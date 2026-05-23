@@ -1,0 +1,158 @@
+# Development
+
+## Tech Stack
+
+### Frontend
+
+- [React 19](https://react.dev/) — UI framework
+- [MUI v9](https://mui.com/) with `@mui/icons-material` and `@emotion/react` — components and icons
+- [Zustand](https://github.com/pmndrs/zustand) — state management
+- [react-i18next](https://react.i18next.com/) + [i18next](https://www.i18next.com/) — internationalization (8 locales)
+- [TypeScript](https://www.typescriptlang.org/)
+- [Vite 7](https://vite.dev/) — dev server and bundler
+
+### Backend
+
+- [Tauri v2](https://v2.tauri.app/) — desktop shell
+- [Rust](https://www.rust-lang.org/) (edition 2024, stable toolchain)
+- [tokio](https://tokio.rs/) — async runtime (custom multi-thread runtime with 4 workers)
+- `serde` + `serde_json` — config serialization
+- `anyhow` — error handling
+- `log` — diagnostic logging
+
+### Tauri plugins
+
+- `tauri-plugin-opener` — open external URLs
+- `tauri-plugin-dialog` — folder picker for the MKVToolNix path
+- `tauri-plugin-clipboard-manager` — write the copied mkvmerge command
+
+### External tools
+
+- [MKVToolNix](https://mkvtoolnix.download/) — `mkvmerge -J` for track metadata, `mkvmerge` for extraction
+
+## Tooling
+
+- [pnpm](https://pnpm.io/) — package manager
+- [Deno](https://deno.com/) — scripts under `scripts/ts/` (e.g. `change-version.ts`)
+
+## Repository layout
+
+```
+src/                        React app
+├── App.tsx                 Theme / language / launch-args bootstrap
+├── main.tsx                Entry point
+├── store.ts                Zustand store (files, queue, profiles, handlers)
+├── service.ts              Wrappers around Tauri invoke calls
+├── protocol.ts             Shared types mirroring Rust protocol
+├── extract-utils.ts        Template parser, drive-key helper, formatters
+├── components/
+│   ├── Layout.tsx          Nav / main / footer grid
+│   ├── Toolbar.tsx         Extract All, Clear All, Profile, Settings, About
+│   ├── MainContent.tsx     Tab container (File List, Queue, Settings, About)
+│   ├── FileList.tsx        Drop zone, polling, card list
+│   ├── MkvFileCard.tsx     Per-file card with track table and progress row
+│   ├── Queue.tsx           Per-drive queue cards
+│   ├── Settings.tsx        Appearance / Profiles / MKV settings
+│   ├── About.tsx           Hero + author + GitHub
+│   └── Footer.tsx          Donation and copyright links
+└── i18n/
+    ├── index.ts            i18next init
+    └── locales/            de, en-US, es, fr, ja, zh-CN, zh-HK, zh-TW
+
+src-tauri/                  Rust crate
+├── src/
+│   ├── lib.rs              Command registration, setup hook, runtime setup
+│   ├── main.rs             Binary entry
+│   ├── constants.rs        APP_NAME
+│   ├── config.rs           Persisted Config (display mode, theme, language,
+│   │                       MKVToolNix path, profiles, active profile, window)
+│   ├── controller.rs       Thin wrappers for commands (get_about / get_config /
+│   │                       set_config / get_mkv_files)
+│   ├── protocol.rs         Shared JSON types (About, MkvTrack, ExtractEntry, …)
+│   ├── extract.rs          Per-drive queue, worker threads, cancel, event emit
+│   └── mkvtoolnix.rs       mkvmerge/mkvmerge resolution, spawn, progress parse
+├── icons/                  App icons (also used in the About tab)
+└── tauri.conf.json         Window defaults, bundle metadata
+
+scripts/ts/
+├── change-version.ts       Bumps version across manifests + workflow YAMLs
+└── deno.json               Deno tasks
+
+.github/workflows/
+├── linux_build.yml
+├── macos_build.yml
+└── windows_build.yml
+```
+
+## Commands
+
+```bash
+pnpm install         # install JS dependencies
+pnpm tauri dev       # run the app in development (hot-reload frontend + Rust)
+pnpm tauri build     # build installers for the current platform
+pnpm dev             # run only the Vite dev server (no Tauri window)
+pnpm build           # type-check and build the frontend
+```
+
+To bump the version across `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
+
+```bash
+cd scripts/ts
+deno task change-version
+```
+
+## Configuration storage
+
+The persisted config file is named `BatchMkvMerge.json` and lives at:
+
+- **Windows** — `%APPDATA%\BatchMkvMerge\` when installed under `%LOCALAPPDATA%` / `%ProgramFiles%` / `%ProgramFiles(x86)%`; next to the `.exe` in portable mode.
+- **Linux** — `$XDG_CONFIG_HOME/BatchMkvMerge/`, else `$HOME/.config/BatchMkvMerge/`.
+- **macOS** — `~/Library/Application Support/BatchMkvMerge/`.
+
+## Frontend ↔ Backend protocol
+
+All communication goes through Tauri's `invoke` and event system; there's no IPC codec beyond JSON.
+
+### Commands (`#[tauri::command]`)
+
+| Command | Purpose |
+| --- | --- |
+| `get_about` | App version for the About tab |
+| `get_config` / `set_config` | Load / save persisted config |
+| `get_launch_args` | Paths passed on the command line |
+| `get_mkv_files` | Resolve dropped paths (files or folders) to `.mkv` file paths |
+| `get_mkv_tracks` | Run `mkvmerge -J` and return the track list |
+| `is_mkvmerge_found` | Validate the MKVToolNix path and surface auto-detected updates |
+| `enqueue_extract` | Add a file to the per-drive queue |
+| `cancel_extract` | Cancel a queued or running extraction |
+| `get_extract_status` | Snapshot of active tasks (frontend polls every 200 ms) |
+
+### Events
+
+| Event | Payload | When |
+| --- | --- | --- |
+| `extraction-finished` | `{ file, outcome: "Completed" \| "Cancelled" \| "Failed", error? }` | Backend worker exits |
+
+## Concurrency
+
+The backend uses a custom `tokio` runtime with `worker_threads(4)` set in `lib.rs`. Each extraction runs on a dedicated `std::thread::spawn`'d worker, so long-running `mkvmerge` child processes do not tie up the async worker pool. Per-drive serialization is enforced in `extract.rs` — see `DriveState` and `on_worker_finished`.
+
+## Template engine
+
+`extract-utils.ts::renderTemplate` is a single-pass character scanner:
+
+- `{{` / `}}` escape to literal braces
+- `{placeholder}` replaces with the corresponding value
+- Unknown placeholders are emitted verbatim (e.g. `{typo}` stays `{typo}`)
+
+Supported placeholders: `{file_name}`, `{track_id}`, `{track_number}`, `{language}`, `{codec_name}`, `{track_name}`. `{codec_name}` and `{track_name}` are sanitized for filesystem-unsafe characters before substitution.
+
+## CI
+
+Three GitHub Actions workflows build release bundles on push/PR:
+
+- `linux_build.yml` — `.deb`, `.rpm`, `.AppImage`
+- `macos_build.yml` — `.dmg` (x86_64 and arm64 via matrix)
+- `windows_build.yml` — `.msi`, `.exe` (NSIS)
+
+Each installs Node 24, pnpm 10, and the stable Rust toolchain, then runs `cargo test -r` followed by `pnpm tauri build`.
