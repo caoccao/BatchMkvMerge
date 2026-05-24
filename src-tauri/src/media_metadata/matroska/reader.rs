@@ -252,7 +252,13 @@ fn walk_segment_l1(
 
         match header.id {
             ids::SEEK_HEAD => {
-                seek_head::collect_deferred(src, &header, deadline, deferred)?;
+                seek_head::collect_deferred(
+                    src,
+                    &header,
+                    deadline,
+                    deferred,
+                    payload_start,
+                )?;
             }
             ids::INFO => {
                 deferred.push(DeferredL1::Info, header.start);

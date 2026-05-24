@@ -34,48 +34,18 @@ use super::reader::{DeferredL1, DeferredL1Positions};
 /// Walk the SeekHead at `(src.position .. parent.end)` and route each entry
 /// into `deferred`.  Unknown / cluster / cues entries are ignored — those are
 /// either dispatched elsewhere or not relevant to identification.
+///
+/// `segment_payload_start` is the absolute file offset of the enclosing
+/// Segment's first payload byte.  SeekPosition values are Segment-relative
+/// per the Matroska spec, so we translate them via the same arithmetic
+/// `libmatroska::KaxSegment::GetGlobalPosition` performs
+/// (`global = relative + segment_payload_start`).
 pub(crate) fn collect_deferred(
     src: &mut FileSource,
     parent: &ElementHeader,
     deadline: &Deadline,
     deferred: &mut DeferredL1Positions,
-) -> Result<(), ParseError> {
-    // SeekHead is always Segment-rooted.  The segment payload starts at the
-    // position passed to `walk_segment_l1`; we recover it via the file
-    // position when parent was first read.  For simplicity we treat the
-    // SeekHead positions as already-absolute file offsets — Matroska's spec
-    // allows both Segment-relative and absolute forms, but kax_reader_c
-    // resolves them via `KaxSegment::GetGlobalPosition`, which for our
-    // header-only parse is equivalent to "trust the position byte-for-byte".
-    //
-    // Files in the wild always encode positions as Segment-relative, and we
-    // expose this via the caller passing the Segment payload start in
-    // `segment_payload_start` below.
-    walk_seek_head(src, parent, deadline, deferred, /*translate=*/ None)
-}
-
-/// Identical to [`collect_deferred`] but resolves each `SeekPosition` against
-/// the Segment payload start so positions become absolute file offsets.
-/// `segment_payload_start` is the absolute offset of the Segment's first
-/// payload byte.  Currently only called from tests where the encoding is
-/// known to be Segment-relative.
-#[cfg(test)]
-pub(crate) fn collect_deferred_translated(
-    src: &mut FileSource,
-    parent: &ElementHeader,
-    deadline: &Deadline,
-    deferred: &mut DeferredL1Positions,
     segment_payload_start: u64,
-) -> Result<(), ParseError> {
-    walk_seek_head(src, parent, deadline, deferred, Some(segment_payload_start))
-}
-
-fn walk_seek_head(
-    src: &mut FileSource,
-    parent: &ElementHeader,
-    deadline: &Deadline,
-    deferred: &mut DeferredL1Positions,
-    translate: Option<u64>,
 ) -> Result<(), ParseError> {
     ebml::walk_children(
         src,
@@ -98,10 +68,7 @@ fn walk_seek_head(
             let Some(SeekEntry { id, position }) = entry else {
                 return Ok(ChildAction::Consumed);
             };
-            let absolute = match translate {
-                Some(base) => base + position,
-                None => position,
-            };
+            let absolute = segment_payload_start.saturating_add(position);
             if let Some(kind) = classify_seek_id(id) {
                 deferred.push(kind, absolute);
             }
@@ -212,7 +179,7 @@ mod tests {
         let mut s = src(head);
         let parent = ebml::read_element_header(&mut s).unwrap();
         let mut deferred = DeferredL1Positions::default();
-        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred).unwrap();
+        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
 
         assert_eq!(deferred.take(DeferredL1::Info), vec![100]);
         assert_eq!(deferred.take(DeferredL1::Tracks), vec![200]);
@@ -231,7 +198,7 @@ mod tests {
         let mut s = src(head);
         let parent = ebml::read_element_header(&mut s).unwrap();
         let mut deferred = DeferredL1Positions::default();
-        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred).unwrap();
+        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
 
         assert!(deferred.take(DeferredL1::Info).is_empty());
         assert!(deferred.take(DeferredL1::Tracks).is_empty());
@@ -245,7 +212,7 @@ mod tests {
         let mut s = src(head);
         let parent = ebml::read_element_header(&mut s).unwrap();
         let mut deferred = DeferredL1Positions::default();
-        collect_deferred_translated(
+        collect_deferred(
             &mut s,
             &parent,
             &no_deadline(),
@@ -269,7 +236,7 @@ mod tests {
         let mut s = src(head);
         let parent = ebml::read_element_header(&mut s).unwrap();
         let mut deferred = DeferredL1Positions::default();
-        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred).unwrap();
+        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
         assert_eq!(deferred.take(DeferredL1::Tracks), vec![250]);
     }
 
@@ -279,7 +246,7 @@ mod tests {
         let mut s = src(head);
         let parent = ebml::read_element_header(&mut s).unwrap();
         let mut deferred = DeferredL1Positions::default();
-        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred).unwrap();
+        collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
         for kind in [
             DeferredL1::Info,
             DeferredL1::Tracks,
