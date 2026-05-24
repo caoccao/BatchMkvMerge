@@ -24,16 +24,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use crate::config;
-use crate::protocol::{MkvToolNixStatus, MkvTrack};
-
-const MKV_EXTENSION: &str = "mkv";
-
-pub fn is_mkv(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case(MKV_EXTENSION))
-        .unwrap_or(false)
-}
+use crate::protocol::MkvToolNixStatus;
 
 pub(crate) fn parse_mkvmerge_progress(line: &str) -> Option<u32> {
     let trimmed = line.trim();
@@ -251,98 +242,6 @@ fn persist_mkvtoolnix_path_if_auto_detected(resolution: &MkvToolNixResolution) -
     cfg.external_tools.mkv_toolnix_path = path;
     config::set_config(cfg)?;
     Ok(())
-}
-
-pub async fn get_mkv_tracks(file: String) -> Result<Vec<MkvTrack>> {
-    let path = Path::new(file.as_str());
-    validate_path_as_file(path)?;
-    let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command("mkvmerge")?;
-    cmd.arg("-J").arg(&file);
-    let output = cmd.output().map_err(|e| {
-        anyhow::anyhow!(
-            "MKVMERGE_NOT_AVAILABLE:{}: {}",
-            mkvmerge_path.display(),
-            e
-        )
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("MKVMERGE_FAILED:{}", stderr));
-    }
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| anyhow::anyhow!("MKVMERGE_PARSE_ERROR:{}", e))?;
-    let mut tracks: Vec<MkvTrack> = json["tracks"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|t| {
-                    let props = &t["properties"];
-                    MkvTrack {
-                        id: t["id"].as_i64().unwrap_or(0),
-                        number: props["number"].as_i64().unwrap_or(0),
-                        track_type: t["type"].as_str().unwrap_or("").to_owned(),
-                        codec: t["codec"].as_str().unwrap_or("").to_owned(),
-                        codec_id: props["codec_id"].as_str().unwrap_or("").to_owned(),
-                        track_name: props["track_name"].as_str().unwrap_or("").to_owned(),
-                        language: props["language"].as_str().unwrap_or("und").to_owned(),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let chapter_entries: i64 = json["chapters"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|v| v["num_entries"].as_i64())
-        .unwrap_or(0);
-    if chapter_entries > 0 {
-        tracks.push(MkvTrack {
-            id: 0,
-            number: 0,
-            track_type: "chapters".to_owned(),
-            codec: "xml".to_owned(),
-            codec_id: "xml".to_owned(),
-            track_name: String::new(),
-            language: String::new(),
-        });
-    }
-
-    if let Some(atts) = json["attachments"].as_array() {
-        for att in atts {
-            let id = att["id"].as_i64().unwrap_or(0);
-            let file_name = att["file_name"].as_str().unwrap_or("").to_owned();
-            let content_type = att["content_type"].as_str().unwrap_or("").to_owned();
-            let subtype = derive_attachment_subtype(&file_name, &content_type);
-            tracks.push(MkvTrack {
-                id,
-                number: 0,
-                track_type: "attachment".to_owned(),
-                codec: subtype.clone(),
-                codec_id: subtype,
-                track_name: file_name,
-                language: String::new(),
-            });
-        }
-    }
-
-    Ok(tracks)
-}
-
-fn derive_attachment_subtype(file_name: &str, content_type: &str) -> String {
-    if let Some(ext_pos) = file_name.rfind('.') {
-        let ext = &file_name[ext_pos + 1..];
-        if !ext.is_empty() {
-            return ext.to_ascii_lowercase();
-        }
-    }
-    if let Some(slash) = content_type.find('/') {
-        let subtype = &content_type[slash + 1..];
-        if !subtype.is_empty() {
-            return subtype.to_ascii_lowercase();
-        }
-    }
-    String::new()
 }
 
 pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<std::process::Child> {

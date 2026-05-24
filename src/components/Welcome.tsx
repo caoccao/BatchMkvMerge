@@ -24,7 +24,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import appIconUrl from "../../src-tauri/icons/icon.png";
-import { getMkvFiles } from "../service";
+import { getMediaFiles } from "../service";
 import { useMkvStore } from "../store";
 
 const AUTHOR_NAME = "Sam Cao";
@@ -140,7 +140,20 @@ export default function Welcome() {
   const handleAddFiles = async () => {
     const selection = await openDialog({
       multiple: true,
-      filters: [{ name: "Matroska", extensions: ["mkv"] }],
+      filters: [
+        {
+          name: "Media files",
+          extensions: [
+            "mkv", "webm", "mka", "mks", "mk3d", "mp4", "m4v", "mov", "m4a",
+            "avi", "mp3", "aac", "flac", "wav", "wv", "tta", "ac3", "eac3",
+            "dts", "dtshd", "thd", "mlp", "ts", "m2ts", "mts", "mpg", "mpeg",
+            "vob", "evo", "ogg", "ogm", "opus", "ra", "rm", "rmvb", "flv",
+            "f4v", "caf", "ivf", "av1", "obu", "h264", "h265", "hevc", "264",
+            "265", "srt", "ass", "ssa", "vtt", "webvtt", "sup", "usf", "idx",
+            "btn", "textst", "vc1", "drc",
+          ],
+        },
+      ],
     });
     if (!selection) {
       return;
@@ -150,9 +163,9 @@ export default function Welcome() {
       return;
     }
     try {
-      const mkvFiles = await getMkvFiles(paths);
-      if (mkvFiles.length > 0) {
-        addFiles(mkvFiles);
+      const mediaFiles = await getMediaFiles(paths);
+      if (mediaFiles.length > 0) {
+        addFiles(mediaFiles);
       }
     } catch (err) {
       console.error("Failed to resolve selected files", err);
@@ -165,9 +178,9 @@ export default function Welcome() {
       return;
     }
     try {
-      const mkvFiles = await getMkvFiles([directory]);
-      if (mkvFiles.length > 0) {
-        addFiles(mkvFiles);
+      const mediaFiles = await getMediaFiles([directory]);
+      if (mediaFiles.length > 0) {
+        addFiles(mediaFiles);
       }
     } catch (err) {
       console.error("Failed to resolve selected folder", err);

@@ -48,10 +48,11 @@ import {
   makeTrackSelector,
   resolveOutputDir,
   trackKey,
-} from "../extract-utils";
+} from "../merge";
+import type { MediaMetadataError } from "../protocol";
 import { QueueItemStatus } from "../protocol";
 import {
-  getMkvTracks,
+  getMediaMetadata,
   launchBetterMediaInfo,
 } from "../service";
 import { useMkvStore } from "../store";
@@ -64,6 +65,54 @@ interface MkvFileCardProps {
   path: string;
 }
 
+type TranslateFn = (
+  key: string,
+  options?: Record<string, string | number>,
+) => string;
+
+function isMediaMetadataError(value: unknown): value is MediaMetadataError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    typeof (value as { kind: unknown }).kind === "string"
+  );
+}
+
+/**
+ * Map a `get_media_metadata` rejection to a human-readable string. Backend
+ * categorises every failure into one of the [`MediaMetadataError`] tagged
+ * variants; the i18n keys live under `extract.error.parser.*`. Unrecognised
+ * values fall back to `String(err)` so debug output is never silently lost.
+ */
+function formatMetadataError(err: unknown, t: TranslateFn): string {
+  if (isMediaMetadataError(err)) {
+    switch (err.kind) {
+      case "io":
+        return t("extract.error.parser.io", { detail: err.detail });
+      case "unexpectedEof":
+        return t("extract.error.parser.unexpectedEof", { detail: err.detail });
+      case "unrecognised":
+        return t("extract.error.parser.unrecognised", { detail: err.detail });
+      case "timeout":
+        return t("extract.error.parser.timeout", {
+          budgetMs: err.budgetMs,
+          stage: err.stage,
+          detail: err.detail,
+        });
+      case "malformed":
+        return t("extract.error.parser.malformed", { detail: err.detail });
+      case "oversizedElement":
+        return t("extract.error.parser.oversizedElement", {
+          detail: err.detail,
+        });
+      case "internal":
+        return t("extract.error.parser.internal", { detail: err.detail });
+    }
+  }
+  return String(err);
+}
+
 export function MkvFileCard({ path }: MkvFileCardProps) {
   const { t } = useTranslation();
   const removeFile = useMkvStore((s) => s.removeFile);
@@ -71,8 +120,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     (s) => s.config?.externalTools?.mkvToolNixPath ?? "",
   );
   const entry = useMkvStore((s) => s.queueItems[path]);
-  const setFileTracks = useMkvStore((s) => s.setFileTracks);
-  const setFileTrackCounts = useMkvStore((s) => s.setFileTrackCounts);
+  const setFileMetadata = useMkvStore((s) => s.setFileMetadata);
   const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
   const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
   const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
@@ -141,71 +189,25 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getMkvTracks(path)
-      .then((result) => {
+    getMediaMetadata(path)
+      .then((metadata) => {
         if (cancelled) {
           return;
         }
-        setFileTracks(path, result);
+        setFileMetadata(path, metadata);
         setLoading(false);
-        let video = 0;
-        let audio = 0;
-        let subtitles = 0;
-        let chapters = 0;
-        let attachments = 0;
-        for (const track of result) {
-          if (track.type === "video") {
-            video += 1;
-          } else if (track.type === "audio") {
-            audio += 1;
-          } else if (track.type === "subtitles") {
-            subtitles += 1;
-          } else if (track.type === "chapters") {
-            chapters += 1;
-          } else if (track.type === "attachment") {
-            attachments += 1;
-          }
-        }
-        setFileTrackCounts(path, {
-          video,
-          audio,
-          subtitles,
-          chapters,
-          attachments,
-        });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (cancelled) {
           return;
         }
-        const msg = String(err);
-        if (msg.includes("MKVMERGE_NOT_AVAILABLE:")) {
-          setError(
-            t("extract.error.mkvmergeNotAvailable", {
-              detail: msg.split("MKVMERGE_NOT_AVAILABLE:")[1],
-            }),
-          );
-        } else if (msg.includes("MKVMERGE_FAILED:")) {
-          setError(
-            t("extract.error.mkvmergeFailed", {
-              detail: msg.split("MKVMERGE_FAILED:")[1],
-            }),
-          );
-        } else if (msg.includes("MKVMERGE_PARSE_ERROR:")) {
-          setError(
-            t("extract.error.parseError", {
-              detail: msg.split("MKVMERGE_PARSE_ERROR:")[1],
-            }),
-          );
-        } else {
-          setError(msg);
-        }
+        setError(formatMetadataError(err, t));
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [path, t, setFileTracks, setFileTrackCounts]);
+  }, [path, t, setFileMetadata]);
 
   const selectedTracks = tracks.filter((track) =>
     selectedIds.has(trackKey(track)),

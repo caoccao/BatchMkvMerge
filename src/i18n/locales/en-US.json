@@ -30,8 +30,15 @@
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",
       "mkvmergeFailed": "mkvmerge failed: {{detail}}",
       "parseError": "Failed to parse mkvmerge output: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",
-      "mkvmergeFailed": "mkvmerge failed: {{detail}}"
+      "parser": {
+        "io": "Could not read file: {{detail}}",
+        "unexpectedEof": "File is truncated: {{detail}}",
+        "unrecognised": "Unrecognised file format: {{detail}}",
+        "timeout": "Parser timed out after {{budgetMs}}ms at {{stage}}: {{detail}}",
+        "malformed": "Malformed file: {{detail}}",
+        "oversizedElement": "Element exceeds size limit: {{detail}}",
+        "internal": "Internal parser error: {{detail}}"
+      }
     }
   },
   "toolbar": {

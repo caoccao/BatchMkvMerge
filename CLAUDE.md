@@ -44,7 +44,14 @@ The non-regen run of that test fails with a line-by-line diff when the checked-i
 
 ### Frontend ↔ Backend split
 
-React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON; `src/protocol.ts` mirrors `src-tauri/src/protocol.rs` and must stay in sync (including the serde `#[serde(rename = "camelCase")]` attributes vs. the TS interface fields).
+React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, extract events, the structured `MediaMetadataErrorPayload`).
+
+The Tauri command surface for files / metadata is:
+
+- `get_media_files(paths)` — recursive directory walk filtered by `media_metadata::probe::extension_hint::is_supported_media_path`.
+- `get_media_metadata(file)` — wraps `media_metadata::parse` with `ParseOptions` built by `controller::parser_options_from_config`. The persisted `config.parser.timeoutMs` wins over the legacy `BMM_PARSER_BUDGET_MS` env override; env only applies when the user has not pinned a value through Settings. Failures arrive on the frontend as a tagged `MediaMetadataError` (`io | unexpectedEof | unrecognised | timeout | malformed | oversizedElement | internal`); `MkvFileCard.formatMetadataError` maps each kind to an `extract.error.parser.*` i18n key.
+
+The old `get_mkv_files` / `get_mkv_tracks` commands and the `MkvTrack` wire struct were removed in Phase 11; the MKV-only `is_mkv` predicate is replaced by `is_supported_media_path` (Phase 11), so the drag-drop accept-list now covers every extension `mkvmerge -J` recognises.
 
 ### Single source of truth: Zustand store
 
@@ -52,7 +59,8 @@ React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All 
 - the dropped file list,
 - the extraction queue (grouped per-drive on Windows — single bucket on Linux/macOS), with per-item status, progress, timestamps, cancel flag, and error,
 - the persisted config (theme, language, profiles, mkvtoolnix path, window geometry),
-- a registry of per-card extract handlers and selection flags that the Toolbar consumes for Extract All.
+- a registry of per-card extract handlers and selection flags that the Toolbar consumes for Extract All,
+- per-file parser results in two parallel maps: `fileMetadata: Record<string, MediaMetadata>` (the raw parser output, kept for future detail panels) and `fileTracks: Record<string, MediaTrack[]>` (the flattened rows the selection table renders, derived by `metadataToMediaTracks` in `src/media-metadata.ts`). `setFileMetadata` writes both maps and the per-kind count summary in one shot. The `MediaTrack` adapter shape, the `MediaTrackType` row-kind enum (`"track" | "chapters" | "attachment"`), and the `mediaTrackCounts` helper all live in `src/media-metadata.ts` — keep new UI-row logic there, not in `src/merge.ts`.
 
 **Important:** `updateConfig` applies the patch optimistically and discards the backend's response. Don't re-add a post-await `set({ config: saved })` — it re-introduces a race condition where rapid typing reverts edits (older async responses land on top of newer optimistic state). The backend also doesn't transform the config inside `set_config`, so the response would be identical anyway.
 
@@ -82,7 +90,7 @@ The tokio runtime is intentionally capped at 4 workers (see `lib.rs` → `tauri:
 
 Profiles live in the persisted config (one `ConfigProfile` per entry, with a shared `activeProfile` pointer). Each profile carries three templates (video / audio / subtitle) and three auto-select flags. The `Default` profile auto-selects subtitle tracks.
 
-Templates are expanded by `extract-utils.ts::renderTemplate`, a **single-pass character scanner** (not regex-based — don't regress this). It supports `{file_name}`, `{track_id}`, `{track_number}`, `{language}`, `{codec_name}`, `{track_name}`. `{{` / `}}` escape to literal braces; unknown placeholders are emitted verbatim so typos are visible. `{codec_name}` and `{track_name}` are sanitized for filesystem-unsafe characters before substitution.
+Templates are expanded by `merge.ts::renderTemplate`, a **single-pass character scanner** (not regex-based — don't regress this). It supports `{file_name}`, `{track_id}`, `{track_number}`, `{language}`, `{codec_name}`, `{track_name}`. `{{` / `}}` escape to literal braces; unknown placeholders are emitted verbatim so typos are visible. `{codec_name}` and `{track_name}` are sanitized for filesystem-unsafe characters before substitution.
 
 The active profile is consumed both on track auto-select (once per card, guarded by `autoSelectedRef`) and at extract time (passed into `buildExtractArgs` / `buildCommandString`).
 
@@ -108,7 +116,7 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser lives under `src-tauri/src/media_metadata/`. As of Phase 11 it has fully replaced the `mkvmerge -J` subprocess shellout, and the drag-drop filter is broadened to every extension `mkvmerge -J` recognises. Delivery was split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase landed as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 

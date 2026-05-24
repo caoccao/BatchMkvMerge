@@ -181,15 +181,41 @@ export interface BetterMediaInfoStatus {
   path: string;
 }
 
-export interface MkvTrack {
-  id: number;
-  number: number;
-  type: string;
-  codec: string;
-  codecId: string;
-  trackName: string;
-  language: string;
-}
+/**
+ * Re-export the auto-generated parser types so most components import them
+ * from a single module. The generated file is the source of truth; never
+ * edit it by hand. Regenerate with:
+ *   BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
+ */
+export type {
+  Attachment,
+  ChapterSummary,
+  Container,
+  ContainerFormat,
+  ContainerProperties,
+  MediaMetadata,
+  Track,
+  TrackType,
+  CodecInfo,
+  TrackProperties,
+  CommonTrackProperties,
+  AudioTrackProperties,
+  VideoTrackProperties,
+  SubtitleTrackProperties,
+} from "./protocol.generated";
+
+/**
+ * Wire shape of the `get_media_metadata` rejection. The frontend switches on
+ * `kind` to pick an i18n message; `detail` is a one-line fallback summary.
+ */
+export type MediaMetadataError =
+  | { kind: "io"; detail: string }
+  | { kind: "unexpectedEof"; detail: string }
+  | { kind: "unrecognised"; detail: string }
+  | { kind: "timeout"; budgetMs: number; stage: string; detail: string }
+  | { kind: "malformed"; detail: string }
+  | { kind: "oversizedElement"; detail: string }
+  | { kind: "internal"; detail: string };
 
 export enum QueueItemStatus {
   Waiting = "Waiting",

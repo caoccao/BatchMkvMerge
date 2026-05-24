@@ -41,7 +41,7 @@ import {
   getActiveProfile,
   getSelectedTracksForFile,
 } from "../actions/extractionActions";
-import { formatHMS } from "../extract-utils";
+import { formatHMS } from "../merge";
 import type { QueueItem } from "../store";
 import { QueueItemStatus, useMkvStore } from "../store";
 

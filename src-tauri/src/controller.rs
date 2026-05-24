@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::constants::APP_NAME;
-use crate::mkvtoolnix::is_mkv;
+use crate::media_metadata;
+use crate::media_metadata::model::MediaMetadata;
+use crate::media_metadata::probe::extension_hint::is_supported_media_path;
+use crate::media_metadata::{ParseError, ParseOptions};
 use crate::protocol::{About, BetterMediaInfoStatus, UpdateCheckResult};
 
 pub async fn get_about() -> Result<About> {
@@ -88,7 +91,7 @@ pub fn check_for_updates() -> Result<UpdateCheckResult> {
     })
 }
 
-pub async fn get_mkv_files(paths: Vec<String>) -> Result<Vec<String>> {
+pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
     for input in paths {
         let path = Path::new(input.as_str());
@@ -100,7 +103,7 @@ pub async fn get_mkv_files(paths: Vec<String>) -> Result<Vec<String>> {
                 .read_dir()
                 .map_err(anyhow::Error::msg)?
                 .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_file() && is_mkv(p))
+                .filter(|p| p.is_file() && is_supported_media_path(p))
                 .collect();
             entries.sort();
             for p in entries {
@@ -108,11 +111,41 @@ pub async fn get_mkv_files(paths: Vec<String>) -> Result<Vec<String>> {
                     result.push(s.to_owned());
                 }
             }
-        } else if path.is_file() && is_mkv(path) {
+        } else if path.is_file() && is_supported_media_path(path) {
             result.push(input);
         }
     }
     Ok(result)
+}
+
+/// Resolve the file's media metadata using the native parser. Extracted as a
+/// plain function (no `#[tauri::command]`) so unit tests can exercise it
+/// without spinning up Tauri.
+pub fn read_media_metadata(
+    file: String,
+    options: ParseOptions,
+) -> Result<MediaMetadata, ParseError> {
+    media_metadata::parse(Path::new(&file), options)
+}
+
+/// Build the per-invocation [`ParseOptions`] from the persisted config. The
+/// persisted setting **wins** over the legacy `BMM_PARSER_BUDGET_MS` env
+/// override; the env var is only consulted when the user has not pinned a
+/// value through Settings (i.e. when `parser.timeoutMs` matches the default).
+/// See [[feedback-parser-timeout]].
+pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
+    let timeout_ms = if cfg.parser.timeout_ms == config::ConfigParser::DEFAULT_TIMEOUT_MS {
+        std::env::var("BMM_PARSER_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
+    } else {
+        cfg.parser.effective_timeout_ms()
+    };
+    ParseOptions {
+        timeout_ms,
+        ..ParseOptions::default()
+    }
 }
 
 pub async fn check_output_path_writable(path: String) -> Result<bool> {
@@ -332,4 +365,59 @@ pub async fn detect_better_media_info(
         found: false,
         path: String::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_timeout(ms: u64) -> config::Config {
+        let mut cfg = config::Config::default();
+        cfg.parser.timeout_ms = ms;
+        cfg
+    }
+
+    #[test]
+    fn parser_options_from_config_default_uses_default_timeout() {
+        let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
+        // SAFETY: unsetting env vars in tests is racy across threads but this
+        // suite never sets it; cargo runs us in process isolation per binary.
+        unsafe {
+            std::env::remove_var("BMM_PARSER_BUDGET_MS");
+        }
+        let opts = parser_options_from_config(&cfg);
+        assert_eq!(opts.timeout_ms, config::ConfigParser::DEFAULT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn parser_options_from_config_clamps_pinned_value() {
+        let cfg = cfg_with_timeout(1);
+        let opts = parser_options_from_config(&cfg);
+        assert_eq!(opts.timeout_ms, config::ConfigParser::MIN_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn parser_options_from_config_honours_pinned_value_over_env() {
+        let cfg = cfg_with_timeout(2500);
+        unsafe {
+            std::env::set_var("BMM_PARSER_BUDGET_MS", "9999");
+        }
+        let opts = parser_options_from_config(&cfg);
+        // SAFETY: see above; we always restore.
+        unsafe {
+            std::env::remove_var("BMM_PARSER_BUDGET_MS");
+        }
+        assert_eq!(opts.timeout_ms, 2500);
+    }
+
+    #[test]
+    fn read_media_metadata_propagates_io_error_for_missing_file() {
+        let opts = ParseOptions::default();
+        let err = read_media_metadata(
+            "this-file-does-not-exist-12345.mkv".to_owned(),
+            opts,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ParseError::Io { .. }));
+    }
 }

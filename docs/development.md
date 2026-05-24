@@ -44,7 +44,7 @@ src/                        React app
 ├── store.ts                Zustand store (files, queue, profiles, handlers)
 ├── service.ts              Wrappers around Tauri invoke calls
 ├── protocol.ts             Shared types mirroring Rust protocol
-├── extract-utils.ts        Template parser, drive-key helper, formatters
+├── merge.ts                Template parser, drive-key helper, mkvmerge arg/command builders, formatters
 ├── components/
 │   ├── Layout.tsx          Nav / main / footer grid
 │   ├── Toolbar.tsx         Extract All, Clear All, Profile, Settings, About
@@ -139,7 +139,7 @@ The backend uses a custom `tokio` runtime with `worker_threads(4)` set in `lib.r
 
 ## Template engine
 
-`extract-utils.ts::renderTemplate` is a single-pass character scanner:
+`merge.ts::renderTemplate` is a single-pass character scanner:
 
 - `{{` / `}}` escape to literal braces
 - `{placeholder}` replaces with the corresponding value
