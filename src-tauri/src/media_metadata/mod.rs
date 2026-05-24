@@ -35,6 +35,7 @@ pub mod mpeg_ts;
 pub mod ogg;
 pub mod probe;
 pub mod reader;
+pub mod subtitles;
 
 pub use deadline::Deadline;
 pub use error::ParseError;

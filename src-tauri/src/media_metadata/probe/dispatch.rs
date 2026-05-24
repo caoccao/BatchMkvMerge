@@ -49,6 +49,10 @@ use crate::media_metadata::mpeg_ps::MpegPsReader;
 use crate::media_metadata::mpeg_ts::MpegTsReader;
 use crate::media_metadata::ogg::OggReader;
 use crate::media_metadata::reader::Reader;
+use crate::media_metadata::subtitles::{
+    HdmvTextStReader, MicroDvdReader, PgsReader, SrtReader, SsaReader, UsfReader,
+    VobButtonReader, VobSubReader, WebVttReader,
+};
 
 /// Describes what the cascade did and why. `Claimed` means a reader's
 /// `probe()` returned `true` — independent of whether `read_headers` then
@@ -132,11 +136,28 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     static DV: DvReader = DvReader;
     static OBU: ObuReader = ObuReader;
 
+    // Subtitle readers.  Image / segment-based formats (PGS, TextST, VobSub,
+    // VobButton) probe first because their magic bytes are unambiguous; the
+    // text-based formats (SRT, SSA, WebVTT, USF, MicroDVD) probe last so they
+    // don't claim binary streams whose decoded UTF-8 happens to look like a
+    // valid timecode line.
+    static PGS: PgsReader = PgsReader;
+    static HDMV_TEXTST: HdmvTextStReader = HdmvTextStReader;
+    static VOBBTN: VobButtonReader = VobButtonReader;
+    static VOBSUB: VobSubReader = VobSubReader;
+    static WEBVTT: WebVttReader = WebVttReader;
+    static USF: UsfReader = UsfReader;
+    static SSA: SsaReader = SsaReader;
+    static SRT: SrtReader = SrtReader;
+    static MICRODVD: MicroDvdReader = MicroDvdReader;
+
     static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[
         &MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS,
         &FLAC, &WAV, &WAVPACK, &TTA, &CORE_AUDIO, &TRUEHD,
         &MPEG_VIDEO, &VC1, &DIRAC, &DV,
         &AVC, &HEVC, &OBU,
+        &PGS, &HDMV_TEXTST, &VOBBTN, &VOBSUB,
+        &WEBVTT, &USF, &SSA, &SRT, &MICRODVD,
         &AC3, &DTS, &MP3, &AAC,
     ];
     REGISTRY

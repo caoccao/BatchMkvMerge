@@ -131,10 +131,11 @@ src-tauri/src/media_metadata/
 ├── mpeg_ps/            # native MPEG-PS reader (packet, pes, stream_map, identify, reader)
 ├── audio/              # audio-only readers (id3v2, mp3, aac, ac3, dts, flac, wav, truehd, tta, wavpack)
 ├── coreaudio/          # native CoreAudio CAF reader (caf, reader)
-└── elementary/         # elementary video stream readers (avc/*, hevc/*, mpeg_video, vc1, dirac, dv, obu)
+├── elementary/         # elementary video stream readers (avc/*, hevc/*, mpeg_video, vc1, dirac, dv, obu)
+└── subtitles/          # subtitle readers (srt, ssa, webvtt, usf, microdvd, vobsub, pgs, hdmv_textst, vobbtn, encoding)
 ```
 
-**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS + magic-byte audio readers (FLAC / WAV / WAVPACK / TTA / CoreAudio / TrueHD) + elementary video readers (MPEG / VC-1 / Dirac / DV / AVC / HEVC / AV1 OBU) + frame-sync audio readers (AC-3 / DTS / MP3 / AAC); other formats land in subsequent phases.
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS + magic-byte audio readers (FLAC / WAV / WAVPACK / TTA / CoreAudio / TrueHD) + elementary video readers (MPEG / VC-1 / Dirac / DV / AVC / HEVC / AV1 OBU) + subtitle readers (PGS / HDMV TextST / VobButton / VobSub / WebVTT / USF / SSA-ASS / SRT / MicroDVD) + frame-sync audio readers (AC-3 / DTS / MP3 / AAC); other formats land in subsequent phases. Subtitle readers fall between elementary-video and frame-sync-audio so unambiguous magic (PGS `PG`, HDMV `TextST`, VobButton `butonDVD`, VobSub `# VobSub index file, v…`) claims before frame-sync probes; text-based formats probe last so binary frames whose decoded UTF-8 happens to contain a timecode-shaped line don't false-positive.
 
 **Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
 
@@ -173,6 +174,20 @@ src-tauri/src/media_metadata/
 - **Dirac** (`elementary/dirac.rs`) — `BBCD` parse-info magic + sequence-header parse-code (`0x00`).
 - **DV** (`elementary/dv.rs`) — Header DIF block `0x1F 0x07 0x00` + the `dsf` flag for NTSC/PAL classification (720×480 / 720×576).
 - **AV1 OBU** (`elementary/obu.rs`) — strict probe requires a `temporal_delimiter` OBU as the first byte (avoids collision with AC-3's `0x0B 0x77` first byte).  LEB128-decoded sizes; sequence_header OBU decode covers `seq_profile`, `max_frame_width/height`, `bit_depth` (8/10/12), `monochrome`, and chroma subsampling factors derived from the profile.
+
+**Subtitle readers:** nine header-only ports under `subtitles/`, plus a shared `encoding` helper.
+
+- **Text formats** decode the first 1-16 KB into UTF-8 (using `encoding_rs::Encoding::for_bom` for UTF-8 / UTF-16 LE / UTF-16 BE detection) and recognise format-specific line patterns:
+  - `srt.rs` — `HH:MM:SS,mmm --> HH:MM:SS,mmm` timecode line (also accepts `.` and `:` as the ms separator; tolerates up to 4-digit hours).
+  - `ssa.rs` — `[Script Info]` + `[V4+ Styles]` (ASS) / `[V4 Styles]` (SSA); `ScriptType: v4.00+/v4.00` lines disambiguate when no styles section is present.
+  - `webvtt.rs` — leading `WEBVTT` followed by newline/tab/space/EOF (W3C-conformant; stricter than mkvtoolnix's `r_webvtt.cpp`).
+  - `usf.rs` — root `<USFSubtitles` element, tolerating any number of `<?xml ?>` declarations and leading `<!-- ... -->` comments.
+  - `microdvd.rs` — `{startFrame}{endFrame}text` line shape (digit-only frame numbers).
+- **Image / segment formats** walk length-prefixed segment chains or fixed magic bytes:
+  - `pgs.rs` — PGS `.sup` segment chain (`PG` magic + 13-byte header per segment, segment types 0x14/0x15/0x16/0x17/0x80).
+  - `hdmv_textst.rs` — `TextST` 6-byte magic + Dialog Style (0x81) chain.
+  - `vobsub.rs` — `.idx` manifest with `# VobSub index file, v…` magic (case-insensitive, tolerates BOM); parses `id: XX, index: N` per-language entries, records the sibling `.sub` path under `container.properties.otherFiles`.
+  - `vobbtn.rs` — `butonDVD` magic (case-insensitive) + 4-byte PES `private_stream_2` start code at offset 0x10 + 3-byte tail at 0x14 (mirrors `r_vobbtn.cpp`'s structural probe).
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 
