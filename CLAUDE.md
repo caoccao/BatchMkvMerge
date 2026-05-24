@@ -123,12 +123,15 @@ src-tauri/src/media_metadata/
 ├── language/           # ISO 639-2 alpha-3 table + BCP-47 wrapper (`language-tags` crate)
 ├── model/              # Wire-format structs — camelCase, nested, never flattened
 ├── probe/              # 6-phase dispatch cascade + extension table + magic signatures
-└── matroska/           # native EBML reader (ebml, ids, info, seek_head, tracks/*, attachments, chapters, tags)
+├── matroska/           # native EBML reader (ebml, ids, info, seek_head, tracks/*, attachments, chapters, tags)
+└── mp4/                # native MP4/QuickTime reader (atom, ftyp, moov/*, codec_specific/*, meta/*, fragments)
 ```
 
-**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). Phase 3 ships the Matroska reader only — other formats land in subsequent phases.
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + MP4 readers; other formats land in subsequent phases.
 
 **Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
+
+**MP4 reader:** pure-Rust port of `mkvtoolnix/src/input/r_qtmp4.cpp` — header-only walk of the ISO BMFF / QuickTime box hierarchy. Supports 32-bit, 64-bit large-size, and size=0 (to-EOF) box forms. `ftyp` classifies QuickTime (`qt  `) vs MP4 brands into `ContainerFormat`; `moov` drives `mvhd` + per-`trak` walks (`tkhd`, `mdia → mdhd / hdlr / minf → stbl → stsd / stts`, `edts/elst`). Codec-specific sub-boxes (`avcC`, `hvcC`, `esds`, `colr`, `pasp`, `dvcC` / `dvvC`) populate `VideoCodecConfig` / `AudioCodecConfig`. iTunes metadata (`udta → meta → ilst`) feeds container title / muxing app / date_utc; unknown tags land in `tags.global`. Fragmented MP4 (`mvex/trex` + `moof/traf/tfhd/trun`) sets `is_fragmented` and aggregates fragment sample counts into `num_index_entries`. Cluster-equivalent `mdat` payloads are never read.
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 

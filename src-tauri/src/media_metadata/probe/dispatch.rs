@@ -35,6 +35,7 @@ use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::FileSource;
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
+use crate::media_metadata::mp4::Mp4Reader;
 use crate::media_metadata::reader::Reader;
 
 /// Describes what the cascade did and why. `Claimed` means a reader's
@@ -78,14 +79,14 @@ pub fn dispatch(
 }
 
 /// The active reader registry. Order matches mkvtoolnix's probe cascade so
-/// adding a reader is a one-line insert at the right priority level.  Phase 3
-/// only ships the Matroska reader; later phases extend this slice.
+/// adding a reader is a one-line insert at the right priority level.
 pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     // Static dispatch table.  The lifetime is `'static` because every entry
     // is a zero-sized unit struct; no allocation involved.  `Send + Sync`
     // bounds let the static live in a multi-threaded process.
     static MATROSKA: MatroskaReader = MatroskaReader;
-    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[&MATROSKA];
+    static MP4: Mp4Reader = Mp4Reader;
+    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[&MATROSKA, &MP4];
     REGISTRY
 }
 

@@ -25,6 +25,7 @@ pub mod io;
 pub mod language;
 pub mod matroska;
 pub mod model;
+pub mod mp4;
 pub mod probe;
 pub mod reader;
 
