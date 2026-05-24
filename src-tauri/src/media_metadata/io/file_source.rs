@@ -69,6 +69,13 @@ impl FileSource {
         })
     }
 
+    /// Construct over an in-memory byte buffer. Used in production to parse a
+    /// decompressed payload (e.g. a zlib-inflated QuickTime `cmov` movie box)
+    /// with the same box walkers used for on-disk data.
+    pub fn from_memory(bytes: Vec<u8>) -> Self {
+        Self::from_reader_for_test(std::io::Cursor::new(bytes))
+    }
+
     /// Test-only constructor over an in-memory cursor. Used by unit tests and
     /// by the `Reader` trait's synthetic exercises.
     pub fn from_reader_for_test<R: Read + Seek + Send + 'static>(reader: R) -> Self {

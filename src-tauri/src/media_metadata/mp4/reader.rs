@@ -63,13 +63,16 @@ impl Reader for Mp4Reader {
         let mut filetype: Option<FileType> = None;
         let mut moov_builder = MoovBuilder::default();
         let mut have_moov = false;
+        let mut have_mdat = false;
         let mut is_fragmented = false;
         let mut fragment_counts: HashMap<u32, u32> = HashMap::new();
 
         let stream_end = src.length();
         src.seek_to(0)?;
 
-        let mut iteration_guard = 0usize;
+        // No fixed iteration cap (PARSER-048): mkvtoolnix scans every top-level
+        // atom until EOF. We guard only against a box that fails to advance the
+        // cursor, which would otherwise loop forever.
         loop {
             deadline.check("mp4::read_headers")?;
             if let Some(end) = stream_end {
@@ -77,16 +80,12 @@ impl Reader for Mp4Reader {
                     break;
                 }
             }
+            let box_start = src.position();
             let header = match atom::read_box_header(src) {
                 Ok(h) => h,
                 Err(ParseError::UnexpectedEof { .. }) => break,
                 Err(e) => return Err(e),
             };
-            iteration_guard += 1;
-            if iteration_guard > 1024 {
-                // Defensive cap — pathological input should not loop here.
-                break;
-            }
 
             match &header.kind.0 {
                 b"ftyp" => {
@@ -98,7 +97,7 @@ impl Reader for Mp4Reader {
                 }
                 b"moov" => {
                     if !have_moov {
-                        moov::parse(src, &header, deadline, &mut moov_builder)?;
+                        moov::parse(src, &header, deadline, &mut moov_builder, out)?;
                         have_moov = true;
                     }
                     atom::skip_payload(src, &header)?;
@@ -111,7 +110,11 @@ impl Reader for Mp4Reader {
                     }
                     atom::skip_payload(src, &header)?;
                 }
-                b"mdat" | b"free" | b"skip" | b"wide" | b"pnot" | b"sidx" => {
+                b"mdat" => {
+                    have_mdat = true;
+                    atom::skip_payload(src, &header)?;
+                }
+                b"free" | b"skip" | b"wide" | b"pnot" | b"sidx" => {
                     atom::skip_payload(src, &header)?;
                 }
                 b"meta" => {
@@ -126,6 +129,11 @@ impl Reader for Mp4Reader {
                     atom::skip_payload(src, &header)?;
                 }
             }
+
+            // Guard against non-advancing boxes (size-0 that isn't to-EOF, etc.).
+            if src.position() <= box_start {
+                break;
+            }
         }
 
         if !have_moov {
@@ -133,6 +141,15 @@ impl Reader for Mp4Reader {
                 format: "mp4",
                 offset: 0,
                 reason: "no moov box found".to_string(),
+            });
+        }
+        if !have_mdat {
+            // mkvtoolnix's r_qtmp4 errors with "No movie data found." when no
+            // mdat atom is present (PARSER-040).
+            return Err(ParseError::Malformed {
+                format: "mp4",
+                offset: 0,
+                reason: "no mdat box found".to_string(),
             });
         }
 
@@ -275,6 +292,109 @@ mod tests {
             out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
             "eng"
         );
+    }
+
+    // ---- PARSER-040: mdat required ---------------------------------------
+
+    #[test]
+    fn read_headers_rejects_files_without_mdat() {
+        // ftyp + moov (with a track) but NO mdat.
+        let mut ftyp_payload = Vec::new();
+        ftyp_payload.extend_from_slice(b"mp42");
+        ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
+        ftyp_payload.extend_from_slice(b"isom");
+        let ftyp = encode_box(b"ftyp", &ftyp_payload);
+        let trak = build_video_trak(1, b"avc1", "eng", 320, 240);
+        let mvhd = encode_box(b"mvhd", &build_mvhd_payload_v0(1000, 60_000, 2));
+        let mut moov_payload = mvhd;
+        moov_payload.extend(trak);
+        let moov = encode_box(b"moov", &moov_payload);
+        let mut bytes = ftyp;
+        bytes.extend(moov);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.mp4", 0);
+        let err = Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap_err();
+        assert!(matches!(err, ParseError::Malformed { .. }));
+    }
+
+    // ---- PARSER-041: compressed (cmov) movie box -------------------------
+
+    #[test]
+    fn cmov_compressed_moov_is_decompressed() {
+        use crate::media_metadata::mp4::moov::mvhd::build_mvhd_payload_v0;
+        use std::io::Write;
+        // Build the *real* moov that lives inside the compressed cmvd.
+        let trak = build_video_trak(7, b"avc1", "eng", 1280, 720);
+        let mvhd = encode_box(b"mvhd", &build_mvhd_payload_v0(1000, 30_000, 8));
+        let mut inner_payload = mvhd;
+        inner_payload.extend(trak);
+        let inner_moov = encode_box(b"moov", &inner_payload);
+
+        // zlib-compress the moov atom; cmvd = uncompressed_size(u32) + zlib data.
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&inner_moov).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut cmvd_payload = (inner_moov.len() as u32).to_be_bytes().to_vec();
+        cmvd_payload.extend(compressed);
+        let dcom = encode_box(b"dcom", b"zlib");
+        let cmvd = encode_box(b"cmvd", &cmvd_payload);
+        let mut cmov_payload = dcom;
+        cmov_payload.extend(cmvd);
+        let cmov = encode_box(b"cmov", &cmov_payload);
+        let outer_moov = encode_box(b"moov", &cmov);
+
+        let mut ftyp_payload = Vec::new();
+        ftyp_payload.extend_from_slice(b"qt  ");
+        ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
+        ftyp_payload.extend_from_slice(b"qt  ");
+        let ftyp = encode_box(b"ftyp", &ftyp_payload);
+        let mdat = encode_box(b"mdat", &[0u8; 4]);
+        let mut bytes = ftyp;
+        bytes.extend(outer_moov);
+        bytes.extend(mdat);
+
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.mov", 0);
+        Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(
+            out.tracks[0].properties.video.as_ref().unwrap().pixel_dimensions.unwrap().width,
+            1280
+        );
+    }
+
+    // ---- PARSER-043: esds object type refines the codec ------------------
+
+    #[test]
+    fn esds_mp3_object_type_reports_mp3() {
+        use crate::media_metadata::mp4::codec_specific::esds::build_esds_payload;
+        use crate::media_metadata::mp4::moov::stbl::stsd::build_audio_sample_entry_v0;
+        // mp4a sample entry carrying an esds with objectType 0x6B (MP3).
+        let esds = encode_box(b"esds", &build_esds_payload(0x6B, &[]));
+        let entry = build_audio_sample_entry_v0(b"mp4a", 2, 16, 48_000, &esds);
+        let stsd = encode_box(
+            b"stsd",
+            &crate::media_metadata::mp4::moov::stbl::stsd::build_stsd_payload(&[entry]),
+        );
+        let stbl = encode_box(b"stbl", &stsd);
+        let minf = encode_box(b"minf", &stbl);
+        let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(48_000, 0, "eng"));
+        let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"soun", "Sound"));
+        let mut mdia = mdhd;
+        mdia.extend(hdlr);
+        mdia.extend(minf);
+        let mdia = encode_box(b"mdia", &mdia);
+        let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(1, 0, 0));
+        let mut trak = tkhd;
+        trak.extend(mdia);
+        let trak = encode_box(b"trak", &trak);
+        let bytes = build_minimal_mp4(b"mp42", vec![trak]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.mp4", 0);
+        Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.tracks[0].codec.id, "A_MPEG/L3");
+        assert_eq!(out.tracks[0].codec.name.as_deref(), Some("MP3"));
     }
 
     #[test]

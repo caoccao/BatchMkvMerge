@@ -113,7 +113,9 @@ fn parses_native_flac() {
 #[test]
 fn parses_wavpack() {
     let sr_index: u32 = 9; // 44_100
-    let flags = (sr_index << 23) | 1u32; // bps_index 1 = 16-bit
+    // bps_index 1 = 16-bit; INITIAL_BLOCK (0x800) + FINAL_BLOCK (0x1000) mark a
+    // complete single-block segment.
+    let flags = (sr_index << 23) | 1u32 | 0x800 | 0x1000;
     let mut bytes = vec![0u8; 32];
     bytes[..4].copy_from_slice(b"wvpk");
     bytes[4..8].copy_from_slice(&100u32.to_le_bytes());
@@ -250,15 +252,64 @@ fn parses_ac3_stream() {
 
 // -- DTS ----------------------------------------------------------------------
 
+/// MSB-first bit writer for building a synthetic DTS core frame.
+struct BitW {
+    bytes: Vec<u8>,
+    bit_pos: usize,
+}
+impl BitW {
+    fn new() -> Self {
+        BitW { bytes: Vec::new(), bit_pos: 0 }
+    }
+    fn put(&mut self, n: u32, value: u64) {
+        for i in (0..n).rev() {
+            let bit = ((value >> i) & 1) as u8;
+            let byte_idx = self.bit_pos / 8;
+            if byte_idx >= self.bytes.len() {
+                self.bytes.push(0);
+            }
+            if bit != 0 {
+                self.bytes[byte_idx] |= 0x80 >> (self.bit_pos % 8);
+            }
+            self.bit_pos += 1;
+        }
+    }
+}
+
+fn build_dts_core_frame() -> Vec<u8> {
+    let mut w = BitW::new();
+    w.put(32, 0x7ffe_8001); // sync word (core)
+    w.put(1, 1); // frametype normal
+    w.put(5, 0); // deficit
+    w.put(1, 0); // crc present
+    w.put(7, 0); // num_pcm_sample_blocks - 1
+    w.put(14, 95); // frame_byte_size - 1 → 96 bytes
+    w.put(6, 2); // amode → 2 channels
+    w.put(4, 13); // sfreq → 48 kHz
+    w.put(5, 0); // transmission bitrate
+    for _ in 0..5 {
+        w.put(1, 0); // downmix/dynrange/timestamp/aux/hdcd
+    }
+    w.put(3, 0); // extension audio descriptor
+    w.put(1, 0); // extended coding
+    w.put(1, 0); // audio sync word in sub-sub
+    w.put(2, 0); // lfe type
+    w.put(1, 0); // predictor history
+    w.put(1, 0); // multirate interpolator
+    w.put(4, 0); // encoder software revision
+    w.put(2, 0); // copy history
+    w.put(3, 0); // source pcm resolution → spr_16
+    w.put(1, 0); // front sum/difference
+    w.put(1, 0); // surround sum/difference
+    w.put(4, 0); // dialog normalization gain
+    let mut bytes = w.bytes;
+    bytes.resize(96 + 16, 0); // frame + exss-search lookahead
+    bytes
+}
+
 #[test]
 fn parses_dts_stream() {
-    let mut bytes = vec![0u8; 64];
-    bytes[0] = 0x7F;
-    bytes[1] = 0xFE;
-    bytes[2] = 0x80;
-    bytes[3] = 0x01;
-    bytes[7] = 0x01;
-    bytes[8] = 0b1011_0100;
+    let bytes = build_dts_core_frame();
     let path = write_tempfile(&bytes, "dts");
     let m = parse(&path, ParseOptions::default()).unwrap();
     let _ = std::fs::remove_file(&path);
@@ -267,15 +318,21 @@ fn parses_dts_stream() {
 
 // -- TrueHD -------------------------------------------------------------------
 
+fn build_truehd_frame() -> Vec<u8> {
+    let mut b = vec![0u8; 32];
+    b[1] = 0x10; // access_unit_length 16 → frame size 32
+    b[4] = 0xF8;
+    b[5] = 0x72;
+    b[6] = 0x6F;
+    b[7] = 0xBA; // TrueHD sync word at offset 4
+    b
+}
+
 #[test]
 fn parses_truehd_stream() {
-    let mut bytes = vec![0u8; 32];
-    bytes[0] = 0xF8;
-    bytes[1] = 0x72;
-    bytes[2] = 0x6F;
-    bytes[3] = 0xBB;
-    bytes[8] = 0x10; // sr_index 1 = 96 kHz
-    bytes[9] = 0x07;
+    // Two back-to-back sync frames are required to confirm the stream.
+    let mut bytes = build_truehd_frame();
+    bytes.extend(build_truehd_frame());
     let path = write_tempfile(&bytes, "thd");
     let m = parse(&path, ParseOptions::default()).unwrap();
     let _ = std::fs::remove_file(&path);

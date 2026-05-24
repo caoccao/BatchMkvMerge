@@ -67,7 +67,7 @@ fn build_track(
     mvex: &TrexDefaults,
     fragment_track_counts: &std::collections::HashMap<u32, u32>,
 ) -> Option<Track> {
-    let codec_id = builder.codec_id_str.clone().unwrap_or_default();
+    let mut codec_id = builder.codec_id_str.clone().unwrap_or_default();
     if codec_id.is_empty() {
         return None;
     }
@@ -83,6 +83,19 @@ fn build_track(
         TrackType::Unknown => return None, // skip non-track handlers
         t => t,
     };
+
+    // PARSER-043: a generic MPEG-4 system sample entry (mp4a / mp4v / mp4s) is
+    // refined to the real codec from the esds objectTypeIndication so MP3, AC-3,
+    // DTS, AAC, AVC, etc. are not all reported as "mp4a"/"mp4v".
+    let mut codec_name = builder.codec_name.clone();
+    if matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ") {
+        if let Some(ot) = builder.esds_object_type {
+            if let Some((id, name)) = codec_from_object_type(ot) {
+                codec_id = id.to_string();
+                codec_name = Some(name.to_string());
+            }
+        }
+    }
 
     let mut common = CommonTrackProperties::default();
     common.number = builder.track_id.map(|id| id as u64);
@@ -131,7 +144,7 @@ fn build_track(
 
     let codec = CodecInfo {
         id: codec_id,
-        name: builder.codec_name,
+        name: codec_name,
         codec_private,
     };
 
@@ -181,6 +194,25 @@ fn build_track(
         track_type,
         codec,
         properties,
+    })
+}
+
+/// Map an MPEG-4 `objectTypeIndication` to a (codec_id, name) pair. Mirrors the
+/// audio/video branches of `r_qtmp4.cpp::determine_codec`.
+fn codec_from_object_type(object_type: u8) -> Option<(&'static str, &'static str)> {
+    Some(match object_type {
+        0x40 | 0x66 | 0x67 | 0x68 => ("A_AAC", "AAC"),
+        0x69 | 0x6B => ("A_MPEG/L3", "MP3"),
+        0x6A => ("A_MPEG/L2", "MP2"),
+        0xA5 => ("A_AC3", "AC-3"),
+        0xA6 => ("A_EAC3", "E-AC-3"),
+        0xA9 | 0xAA | 0xAB => ("A_DTS", "DTS"),
+        0xDD => ("A_VORBIS", "Vorbis"),
+        0x20 => ("V_MPEG4/ISO/ASP", "MPEG-4 Visual"),
+        0x21 => ("V_MPEG4/ISO/AVC", "AVC/H.264"),
+        0x23 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265"),
+        0x6C => ("V_MJPEG", "JPEG"),
+        _ => return None,
     })
 }
 

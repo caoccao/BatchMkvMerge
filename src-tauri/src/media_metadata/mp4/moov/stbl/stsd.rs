@@ -216,34 +216,53 @@ fn parse_audio_sample_entry(
     let version = src.read_u16_be()?;
     let _revision = src.read_u16_be()?;
     let _vendor = src.read_u32_be()?;
-    let channels = src.read_u16_be()? as u32;
-    let sample_size = src.read_u16_be()? as u32;
-    let _compression_id = src.read_u16_be()?;
-    let _packet_size = src.read_u16_be()?;
-    let sample_rate_fixed = src.read_u32_be()?; // 16.16 fixed-point in v0
-    let mut sample_rate_hz = (sample_rate_fixed >> 16) as f64;
 
-    let mut bytes = AUDIO_PREAMBLE_BYTES + AUDIO_FIXED_BYTES;
+    let channels;
+    let sample_size;
+    let sample_rate_hz;
+    let bytes;
 
-    // v1: 16 more bytes of layout (samples_per_packet, etc.)
-    if version >= 1 {
-        let extra = 16u64;
-        if payload >= consumed_so_far + bytes + extra {
-            src.skip(extra)?;
-            bytes += extra;
+    if version == 2 {
+        // QuickTime version-2 audio sample entry (PARSER-047): the v0
+        // channel/sample-size fields are fixed placeholders (3 / 16); the real
+        // values live in the explicit float64 + u32 fields that follow.
+        let need = AUDIO_PREAMBLE_BYTES + 48;
+        if payload < consumed_so_far + need {
+            return Err(ParseError::Malformed {
+                format: "mp4",
+                offset: entry.start,
+                reason: format!("v2 audio sample entry payload too short ({payload} bytes)"),
+            });
         }
-    }
-    // v2: 36 more bytes including an explicit float64 sample rate.
-    if version >= 2 {
-        let extra = 36u64;
-        if payload >= consumed_so_far + bytes + extra {
-            let _v2_size = src.read_u32_be()?;
-            let raw = src.read_u64_be()?;
-            sample_rate_hz = f64::from_bits(raw);
-            // skip remaining 24 bytes
-            src.skip(24)?;
-            bytes += extra;
+        // always3(2) always16(2) alwaysMinus2(2) always0(2) always65536(4)
+        // sizeOfStructOnly(4) = 16 bytes
+        src.skip(16)?;
+        sample_rate_hz = f64::from_bits(src.read_u64_be()?); // audioSampleRate
+        channels = src.read_u32_be()?; // numAudioChannels
+        src.skip(4)?; // always7F000000
+        sample_size = src.read_u32_be()?; // constBitsPerChannel
+        // formatSpecificFlags(4) constBytesPerAudioPacket(4)
+        // constLPCMFramesPerAudioPacket(4) = 12 bytes
+        src.skip(12)?;
+        bytes = AUDIO_PREAMBLE_BYTES + 48;
+    } else {
+        channels = src.read_u16_be()? as u32;
+        sample_size = src.read_u16_be()? as u32;
+        let _compression_id = src.read_u16_be()?;
+        let _packet_size = src.read_u16_be()?;
+        let sample_rate_fixed = src.read_u32_be()?; // 16.16 fixed-point in v0/v1
+        sample_rate_hz = (sample_rate_fixed >> 16) as f64;
+
+        let mut b = AUDIO_PREAMBLE_BYTES + AUDIO_FIXED_BYTES;
+        // v1: 16 more bytes (samplesPerPacket, bytesPerPacket, ...).
+        if version == 1 {
+            let extra = 16u64;
+            if payload >= consumed_so_far + b + extra {
+                src.skip(extra)?;
+                b += extra;
+            }
         }
+        bytes = b;
     }
 
     let mut audio = AudioTrackProperties::default();
@@ -293,10 +312,72 @@ fn walk_sample_entry_children(
             b"colr" => codec_specific::colr::parse(src, &child, builder)?,
             b"pasp" => codec_specific::pasp::parse(src, &child, builder)?,
             b"dvcC" | b"dvvC" => codec_specific::dvcc::parse(src, &child, builder)?,
+            // QuickTime nests codec-config atoms (esds, dOps, ...) inside a
+            // `wave` container (PARSER-044) — recurse into it.
+            b"wave" => walk_sample_entry_children(src, &child, deadline, builder)?,
+            // Opus / FLAC private boxes (PARSER-045).
+            b"dOps" => parse_dops(src, &child, builder)?,
+            b"dfLa" => parse_dfla(src, &child, builder)?,
             _ => {}
         }
         atom::skip_payload(src, &child)?;
     }
+    Ok(())
+}
+
+/// Parse a `dOps` (Opus) box. Layout: Version(1) OutputChannelCount(1)
+/// PreSkip(2) InputSampleRate(4) OutputGain(2) ChannelMappingFamily(1) …
+/// Opus always decodes at 48 kHz regardless of InputSampleRate.
+fn parse_dops(
+    src: &mut FileSource,
+    header: &BoxHeader,
+    builder: &mut TrackBuilder,
+) -> Result<(), ParseError> {
+    let payload = atom::read_payload(src, header, 4096)?;
+    if payload.len() < 11 {
+        return Ok(());
+    }
+    let channels = payload[1] as u32;
+    let audio = builder.audio.get_or_insert_with(AudioTrackProperties::default);
+    if channels != 0 {
+        audio.channels = Some(channels);
+    }
+    audio.sampling_frequency = Some(48_000.0);
+    builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
+    Ok(())
+}
+
+/// Parse a `dfLa` (FLAC) box: 4-byte FullBox header + FLAC metadata block
+/// chain. The first block is STREAMINFO (sample rate / channels / bit depth).
+fn parse_dfla(
+    src: &mut FileSource,
+    header: &BoxHeader,
+    builder: &mut TrackBuilder,
+) -> Result<(), ParseError> {
+    let payload = atom::read_payload(src, header, 64 * 1024)?;
+    if payload.len() < 4 {
+        return Ok(());
+    }
+    builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
+    // After the 4-byte FullBox header: metadata block header (4) + STREAMINFO.
+    let body = &payload[4..];
+    if body.len() < 4 + 34 {
+        return Ok(());
+    }
+    let info = &body[4..4 + 34];
+    // STREAMINFO: bytes 10..18 pack sample_rate(20) channels(3) bits(5) ...
+    let packed = u64::from_be_bytes([
+        info[10], info[11], info[12], info[13], info[14], info[15], info[16], info[17],
+    ]);
+    let sample_rate = ((packed >> 44) & 0xF_FFFF) as f64;
+    let channels = (((packed >> 41) & 0x07) + 1) as u32;
+    let bits = (((packed >> 36) & 0x1F) + 1) as u32;
+    let audio = builder.audio.get_or_insert_with(AudioTrackProperties::default);
+    if sample_rate > 0.0 {
+        audio.sampling_frequency = Some(sample_rate);
+    }
+    audio.channels = Some(channels);
+    audio.bit_depth = Some(bits);
     Ok(())
 }
 
@@ -358,6 +439,37 @@ pub(crate) fn build_audio_sample_entry_v0(
     p.extend_from_slice(&sample_size.to_be_bytes());
     p.extend_from_slice(&[0u8; 2 + 2]); // compression_id + packet_size
     p.extend_from_slice(&(sample_rate_hz << 16).to_be_bytes());
+    p.extend_from_slice(children);
+    crate::media_metadata::mp4::atom::encode_box(fourcc_kind, &p)
+}
+
+#[cfg(test)]
+pub(crate) fn build_audio_sample_entry_v2(
+    fourcc_kind: &[u8; 4],
+    channels: u32,
+    bits: u32,
+    sample_rate_hz: f64,
+    children: &[u8],
+) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&[0u8; 6]); // reserved
+    p.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    p.extend_from_slice(&2u16.to_be_bytes()); // version 2
+    p.extend_from_slice(&[0u8; 2 + 4]); // revision + vendor
+    // v2 fixed placeholders + struct size.
+    p.extend_from_slice(&3u16.to_be_bytes());
+    p.extend_from_slice(&16u16.to_be_bytes());
+    p.extend_from_slice(&(-2i16).to_be_bytes());
+    p.extend_from_slice(&0u16.to_be_bytes());
+    p.extend_from_slice(&65536u32.to_be_bytes());
+    p.extend_from_slice(&72u32.to_be_bytes()); // sizeOfStructOnly
+    p.extend_from_slice(&sample_rate_hz.to_bits().to_be_bytes());
+    p.extend_from_slice(&channels.to_be_bytes());
+    p.extend_from_slice(&0x7F00_0000u32.to_be_bytes());
+    p.extend_from_slice(&bits.to_be_bytes());
+    p.extend_from_slice(&0u32.to_be_bytes()); // formatSpecificFlags
+    p.extend_from_slice(&0u32.to_be_bytes()); // constBytesPerAudioPacket
+    p.extend_from_slice(&0u32.to_be_bytes()); // constLPCMFramesPerAudioPacket
     p.extend_from_slice(children);
     crate::media_metadata::mp4::atom::encode_box(fourcc_kind, &p)
 }
@@ -491,6 +603,73 @@ mod tests {
             cfg.chroma_format,
             Some(crate::media_metadata::model::track_properties_video::ChromaFormat::Yuv420)
         );
+    }
+
+    // ---- PARSER-047: version-2 audio sample entry ------------------------
+
+    #[test]
+    fn v2_audio_entry_reads_explicit_channels_and_rate() {
+        let entry = build_audio_sample_entry_v2(b"lpcm", 8, 24, 96_000.0, &[]);
+        let payload = build_stsd_payload(&[entry]);
+        let b = run(payload, *b"soun");
+        let a = b.audio.unwrap();
+        // Real values from the v2 fields, not the always-3 / always-16 stubs.
+        assert_eq!(a.channels, Some(8));
+        assert_eq!(a.sampling_frequency, Some(96_000.0));
+        assert_eq!(a.bit_depth, Some(24));
+    }
+
+    // ---- PARSER-044: wave container recursion ----------------------------
+
+    #[test]
+    fn wave_container_nests_esds() {
+        let esds_payload =
+            crate::media_metadata::mp4::codec_specific::esds::build_esds_payload(0x40, &[0x12, 0x10]);
+        let esds = encode_box(b"esds", &esds_payload);
+        let wave = encode_box(b"wave", &esds);
+        let entry = build_audio_sample_entry_v0(b"mp4a", 2, 16, 44_100, &wave);
+        let payload = build_stsd_payload(&[entry]);
+        let b = run(payload, *b"soun");
+        // esds nested inside wave is still decoded.
+        assert_eq!(b.audio_codec_config.unwrap().aac_object_type, Some(2));
+    }
+
+    // ---- PARSER-045: Opus / FLAC private boxes ---------------------------
+
+    #[test]
+    fn dops_box_sets_opus_channels_and_48k() {
+        // dOps: version(1) channels(1) preskip(2) inputrate(4) gain(2) family(1)
+        let mut dops_payload = vec![0u8, 6]; // version 0, 6 channels
+        dops_payload.extend_from_slice(&0u16.to_be_bytes()); // preskip
+        dops_payload.extend_from_slice(&44_100u32.to_be_bytes()); // input sample rate
+        dops_payload.extend_from_slice(&0u16.to_be_bytes()); // gain
+        dops_payload.push(0); // mapping family
+        let dops = encode_box(b"dOps", &dops_payload);
+        let entry = build_audio_sample_entry_v0(b"Opus", 0, 0, 0, &dops);
+        let payload = build_stsd_payload(&[entry]);
+        let b = run(payload, *b"soun");
+        let a = b.audio.unwrap();
+        assert_eq!(a.channels, Some(6));
+        assert_eq!(a.sampling_frequency, Some(48_000.0));
+    }
+
+    #[test]
+    fn dfla_box_decodes_flac_streaminfo() {
+        // dfLa: 4-byte FullBox header + metadata block header(4) + STREAMINFO(34).
+        let mut info = vec![0u8; 34];
+        let packed = (44_100u64 << 44) | ((1u64) << 41) | ((15u64) << 36); // 44100, 2ch, 16-bit
+        info[10..18].copy_from_slice(&packed.to_be_bytes());
+        let mut dfla_payload = vec![0u8; 4]; // FullBox
+        dfla_payload.extend_from_slice(&[0x80, 0x00, 0x00, 34]); // last STREAMINFO block header
+        dfla_payload.extend_from_slice(&info);
+        let dfla = encode_box(b"dfLa", &dfla_payload);
+        let entry = build_audio_sample_entry_v0(b"fLaC", 0, 0, 0, &dfla);
+        let payload = build_stsd_payload(&[entry]);
+        let b = run(payload, *b"soun");
+        let a = b.audio.unwrap();
+        assert_eq!(a.sampling_frequency, Some(44_100.0));
+        assert_eq!(a.channels, Some(2));
+        assert_eq!(a.bit_depth, Some(16));
     }
 
     #[test]

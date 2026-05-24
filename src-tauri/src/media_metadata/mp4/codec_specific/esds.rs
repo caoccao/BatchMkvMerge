@@ -56,8 +56,10 @@ pub fn parse(
     let mut cursor = Cursor { data: body, pos: 0 };
     let mut cfg = AudioCodecConfig::default();
     cfg.raw_hex = Some(hex_encode(&payload));
-    walk(&mut cursor, &mut cfg);
+    let mut object_type: Option<u8> = None;
+    walk(&mut cursor, &mut cfg, &mut object_type);
     builder.audio_codec_config = Some(cfg);
+    builder.esds_object_type = object_type;
     builder.codec_private_hex = Some(hex_encode(&payload));
     Ok(())
 }
@@ -114,7 +116,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig) {
+fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig, object_type_out: &mut Option<u8>) {
     while let Some(tag) = cursor.read_u8() {
         let len = match cursor.read_ber_length() {
             Some(l) => l,
@@ -142,11 +144,12 @@ fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig) {
                     data: &cursor.data[cursor.pos..body_end],
                     pos: 0,
                 };
-                walk(&mut inner, cfg);
+                walk(&mut inner, cfg, object_type_out);
                 cursor.pos = body_end;
             }
             TAG_DECODER_CONFIG => {
                 let object_type = cursor.read_u8().unwrap_or(0);
+                *object_type_out = Some(object_type);
                 let _stream_type = cursor.read_u8();
                 let _buffer = cursor.read_u8().is_some()
                     && cursor.read_u8().is_some()
@@ -160,7 +163,7 @@ fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig) {
                     data: &cursor.data[cursor.pos..body_end],
                     pos: 0,
                 };
-                walk(&mut inner, cfg);
+                walk(&mut inner, cfg, object_type_out);
                 cursor.pos = body_end;
             }
             TAG_DEC_SPECIFIC_INFO => {
@@ -176,31 +179,78 @@ fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig) {
     }
 }
 
+/// Port of `common/aac.cpp::parse_audio_specific_config` (the subset needed for
+/// identification): hierarchical SBR/PS signalling, the GASpecificConfig frame
+/// length flag, and the backward-compatible 0x2b7 sync-extension (PARSER-046).
 fn parse_audio_specific_config(bytes: &[u8], cfg: &mut AudioCodecConfig) {
     if bytes.is_empty() {
         return;
     }
-    let mut reader = BitCursor { data: bytes, pos: 0 };
-    let aot = read_audio_object_type(&mut reader);
-    let sample_rate_index = reader.read_bits(4) as u32;
-    let _sample_rate = if sample_rate_index == 0xF {
-        reader.read_bits(24)
-    } else {
-        sample_rate_from_index(sample_rate_index as u8)
-    };
-    let channel_config = reader.read_bits(4) as u32;
-    cfg.aac_object_type = Some(aot);
-    cfg.aac_frame_length = Some(match aot {
-        3 => 768,
-        _ => 1024,
-    });
-    let _ = channel_config; // channels already filled from sample entry
+    let mut r = BitCursor { data: bytes, pos: 0 };
+    let mut profile = read_audio_object_type(&mut r);
+    let sample_rate_index = r.read_bits(4) as u32;
+    if sample_rate_index == 0xF {
+        r.read_bits(24);
+    }
+    let channel_config = r.read_bits(4) as u32;
 
-    // Extension: object type 5 (SBR) or 29 (PS) signal presence.
-    let sbr_present = matches!(aot, 5 | 29);
-    let ps_present = aot == 29;
-    cfg.aac_sbr_present = Some(sbr_present);
-    cfg.aac_ps_present = Some(ps_present);
+    let mut sbr = false;
+    let mut ps = false;
+
+    // Explicit hierarchical SBR/PS signalling (AOT 5 = SBR, 29 = PS).
+    if profile == 5 || profile == 29 {
+        sbr = true;
+        if profile == 29 {
+            ps = true;
+        }
+        let ext_sr_index = r.read_bits(4) as u32;
+        if ext_sr_index == 0xF {
+            r.read_bits(24);
+        }
+        profile = read_audio_object_type(&mut r); // the real core object type
+        if profile == 22 {
+            r.read_bits(4); // ext channel configuration
+        }
+    }
+
+    // GASpecificConfig: frame length flag distinguishes 960 vs 1024 samples.
+    let mut frame_length = 1024u32;
+    if matches!(profile, 1 | 2 | 3 | 4 | 6 | 7 | 17 | 19 | 20 | 21 | 22 | 23) {
+        let frame_length_flag = r.read_bits(1);
+        frame_length = if frame_length_flag != 0 { 960 } else { 1024 };
+        if r.read_bits(1) != 0 {
+            r.read_bits(14); // coreCoderDelay
+        }
+        let _extension_flag = r.read_bits(1);
+    }
+
+    // Backward-compatible SBR signalling via the 0x2b7 sync extension.
+    if !sbr && r.remaining() >= 16 {
+        if r.read_bits(11) as u32 == 0x2b7 {
+            if read_audio_object_type(&mut r) == 5 {
+                let sbr_present = r.read_bits(1);
+                if sbr_present != 0 {
+                    sbr = true;
+                    let ext_sr_index = r.read_bits(4) as u32;
+                    if ext_sr_index == 0xF {
+                        r.read_bits(24);
+                    }
+                    // Optional PS signalling (0x548 sync extension).
+                    if r.remaining() >= 12 && r.read_bits(11) as u32 == 0x548 {
+                        if r.read_bits(1) != 0 {
+                            ps = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    cfg.aac_object_type = Some(profile);
+    cfg.aac_frame_length = Some(frame_length);
+    cfg.aac_sbr_present = Some(sbr);
+    cfg.aac_ps_present = Some(ps);
+    let _ = (sample_rate_index, channel_config);
 }
 
 fn read_audio_object_type(cursor: &mut BitCursor) -> u32 {
@@ -217,6 +267,10 @@ struct BitCursor<'a> {
 }
 
 impl<'a> BitCursor<'a> {
+    fn remaining(&self) -> usize {
+        (self.data.len() * 8).saturating_sub(self.pos)
+    }
+
     fn read_bits(&mut self, n: u32) -> u64 {
         let mut value: u64 = 0;
         for _ in 0..n {
