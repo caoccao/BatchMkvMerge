@@ -123,6 +123,64 @@ pub fn parse(bytes: &[u8]) -> Result<CafMetadata, ParseError> {
     Ok(metadata)
 }
 
+/// Decode an AudioStreamBasicDescription (`desc` chunk body, ≥ 32 bytes).
+pub fn decode_desc(body: &[u8]) -> Option<AudioDescription> {
+    if body.len() < 32 {
+        return None;
+    }
+    let sample_rate = f64::from_bits(u64::from_be_bytes([
+        body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[7],
+    ]));
+    Some(AudioDescription {
+        sample_rate,
+        format_id: [body[8], body[9], body[10], body[11]],
+        format_flags: u32::from_be_bytes([body[12], body[13], body[14], body[15]]),
+        bytes_per_packet: u32::from_be_bytes([body[16], body[17], body[18], body[19]]),
+        frames_per_packet: u32::from_be_bytes([body[20], body[21], body[22], body[23]]),
+        channels: u32::from_be_bytes([body[24], body[25], body[26], body[27]]),
+        bits_per_channel: u32::from_be_bytes([body[28], body[29], body[30], body[31]]),
+    })
+}
+
+/// `sizeof(mtx::alac::codec_config_t)`.
+pub const ALAC_CONFIG_SIZE: usize = 24;
+
+#[derive(Debug, Clone, Copy)]
+pub struct AlacConfig {
+    pub bit_depth: u8,
+    pub num_channels: u8,
+    pub sample_rate: u32,
+}
+
+/// Port of `handle_alac_magic_cookie`: unwrap an old-style (`frmaalac`) cookie
+/// to the 24-byte codec_config, otherwise return the cookie as-is.
+pub fn convert_alac_cookie(cookie: &[u8]) -> Option<Vec<u8>> {
+    if cookie.len() < ALAC_CONFIG_SIZE {
+        return None;
+    }
+    if cookie.len() >= 12 && &cookie[4..12] == b"frmaalac" {
+        let min = 12 + 12 + ALAC_CONFIG_SIZE;
+        if cookie.len() < min {
+            return None;
+        }
+        Some(cookie[24..24 + ALAC_CONFIG_SIZE].to_vec())
+    } else {
+        Some(cookie.to_vec())
+    }
+}
+
+/// Decode the ALAC `codec_config_t` fields used for identification.
+pub fn parse_alac_config(cfg: &[u8]) -> Option<AlacConfig> {
+    if cfg.len() < ALAC_CONFIG_SIZE {
+        return None;
+    }
+    Some(AlacConfig {
+        bit_depth: cfg[5],
+        num_channels: cfg[11],
+        sample_rate: u32::from_be_bytes([cfg[20], cfg[21], cfg[22], cfg[23]]),
+    })
+}
+
 pub fn fourcc_string(bytes: &[u8; 4]) -> String {
     bytes
         .iter()

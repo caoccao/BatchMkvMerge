@@ -15,13 +15,22 @@
  *   limitations under the License.
  */
 
-//! Top-level `CoreAudioReader`.
+//! Top-level `CoreAudioReader`. Pure-Rust port of
+//! `mkvtoolnix/src/input/r_coreaudio.cpp`.
+//!
+//! Chunks are scanned through the whole file via seeks (PARSER-029) so `desc`,
+//! `pakt`, and `kuki` are found regardless of position. The `pakt` packet
+//! table feeds the duration and the `kuki` ALAC magic cookie becomes the
+//! codec-private blob (PARSER-030). `supported` is set only for ALAC, matching
+//! mkvtoolnix, which marks every other CAF codec unsupported (PARSER-031).
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
+use crate::media_metadata::io::endian::{get_u32_be, get_u64_be};
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::container::ContainerFormat;
-use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
+use crate::media_metadata::model::duration::DurationValue;
+use crate::media_metadata::model::track::{CodecInfo, CodecPrivate, Track, TrackProperties, TrackType};
 use crate::media_metadata::model::track_properties_audio::AudioTrackProperties;
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
 use crate::media_metadata::model::MediaMetadata;
@@ -29,7 +38,54 @@ use crate::media_metadata::reader::Reader;
 
 use super::caf::{self, CAFF_MAGIC};
 
-const PROBE_BYTES: usize = 64 * 1024;
+const MAX_CHUNKS: usize = 4096;
+const MAX_CHUNK_READ: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct Chunk {
+    ctype: [u8; 4],
+    data_pos: u64,
+    size: u64,
+}
+
+/// Port of `scan_chunks` — walk `type(4) + size(u64 BE)` headers through the
+/// file. A zero size means "to end of file".
+fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+    let mut chunks = Vec::new();
+    let mut pos = 8u64; // after "caff" + version(2) + flags(2)
+    while chunks.len() < MAX_CHUNKS {
+        src.seek_to(pos)?;
+        let mut hdr = [0u8; 12];
+        if src.read_at_most(&mut hdr)? < 12 {
+            break;
+        }
+        let ctype = [hdr[0], hdr[1], hdr[2], hdr[3]];
+        let raw_size = get_u64_be(&hdr[4..]);
+        let data_pos = pos + 12;
+        let remaining = file_size.saturating_sub(data_pos);
+        let size = if raw_size == 0 { remaining } else { raw_size.min(remaining) };
+        chunks.push(Chunk { ctype, data_pos, size });
+        let next = data_pos.saturating_add(size);
+        if next <= pos || next >= file_size {
+            break;
+        }
+        pos = next;
+    }
+    Ok(chunks)
+}
+
+fn find_chunk<'a>(chunks: &'a [Chunk], ctype: &[u8; 4]) -> Option<&'a Chunk> {
+    chunks.iter().find(|c| &c.ctype == ctype)
+}
+
+fn read_chunk_body(src: &mut FileSource, chunk: &Chunk) -> Result<Vec<u8>, ParseError> {
+    src.seek_to(chunk.data_pos)?;
+    let want = chunk.size.min(MAX_CHUNK_READ);
+    let mut buf = vec![0u8; want as usize];
+    let n = src.read_at_most(&mut buf)?;
+    buf.truncate(n);
+    Ok(buf)
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoreAudioReader;
@@ -52,19 +108,58 @@ impl Reader for CoreAudioReader {
         _deadline: &Deadline,
         out: &mut MediaMetadata,
     ) -> Result<(), ParseError> {
-        let mut buf = vec![0u8; PROBE_BYTES];
         src.seek_to(0)?;
-        let read = src.read_at_most(&mut buf)?;
-        let metadata = caf::parse(&buf[..read])?;
+        let mut magic = [0u8; 8];
+        if src.read_at_most(&mut magic)? < 8 || magic[..4] != CAFF_MAGIC {
+            return Err(ParseError::Unrecognised);
+        }
+        let file_size = src.length().unwrap_or(u64::MAX);
+        let chunks = scan_chunks(src, file_size)?;
 
-        out.container.format = ContainerFormat::CoreAudio;
-        out.container.recognized = true;
-        out.container.supported = true;
-        let description = metadata.description.ok_or(ParseError::Malformed {
+        let desc_chunk = find_chunk(&chunks, b"desc").ok_or(ParseError::Malformed {
             format: "coreaudio",
             offset: 0,
             reason: "missing desc chunk".to_string(),
         })?;
+        let desc_body = read_chunk_body(src, desc_chunk)?;
+        let description = caf::decode_desc(&desc_body).ok_or(ParseError::Malformed {
+            format: "coreaudio",
+            offset: desc_chunk.data_pos,
+            reason: "truncated desc chunk".to_string(),
+        })?;
+
+        // mkvtoolnix only supports ALAC inside CAF (PARSER-031).
+        let is_alac = description.format_id.eq_ignore_ascii_case(b"alac");
+
+        out.container.format = ContainerFormat::CoreAudio;
+        out.container.recognized = true;
+        out.container.supported = is_alac;
+
+        // pakt → total frame count → duration.
+        if let Some(pakt) = find_chunk(&chunks, b"pakt") {
+            let body = read_chunk_body(src, pakt)?;
+            if body.len() >= 24 && description.sample_rate > 0.0 {
+                // num_packets(u64) · num_valid_frames(u64) · priming(u32) · remainder(u32).
+                let valid_frames = get_u64_be(&body[8..]);
+                let priming = get_u32_be(&body[16..]) as u64;
+                let remainder = get_u32_be(&body[20..]) as u64;
+                let total_frames = valid_frames.saturating_add(priming).saturating_add(remainder);
+                let ns = (total_frames as u128) * 1_000_000_000 / description.sample_rate as u128;
+                out.container.properties.duration = Some(DurationValue::from_ns(ns as u64));
+            }
+        }
+
+        // kuki → ALAC magic cookie → codec_private.
+        let mut codec_private = None;
+        if is_alac {
+            if let Some(kuki) = find_chunk(&chunks, b"kuki") {
+                let body = read_chunk_body(src, kuki)?;
+                if let Some(cookie) = caf::convert_alac_cookie(&body) {
+                    codec_private = Some(CodecPrivate::from_bytes(&cookie));
+                }
+            }
+        }
+
         let mut common = CommonTrackProperties::default();
         common.number = Some(1);
         let mut audio = AudioTrackProperties::default();
@@ -85,7 +180,7 @@ impl Reader for CoreAudioReader {
             codec: CodecInfo {
                 id: codec_id,
                 name: Some(codec_name.to_string()),
-                codec_private: None,
+                codec_private,
             },
             properties: TrackProperties {
                 common,
@@ -150,14 +245,92 @@ mod tests {
         assert_eq!(out.tracks[0].codec.name.as_deref(), Some("PCM"));
     }
 
+    // ---- PARSER-031: only ALAC is supported -------------------------------
+
     #[test]
-    fn read_headers_recognises_alac() {
+    fn lpcm_is_recognised_but_unsupported() {
+        use crate::media_metadata::deadline::Deadline;
+        let bytes = build_caf(b"lpcm", 48_000.0, 2, 24);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.caf", 0);
+        CoreAudioReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert!(out.container.recognized);
+        assert!(!out.container.supported);
+    }
+
+    #[test]
+    fn alac_is_supported() {
         use crate::media_metadata::deadline::Deadline;
         let bytes = build_caf(b"alac", 44_100.0, 2, 16);
         let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
         let mut out = MediaMetadata::new("clip.caf", 0);
         CoreAudioReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert!(out.container.supported);
         assert_eq!(out.tracks[0].codec.name.as_deref(), Some("ALAC (Apple Lossless)"));
+    }
+
+    // ---- PARSER-029 / 030: late chunks, pakt, kuki ------------------------
+
+    #[test]
+    fn finds_desc_after_large_data_chunk() {
+        // free chunk (96 KiB) before desc — beyond the old 64 KiB window.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"caff");
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.extend_from_slice(b"free");
+        bytes.extend_from_slice(&(96u64 * 1024).to_be_bytes());
+        bytes.extend(vec![0u8; 96 * 1024]);
+        bytes.extend_from_slice(b"desc");
+        bytes.extend_from_slice(&32u64.to_be_bytes());
+        bytes.extend_from_slice(&48_000.0f64.to_bits().to_be_bytes());
+        bytes.extend_from_slice(b"alac");
+        bytes.extend_from_slice(&[0u8; 4]); // flags
+        bytes.extend_from_slice(&[0u8; 4]); // bytes_per_packet
+        bytes.extend_from_slice(&1024u32.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&16u32.to_be_bytes());
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.caf", 0);
+        CoreAudioReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert!(out.container.supported);
+        assert_eq!(out.tracks[0].properties.audio.as_ref().unwrap().channels, Some(2));
+    }
+
+    #[test]
+    fn pakt_yields_duration_and_kuki_codec_private() {
+        use crate::media_metadata::deadline::Deadline;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"caff");
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        // desc (alac, 48000)
+        bytes.extend_from_slice(b"desc");
+        bytes.extend_from_slice(&32u64.to_be_bytes());
+        bytes.extend_from_slice(&48_000.0f64.to_bits().to_be_bytes());
+        bytes.extend_from_slice(b"alac");
+        bytes.extend_from_slice(&[0u8; 12]); // flags + bytes_per_packet + frames_per_packet
+        bytes.extend_from_slice(&2u32.to_be_bytes()); // channels
+        bytes.extend_from_slice(&16u32.to_be_bytes()); // bits
+        // pakt: num_packets, valid_frames=96000, priming=0, remainder=0
+        bytes.extend_from_slice(b"pakt");
+        bytes.extend_from_slice(&24u64.to_be_bytes());
+        bytes.extend_from_slice(&10u64.to_be_bytes()); // num_packets
+        bytes.extend_from_slice(&96_000u64.to_be_bytes()); // valid frames → 2s
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // priming
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // remainder
+        // kuki: new-style ALAC config (24 bytes)
+        let mut cfg = vec![0u8; caf::ALAC_CONFIG_SIZE];
+        cfg[11] = 2; // num_channels
+        cfg[5] = 16; // bit_depth
+        bytes.extend_from_slice(b"kuki");
+        bytes.extend_from_slice(&(cfg.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(&cfg);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.caf", 0);
+        CoreAudioReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert_eq!(out.container.properties.duration.unwrap().ns, 2_000_000_000);
+        assert!(out.tracks[0].codec.codec_private.is_some());
     }
 
     #[test]
