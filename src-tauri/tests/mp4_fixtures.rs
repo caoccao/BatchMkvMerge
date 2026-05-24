@@ -197,7 +197,9 @@ fn write_tempfile(bytes: &[u8], ext: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = dir.join(format!("bmm-mp4-{pid}-{nanos}.{ext}"));
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("bmm-mp4-{pid}-{nanos}-{seq}.{ext}"));
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(bytes).unwrap();
     drop(f);

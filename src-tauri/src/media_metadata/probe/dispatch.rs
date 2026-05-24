@@ -33,9 +33,11 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::FileSource;
+use crate::media_metadata::avi::AviReader;
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::mp4::Mp4Reader;
+use crate::media_metadata::ogg::OggReader;
 use crate::media_metadata::reader::Reader;
 
 /// Describes what the cascade did and why. `Claimed` means a reader's
@@ -86,7 +88,9 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     // bounds let the static live in a multi-threaded process.
     static MATROSKA: MatroskaReader = MatroskaReader;
     static MP4: Mp4Reader = Mp4Reader;
-    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[&MATROSKA, &MP4];
+    static AVI: AviReader = AviReader;
+    static OGG: OggReader = OggReader;
+    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[&MATROSKA, &AVI, &OGG, &MP4];
     REGISTRY
 }
 

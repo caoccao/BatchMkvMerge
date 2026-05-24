@@ -18,6 +18,7 @@
 // `unsafe` is forbidden throughout the parser sub-tree.
 #![forbid(unsafe_code)]
 
+pub mod avi;
 pub mod codec;
 pub mod deadline;
 pub mod error;
@@ -26,6 +27,7 @@ pub mod language;
 pub mod matroska;
 pub mod model;
 pub mod mp4;
+pub mod ogg;
 pub mod probe;
 pub mod reader;
 
