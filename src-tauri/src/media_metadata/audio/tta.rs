@@ -39,6 +39,22 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::reader::Reader;
 
+use super::id3v2;
+
+/// Byte offset where the payload starts, skipping a leading ID3v2 tag. Mirrors
+/// `mtx::id3::skip_v2_tag` — sizes the tag from its 10-byte header so an
+/// arbitrarily large tag is skipped without buffering it (PARSER-016).
+fn payload_start(src: &mut FileSource) -> Result<usize, ParseError> {
+    let mut head = [0u8; 10];
+    let n = src.read_at_most(&mut head)?;
+    src.seek_to(0)?;
+    if n == 10 {
+        Ok(id3v2::skip_id3v2(&head).unwrap_or(0))
+    } else {
+        Ok(0)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TtaHeader {
     pub channels: u32,
@@ -73,6 +89,8 @@ impl Reader for TtaReader {
     }
 
     fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
+        let start = payload_start(src)?;
+        src.seek_to(start as u64)?;
         let mut head = [0u8; 4];
         let read = src.read_at_most(&mut head)?;
         src.seek_to(0)?;
@@ -85,8 +103,9 @@ impl Reader for TtaReader {
         _deadline: &Deadline,
         out: &mut MediaMetadata,
     ) -> Result<(), ParseError> {
+        let start = payload_start(src)?;
+        src.seek_to(start as u64)?;
         let mut bytes = vec![0u8; 22];
-        src.seek_to(0)?;
         let read = src.read_at_most(&mut bytes)?;
         let header = parse_header(&bytes[..read]).ok_or(ParseError::Unrecognised)?;
 
@@ -177,6 +196,28 @@ mod tests {
         let bytes = build_tta1_header(2, 16, 44_100, 1);
         let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
         assert!(TtaReader.probe(&mut s).unwrap());
+    }
+
+    #[test]
+    fn probe_accepts_tta1_after_id3v2_tag() {
+        let mut bytes = crate::media_metadata::audio::id3v2::build_id3v2_tag(false, 100);
+        bytes.extend(build_tta1_header(2, 16, 44_100, 1));
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        assert!(TtaReader.probe(&mut s).unwrap());
+    }
+
+    #[test]
+    fn read_headers_parses_tta1_after_id3v2_tag() {
+        use crate::media_metadata::deadline::Deadline;
+        let mut bytes = crate::media_metadata::audio::id3v2::build_id3v2_tag(true, 200);
+        bytes.extend(build_tta1_header(6, 24, 48_000, 96_000));
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.tta", 0);
+        TtaReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        let a = out.tracks[0].properties.audio.as_ref().unwrap();
+        assert_eq!(a.channels, Some(6));
+        assert_eq!(a.bit_depth, Some(24));
+        assert_eq!(a.sampling_frequency, Some(48_000.0));
     }
 
     #[test]
