@@ -45,9 +45,91 @@ use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::ogg::comments;
 use crate::media_metadata::reader::Reader;
 
-const PROBE_BYTES: usize = 64 * 1024;
+use super::id3v2;
+
 const BLOCK_TYPE_STREAMINFO: u8 = 0;
 const BLOCK_TYPE_VORBIS_COMMENT: u8 = 4;
+/// Safety cap on the number of metadata blocks walked.
+const MAX_META_BLOCKS: usize = 4096;
+/// Cap on a single VORBIS_COMMENT block read.
+const MAX_COMMENT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Byte offset where the FLAC stream starts, skipping a leading ID3v2 tag.
+/// Mirrors `r_flac.cpp`'s `mtx::id3::skip_v2_tag` (PARSER-023).
+fn payload_start(src: &mut FileSource) -> Result<u64, ParseError> {
+    let mut head = [0u8; 10];
+    let n = src.read_at_most(&mut head)?;
+    src.seek_to(0)?;
+    if n == 10 {
+        Ok(id3v2::skip_id3v2(&head).unwrap_or(0) as u64)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Walk the FLAC metadata-block chain over a [`FileSource`], skipping past
+/// large PICTURE/PADDING/APPLICATION blocks via seeks so VORBIS_COMMENT and
+/// STREAMINFO are found regardless of how far into the file they sit
+/// (PARSER-024). Skips a leading ID3v2 tag (PARSER-023).
+pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseError> {
+    let start = payload_start(src)?;
+    src.seek_to(start)?;
+    let mut magic = [0u8; 4];
+    if src.read_at_most(&mut magic)? < 4 || &magic != b"fLaC" {
+        return Ok(None);
+    }
+    let file_size = src.length().unwrap_or(u64::MAX);
+
+    let mut metadata = FlacMetadata::default();
+    let mut pos = start + 4;
+    let mut blocks = 0usize;
+
+    loop {
+        blocks += 1;
+        if blocks > MAX_META_BLOCKS {
+            break;
+        }
+        src.seek_to(pos)?;
+        let mut header = [0u8; 4];
+        if src.read_at_most(&mut header)? < 4 {
+            break;
+        }
+        let last_block = header[0] & 0x80 != 0;
+        let block_type = header[0] & 0x7F;
+        let length =
+            ((header[1] as u64) << 16) | ((header[2] as u64) << 8) | (header[3] as u64);
+        let body_pos = pos + 4;
+
+        match block_type {
+            BLOCK_TYPE_STREAMINFO if length >= 34 => {
+                src.seek_to(body_pos)?;
+                let mut info = [0u8; 34];
+                if src.read_at_most(&mut info)? == 34 {
+                    metadata.streaminfo = Some(decode_streaminfo(&info));
+                }
+            }
+            BLOCK_TYPE_VORBIS_COMMENT => {
+                src.seek_to(body_pos)?;
+                let want = length.min(MAX_COMMENT_BYTES) as usize;
+                let mut body = vec![0u8; want];
+                let n = src.read_at_most(&mut body)?;
+                body.truncate(n);
+                if let Some(c) = comments::parse(&body) {
+                    metadata.vendor = Some(c.vendor);
+                    metadata.tags = c.entries;
+                }
+            }
+            _ => {}
+        }
+
+        pos = body_pos + length;
+        if last_block || pos >= file_size {
+            break;
+        }
+    }
+
+    Ok(Some(metadata))
+}
 
 #[derive(Debug, Clone)]
 pub struct FlacStreaminfo {
@@ -147,6 +229,8 @@ impl Reader for FlacReader {
     }
 
     fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
+        let start = payload_start(src)?;
+        src.seek_to(start)?;
         let mut head = [0u8; 4];
         let read = src.read_at_most(&mut head)?;
         src.seek_to(0)?;
@@ -159,10 +243,7 @@ impl Reader for FlacReader {
         _deadline: &Deadline,
         out: &mut MediaMetadata,
     ) -> Result<(), ParseError> {
-        let mut buf = vec![0u8; PROBE_BYTES];
-        src.seek_to(0)?;
-        let read = src.read_at_most(&mut buf)?;
-        let metadata = parse(&buf[..read]).ok_or(ParseError::Unrecognised)?;
+        let metadata = parse_source(src)?.ok_or(ParseError::Unrecognised)?;
         let streaminfo = metadata.streaminfo.ok_or(ParseError::Malformed {
             format: "flac",
             offset: 0,
@@ -246,6 +327,37 @@ pub(crate) fn build_flac_native(
 }
 
 #[cfg(test)]
+fn block_header(last: bool, block_type: u8, length: usize) -> Vec<u8> {
+    let mut h = vec![if last { 0x80 | block_type } else { block_type }];
+    h.extend_from_slice(&[(length >> 16) as u8, (length >> 8) as u8, length as u8]);
+    h
+}
+
+/// Build a native FLAC stream with STREAMINFO, a large PICTURE block, then a
+/// VORBIS_COMMENT block — exercising the >64 KiB metadata walk.
+#[cfg(test)]
+fn build_flac_with_picture_and_comment(picture_len: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"fLaC");
+    // STREAMINFO (type 0, not last).
+    bytes.extend(block_header(false, 0, 34));
+    let mut info = vec![0u8; 34];
+    info[..2].copy_from_slice(&4096u16.to_be_bytes());
+    info[2..4].copy_from_slice(&4096u16.to_be_bytes());
+    let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 96_000u64;
+    info[10..18].copy_from_slice(&packed.to_be_bytes());
+    bytes.extend(info);
+    // PICTURE (type 6, not last) — large.
+    bytes.extend(block_header(false, 6, picture_len));
+    bytes.extend(vec![0xCDu8; picture_len]);
+    // VORBIS_COMMENT (type 4, last).
+    let comment = comments::build_block("ref enc", &[("TITLE", "Far")]);
+    bytes.extend(block_header(true, 4, comment.len()));
+    bytes.extend(comment);
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
@@ -295,6 +407,37 @@ mod tests {
         assert_eq!(a.bit_depth, Some(24));
         // 96_000 samples / 48_000 = 2 seconds
         assert_eq!(out.container.properties.duration.unwrap().ns, 2_000_000_000);
+    }
+
+    // ---- PARSER-023: ID3v2 prefix ----------------------------------------
+
+    #[test]
+    fn probe_and_read_accept_flac_after_id3v2_tag() {
+        let mut bytes = crate::media_metadata::audio::id3v2::build_id3v2_tag(false, 256);
+        bytes.extend(build_flac_native(44_100, 2, 16, 44_100));
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+        assert!(FlacReader.probe(&mut s).unwrap());
+
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.flac", 0);
+        FlacReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        let a = out.tracks[0].properties.audio.as_ref().unwrap();
+        assert_eq!(a.sampling_frequency, Some(44_100.0));
+    }
+
+    // ---- PARSER-024: metadata chain beyond 64 KiB ------------------------
+
+    #[test]
+    fn finds_comment_after_large_picture_block() {
+        // 128 KiB picture block sits between STREAMINFO and VORBIS_COMMENT.
+        let bytes = build_flac_with_picture_and_comment(128 * 1024);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert!(m.streaminfo.is_some());
+        assert_eq!(m.vendor.as_deref(), Some("ref enc"));
+        assert_eq!(m.tags.len(), 1);
+        assert_eq!(m.tags[0].name, "TITLE");
+        assert_eq!(m.tags[0].value, "Far");
     }
 
     #[test]
