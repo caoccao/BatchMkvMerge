@@ -18,7 +18,7 @@
 //! Wire-format data model for the media-metadata parser.
 //!
 //! Every struct here is camelCase on the wire and preserves its nested
-//! hierarchy — never flattened.  See [[feedback-protocol-shape]] and plan §4.
+//! hierarchy — never flattened.  See [[feedback-protocol-shape]].
 
 pub mod attachment;
 pub mod chapter;

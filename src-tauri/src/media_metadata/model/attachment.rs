@@ -20,7 +20,7 @@ use specta::Type;
 use specta_typescript::Number;
 
 /// One attached file (Matroska Attachments, MP4 mdat-by-handler, ...).  The
-/// payload itself is **not** read — see plan §15.
+/// payload itself is **not** read at identification time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {

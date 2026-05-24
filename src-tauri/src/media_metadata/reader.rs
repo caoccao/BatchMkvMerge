@@ -18,12 +18,12 @@
 use super::deadline::Deadline;
 use super::error::ParseError;
 use super::io::FileSource;
+use super::model::MediaMetadata;
 
 /// Implemented once per container/codec family. The probe cascade
-/// (`media_metadata::probe::dispatch`, landed in a later phase) walks every
-/// registered reader in priority order, calling `probe` on each. The first
-/// reader whose `probe` returns `Ok(true)` owns the file and is asked to
-/// `read_headers`.
+/// ([`crate::media_metadata::probe::dispatch`]) walks every registered reader
+/// in priority order, calling `probe` on each. The first reader whose
+/// `probe` returns `Ok(true)` owns the file and is asked to `read_headers`.
 ///
 /// Implementors are pure types (unit structs); no instance state.
 pub trait Reader {
@@ -37,12 +37,17 @@ pub trait Reader {
     /// `Err(_)` is fatal (e.g. true I/O failure).
     fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError>;
 
-    /// Parse headers, populating any output structures the reader owns.
-    /// Phase 1 leaves the populated-output shape as `()` since the model
-    /// types do not exist yet — Phase 2 introduces `MediaMetadata` and this
-    /// signature is widened then. The cursor on entry is at offset 0; on
-    /// successful return the cursor position is unspecified.
-    fn read_headers(&self, src: &mut FileSource, deadline: &Deadline) -> Result<(), ParseError>;
+    /// Parse headers and populate `out` in-place. The cursor on entry is at
+    /// offset 0; on successful return the cursor position is unspecified.
+    /// Returning `Ok(())` implies a successful parse — the caller stamps the
+    /// container's `recognized` / `supported` flags before yielding the
+    /// metadata to the public entry point.
+    fn read_headers(
+        &self,
+        src: &mut FileSource,
+        deadline: &Deadline,
+        out: &mut MediaMetadata,
+    ) -> Result<(), ParseError>;
 }
 
 #[cfg(test)]
@@ -63,7 +68,12 @@ mod tests {
             src.seek_to(0)?;
             Ok(read == 1 && byte[0] == 0xAB)
         }
-        fn read_headers(&self, _src: &mut FileSource, _d: &Deadline) -> Result<(), ParseError> {
+        fn read_headers(
+            &self,
+            _src: &mut FileSource,
+            _d: &Deadline,
+            _out: &mut MediaMetadata,
+        ) -> Result<(), ParseError> {
             Ok(())
         }
     }
@@ -101,6 +111,7 @@ mod tests {
         let bytes = vec![0xAB];
         let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
         let d = Deadline::new(60_000);
-        SentinelReader.read_headers(&mut src, &d).unwrap();
+        let mut out = MediaMetadata::new("synthetic", 1);
+        SentinelReader.read_headers(&mut src, &d, &mut out).unwrap();
     }
 }

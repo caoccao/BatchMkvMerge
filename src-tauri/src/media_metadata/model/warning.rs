@@ -20,7 +20,7 @@ use specta::Type;
 use specta_typescript::Number;
 
 /// Non-fatal observations made during parse.  Fatal errors are returned as
-/// `Err(ParseError)` and never appear here — see plan §6.3.
+/// `Err(ParseError)` and never appear here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Warning {

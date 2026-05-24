@@ -16,7 +16,7 @@
  */
 
 //! Codec-identifier catalogues: Matroska CodecIDs, FOURCCs, MPEG-TS stream
-//! types.  See plan §5.
+//! types.
 
 pub mod fourcc;
 pub mod matroska_codec_ids;

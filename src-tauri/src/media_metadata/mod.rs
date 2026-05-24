@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-// `unsafe` is forbidden throughout the parser sub-tree — see plan §6.5.
+// `unsafe` is forbidden throughout the parser sub-tree.
 #![forbid(unsafe_code)]
 
 pub mod codec;
@@ -23,7 +23,9 @@ pub mod deadline;
 pub mod error;
 pub mod io;
 pub mod language;
+pub mod matroska;
 pub mod model;
+pub mod probe;
 pub mod reader;
 
 pub use deadline::Deadline;
@@ -35,8 +37,10 @@ pub use reader::Reader;
 
 use std::path::Path;
 
+use crate::media_metadata::io::file_source::FileSource;
+
 /// Tuning knobs for a single parse call. Built per-invocation from the user's
-/// persisted config; never global. See plan §6.1 and [[feedback-parser-timeout]].
+/// persisted config; never global. See [[feedback-parser-timeout]].
 #[derive(Debug, Clone, Copy)]
 pub struct ParseOptions {
     pub timeout_ms: u64,
@@ -52,11 +56,28 @@ impl Default for ParseOptions {
     }
 }
 
-/// Public entry point. Phase 1 only wires the foundations — every call returns
-/// `Err(Unrecognised)` until a format reader lands in a later phase. The
-/// signature is final.
-pub fn parse<P: AsRef<Path>>(_path: P, _options: ParseOptions) -> Result<(), ParseError> {
-    Err(ParseError::Unrecognised)
+/// Public entry point.  Opens `path`, builds a `FileSource`, runs the probe
+/// cascade and returns a populated `MediaMetadata` on success.
+///
+/// As of Phase 3 the Matroska reader is the only registered format reader.
+/// Files of types whose reader has not yet landed return
+/// `Err(ParseError::Unrecognised)`.
+pub fn parse<P: AsRef<Path>>(
+    path: P,
+    options: ParseOptions,
+) -> Result<MediaMetadata, ParseError> {
+    let path_ref = path.as_ref();
+    let mut src = FileSource::open(path_ref)?;
+    let file_name = path_ref
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let file_size = src.length().unwrap_or(0);
+    let deadline = Deadline::new(options.timeout_ms);
+    let mut metadata = MediaMetadata::new(file_name, file_size);
+    probe::dispatch(&mut src, &deadline, &mut metadata)?;
+    Ok(metadata)
 }
 
 #[cfg(test)]
@@ -71,8 +92,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_returns_unrecognised_in_phase_1() {
-        let err = parse("nonexistent.mkv", ParseOptions::default()).unwrap_err();
-        assert!(matches!(err, ParseError::Unrecognised));
+    fn parse_returns_io_error_when_file_missing() {
+        let err = parse("does-not-exist-12345.mkv", ParseOptions::default()).unwrap_err();
+        assert!(matches!(err, ParseError::Io { .. }));
     }
 }

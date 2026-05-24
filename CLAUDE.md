@@ -108,21 +108,27 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. The plan is `D:/documents/public/Diary/Common/Prompts/BatchMkvMerge/plan-parser-01.md` (12 phases; Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phases 5-10 = remaining containers + elementary streams + subtitles, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
 
-Layout (one module tree per format family — every file under 1000 LOC, matching plan §5):
+Layout (one module tree per format family — every file under 1000 LOC):
 
 ```
 src-tauri/src/media_metadata/
 ├── mod.rs              # `pub fn parse(path, ParseOptions)`; ParseError; Deadline
 ├── error.rs            # ParseError enum (Timeout / Io / Malformed / OversizedElement / ...)
 ├── deadline.rs         # soft per-file budget; `check(stage)` at every coarse boundary
-├── reader.rs           # `trait Reader { probe; read_headers }` + registry surface
+├── reader.rs           # `trait Reader { probe; read_headers }` — populates &mut MediaMetadata
 ├── io/                 # FileSource, BufReader-wrapped, BitReader, endian, VINT decoders
 ├── codec/              # Matroska CodecID + FOURCC + MPEG-TS stream_type lookup tables
 ├── language/           # ISO 639-2 alpha-3 table + BCP-47 wrapper (`language-tags` crate)
-└── model/              # Wire-format structs — camelCase, nested, never flattened
+├── model/              # Wire-format structs — camelCase, nested, never flattened
+├── probe/              # 6-phase dispatch cascade + extension table + magic signatures
+└── matroska/           # native EBML reader (ebml, ids, info, seek_head, tracks/*, attachments, chapters, tags)
 ```
+
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). Phase 3 ships the Matroska reader only — other formats land in subsequent phases.
+
+**Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 
@@ -154,6 +160,6 @@ Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfo
 - macOS `Stack` alignment must use `sx={{ alignItems: "center" }}`, not the `alignItems` prop — MUI v9 dropped the prop.
 - When cards register their `handleExtract` into `fileExtractHandlers`, the signature is `() => Promise<void>`. The toolbar's Extract All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
 - All `if-else` must have braces.
-- Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase, each closing a phase number in `plan-parser-01.md`.
+- Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase.
 - When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.
 - Never edit `src/protocol.generated.ts` by hand — it is regenerated from the Rust model.

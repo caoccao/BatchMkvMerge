@@ -11,7 +11,7 @@ export type AlphaMode = "none" | "present";
 
 /**
  *  One attached file (Matroska Attachments, MP4 mdat-by-handler, ...).  The
- *  payload itself is **not** read — see plan §15.
+ *  payload itself is **not** read at identification time.
  */
 export type Attachment = {
 	/**  1-based sequence number in the file (matches `mkvmerge -J` ordering). */
@@ -80,7 +80,7 @@ export type ChannelLayoutKind = "mono" | "stereo" | "layout21" | "layout30" | "l
 
 /**
  *  Identification-time summary of the chapter editions in a file.  We do not
- *  extract individual chapter titles / timecodes — see plan §15.
+ *  extract individual chapter titles / timecodes at identification time.
  */
 export type ChapterSummary = {
 	/**  Total entries summed across all editions. */
@@ -219,7 +219,7 @@ export type CommonTrackProperties = {
 
 /**
  *  Container-level metadata.  Mirrors `mkvmerge -J`'s container object as a
- *  floor but adds typed fields the v20 schema omits — see plan §4.
+ *  floor but adds typed fields the v20 schema omits.
  */
 export type Container = {
 	/**  Did at least one reader's `probe()` claim this file? */
@@ -233,8 +233,8 @@ export type Container = {
 
 /**
  *  One variant per reader we ship.  Listed in roughly the same order the
- *  probe cascade tries them (plan §6.2).  Add new variants here when adding a
- *  new format reader.
+ *  probe cascade tries them.  Add new variants here when adding a new
+ *  format reader.
  */
 export type ContainerFormat = "matroska" | "webM" | "mp4" | "quickTime" | "avi" | "ogg" | "webvtt" | "mpegTs" | "mpegPs" | "flv" | "realMedia" | "ivf" | "coreAudio" | "wav" | "flac" | "mp3" | "aac" | "ac3" | "eac3" | "dts" | "trueHd" | "tta" | "wavpack" | "avc" | "hevc" | "mpegVideo" | "vc1" | "dirac" | "dv" | "av1Obu" | "srt" | "ssaAss" | "vobSub" | "usf" | "microDvd" | "hdmvPgs" | "hdmvTextSt" | "vobButton" | "chapters" | "cdxa" | "hdSub" | "asf" | "unknown";
 
@@ -556,7 +556,7 @@ export type VideoTrackProperties = {
 
 /**
  *  Non-fatal observations made during parse.  Fatal errors are returned as
- *  `Err(ParseError)` and never appear here — see plan §6.3.
+ *  `Err(ParseError)` and never appear here.
  */
 export type Warning = {
 	category: WarningCategory,

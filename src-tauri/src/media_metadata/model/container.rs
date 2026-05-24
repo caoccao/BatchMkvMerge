@@ -23,7 +23,7 @@ use super::duration::DurationValue;
 use super::playlist::PlaylistInfo;
 
 /// Container-level metadata.  Mirrors `mkvmerge -J`'s container object as a
-/// floor but adds typed fields the v20 schema omits — see plan §4.
+/// floor but adds typed fields the v20 schema omits.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Container {
@@ -48,8 +48,8 @@ impl Default for Container {
 }
 
 /// One variant per reader we ship.  Listed in roughly the same order the
-/// probe cascade tries them (plan §6.2).  Add new variants here when adding a
-/// new format reader.
+/// probe cascade tries them.  Add new variants here when adding a new
+/// format reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerFormat {

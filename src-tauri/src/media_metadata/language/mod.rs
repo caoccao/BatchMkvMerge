@@ -19,7 +19,9 @@
 //!
 //! Every track surfaces both the legacy ISO 639-2 alpha-3 code (consumed by
 //! existing tooling) and, when available, the canonical BCP-47 IETF tag.
-//! The selection pipeline matches plan §7.1.
+//! The selection pipeline prefers a valid IETF tag, falls back to a valid
+//! ISO-639-2 alpha-3 code, then to `eng` (Matroska default) or `und` per the
+//! caller's request.
 
 pub mod bcp47;
 pub mod iso_639;
@@ -96,7 +98,8 @@ impl Language {
         Self::from_iso_639_2("eng")
     }
 
-    /// Apply plan §7.1's resolution pipeline.
+    /// Resolution pipeline (prefer IETF when valid, else ISO-639-2, else
+    /// `eng` or `und` depending on `default_eng`).
     ///
     /// * If `ietf_hint` is non-empty and validates → use that (record the
     ///   canonical form, derive iso639_2 from the primary subtag).

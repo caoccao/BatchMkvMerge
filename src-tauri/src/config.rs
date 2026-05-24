@@ -74,7 +74,7 @@ impl Default for Config {
     }
 }
 
-/// User-tunable parser settings.  See plan §6.4 and [[feedback-parser-timeout]].
+/// User-tunable parser settings.  See [[feedback-parser-timeout]].
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfigParser {
     /// Per-file parse budget in milliseconds.  Default 1000.  Clamped to the
@@ -84,7 +84,7 @@ pub struct ConfigParser {
 }
 
 impl ConfigParser {
-    /// Default parser timeout in ms (plan §6.4).
+    /// Default parser timeout in ms.
     pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
     /// Minimum allowed timeout — small enough for ridiculous test runs but
     /// large enough that a real file's headers can be read.

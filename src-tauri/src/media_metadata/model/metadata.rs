@@ -27,7 +27,7 @@ use super::track::Track;
 use super::warning::Warning;
 
 /// Our own protocol version.  Bumped on breaking changes to the wire shape —
-/// this is **not** the mkvmerge schema version.  See plan §4.
+/// this is **not** the mkvmerge schema version.
 pub const PARSER_PROTOCOL_VERSION: u32 = 1;
 
 /// Root struct returned by [`crate::media_metadata::parse`] on success.  The
