@@ -37,6 +37,8 @@ use crate::media_metadata::avi::AviReader;
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::mp4::Mp4Reader;
+use crate::media_metadata::mpeg_ps::MpegPsReader;
+use crate::media_metadata::mpeg_ts::MpegTsReader;
 use crate::media_metadata::ogg::OggReader;
 use crate::media_metadata::reader::Reader;
 
@@ -90,7 +92,10 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     static MP4: Mp4Reader = Mp4Reader;
     static AVI: AviReader = AviReader;
     static OGG: OggReader = OggReader;
-    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[&MATROSKA, &AVI, &OGG, &MP4];
+    static MPEG_PS: MpegPsReader = MpegPsReader;
+    static MPEG_TS: MpegTsReader = MpegTsReader;
+    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] =
+        &[&MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS];
     REGISTRY
 }
 

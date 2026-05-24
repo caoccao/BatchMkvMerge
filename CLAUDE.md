@@ -108,7 +108,7 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phases 6-10 = remaining containers + elementary streams + subtitles, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phases 7-10 = audio/elementary/subtitles/residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 
@@ -126,10 +126,12 @@ src-tauri/src/media_metadata/
 ├── matroska/           # native EBML reader (ebml, ids, info, seek_head, tracks/*, attachments, chapters, tags)
 ├── mp4/                # native MP4/QuickTime reader (atom, ftyp, moov/*, codec_specific/*, meta/*, fragments)
 ├── avi/                # native AVI reader (riff, avih, strl, odml, identify, reader)
-└── ogg/                # native Ogg/OGM reader (page, codecs/*, comments, identify, reader)
+├── ogg/                # native Ogg/OGM reader (page, codecs/*, comments, identify, reader)
+├── mpeg_ts/            # native MPEG-TS reader (packet, pat, pmt, pes, descriptors/*, stream_table, identify, reader)
+└── mpeg_ps/            # native MPEG-PS reader (packet, pes, stream_map, identify, reader)
 ```
 
-**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 readers; other formats land in subsequent phases.
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS readers; other formats land in subsequent phases.
 
 **Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
 
@@ -138,6 +140,10 @@ src-tauri/src/media_metadata/
 **AVI reader:** pure-Rust port of `mkvtoolnix/src/input/r_avi.cpp` — walks the RIFF chunk hierarchy via a hand-rolled chunk walker (no `avilib` dependency). `RIFF/AVI ` is the entry point; `LIST/hdrl` hosts `avih` (MainAVIHeader → frame interval, total frames, dimensions, flags) and one `LIST/strl` per stream containing `strh` (kind + codec FOURCC + timebase) and `strf` (`BITMAPINFOHEADER` for video, `WAVEFORMATEX(TENSIBLE)` for audio). ODML's `LIST/odml/dmlh` provides the 32-bit total-frame count for files > 2 GB. Negative `BITMAPINFOHEADER` heights (top-down DIB) are flipped positive; WAVEFORMATEX `extra` bytes become `codec_private`.
 
 **Ogg / OGM reader:** pure-Rust port of `mkvtoolnix/src/input/r_ogm.cpp`. Walks pages per RFC 3533 (no `ogg` crate dependency) — extracts `bitstream_serial`, `granule_position`, segment-table → packet boundaries. The first packet of each Beginning-Of-Stream page is fed to the codec sniffers under `ogg/codecs/`: Vorbis (`\x01vorbis`), Opus (`OpusHead`), Theora (`\x80theora` + KEYFRAME_GRANULE), FLAC-in-Ogg (`\x7FFLAC` + STREAMINFO), Speex (`Speex   ` 8-byte signature), Kate (`\x80kate\0\0\0`), and OGM legacy stream headers (`\x01video/audio/text...`). VorbisComment blocks on the second packet populate per-track tags + the container's `muxing_app`. Stops once every stream has a comment block to keep identification fast for huge files.
+
+**MPEG-TS reader:** pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ts.cpp`. Detects packet size by scanning the first 8 KB for the 0x47 sync byte at strides of 188 (standard), 192 (BD M2TS — 4-byte timecode prefix per packet) or 204 (FEC-extended). Reassembles PSI sections from `payload_unit_start=1` packets, parses PAT (PID 0) → list of `(program_number, pmt_pid)`, then PMT → per-stream `(stream_type, elementary_pid, descriptors)`. Eight descriptor decoders (ISO-639 language, AC-3, E-AC-3, DTS, teletext with BCD page number, HEVC, Dolby Vision profile, DVB service) enrich each stream. A canonical `stream_type → codec_id` table mirrors mkvtoolnix's `determine_codec_from_stream_type`; private-PES streams (0x06) are promoted to AC-3 / E-AC-3 / DTS / Teletext via descriptors. Multi-program TS files surface each program (with track-ID list + DVB service name) in `container.properties.programs`.
+
+**MPEG-PS reader:** pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ps.cpp`. Identifies the file via the pack-header start code (`0x000001BA`), then walks subsequent start codes collecting unique `stream_id` values. Audio range `0xC0..=0xDF` and video range `0xE0..=0xEF` produce one track per stream id; the private-stream-1 marker (`0xBD`) is classified as AC-3 (DVD-VOB convention). The `program_stream_map` decoder (`0xBC`) is available for files that carry one, though identification falls back to start-code enumeration when absent.
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 
