@@ -30,6 +30,9 @@ pub struct AudioTrackProperties {
     pub channel_layout: Option<ChannelLayout>,
     pub bit_depth: Option<u32>,
     pub emphasis: Option<AudioEmphasis>,
+    /// Nominal per-frame duration in nanoseconds (Matroska `DefaultDuration`).
+    #[specta(type = Option<Number>)]
+    pub default_duration_ns: Option<u64>,
     pub codec_config: Option<AudioCodecConfig>,
 }
 
@@ -127,6 +130,7 @@ mod tests {
             }),
             bit_depth: Some(24),
             emphasis: Some(AudioEmphasis::None),
+            default_duration_ns: Some(21_333_333),
             codec_config: Some(AudioCodecConfig {
                 profile_name: Some("LC".to_owned()),
                 aac_object_type: Some(2),

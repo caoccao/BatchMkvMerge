@@ -53,8 +53,6 @@ use super::tracks;
 /// Soft cap on the segment-info / tracks / attachments element size. We never
 /// allocate more than this for a single EBML element payload — corrupt
 /// containers cannot drive an OOM via a 16-EiB size VINT.
-const MAX_TOP_LEVEL_ELEMENT: u64 = 64 * 1024 * 1024;
-
 /// The matroska reader.  Zero-sized — every parse owns its own `FileSource`,
 /// `Deadline`, and `MediaMetadata`.
 #[derive(Debug, Default, Clone, Copy)]
@@ -69,6 +67,9 @@ pub(crate) enum DeferredL1 {
     Attachments,
     Chapters,
     Tags,
+    /// A SeekHead that another SeekHead points at (chained SeekHeads,
+    /// PARSER-038).
+    SeekHead,
 }
 
 #[derive(Debug, Default)]
@@ -151,6 +152,42 @@ impl Reader for MatroskaReader {
         // Walk Segment's L1 children. Hand each one off; defer or dispatch.
         let mut deferred = DeferredL1Positions::default();
         walk_segment_l1(src, &segment, deadline, &mut deferred, out)?;
+
+        // Follow chained SeekHeads first (PARSER-038): a SeekHead may point at
+        // another SeekHead. Drain the bucket until no new unhandled positions
+        // remain (the handled-set guards against cycles).
+        loop {
+            let positions = deferred.take(DeferredL1::SeekHead);
+            if positions.is_empty() {
+                break;
+            }
+            let mut made_progress = false;
+            for pos in positions {
+                if deferred.has_been_handled(DeferredL1::SeekHead, pos) {
+                    continue;
+                }
+                deferred.mark_handled(DeferredL1::SeekHead, pos);
+                made_progress = true;
+                if src.seek_to(pos).is_err() {
+                    continue;
+                }
+                if let Ok(h) = ebml::read_element_header(src) {
+                    if h.id == ids::SEEK_HEAD {
+                        // Tolerate errors from a referenced SeekHead.
+                        let _ = seek_head::collect_deferred(
+                            src,
+                            &h,
+                            deadline,
+                            &mut deferred,
+                            segment.payload_start(),
+                        );
+                    }
+                }
+            }
+            if !made_progress {
+                break;
+            }
+        }
 
         // Process deferred elements in mkvmerge order: Info, Tracks,
         // Attachments, Tags, Chapters.
@@ -313,17 +350,9 @@ fn process_deferred(
 ) -> Result<(), ParseError> {
     src.seek_to(pos)?;
     let header = ebml::read_element_header(src)?;
-    if let Some(size) = header.size {
-        if size > MAX_TOP_LEVEL_ELEMENT {
-            return Err(ParseError::OversizedElement {
-                format: "matroska",
-                id: header.id as u64,
-                size,
-                cap: MAX_TOP_LEVEL_ELEMENT,
-                offset: header.start,
-            });
-        }
-    }
+    // No blanket size rejection here (PARSER-039): the per-element walkers seek
+    // past large binary leaves (e.g. KaxFileData) rather than buffering them,
+    // so a multi-gigabyte Attachments element is walked, not rejected.
     match kind {
         DeferredL1::Info => {
             info::parse(src, &header, deadline, out)?;
@@ -340,6 +369,8 @@ fn process_deferred(
         DeferredL1::Tags => {
             tags::parse(src, &header, deadline, out)?;
         }
+        // SeekHeads are drained in read_headers before this loop runs.
+        DeferredL1::SeekHead => {}
     }
     let _ = deferred;
     Ok(())
@@ -348,7 +379,9 @@ fn process_deferred(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media_metadata::matroska::ebml::{encode_element, encode_element_string, encode_element_uint};
+    use crate::media_metadata::matroska::ebml::{
+        encode_element, encode_element_string, encode_element_uint, encode_id, encode_size,
+    };
     use std::io::Cursor;
 
     fn src(bytes: Vec<u8>) -> FileSource {
@@ -357,6 +390,106 @@ mod tests {
 
     fn no_deadline() -> Deadline {
         Deadline::new(60_000)
+    }
+
+    const SEEKHEAD_ID_BYTES: [u8; 4] = [0x11, 0x4D, 0x9B, 0x74];
+    const TRACKS_ID_BYTES: [u8; 4] = [0x16, 0x54, 0xAE, 0x6B];
+
+    fn seek_entry(target_id_bytes: &[u8], pos: u64) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend(encode_element(ids::SEEK_ID, 2, target_id_bytes));
+        p.extend(encode_element_uint(ids::SEEK_POSITION, 2, pos));
+        encode_element(ids::SEEK, 2, &p)
+    }
+
+    fn seek_head_with(entry: Vec<u8>) -> Vec<u8> {
+        encode_element(ids::SEEK_HEAD, 4, &entry)
+    }
+
+    fn minimal_audio_tracks() -> Vec<u8> {
+        let mut t = Vec::new();
+        t.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        t.extend(encode_element_uint(ids::TRACK_TYPE, 1, 2)); // audio
+        t.extend(encode_element_string(ids::CODEC_ID, 1, "A_AAC"));
+        let entry = encode_element(ids::TRACK_ENTRY, 1, &t);
+        encode_element(ids::TRACKS, 4, &entry)
+    }
+
+    fn ebml_head() -> Vec<u8> {
+        encode_element(ids::EBML, 4, &encode_element_string(ids::DOC_TYPE, 2, "matroska"))
+    }
+
+    // ---- PARSER-038: chained SeekHeads ------------------------------------
+
+    #[test]
+    fn chained_seekheads_reach_tracks() {
+        // Segment payload layout: SeekHead1 → SeekHead2 → Tracks. SeekHead1
+        // points at SeekHead2 (segment-relative), SeekHead2 points at Tracks.
+        let sh1_probe = seek_head_with(seek_entry(&SEEKHEAD_ID_BYTES, 0));
+        let sh2_probe = seek_head_with(seek_entry(&TRACKS_ID_BYTES, 0));
+        let sh1_len = sh1_probe.len() as u64;
+        let sh2_len = sh2_probe.len() as u64;
+        let sh2_off = sh1_len;
+        let tracks_off = sh1_len + sh2_len;
+
+        let sh1 = seek_head_with(seek_entry(&SEEKHEAD_ID_BYTES, sh2_off));
+        let sh2 = seek_head_with(seek_entry(&TRACKS_ID_BYTES, tracks_off));
+        // Position values are small (<128) so the VINT widths — and thus the
+        // element lengths — are stable between the probe and final builds.
+        assert_eq!(sh1.len() as u64, sh1_len);
+        assert_eq!(sh2.len() as u64, sh2_len);
+
+        let mut payload = Vec::new();
+        payload.extend(sh1);
+        payload.extend(sh2);
+        payload.extend(minimal_audio_tracks());
+        let segment = encode_element(ids::SEGMENT, 4, &payload);
+
+        let mut bytes = ebml_head();
+        bytes.extend(segment);
+        let mut s = src(bytes.clone());
+        let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+        MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1, "Tracks reached only via chained SeekHeads");
+        assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    }
+
+    // ---- PARSER-039: oversized top-level element is not rejected ----------
+
+    #[test]
+    fn oversized_attachments_element_is_not_rejected() {
+        const HUGE: u64 = 100_000_000;
+        // FileData header declaring 100 MB but with no actual payload bytes.
+        let filename = encode_element_string(ids::FILE_NAME, 2, "big.bin");
+        let mut filedata = encode_id(ids::FILE_DATA, 2);
+        filedata.extend(encode_size(HUGE));
+
+        // AttachedFile: declared payload includes the 100 MB FileData payload,
+        // but only the header bytes are actually present.
+        let af_declared = filename.len() as u64 + filedata.len() as u64 + HUGE;
+        let mut attached = encode_id(ids::ATTACHED_FILE, 2);
+        attached.extend(encode_size(af_declared));
+        let af_header_len = attached.len() as u64;
+        attached.extend(&filename);
+        attached.extend(&filedata);
+
+        // Attachments: declared payload spans the whole (oversized) AttachedFile;
+        // its declared size exceeds the old 64 MiB rejection cap.
+        let attachments_declared = af_header_len + af_declared;
+        let mut attachments = encode_id(ids::ATTACHMENTS, 4);
+        attachments.extend(encode_size(attachments_declared));
+        attachments.extend(attached);
+
+        let segment = encode_element(ids::SEGMENT, 4, &attachments);
+        let mut bytes = ebml_head();
+        bytes.extend(segment);
+        let mut s = src(bytes.clone());
+        let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+        // Previously returned Err(OversizedElement); now it walks in and records
+        // the attachment.
+        MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+        assert_eq!(out.attachments.len(), 1);
+        assert_eq!(out.attachments[0].size, 100_000_000);
     }
 
     fn build_minimal_matroska(doc_type: &str) -> Vec<u8> {

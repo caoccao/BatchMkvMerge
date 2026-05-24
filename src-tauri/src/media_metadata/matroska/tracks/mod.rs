@@ -56,9 +56,17 @@ pub fn parse(
     deadline: &Deadline,
     out: &mut MediaMetadata,
 ) -> Result<(), ParseError> {
+    // Track numbers already seen — duplicates are rejected (PARSER-035).
+    let mut used_track_numbers = std::collections::HashSet::new();
     ebml::walk_children(src, parent, "matroska::tracks", deadline, |src, child| {
         if child.id == ids::TRACK_ENTRY {
-            if let Some(track) = read_track_entry(src, child, deadline, out.tracks.len() as i64)? {
+            if let Some(track) = read_track_entry(
+                src,
+                child,
+                deadline,
+                out.tracks.len() as i64,
+                &mut used_track_numbers,
+            )? {
                 out.tracks.push(track);
             }
             Ok(ChildAction::Consumed)
@@ -73,6 +81,7 @@ fn read_track_entry(
     parent: &ElementHeader,
     deadline: &Deadline,
     id_seed: i64,
+    used_track_numbers: &mut std::collections::HashSet<u64>,
 ) -> Result<Option<Track>, ParseError> {
     let mut common = common::CommonBuilder::default();
     let mut track_type_byte: Option<u64> = None;
@@ -132,6 +141,17 @@ fn read_track_entry(
         },
     )?;
 
+    // mkvmerge skips tracks missing their TrackNumber (r_matroska.cpp:1383-1387,
+    // PARSER-034), and rejects duplicate track numbers, keeping the first
+    // occurrence (PARSER-035).
+    let track_number = match common.number {
+        Some(n) => n,
+        None => return Ok(None),
+    };
+    if !used_track_numbers.insert(track_number) {
+        return Ok(None);
+    }
+
     let track_type_byte = match track_type_byte {
         Some(v) => v,
         None => return Ok(None), // mkvmerge skips type-less tracks
@@ -142,27 +162,17 @@ fn read_track_entry(
         return Ok(None);
     }
 
+    // Track type comes solely from the Matroska TrackType byte (audio/video/
+    // subtitle); every other value — including "complex" — is Unknown, matching
+    // mkvtoolnix, which never infers the type from the codec ID (PARSER-036).
     let track_type = classify_track_type(track_type_byte);
 
-    // Resolve codec catalogue entry from the CodecID (e.g. V_MPEG4/ISO/AVC).
+    // Resolve codec catalogue entry from the CodecID (e.g. V_MPEG4/ISO/AVC) for
+    // the human-readable codec name only.
     let resolved = matroska_codec_ids::lookup(&codec_id);
     let resolved_name = codec_name
         .clone()
         .or_else(|| resolved.map(|r| r.name.to_string()));
-
-    // Bridge resolved kind into our typed enum if the codec ID dictates it
-    // (Matroska TrackType still wins, but the codec table is a useful cross-check).
-    let kind_track_type = resolved.map(|r| match r.kind.to_track_type() {
-        TrackType::Video => TrackType::Video,
-        TrackType::Audio => TrackType::Audio,
-        TrackType::Subtitles => TrackType::Subtitles,
-        TrackType::Buttons => TrackType::Buttons,
-        TrackType::Unknown => TrackType::Unknown,
-    });
-    let track_type = match (track_type, kind_track_type) {
-        (TrackType::Unknown, Some(kind)) => kind,
-        (t, _) => t,
-    };
 
     let codec = CodecInfo {
         id: codec_id,
@@ -172,24 +182,30 @@ fn read_track_entry(
         ),
     };
 
+    // KaxTrackDefaultDuration is exposed on the per-domain properties
+    // (PARSER-032).
+    let default_duration_ns = common.default_duration_ns;
+
+    let properties_common = common.build();
     let mut properties = TrackProperties {
-        common: common.build(),
+        common: properties_common,
         ..TrackProperties::default()
     };
-    if !block_additions.is_empty() {
-        // Track maxBlockAdditionId as the count of mapped extensions for
-        // convenience; the mappings themselves are not exposed yet (Phase 4+
-        // for codec-specific decoders).
-        properties.common.max_block_addition_id =
-            Some(block_additions.len() as u64);
-    }
+    // MaxBlockAdditionID stays the value read from the element — it is NOT the
+    // count of BlockAdditionMapping entries (PARSER-037). The mappings are
+    // walked for validation but not yet otherwise exposed.
+    let _ = &block_additions;
 
     match track_type {
         TrackType::Video => {
-            properties.video = Some(video.build());
+            let mut v = video.build();
+            v.default_duration_ns = default_duration_ns;
+            properties.video = Some(v);
         }
         TrackType::Audio => {
-            properties.audio = Some(audio.build());
+            let mut a = audio.build();
+            a.default_duration_ns = default_duration_ns;
+            properties.audio = Some(a);
         }
         TrackType::Subtitles => {
             properties.subtitle = Some(subtitle.build_from_codec_id(&codec.id));
@@ -206,12 +222,12 @@ fn read_track_entry(
 }
 
 fn classify_track_type(byte: u64) -> TrackType {
+    // mkvtoolnix maps only audio/video/subtitle; everything else (complex,
+    // logo, buttons, control, unknown) becomes Unknown (PARSER-036).
     match byte {
-        KAX_TRACK_VIDEO | KAX_TRACK_COMPLEX => TrackType::Video,
+        KAX_TRACK_VIDEO => TrackType::Video,
         KAX_TRACK_AUDIO => TrackType::Audio,
         KAX_TRACK_SUBTITLE => TrackType::Subtitles,
-        KAX_TRACK_BUTTONS => TrackType::Buttons,
-        KAX_TRACK_LOGO | KAX_TRACK_CONTROL => TrackType::Unknown,
         _ => TrackType::Unknown,
     }
 }
@@ -240,8 +256,12 @@ mod tests {
     }
 
     fn build_simple_video_track(codec_id: &str) -> Vec<u8> {
+        build_simple_video_track_num(1, codec_id)
+    }
+
+    fn build_simple_video_track_num(number: u64, codec_id: &str) -> Vec<u8> {
         let mut payload = Vec::new();
-        payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, number));
         payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
         payload.extend(encode_element_string(ids::CODEC_ID, 1, codec_id));
         let mut video_payload = Vec::new();
@@ -326,8 +346,8 @@ mod tests {
     #[test]
     fn id_increments_per_track() {
         let (_b, header, mut s) = build_tracks(vec![
-            build_simple_video_track("V_VP8"),
-            build_simple_video_track("V_VP9"),
+            build_simple_video_track_num(1, "V_VP8"),
+            build_simple_video_track_num(2, "V_VP9"),
         ]);
         let mut out = MediaMetadata::new("clip.mkv", 0);
         parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
@@ -339,12 +359,128 @@ mod tests {
     fn classify_track_type_handles_logo_and_control_as_unknown() {
         assert_eq!(classify_track_type(KAX_TRACK_LOGO), TrackType::Unknown);
         assert_eq!(classify_track_type(KAX_TRACK_CONTROL), TrackType::Unknown);
+        assert_eq!(classify_track_type(KAX_TRACK_BUTTONS), TrackType::Unknown);
+    }
+
+    // ---- PARSER-036: complex tracks are Unknown, not Video ----------------
+
+    #[test]
+    fn classify_track_type_handles_complex_as_unknown() {
+        assert_eq!(classify_track_type(KAX_TRACK_COMPLEX), TrackType::Unknown);
     }
 
     #[test]
-    fn classify_track_type_handles_complex_as_video() {
-        // Matroska's "complex" type was for older muxers; mkvmerge treats it
-        // as video.
-        assert_eq!(classify_track_type(KAX_TRACK_COMPLEX), TrackType::Video);
+    fn complex_track_with_video_codec_is_not_video() {
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_COMPLEX));
+        payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_MPEG4/ISO/AVC"));
+        let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+        let (_b, header, mut s) = build_tracks(vec![entry]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].track_type, TrackType::Unknown);
+        assert!(out.tracks[0].properties.video.is_none());
+    }
+
+    // ---- PARSER-034: tracks without TrackNumber are skipped ---------------
+
+    #[test]
+    fn track_without_track_number_is_skipped() {
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+        payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_VP9"));
+        let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+        let (_b, header, mut s) = build_tracks(vec![entry]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        assert!(out.tracks.is_empty());
+    }
+
+    // ---- PARSER-035: duplicate track numbers are rejected -----------------
+
+    #[test]
+    fn duplicate_track_number_is_rejected() {
+        let (_b, header, mut s) = build_tracks(vec![
+            build_simple_video_track_num(1, "V_VP8"),
+            build_simple_video_track_num(1, "V_VP9"), // duplicate number 1
+        ]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].codec.id, "V_VP8"); // first kept
+    }
+
+    // ---- PARSER-032: DefaultDuration reaches video/audio props ------------
+
+    #[test]
+    fn default_duration_exposed_on_video_and_audio() {
+        let mut vpayload = Vec::new();
+        vpayload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        vpayload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+        vpayload.extend(encode_element_string(ids::CODEC_ID, 1, "V_VP9"));
+        vpayload.extend(encode_element_uint(ids::DEFAULT_DURATION, 3, 41_708_333));
+        let v = encode_element(ids::TRACK_ENTRY, 1, &vpayload);
+
+        let mut apayload = Vec::new();
+        apayload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 2));
+        apayload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_AUDIO));
+        apayload.extend(encode_element_string(ids::CODEC_ID, 1, "A_AC3"));
+        apayload.extend(encode_element_uint(ids::DEFAULT_DURATION, 3, 24_000_000));
+        let a = encode_element(ids::TRACK_ENTRY, 1, &apayload);
+
+        let (_b, header, mut s) = build_tracks(vec![v, a]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        assert_eq!(
+            out.tracks[0].properties.video.as_ref().unwrap().default_duration_ns,
+            Some(41_708_333)
+        );
+        assert_eq!(
+            out.tracks[1].properties.audio.as_ref().unwrap().default_duration_ns,
+            Some(24_000_000)
+        );
+    }
+
+    // ---- PARSER-033: audio defaults ---------------------------------------
+
+    #[test]
+    fn audio_track_without_audio_block_uses_defaults() {
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_AUDIO));
+        payload.extend(encode_element_string(ids::CODEC_ID, 1, "A_AAC"));
+        let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+        let (_b, header, mut s) = build_tracks(vec![entry]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        let a = out.tracks[0].properties.audio.as_ref().unwrap();
+        assert_eq!(a.sampling_frequency, Some(8000.0));
+        assert_eq!(a.channels, Some(1));
+    }
+
+    // ---- PARSER-037: MaxBlockAdditionID kept, not overwritten -------------
+
+    #[test]
+    fn max_block_addition_id_is_the_element_value() {
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+        payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+        payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_VP9"));
+        payload.extend(encode_element_uint(ids::MAX_BLOCK_ADDITION_ID, 2, 4));
+        // One BlockAdditionMapping with a valid id_type so it is recorded.
+        let mut mapping_payload = Vec::new();
+        mapping_payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_TYPE, 2, 1));
+        payload.extend(encode_element(ids::BLOCK_ADDITION_MAPPING, 2, &mapping_payload));
+        let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+        let (_b, header, mut s) = build_tracks(vec![entry]);
+        let mut out = MediaMetadata::new("clip.mkv", 0);
+        parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+        // 4 from the element, NOT 1 (the mapping count).
+        assert_eq!(
+            out.tracks[0].properties.common.max_block_addition_id,
+            Some(4)
+        );
     }
 }

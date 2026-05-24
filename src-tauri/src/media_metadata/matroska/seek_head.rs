@@ -131,6 +131,8 @@ fn classify_seek_id(id: u32) -> Option<DeferredL1> {
         ids::ATTACHMENTS => Some(DeferredL1::Attachments),
         ids::CHAPTERS => Some(DeferredL1::Chapters),
         ids::TAGS => Some(DeferredL1::Tags),
+        // A SeekHead may point at another SeekHead (PARSER-038).
+        ids::SEEK_HEAD => Some(DeferredL1::SeekHead),
         _ => None,
     }
 }

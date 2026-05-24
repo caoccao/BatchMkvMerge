@@ -46,13 +46,17 @@ pub struct AudioBuilder {
 
 impl AudioBuilder {
     pub fn build(self) -> AudioTrackProperties {
+        // Matroska defaults: SamplingFrequency 8000 Hz, Channels 1 when the
+        // elements are absent (mkvtoolnix `read_headers_track_audio`,
+        // PARSER-033).
         AudioTrackProperties {
-            sampling_frequency: self.sampling_frequency,
+            sampling_frequency: Some(self.sampling_frequency.unwrap_or(8000.0)),
             output_sampling_frequency: self.output_sampling_frequency,
-            channels: self.channels,
+            channels: Some(self.channels.unwrap_or(1)),
             channel_layout: None,
             bit_depth: self.bit_depth,
             emphasis: self.emphasis,
+            default_duration_ns: None,
             codec_config: None,
         }
     }
@@ -174,13 +178,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_audio_block_leaves_all_optional() {
+    fn empty_audio_block_applies_matroska_defaults() {
+        // PARSER-033: absent SamplingFrequency/Channels default to 8000 Hz / 1.
         let (_b, h, mut s) = build_audio(Vec::new());
         let mut builder = AudioBuilder::default();
         parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
         let a = builder.build();
-        assert!(a.sampling_frequency.is_none());
-        assert!(a.channels.is_none());
+        assert_eq!(a.sampling_frequency, Some(8000.0));
+        assert_eq!(a.channels, Some(1));
         assert!(a.bit_depth.is_none());
     }
 

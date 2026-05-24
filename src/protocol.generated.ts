@@ -59,6 +59,8 @@ export type AudioTrackProperties = {
 	channelLayout: ChannelLayout | null,
 	bitDepth: number | null,
 	emphasis: AudioEmphasis | null,
+	/**  Nominal per-frame duration in nanoseconds (Matroska `DefaultDuration`). */
+	defaultDurationNs: number | null,
 	codecConfig: AudioCodecConfig | null,
 };
 
