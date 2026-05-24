@@ -2,7 +2,7 @@
 
 [![Linux Build](https://github.com/caoccao/BatchMkvMerge/actions/workflows/linux_build.yml/badge.svg)](https://github.com/caoccao/BatchMkvMerge/actions/workflows/linux_build.yml) [![MacOS Build](https://github.com/caoccao/BatchMkvMerge/actions/workflows/macos_build.yml/badge.svg)](https://github.com/caoccao/BatchMkvMerge/actions/workflows/macos_build.yml) [![Windows Build](https://github.com/caoccao/BatchMkvMerge/actions/workflows/windows_build.yml/badge.svg)](https://github.com/caoccao/BatchMkvMerge/actions/workflows/windows_build.yml)
 
-![BatchMkvMerge](src-tauri/icons/icon.png)
+![BatchMkvMerge](src-tauri/icons/128x128@2x.png)
 
 BatchMkvMerge is a desktop GUI that drives [mkvmerge](https://mkvtoolnix.download/doc/mkvmerge.html) from [MKVToolNix](https://mkvtoolnix.download/) across many `.mkv` files at once, so you can pull tracks, chapters, and attachments out of a whole batch without hand-writing commands.
 
