@@ -15,19 +15,15 @@
  *   limitations under the License.
  */
 
-//! WAV reader.  Supports both classic `RIFF/WAVE` and `RF64/WAVE` (for
-//! files > 4 GB).  Walks chunks until `fmt ` + `data` are seen:
-//!
-//! ```text
-//! RIFF | RF64
-//!   WAVE
-//!     ds64 (RF64 only) — extended sizes
-//!     fmt  — WAVEFORMATEX or WAVEFORMATEXTENSIBLE
-//!     data — payload
-//! ```
+//! WAV reader. Pure-Rust port of `mkvtoolnix/src/input/r_wav.cpp`. Supports
+//! classic `RIFF/WAVE`, `RF64/WAVE` (>4 GB), and Wave64 (PARSER-020). The
+//! chunk structure is walked through the whole file via seeks rather than a
+//! fixed 16 KiB window (PARSER-022), and `WAVE_FORMAT_EXTENSIBLE` (0xFFFE) is
+//! unwrapped to the subformat GUID's `data1` codec tag (PARSER-021).
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
+use crate::media_metadata::io::endian::{get_u16_le, get_u32_le, get_u64_le};
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::duration::DurationValue;
@@ -37,14 +33,41 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::reader::Reader;
 
-const PROBE_BYTES: usize = 16 * 1024;
-const WAVE_FORMAT_PCM: u16 = 0x0001;
-const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
+const WAVE_FORMAT_PCM: u32 = 0x0001;
+const WAVE_FORMAT_IEEE_FLOAT: u32 = 0x0003;
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+/// `sizeof(alWAVEFORMATEXTENSIBLE)` = WAVEFORMATEX(18) + ext(2 + 4 + 16).
+const WAVEFORMATEXTENSIBLE_SIZE: usize = 40;
+/// Byte offset of the SubFormat GUID `data1` field inside the fmt chunk.
+const SUBFORMAT_DATA1_OFFSET: usize = 24;
+const MAX_CHUNKS: usize = 4096;
+const FMT_READ_CAP: u64 = 4096;
+
+/// Wave64 RIFF GUID (`mtx::w64::g_guid_riff`).
+const W64_GUID_RIFF: [u8; 16] = [
+    b'r', b'i', b'f', b'f', 0x2e, 0x91, 0xcf, 0x11, 0xa5, 0xd6, 0x28, 0xdb, 0x04, 0xc1, 0x00, 0x00,
+];
+/// Wave64 WAVE GUID (`mtx::w64::g_guid_wave`).
+const W64_GUID_WAVE: [u8; 16] = [
+    b'w', b'a', b'v', b'e', 0xf3, 0xac, 0xd3, 0x11, 0x8c, 0xd1, 0x00, 0xc0, 0x4f, 0x8e, 0xdb, 0x8a,
+];
+/// Wave64 chunk header size (`sizeof(mtx::w64::chunk_t)`): 16-byte GUID + u64.
+const W64_CHUNK_HEADER: u64 = 24;
+/// Wave64 file header size (`sizeof(mtx::w64::header_t)`): chunk_t + 16-byte GUID.
+const W64_HEADER: u64 = 40;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WavType {
+    Wave,
+    Rf64,
+    Wave64,
+}
 
 #[derive(Debug, Clone)]
 pub struct WaveFormat {
-    pub format_tag: u16,
+    /// Resolved format tag — the SubFormat GUID `data1` when the fmt tag is
+    /// `WAVE_FORMAT_EXTENSIBLE`, otherwise the raw `wFormatTag`.
+    pub format_tag: u32,
     pub channels: u16,
     pub sample_rate: u32,
     pub avg_bytes_per_sec: u32,
@@ -55,81 +78,131 @@ pub struct WaveFormat {
 
 #[derive(Debug, Clone)]
 pub struct WavMetadata {
-    pub is_rf64: bool,
+    pub wav_type: WavType,
     pub format: WaveFormat,
     pub data_bytes: u64,
 }
 
-pub fn parse(bytes: &[u8]) -> Option<WavMetadata> {
-    if bytes.len() < 12 {
-        return None;
-    }
-    let is_rf64 = match &bytes[0..4] {
-        b"RIFF" => false,
-        b"RF64" => true,
-        _ => return None,
-    };
-    if &bytes[8..12] != b"WAVE" {
-        return None;
-    }
-    let mut pos = 12usize;
-    let mut format: Option<WaveFormat> = None;
-    let mut data_bytes: Option<u64> = None;
-    let mut data_size_override: Option<u64> = None;
-    while pos + 8 <= bytes.len() {
-        let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
-        let body_start = pos + 8;
-        let body_end = body_start + size;
-        if body_end > bytes.len() && id != b"data" {
-            // Don't bail if data chunk extends past our probe — we only need
-            // its size header, not the payload.
-            break;
-        }
-        match id {
-            b"ds64" if is_rf64 && size >= 16 => {
-                // riff_size_low/high then data_size_low/high — we want data.
-                let data = u64::from_le_bytes(bytes[body_start + 8..body_start + 16].try_into().ok()?);
-                data_size_override = Some(data);
-            }
-            b"fmt " => {
-                format = parse_fmt_chunk(&bytes[body_start..body_start.saturating_add(size).min(bytes.len())]);
-            }
-            b"data" => {
-                let data_size = if size == 0xFFFF_FFFF {
-                    data_size_override.unwrap_or(0)
-                } else {
-                    size as u64
-                };
-                data_bytes = Some(data_size);
-                break;
-            }
-            _ => {}
-        }
-        // Pad chunk sizes to 2-byte boundary
-        let advance = if size & 1 != 0 { size + 1 } else { size };
-        pos = body_start.saturating_add(advance);
-    }
-    let format = format?;
-    Some(WavMetadata {
-        is_rf64,
-        format,
-        data_bytes: data_bytes.unwrap_or(0),
-    })
+#[derive(Debug, Clone)]
+struct Chunk {
+    id: [u8; 4],
+    pos: u64,
+    len: u64,
 }
 
-fn parse_fmt_chunk(bytes: &[u8]) -> Option<WaveFormat> {
+fn id_eq(id: &[u8; 4], want: &[u8; 4]) -> bool {
+    id.eq_ignore_ascii_case(want)
+}
+
+/// Port of `wav_reader_c::determine_type`.
+fn determine_type(head: &[u8]) -> Option<WavType> {
+    if head.len() < W64_HEADER as usize {
+        // Still allow a short classic header (RIFF/RF64 need only 12 bytes).
+        if head.len() >= 12 {
+            if &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
+                return Some(WavType::Wave);
+            }
+            if &head[0..4] == b"RF64" && &head[8..12] == b"WAVE" {
+                return Some(WavType::Rf64);
+            }
+        }
+        return None;
+    }
+    if &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
+        return Some(WavType::Wave);
+    }
+    if &head[0..4] == b"RF64" && &head[8..12] == b"WAVE" {
+        return Some(WavType::Rf64);
+    }
+    if head[0..16] == W64_GUID_RIFF && head[24..40] == W64_GUID_WAVE {
+        return Some(WavType::Wave64);
+    }
+    None
+}
+
+/// Walk the RIFF chunk list (`scan_chunks_wave`). RIFF chunks are word-aligned
+/// (odd payloads carry a trailing pad byte).
+fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+    let mut chunks = Vec::new();
+    let mut pos = 12u64; // after RIFF id + size + WAVE id
+    while chunks.len() < MAX_CHUNKS {
+        src.seek_to(pos)?;
+        let mut hdr = [0u8; 8];
+        if src.read_at_most(&mut hdr)? != 8 {
+            break;
+        }
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&hdr[0..4]);
+        let len = get_u32_le(&hdr[4..]) as u64;
+        let data_pos = pos + 8;
+        chunks.push(Chunk { id, pos: data_pos, len });
+        // Advance past the payload, padding odd lengths to a word boundary.
+        let advance = if len & 1 != 0 { len + 1 } else { len };
+        let next = data_pos.saturating_add(advance);
+        if next <= pos || next > file_size.max(data_pos) {
+            break;
+        }
+        pos = next;
+    }
+    Ok(chunks)
+}
+
+/// Walk the Wave64 chunk list (`scan_chunks_wave64`).
+fn scan_chunks_wave64(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+    let mut chunks = Vec::new();
+    let mut pos = W64_HEADER;
+    while chunks.len() < MAX_CHUNKS {
+        src.seek_to(pos)?;
+        let mut hdr = [0u8; W64_CHUNK_HEADER as usize];
+        if src.read_at_most(&mut hdr)? != W64_CHUNK_HEADER as usize {
+            break;
+        }
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&hdr[0..4]);
+        let size = get_u64_le(&hdr[16..]);
+        if size < W64_CHUNK_HEADER {
+            break;
+        }
+        let len = size - W64_CHUNK_HEADER;
+        let data_pos = pos + W64_CHUNK_HEADER;
+        chunks.push(Chunk { id, pos: data_pos, len });
+        let next = data_pos.saturating_add(len);
+        if next <= pos || next > file_size.max(data_pos) {
+            break;
+        }
+        pos = next;
+    }
+    Ok(chunks)
+}
+
+fn find_chunk<'a>(chunks: &'a [Chunk], want: &[u8; 4], require_non_empty: bool) -> Option<&'a Chunk> {
+    chunks
+        .iter()
+        .find(|c| id_eq(&c.id, want) && (!require_non_empty || c.len != 0))
+}
+
+/// Parse the fmt chunk body, resolving `WAVE_FORMAT_EXTENSIBLE`.
+fn parse_fmt(bytes: &[u8]) -> Option<WaveFormat> {
     if bytes.len() < 16 {
         return None;
     }
-    let format_tag = u16::from_le_bytes([bytes[0], bytes[1]]);
-    let channels = u16::from_le_bytes([bytes[2], bytes[3]]);
-    let sample_rate = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    let avg_bytes_per_sec = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-    let block_align = u16::from_le_bytes([bytes[12], bytes[13]]);
-    let bits_per_sample = u16::from_le_bytes([bytes[14], bytes[15]]);
+    let raw_tag = get_u16_le(&bytes[0..]);
+    let channels = get_u16_le(&bytes[2..]);
+    let sample_rate = get_u32_le(&bytes[4..]);
+    let avg_bytes_per_sec = get_u32_le(&bytes[8..]);
+    let block_align = get_u16_le(&bytes[12..]);
+    let bits_per_sample = get_u16_le(&bytes[14..]);
+
+    let format_tag = if raw_tag == WAVE_FORMAT_EXTENSIBLE
+        && bytes.len() >= WAVEFORMATEXTENSIBLE_SIZE
+    {
+        get_u32_le(&bytes[SUBFORMAT_DATA1_OFFSET..])
+    } else {
+        raw_tag as u32
+    };
+
     let extra = if bytes.len() >= 18 {
-        let cb = u16::from_le_bytes([bytes[16], bytes[17]]) as usize;
+        let cb = get_u16_le(&bytes[16..]) as usize;
         if 18 + cb <= bytes.len() {
             bytes[18..18 + cb].to_vec()
         } else {
@@ -138,6 +211,7 @@ fn parse_fmt_chunk(bytes: &[u8]) -> Option<WaveFormat> {
     } else {
         Vec::new()
     };
+
     Some(WaveFormat {
         format_tag,
         channels,
@@ -149,15 +223,82 @@ fn parse_fmt_chunk(bytes: &[u8]) -> Option<WaveFormat> {
     })
 }
 
-fn codec_name(format_tag: u16) -> &'static str {
-    match format_tag {
+/// Full parse over a [`FileSource`]: determine type, scan chunks, read fmt and
+/// data. Mirrors `wav_reader_c::parse_file`.
+fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError> {
+    src.seek_to(0)?;
+    let mut head = [0u8; W64_HEADER as usize];
+    let n = src.read_at_most(&mut head)?;
+    let Some(wav_type) = determine_type(&head[..n]) else {
+        return Ok(None);
+    };
+    let file_size = src.length().unwrap_or(u64::MAX);
+
+    let chunks = match wav_type {
+        WavType::Wave | WavType::Rf64 => scan_chunks_riff(src, file_size)?,
+        WavType::Wave64 => scan_chunks_wave64(src, file_size)?,
+    };
+
+    // RF64: ds64 carries the real data size when the data chunk len is 0xFFFFFFFF.
+    let ds64_data_size = if wav_type == WavType::Rf64 {
+        if let Some(ds64) = find_chunk(&chunks, b"ds64", false) {
+            if ds64.len >= 16 {
+                src.seek_to(ds64.pos)?;
+                let mut buf = [0u8; 16];
+                if src.read_at_most(&mut buf)? == 16 {
+                    let _riff_size = get_u64_le(&buf[0..]);
+                    Some(get_u64_le(&buf[8..]))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let fmt_chunk = find_chunk(&chunks, b"fmt ", false).cloned();
+    let Some(fmt_chunk) = fmt_chunk else {
+        return Ok(None);
+    };
+    src.seek_to(fmt_chunk.pos)?;
+    let fmt_bytes = src.read_vec_capped(fmt_chunk.len.min(FMT_READ_CAP), FMT_READ_CAP)?;
+    let Some(format) = parse_fmt(&fmt_bytes) else {
+        return Ok(None);
+    };
+
+    let data_chunk = find_chunk(&chunks, b"data", false);
+    let Some(data_chunk) = data_chunk else {
+        return Ok(None);
+    };
+    let data_bytes = if data_chunk.len == 0xFFFF_FFFF {
+        ds64_data_size.unwrap_or(0)
+    } else {
+        data_chunk.len
+    };
+
+    Ok(Some(WavMetadata {
+        wav_type,
+        format,
+        data_bytes,
+    }))
+}
+
+fn codec_id_and_name(format_tag: u32) -> (String, &'static str) {
+    let name = match format_tag {
         WAVE_FORMAT_PCM => "PCM",
         WAVE_FORMAT_IEEE_FLOAT => "IEEE Float",
-        WAVE_FORMAT_EXTENSIBLE => "WAVEFORMATEXTENSIBLE",
+        0x0002 => "ADPCM",
         0x0055 => "MP3",
+        0x2000 => "AC-3",
         0x00FF => "AAC",
         _ => "Unknown",
-    }
+    };
+    (format!("0x{format_tag:04X}"), name)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -169,14 +310,10 @@ impl Reader for WavReader {
     }
 
     fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-        let mut head = [0u8; 12];
+        let mut head = [0u8; W64_HEADER as usize];
         let read = src.read_at_most(&mut head)?;
         src.seek_to(0)?;
-        if read < 12 {
-            return Ok(false);
-        }
-        let prefix = &head[0..4];
-        Ok((prefix == b"RIFF" || prefix == b"RF64") && &head[8..12] == b"WAVE")
+        Ok(determine_type(&head[..read]).is_some())
     }
 
     fn read_headers(
@@ -185,10 +322,7 @@ impl Reader for WavReader {
         _deadline: &Deadline,
         out: &mut MediaMetadata,
     ) -> Result<(), ParseError> {
-        let mut probe = vec![0u8; PROBE_BYTES];
-        src.seek_to(0)?;
-        let read = src.read_at_most(&mut probe)?;
-        let metadata = parse(&probe[..read]).ok_or(ParseError::Unrecognised)?;
+        let metadata = parse_source(src)?.ok_or(ParseError::Unrecognised)?;
 
         out.container.format = ContainerFormat::Wav;
         out.container.recognized = true;
@@ -224,12 +358,13 @@ impl Reader for WavReader {
         } else {
             Some(CodecPrivate::from_bytes(&metadata.format.extra))
         };
+        let (codec_id, codec_name) = codec_id_and_name(metadata.format.format_tag);
         out.tracks.push(Track {
             id: 0,
             track_type: TrackType::Audio,
             codec: CodecInfo {
-                id: format!("0x{:04X}", metadata.format.format_tag),
-                name: Some(codec_name(metadata.format.format_tag).to_string()),
+                id: codec_id,
+                name: Some(codec_name.to_string()),
                 codec_private,
             },
             properties: TrackProperties {
@@ -243,32 +378,84 @@ impl Reader for WavReader {
 }
 
 #[cfg(test)]
-pub(crate) fn build_wav(
-    sample_rate: u32,
-    channels: u16,
-    bits: u16,
-    data_bytes: u32,
-) -> Vec<u8> {
+fn fmt_pcm(sample_rate: u32, channels: u16, bits: u16) -> Vec<u8> {
     let block_align = channels * bits / 8;
     let mut fmt = Vec::new();
-    fmt.extend_from_slice(&WAVE_FORMAT_PCM.to_le_bytes());
+    fmt.extend_from_slice(&(WAVE_FORMAT_PCM as u16).to_le_bytes());
     fmt.extend_from_slice(&channels.to_le_bytes());
     fmt.extend_from_slice(&sample_rate.to_le_bytes());
     fmt.extend_from_slice(&(sample_rate * block_align as u32).to_le_bytes());
     fmt.extend_from_slice(&block_align.to_le_bytes());
     fmt.extend_from_slice(&bits.to_le_bytes());
+    fmt
+}
 
-    let mut payload = Vec::new();
-    payload.extend_from_slice(b"WAVE");
-    payload.extend_from_slice(b"fmt ");
-    payload.extend_from_slice(&(fmt.len() as u32).to_le_bytes());
-    payload.extend_from_slice(&fmt);
-    payload.extend_from_slice(b"data");
-    payload.extend_from_slice(&data_bytes.to_le_bytes());
-    let mut bytes = Vec::with_capacity(8 + payload.len());
+#[cfg(test)]
+fn riff_wrap(payload_chunks: Vec<(&[u8; 4], Vec<u8>)>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WAVE");
+    for (id, data) in payload_chunks {
+        body.extend_from_slice(id);
+        body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        body.extend_from_slice(&data);
+        if data.len() & 1 != 0 {
+            body.push(0);
+        }
+    }
+    let mut bytes = Vec::new();
     bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    bytes.extend(payload);
+    bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    bytes.extend(body);
+    bytes
+}
+
+#[cfg(test)]
+pub(crate) fn build_wav(sample_rate: u32, channels: u16, bits: u16, data_bytes: u32) -> Vec<u8> {
+    riff_wrap(vec![
+        (b"fmt ", fmt_pcm(sample_rate, channels, bits)),
+        (b"data", vec![0u8; data_bytes as usize]),
+    ])
+}
+
+#[cfg(test)]
+fn build_wav_extensible(subformat_tag: u32, channels: u16, bits: u16) -> Vec<u8> {
+    let block_align = channels * bits / 8;
+    let mut fmt = Vec::new();
+    fmt.extend_from_slice(&WAVE_FORMAT_EXTENSIBLE.to_le_bytes());
+    fmt.extend_from_slice(&channels.to_le_bytes());
+    fmt.extend_from_slice(&48_000u32.to_le_bytes());
+    fmt.extend_from_slice(&(48_000 * block_align as u32).to_le_bytes());
+    fmt.extend_from_slice(&block_align.to_le_bytes());
+    fmt.extend_from_slice(&bits.to_le_bytes());
+    fmt.extend_from_slice(&22u16.to_le_bytes()); // cbSize
+    fmt.extend_from_slice(&bits.to_le_bytes()); // wValidBitsPerSample
+    fmt.extend_from_slice(&0u32.to_le_bytes()); // dwChannelMask
+    fmt.extend_from_slice(&subformat_tag.to_le_bytes()); // GUID data1
+    fmt.extend_from_slice(&[0u8; 12]); // rest of GUID
+    riff_wrap(vec![(b"fmt ", fmt), (b"data", vec![0u8; 16])])
+}
+
+#[cfg(test)]
+fn build_wave64(sample_rate: u32, channels: u16, bits: u16, data_bytes: usize) -> Vec<u8> {
+    fn w64_chunk(id4: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut guid = [0u8; 16];
+        guid[0..4].copy_from_slice(id4);
+        // Reuse the wave-suffix bytes for non-riff chunks (id only matters for 4).
+        guid[4..].copy_from_slice(&W64_GUID_WAVE[4..]);
+        let size = (W64_CHUNK_HEADER as usize + body.len()) as u64;
+        let mut out = Vec::new();
+        out.extend_from_slice(&guid);
+        out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&W64_GUID_RIFF);
+    // riff size (whole file) — value not validated by the reader.
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&W64_GUID_WAVE);
+    bytes.extend(w64_chunk(b"fmt ", &fmt_pcm(sample_rate, channels, bits)));
+    bytes.extend(w64_chunk(b"data", &vec![0u8; data_bytes]));
     bytes
 }
 
@@ -280,27 +467,111 @@ mod tests {
     #[test]
     fn parses_riff_wave_pcm() {
         let bytes = build_wav(48_000, 2, 24, 96_000);
-        let m = parse(&bytes).unwrap();
-        assert!(!m.is_rf64);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.wav_type, WavType::Wave);
         assert_eq!(m.format.sample_rate, 48_000);
         assert_eq!(m.format.channels, 2);
         assert_eq!(m.format.bits_per_sample, 24);
         assert_eq!(m.data_bytes, 96_000);
+        assert_eq!(m.format.format_tag, WAVE_FORMAT_PCM);
+    }
+
+    // ---- PARSER-020: Wave64 ----------------------------------------------
+
+    #[test]
+    fn probe_and_parse_wave64() {
+        let bytes = build_wave64(48_000, 2, 16, 64);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+        assert!(WavReader.probe(&mut s).unwrap());
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.wav_type, WavType::Wave64);
+        assert_eq!(m.format.sample_rate, 48_000);
+        assert_eq!(m.format.channels, 2);
+        assert_eq!(m.data_bytes, 64);
+    }
+
+    // ---- PARSER-021: WAVEFORMATEXTENSIBLE resolution ----------------------
+
+    #[test]
+    fn extensible_resolves_pcm_subformat() {
+        let bytes = build_wav_extensible(WAVE_FORMAT_PCM, 6, 24);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        // Resolved to the subformat, not left as 0xFFFE.
+        assert_eq!(m.format.format_tag, WAVE_FORMAT_PCM);
+        let (id, name) = codec_id_and_name(m.format.format_tag);
+        assert_eq!(id, "0x0001");
+        assert_eq!(name, "PCM");
     }
 
     #[test]
-    fn parses_rf64_format_marker() {
-        let mut bytes = build_wav(48_000, 2, 16, 12);
+    fn extensible_resolves_float_subformat() {
+        let bytes = build_wav_extensible(WAVE_FORMAT_IEEE_FLOAT, 2, 32);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.format.format_tag, WAVE_FORMAT_IEEE_FLOAT);
+    }
+
+    // ---- PARSER-022: late fmt/data after a large chunk --------------------
+
+    #[test]
+    fn finds_fmt_and_data_after_large_junk_chunk() {
+        // A 64 KiB JUNK chunk before fmt/data — beyond the old 16 KiB window.
+        let junk = vec![0xAAu8; 64 * 1024];
+        let bytes = riff_wrap(vec![
+            (b"JUNK", junk),
+            (b"fmt ", fmt_pcm(44_100, 2, 16)),
+            (b"data", vec![0u8; 4000]),
+        ]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.format.sample_rate, 44_100);
+        assert_eq!(m.data_bytes, 4000);
+    }
+
+    #[test]
+    fn handles_odd_length_chunk_padding() {
+        // Odd-length JUNK (3 bytes) must be word-padded so fmt is found.
+        let bytes = riff_wrap(vec![
+            (b"JUNK", vec![1, 2, 3]),
+            (b"fmt ", fmt_pcm(48_000, 1, 16)),
+            (b"data", vec![0u8; 100]),
+        ]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.format.channels, 1);
+    }
+
+    #[test]
+    fn rf64_uses_ds64_data_size() {
+        let mut ds64 = Vec::new();
+        ds64.extend_from_slice(&0u64.to_le_bytes()); // riff_size
+        ds64.extend_from_slice(&500_000u64.to_le_bytes()); // data_size
+        ds64.extend_from_slice(&0u64.to_le_bytes()); // sample_count
+        let mut bytes = riff_wrap(vec![
+            (b"ds64", ds64),
+            (b"fmt ", fmt_pcm(48_000, 2, 16)),
+            (b"data", vec![0u8; 8]),
+        ]);
         bytes[0..4].copy_from_slice(b"RF64");
-        let m = parse(&bytes).unwrap();
-        assert!(m.is_rf64);
+        // Force the data chunk length to 0xFFFFFFFF so the ds64 override is used.
+        // Locate the "data" chunk's 4-byte size field and overwrite it.
+        let data_id_pos = bytes.windows(4).position(|w| w == b"data").unwrap();
+        bytes[data_id_pos + 4..data_id_pos + 8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let m = parse_source(&mut s).unwrap().unwrap();
+        assert_eq!(m.wav_type, WavType::Rf64);
+        assert_eq!(m.data_bytes, 500_000);
     }
 
     #[test]
     fn rejects_non_wave_payload() {
         let mut bytes = build_wav(48_000, 2, 16, 12);
         bytes[8..12].copy_from_slice(b"AVI ");
-        assert!(parse(&bytes).is_none());
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        assert!(parse_source(&mut s).unwrap().is_none());
     }
 
     #[test]
@@ -312,7 +583,6 @@ mod tests {
 
     #[test]
     fn read_headers_populates_audio_track_and_duration() {
-        use crate::media_metadata::deadline::Deadline;
         let bytes = build_wav(48_000, 2, 16, 192_000); // 1 second @ 48 kHz stereo 16-bit
         let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
         let mut out = MediaMetadata::new("clip.wav", 0);
@@ -324,12 +594,11 @@ mod tests {
     }
 
     #[test]
-    fn codec_name_table_covers_common_tags() {
-        assert_eq!(codec_name(0x0001), "PCM");
-        assert_eq!(codec_name(0x0003), "IEEE Float");
-        assert_eq!(codec_name(0xFFFE), "WAVEFORMATEXTENSIBLE");
-        assert_eq!(codec_name(0x0055), "MP3");
-        assert_eq!(codec_name(0x00FF), "AAC");
-        assert_eq!(codec_name(0xCAFE), "Unknown");
+    fn codec_table_covers_common_tags() {
+        assert_eq!(codec_id_and_name(0x0001).1, "PCM");
+        assert_eq!(codec_id_and_name(0x0003).1, "IEEE Float");
+        assert_eq!(codec_id_and_name(0x0055).1, "MP3");
+        assert_eq!(codec_id_and_name(0x2000).1, "AC-3");
+        assert_eq!(codec_id_and_name(0xCAFE).1, "Unknown");
     }
 }
