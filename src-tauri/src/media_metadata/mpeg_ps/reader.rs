@@ -15,9 +15,16 @@
  *   limitations under the License.
  */
 
-//! `MpegPsReader` — walks start codes and collects unique stream IDs.
+//! `MpegPsReader`. Pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ps.cpp`.
+//!
+//! - Probe scans the first 32 KiB for a leading pack header or a
+//!   system-header + packet start-code pair (PARSER-049).
+//! - PES packets are depacketised per stream; Program Stream Map entries are
+//!   parsed (PARSER-051) and private-stream-1 substream ids are recorded so
+//!   the codec can be resolved later (PARSER-050); the accumulated elementary
+//!   payload feeds codec-header decoding (PARSER-052).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -25,13 +32,43 @@ use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::reader::Reader;
 
-use super::identify::{self, classify_stream_id, StreamObservation};
-use super::packet::{self, StartCode, PACK_HEADER};
+use super::identify::{self, StreamObservation};
+use super::packet::{self, StartCode, PACK_HEADER, SYSTEM_HEADER};
+use super::{pes, stream_map};
 
 const PROBE_BYTES: usize = 64 * 1024;
+const PROBE_SCAN: usize = 32 * 1024;
+const STREAM_PAYLOAD_CAP: usize = 256 * 1024;
+const MAX_STREAMS: usize = 64;
+const PACKET_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, PACK_HEADER];
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MpegPsReader;
+
+/// A start-code byte is a PS packet-layer code (`0xB9`..`0xFF`) rather than an
+/// elementary-stream code (`0x00`..`0xB8`, e.g. MPEG slice / sequence headers
+/// embedded in a video payload).
+fn is_packet_layer(sid: u8) -> bool {
+    sid >= 0xB9
+}
+
+/// Scan forward for the next packet-layer start code, skipping elementary
+/// start codes that appear inside a video payload.
+fn next_packet_layer(bytes: &[u8], from: usize) -> usize {
+    let mut i = from;
+    loop {
+        match packet::find_start_code(bytes, i) {
+            Some((pos, sid)) if is_packet_layer(sid) => return pos,
+            Some((pos, _)) => i = pos + 4,
+            None => return bytes.len(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct StreamAcc {
+    payload: Vec<u8>,
+}
 
 impl Reader for MpegPsReader {
     fn name(&self) -> &'static str {
@@ -39,18 +76,35 @@ impl Reader for MpegPsReader {
     }
 
     fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-        let mut head = vec![0u8; 256];
+        let mut head = vec![0u8; PROBE_SCAN];
         let read = src.read_at_most(&mut head)?;
         src.seek_to(0)?;
         if read < 4 {
             return Ok(false);
         }
-        // Must begin with a pack header start code.
-        Ok(read >= 4
-            && head[0] == 0x00
-            && head[1] == 0x00
-            && head[2] == 0x01
-            && head[3] == PACK_HEADER)
+        // Fast path: file begins with a pack header.
+        if head[..4] == PACKET_START_CODE {
+            return Ok(true);
+        }
+        // Otherwise require both a system-header and a packet start code within
+        // the scan window (mkvtoolnix's fallback).
+        let bytes = &head[..read];
+        let mut system_header = false;
+        let mut packet_start = false;
+        let mut i = 0usize;
+        while i + 4 <= bytes.len() && (!system_header || !packet_start) {
+            if let Some((pos, sid)) = packet::find_start_code(bytes, i) {
+                match sid {
+                    SYSTEM_HEADER => system_header = true,
+                    PACK_HEADER => packet_start = true,
+                    _ => {}
+                }
+                i = pos + 4;
+            } else {
+                break;
+            }
+        }
+        Ok(system_header && packet_start)
     }
 
     fn read_headers(
@@ -66,31 +120,91 @@ impl Reader for MpegPsReader {
             return Err(ParseError::Unrecognised);
         }
         let bytes = &probe[..read];
-        let mut seen_ids: HashSet<u8> = HashSet::new();
-        let mut observations: Vec<StreamObservation> = Vec::new();
+
+        // Insertion-ordered stream table keyed by (stream_id, sub_id).
+        let mut order: Vec<(u8, Option<u8>)> = Vec::new();
+        let mut streams: HashMap<(u8, Option<u8>), StreamAcc> = HashMap::new();
+        let mut psm_types: HashMap<u8, u8> = HashMap::new();
+
         let mut offset = 0usize;
-        loop {
+        let mut iterations = 0usize;
+        while let Some((pos, sid)) = packet::find_start_code(bytes, offset) {
             deadline.check("mpeg_ps::reader")?;
-            let Some((pos, sid)) = packet::find_start_code(bytes, offset) else {
+            iterations += 1;
+            if iterations > 200_000 {
                 break;
-            };
-            offset = pos + 4;
-            let candidate = match StartCode::from_byte(sid) {
-                StartCode::Audio(b) | StartCode::Video(b) => Some(b),
-                StartCode::PrivateStream1 => Some(0xBDu8),
-                _ => None,
-            };
-            if let Some(c) = candidate {
-                if seen_ids.insert(c) {
-                    if let Some(obs) = classify_stream_id(c) {
-                        observations.push(obs);
+            }
+            if !is_packet_layer(sid) {
+                offset = pos + 4;
+                continue;
+            }
+            match StartCode::from_byte(sid) {
+                StartCode::ProgramStreamMap => {
+                    if let Ok(psm) = stream_map::parse(&bytes[pos + 4..]) {
+                        for e in psm.entries {
+                            psm_types
+                                .entry(e.elementary_stream_id)
+                                .or_insert(e.stream_type);
+                        }
                     }
+                    offset = pos + 4;
+                }
+                StartCode::Audio(_) | StartCode::Video(_) | StartCode::PrivateStream1 => {
+                    let pkt = &bytes[pos..];
+                    let pkt_len = pes::parse(pkt).map(|h| h.packet_length as usize).unwrap_or(0);
+                    let payoff = pes::pes_payload_offset(pkt);
+                    let payload_abs = (pos + payoff).min(bytes.len());
+                    let pkt_end = if pkt_len > 0 {
+                        (pos + 6 + pkt_len).min(bytes.len())
+                    } else {
+                        next_packet_layer(bytes, payload_abs.max(pos + 4))
+                    };
+
+                    let sub_id = if sid == 0xBD && payload_abs < bytes.len() {
+                        Some(bytes[payload_abs])
+                    } else {
+                        None
+                    };
+                    let data_start = if sid == 0xBD {
+                        (payload_abs + 1).min(bytes.len())
+                    } else {
+                        payload_abs
+                    };
+                    let data_end = pkt_end.min(bytes.len()).max(data_start);
+
+                    let key = (sid, sub_id);
+                    let acc = streams.entry(key).or_insert_with(|| {
+                        if order.len() < MAX_STREAMS {
+                            order.push(key);
+                        }
+                        StreamAcc::default()
+                    });
+                    if acc.payload.len() < STREAM_PAYLOAD_CAP {
+                        let take = (STREAM_PAYLOAD_CAP - acc.payload.len())
+                            .min(data_end.saturating_sub(data_start));
+                        acc.payload.extend_from_slice(&bytes[data_start..data_start + take]);
+                    }
+                    offset = pkt_end.max(pos + 4);
+                }
+                _ => {
+                    // PackHeader / SystemHeader / Padding / PrivateStream2 / ...
+                    offset = pos + 4;
                 }
             }
-            if observations.len() >= 16 {
-                break;
-            }
         }
+
+        let observations: Vec<StreamObservation> = order
+            .into_iter()
+            .filter_map(|key| {
+                streams.remove(&key).map(|acc| StreamObservation {
+                    stream_id: key.0,
+                    sub_id: key.1,
+                    psm_stream_type: psm_types.get(&key.0).copied(),
+                    payload: acc.payload,
+                })
+            })
+            .collect();
+
         identify::finalise(observations, out);
         Ok(())
     }
@@ -131,6 +245,19 @@ mod tests {
         assert!(MpegPsReader.probe(&mut s).unwrap());
     }
 
+    // ---- PARSER-049: scan-based probe ------------------------------------
+
+    #[test]
+    fn probe_accepts_leading_garbage_then_system_and_pack() {
+        let mut bytes = vec![0xAA, 0xBB, 0xCC]; // leading junk
+        bytes.extend_from_slice(&start_code(SYSTEM_HEADER));
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes.extend_from_slice(&start_code(PACK_HEADER));
+        bytes.extend_from_slice(&[0u8; 8]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        assert!(MpegPsReader.probe(&mut s).unwrap());
+    }
+
     #[test]
     fn probe_rejects_files_without_pack_header() {
         let mut s = FileSource::from_reader_for_test(Cursor::new(b"RIFF".to_vec()));
@@ -166,5 +293,58 @@ mod tests {
         MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
         assert_eq!(out.tracks.len(), 1);
         assert_eq!(out.tracks[0].track_type, TrackType::Video);
+    }
+
+    // ---- PARSER-050: private-stream-1 substreams -------------------------
+
+    #[test]
+    fn private_stream_1_dts_substream_classified() {
+        // 0xBD packet whose first payload byte (sub_id) is 0x88 → DTS.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&start_code(PACK_HEADER));
+        bytes.extend_from_slice(&[0u8; 10]);
+        bytes.extend_from_slice(&start_code(0xBD));
+        bytes.extend_from_slice(&16u16.to_be_bytes()); // packet length
+        // PES header: 2 flag bytes + header_data_length=0, then payload.
+        bytes.extend_from_slice(&[0x80, 0x80, 0x00]);
+        bytes.push(0x88); // sub_id → DTS
+        bytes.extend_from_slice(&[0u8; 12]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.vob", 0);
+        MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].codec.id, "A_DTS");
+    }
+
+    // ---- PARSER-051: Program Stream Map ----------------------------------
+
+    #[test]
+    fn program_stream_map_overrides_classification() {
+        // PSM mapping stream id 0xE0 → stream_type 0x1B (AVC).
+        let mut psm_payload = Vec::new();
+        psm_payload.extend_from_slice(&0u16.to_be_bytes()); // map length (unused)
+        psm_payload.push(0x80); // current_next + version
+        psm_payload.push(0x01); // marker
+        psm_payload.extend_from_slice(&0u16.to_be_bytes()); // program_stream_info_length
+        psm_payload.extend_from_slice(&4u16.to_be_bytes()); // elementary_stream_map_length
+        psm_payload.push(0x1B); // stream_type AVC
+        psm_payload.push(0xE0); // elementary_stream_id
+        psm_payload.extend_from_slice(&0u16.to_be_bytes()); // es_info_length
+        psm_payload.extend_from_slice(&0u32.to_be_bytes()); // CRC
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&start_code(PACK_HEADER));
+        bytes.extend_from_slice(&[0u8; 10]);
+        bytes.extend_from_slice(&start_code(super::super::packet::PROGRAM_STREAM_MAP));
+        bytes.extend_from_slice(&psm_payload);
+        // A video PES on 0xE0.
+        bytes.extend_from_slice(&start_code(0xE0));
+        bytes.extend_from_slice(&8u16.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.mpg", 0);
+        MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
     }
 }
