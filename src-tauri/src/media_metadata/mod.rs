@@ -25,7 +25,9 @@ pub mod coreaudio;
 pub mod deadline;
 pub mod elementary;
 pub mod error;
+pub mod flv;
 pub mod io;
+pub mod ivf;
 pub mod language;
 pub mod matroska;
 pub mod model;
@@ -35,6 +37,7 @@ pub mod mpeg_ts;
 pub mod ogg;
 pub mod probe;
 pub mod reader;
+pub mod realmedia;
 pub mod subtitles;
 
 pub use deadline::Deadline;

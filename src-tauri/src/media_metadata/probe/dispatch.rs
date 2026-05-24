@@ -42,6 +42,8 @@ use crate::media_metadata::coreaudio::CoreAudioReader;
 use crate::media_metadata::elementary::{
     AvcReader, DiracReader, DvReader, HevcReader, MpegVideoReader, ObuReader, Vc1Reader,
 };
+use crate::media_metadata::flv::FlvReader;
+use crate::media_metadata::ivf::IvfReader;
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::mp4::Mp4Reader;
@@ -49,6 +51,7 @@ use crate::media_metadata::mpeg_ps::MpegPsReader;
 use crate::media_metadata::mpeg_ts::MpegTsReader;
 use crate::media_metadata::ogg::OggReader;
 use crate::media_metadata::reader::Reader;
+use crate::media_metadata::realmedia::RealMediaReader;
 use crate::media_metadata::subtitles::{
     HdmvTextStReader, MicroDvdReader, PgsReader, SrtReader, SsaReader, UsfReader,
     VobButtonReader, VobSubReader, WebVttReader,
@@ -106,6 +109,9 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     static OGG: OggReader = OggReader;
     static MPEG_PS: MpegPsReader = MpegPsReader;
     static MPEG_TS: MpegTsReader = MpegTsReader;
+    static FLV: FlvReader = FlvReader;
+    static REALMEDIA: RealMediaReader = RealMediaReader;
+    static IVF: IvfReader = IvfReader;
 
     // Magic-byte audio formats (single-FOURCC probes) — these go before the
     // frame-sync probes because their magic bytes don't collide.
@@ -153,6 +159,7 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
 
     static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[
         &MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS,
+        &FLV, &REALMEDIA, &IVF,
         &FLAC, &WAV, &WAVPACK, &TTA, &CORE_AUDIO, &TRUEHD,
         &MPEG_VIDEO, &VC1, &DIRAC, &DV,
         &AVC, &HEVC, &OBU,
