@@ -33,7 +33,12 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::FileSource;
+use crate::media_metadata::audio::{
+    AacReader, Ac3Reader, DtsReader, FlacReader, Mp3Reader, TrueHdReader, TtaReader, WavReader,
+    WavpackReader,
+};
 use crate::media_metadata::avi::AviReader;
+use crate::media_metadata::coreaudio::CoreAudioReader;
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::mp4::Mp4Reader;
@@ -94,8 +99,29 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     static OGG: OggReader = OggReader;
     static MPEG_PS: MpegPsReader = MpegPsReader;
     static MPEG_TS: MpegTsReader = MpegTsReader;
-    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] =
-        &[&MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS];
+
+    // Magic-byte audio formats (single-FOURCC probes) — these go before the
+    // frame-sync probes because their magic bytes don't collide.
+    static FLAC: FlacReader = FlacReader;
+    static WAV: WavReader = WavReader;
+    static WAVPACK: WavpackReader = WavpackReader;
+    static TTA: TtaReader = TtaReader;
+    static CORE_AUDIO: CoreAudioReader = CoreAudioReader;
+    static TRUEHD: TrueHdReader = TrueHdReader;
+
+    // Frame-sync audio formats — order mirrors mkvtoolnix's probe cascade:
+    // AC-3 before MP3 (MPEG sync `0xFFE` and AC-3 sync `0x0B77` don't
+    // collide, but MP3 must beat AAC because of the shared `0xFFF` prefix).
+    static AC3: Ac3Reader = Ac3Reader;
+    static DTS: DtsReader = DtsReader;
+    static MP3: Mp3Reader = Mp3Reader;
+    static AAC: AacReader = AacReader;
+
+    static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[
+        &MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS,
+        &FLAC, &WAV, &WAVPACK, &TTA, &CORE_AUDIO, &TRUEHD,
+        &AC3, &DTS, &MP3, &AAC,
+    ];
     REGISTRY
 }
 

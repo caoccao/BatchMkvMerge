@@ -108,7 +108,7 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phases 7-10 = audio/elementary/subtitles/residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phases 8-10 = elementary/subtitles/residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 
@@ -128,10 +128,12 @@ src-tauri/src/media_metadata/
 ├── avi/                # native AVI reader (riff, avih, strl, odml, identify, reader)
 ├── ogg/                # native Ogg/OGM reader (page, codecs/*, comments, identify, reader)
 ├── mpeg_ts/            # native MPEG-TS reader (packet, pat, pmt, pes, descriptors/*, stream_table, identify, reader)
-└── mpeg_ps/            # native MPEG-PS reader (packet, pes, stream_map, identify, reader)
+├── mpeg_ps/            # native MPEG-PS reader (packet, pes, stream_map, identify, reader)
+├── audio/              # audio-only readers (id3v2, mp3, aac, ac3, dts, flac, wav, truehd, tta, wavpack)
+└── coreaudio/          # native CoreAudio CAF reader (caf, reader)
 ```
 
-**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS readers; other formats land in subsequent phases.
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS + magic-byte audio readers (FLAC / WAV / WAVPACK / TTA / CoreAudio / TrueHD) + frame-sync audio readers (AC-3 / DTS / MP3 / AAC); other formats land in subsequent phases.
 
 **Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
 
@@ -144,6 +146,22 @@ src-tauri/src/media_metadata/
 **MPEG-TS reader:** pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ts.cpp`. Detects packet size by scanning the first 8 KB for the 0x47 sync byte at strides of 188 (standard), 192 (BD M2TS — 4-byte timecode prefix per packet) or 204 (FEC-extended). Reassembles PSI sections from `payload_unit_start=1` packets, parses PAT (PID 0) → list of `(program_number, pmt_pid)`, then PMT → per-stream `(stream_type, elementary_pid, descriptors)`. Eight descriptor decoders (ISO-639 language, AC-3, E-AC-3, DTS, teletext with BCD page number, HEVC, Dolby Vision profile, DVB service) enrich each stream. A canonical `stream_type → codec_id` table mirrors mkvtoolnix's `determine_codec_from_stream_type`; private-PES streams (0x06) are promoted to AC-3 / E-AC-3 / DTS / Teletext via descriptors. Multi-program TS files surface each program (with track-ID list + DVB service name) in `container.properties.programs`.
 
 **MPEG-PS reader:** pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ps.cpp`. Identifies the file via the pack-header start code (`0x000001BA`), then walks subsequent start codes collecting unique `stream_id` values. Audio range `0xC0..=0xDF` and video range `0xE0..=0xEF` produce one track per stream id; the private-stream-1 marker (`0xBD`) is classified as AC-3 (DVD-VOB convention). The `program_stream_map` decoder (`0xBC`) is available for files that carry one, though identification falls back to start-code enumeration when absent.
+
+**Audio readers:** ten header-only ports under `audio/` and `coreaudio/`.
+
+- **Magic-byte formats** sniff a fixed 4-8 byte signature at offset 0:
+  - `flac.rs` — `fLaC` + STREAMINFO + VorbisComment (port of `r_flac.cpp`).
+  - `wav.rs` — `RIFF/WAVE` and `RF64/WAVE` (`ds64` for >4 GB) + WAVEFORMATEX(TENSIBLE) (port of `r_wav.cpp`).
+  - `wavpack.rs` — `wvpk` v4 frame header → sample rate index + bit-depth flags (port of `r_wavpack.cpp`).
+  - `tta.rs` — `TTA1` 22-byte stream header (port of `r_tta.cpp`).
+  - `truehd.rs` — Dolby TrueHD / MLP major-sync `F8 72 6F BB/BA` (port of `r_truehd.cpp`).
+  - `coreaudio/caf.rs` + `reader.rs` — CAF `caff` magic + `desc/data` chunks (port of `r_coreaudio.cpp`).
+- **Frame-sync formats** require 8 consecutive valid frame headers to confirm:
+  - `mp3.rs` — MPEG-1/2/2.5 Layer III frame header (`0xFFE` sync) (port of `r_mp3.cpp`).
+  - `aac.rs` — ADTS `0xFFF` sync + profile / sample-rate-index / channel-config (port of `r_aac.cpp`).
+  - `ac3.rs` — AC-3 `0x0B77` sync + bsid byte switches between AC-3 (≤10) and E-AC-3 (≥11) decode paths (port of `r_ac3.cpp`).
+  - `dts.rs` — four sync words (16-bit BE/LE + 14-bit BE/LE) + DTS-HD extension `0x64582025` (port of `r_dts.cpp`).
+- **Shared:** `audio/id3v2.rs` skips ID3v2 headers + footers before the frame-sync scan; `payload_bounds` also strips ID3v1 trailers from the tail.
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 
