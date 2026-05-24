@@ -48,6 +48,8 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: stable
+        # llvm-tools-preview is needed by cargo-llvm-cov for the coverage gate.
+        components: llvm-tools-preview
         # The action sets RUSTFLAGS=-D warnings by default, which turns every
         # rustc warning into a CI failure. Phased delivery of the
         # media_metadata parser intentionally lands public fns before their
@@ -71,6 +73,20 @@ jobs:
     - name: Run Rust tests
       working-directory: src-tauri
       run: cargo test -r
+
+    # Coverage gate: every media_metadata parser sub-module is held to >= 90%
+    # line coverage. Top-level Tauri glue (lib.rs, extract.rs, etc.) is
+    # excluded because it isn't unit-test covered.
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov
+
+    - name: Coverage gate (media_metadata >= 90%)
+      working-directory: src-tauri
+      run: |
+        cargo llvm-cov --summary-only --fail-under-lines 90 \
+          --ignore-filename-regex 'src/(config|constants|controller|extract|lib|main|mkvtoolnix|protocol)\.rs|build\.rs'
 
     - name: Build BatchMkvMerge
       run: pnpm tauri build

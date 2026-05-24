@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "Suelta archivos .mkv o una carpeta aquí"
+    "dropHere": "Suelta archivos multimedia o una carpeta aquí"
   },
   "list": {
     "delete": "Eliminar"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge no está disponible. Verifique la ruta de MKVToolNix en Ajustes. {{detail}}",
       "mkvmergeFailed": "mkvmerge falló: {{detail}}",
-      "parseError": "No se pudo analizar la salida de mkvmerge: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge no está disponible. Verifique la ruta de MKVToolNix en Ajustes. {{detail}}",
-      "mkvmergeFailed": "mkvmerge falló: {{detail}}"
+      "parser": {
+        "io": "No se pudo leer el archivo: {{detail}}",
+        "unexpectedEof": "El archivo está truncado: {{detail}}",
+        "unrecognised": "Formato de archivo no reconocido: {{detail}}",
+        "timeout": "El analizador agotó el tiempo después de {{budgetMs}} ms en la etapa {{stage}}: {{detail}}",
+        "malformed": "Archivo mal formado: {{detail}}",
+        "oversizedElement": "El elemento supera el límite de tamaño: {{detail}}",
+        "internal": "Error interno del analizador: {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -177,7 +183,7 @@
     "intro": "Procese archivos multimedia por lotes de forma sencilla. Una GUI basada en mkvmerge de MKVToolNix.",
     "addFiles": "Agregar archivos",
     "addFolder": "Agregar carpeta",
-    "emptyHint": "Sugerencia: también puede arrastrar y soltar archivos .mkv o carpetas en esta ventana.",
+    "emptyHint": "Sugerencia: también puede arrastrar y soltar archivos multimedia o carpetas en esta ventana.",
     "viewOnGithub": "Ver en GitHub"
   }
 }

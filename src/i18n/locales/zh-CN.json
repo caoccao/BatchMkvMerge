@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "将 .mkv 文件或文件夹拖到此处"
+    "dropHere": "将媒体文件或文件夹拖到此处"
   },
   "list": {
     "delete": "删除"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge 不可用。请在设置中检查 MKVToolNix 路径。{{detail}}",
       "mkvmergeFailed": "mkvmerge 失败:{{detail}}",
-      "parseError": "无法解析 mkvmerge 的输出:{{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge 不可用。请在设置中检查 MKVToolNix 路径。{{detail}}",
-      "mkvmergeFailed": "mkvmerge 失败:{{detail}}"
+      "parser": {
+        "io": "无法读取文件:{{detail}}",
+        "unexpectedEof": "文件被截断:{{detail}}",
+        "unrecognised": "无法识别的文件格式:{{detail}}",
+        "timeout": "解析器在阶段 {{stage}} 超过 {{budgetMs}} 毫秒后超时:{{detail}}",
+        "malformed": "文件格式有误:{{detail}}",
+        "oversizedElement": "元素超过大小上限:{{detail}}",
+        "internal": "解析器内部错误:{{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -177,7 +183,7 @@
     "intro": "以用户友好的方式批量处理媒体文件。基于 MKVToolNix 的 mkvmerge 构建的图形界面。",
     "addFiles": "添加文件",
     "addFolder": "添加文件夹",
-    "emptyHint": "提示：你也可以将 .mkv 文件或文件夹拖放到此窗口中。",
+    "emptyHint": "提示：你也可以将媒体文件或文件夹拖放到此窗口中。",
     "viewOnGithub": "在 GitHub 查看"
   }
 }

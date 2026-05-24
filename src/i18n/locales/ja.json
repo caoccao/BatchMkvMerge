@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": ".mkv ファイルまたはフォルダーをここにドロップ"
+    "dropHere": "メディアファイルまたはフォルダーをここにドロップ"
   },
   "list": {
     "delete": "削除"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge が使用できません。設定で MKVToolNix のパスを確認してください。{{detail}}",
       "mkvmergeFailed": "mkvmerge が失敗しました: {{detail}}",
-      "parseError": "mkvmerge の出力を解析できませんでした: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge が使用できません。設定で MKVToolNix のパスを確認してください。{{detail}}",
-      "mkvmergeFailed": "mkvmerge が失敗しました: {{detail}}"
+      "parser": {
+        "io": "ファイルを読み取れませんでした: {{detail}}",
+        "unexpectedEof": "ファイルが途中で切れています: {{detail}}",
+        "unrecognised": "認識できないファイル形式です: {{detail}}",
+        "timeout": "パーサーが {{stage}} で {{budgetMs}} ms を超えてタイムアウトしました: {{detail}}",
+        "malformed": "ファイルの形式が不正です: {{detail}}",
+        "oversizedElement": "要素がサイズ上限を超えています: {{detail}}",
+        "internal": "パーサーの内部エラー: {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -177,7 +183,7 @@
     "intro": "メディアファイルを使いやすい方法でバッチ処理。MKVToolNix の mkvmerge を活用した GUI です。",
     "addFiles": "ファイルを追加",
     "addFolder": "フォルダを追加",
-    "emptyHint": "ヒント：このウィンドウに .mkv ファイルやフォルダをドラッグ＆ドロップすることもできます。",
+    "emptyHint": "ヒント：このウィンドウにメディアファイルやフォルダをドラッグ＆ドロップすることもできます。",
     "viewOnGithub": "GitHub で見る"
   }
 }

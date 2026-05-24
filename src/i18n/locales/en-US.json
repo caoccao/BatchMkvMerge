@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "Drop .mkv files or a folder here"
+    "dropHere": "Drop media files or a folder here"
   },
   "list": {
     "delete": "Delete"
@@ -29,7 +29,6 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",
       "mkvmergeFailed": "mkvmerge failed: {{detail}}",
-      "parseError": "Failed to parse mkvmerge output: {{detail}}",
       "parser": {
         "io": "Could not read file: {{detail}}",
         "unexpectedEof": "File is truncated: {{detail}}",
@@ -184,7 +183,7 @@
     "intro": "Batch process media files in a user friendly way. A GUI on top of mkvmerge from MKVToolNix.",
     "addFiles": "Add Files",
     "addFolder": "Add Folder",
-    "emptyHint": "Tip: you can also drag and drop .mkv files or folders into this window.",
+    "emptyHint": "Tip: you can also drag and drop media files or folders into this window.",
     "viewOnGithub": "View on GitHub"
   }
 }

@@ -27,7 +27,7 @@ The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.94.0**
 
 ### Tests
 
-The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90`. The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `extract.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
 
 ```bash
 cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
@@ -116,7 +116,7 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser lives under `src-tauri/src/media_metadata/`. As of Phase 11 it has fully replaced the `mkvmerge -J` subprocess shellout, and the drag-drop filter is broadened to every extension `mkvmerge -J` recognises. Delivery was split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase landed as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser lives under `src-tauri/src/media_metadata/`. It has fully replaced the `mkvmerge -J` subprocess shellout, the drag-drop filter is broadened to every extension `mkvmerge -J` recognises, and CI gates parser line coverage at ≥ 90 %. Delivery was split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase landed as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 

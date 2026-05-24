@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "Rilascia qui i file .mkv o una cartella"
+    "dropHere": "Rilascia qui file multimediali o una cartella"
   },
   "list": {
     "delete": "Elimina"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge non è disponibile. Controlla il percorso MKVToolNix in Impostazioni. {{detail}}",
       "mkvmergeFailed": "mkvmerge non riuscito: {{detail}}",
-      "parseError": "Impossibile analizzare l'output di mkvmerge: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge non è disponibile. Controlla il percorso MKVToolNix in Impostazioni. {{detail}}",
-      "mkvmergeFailed": "mkvmerge non riuscito: {{detail}}"
+      "parser": {
+        "io": "Impossibile leggere il file: {{detail}}",
+        "unexpectedEof": "File troncato: {{detail}}",
+        "unrecognised": "Formato di file non riconosciuto: {{detail}}",
+        "timeout": "Timeout dell'analizzatore dopo {{budgetMs}} ms nella fase {{stage}}: {{detail}}",
+        "malformed": "File malformato: {{detail}}",
+        "oversizedElement": "L'elemento supera il limite di dimensione: {{detail}}",
+        "internal": "Errore interno dell'analizzatore: {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -177,7 +183,7 @@
     "intro": "Elabora file multimediali in batch in modo intuitivo. Una GUI basata su mkvmerge di MKVToolNix.",
     "addFiles": "Aggiungi file",
     "addFolder": "Aggiungi cartella",
-    "emptyHint": "Suggerimento: puoi anche trascinare e rilasciare in questa finestra file .mkv o cartelle.",
+    "emptyHint": "Suggerimento: puoi anche trascinare e rilasciare in questa finestra file multimediali o cartelle.",
     "viewOnGithub": "Visualizza su GitHub"
   }
 }

@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "將 .mkv 檔案或資料夾拖曳至此"
+    "dropHere": "將媒體檔案或資料夾拖曳至此"
   },
   "list": {
     "delete": "刪除"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge 無法使用。請在設定中檢查 MKVToolNix 路徑。{{detail}}",
       "mkvmergeFailed": "mkvmerge 失敗:{{detail}}",
-      "parseError": "無法解析 mkvmerge 的輸出:{{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge 無法使用。請在設定中檢查 MKVToolNix 路徑。{{detail}}",
-      "mkvmergeFailed": "mkvmerge 失敗:{{detail}}"
+      "parser": {
+        "io": "無法讀取檔案:{{detail}}",
+        "unexpectedEof": "檔案被截斷:{{detail}}",
+        "unrecognised": "無法辨識的檔案格式:{{detail}}",
+        "timeout": "解析器在 {{stage}} 階段超過 {{budgetMs}} 毫秒後逾時:{{detail}}",
+        "malformed": "檔案格式有誤:{{detail}}",
+        "oversizedElement": "元素超出大小上限:{{detail}}",
+        "internal": "解析器內部錯誤:{{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -177,7 +183,7 @@
     "intro": "以使用者友善的方式批次處理媒體檔案。建構於 MKVToolNix 的 mkvmerge 之上的圖形介面。",
     "addFiles": "新增檔案",
     "addFolder": "新增資料夾",
-    "emptyHint": "提示：您也可以將 .mkv 檔案或資料夾拖放到此視窗。",
+    "emptyHint": "提示：您也可以將媒體檔案或資料夾拖放到此視窗。",
     "viewOnGithub": "在 GitHub 查看"
   }
 }
