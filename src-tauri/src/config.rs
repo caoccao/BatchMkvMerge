@@ -44,6 +44,8 @@ pub struct Config {
     pub window: ConfigWindow,
     #[serde(default)]
     pub update: ConfigUpdate,
+    #[serde(default)]
+    pub parser: ConfigParser,
 }
 
 impl Config {
@@ -67,6 +69,46 @@ impl Default for Config {
             active_profile: Self::default_active_profile(),
             window: Default::default(),
             update: Default::default(),
+            parser: Default::default(),
+        }
+    }
+}
+
+/// User-tunable parser settings.  See [[feedback-parser-timeout]].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigParser {
+    /// Per-file parse budget in milliseconds.  Default 1000.  Clamped to the
+    /// supported range when read.
+    #[serde(rename = "timeoutMs", default = "ConfigParser::default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl ConfigParser {
+    /// Default parser timeout in ms.
+    pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
+    /// Minimum allowed timeout — small enough for ridiculous test runs but
+    /// large enough that a real file's headers can be read.
+    pub const MIN_TIMEOUT_MS: u64 = 100;
+    /// Maximum allowed timeout — 60 s; anything beyond this should be a
+    /// streaming / partial parse, not header probing.
+    pub const MAX_TIMEOUT_MS: u64 = 60_000;
+
+    pub fn default_timeout_ms() -> u64 {
+        Self::DEFAULT_TIMEOUT_MS
+    }
+
+    /// Clamp `timeout_ms` to the supported range.  Returns the effective value
+    /// callers should hand to the parser.
+    pub fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms
+            .clamp(Self::MIN_TIMEOUT_MS, Self::MAX_TIMEOUT_MS)
+    }
+}
+
+impl Default for ConfigParser {
+    fn default() -> Self {
+        Self {
+            timeout_ms: Self::DEFAULT_TIMEOUT_MS,
         }
     }
 }
@@ -468,4 +510,95 @@ pub fn set_config(config: Config) -> Result<()> {
         .unwrap()
         .clone_from(&config);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_defaults_to_one_second() {
+        let p = ConfigParser::default();
+        assert_eq!(p.timeout_ms, 1000);
+        assert_eq!(p.effective_timeout_ms(), 1000);
+    }
+
+    #[test]
+    fn parser_deserializes_from_json_with_camel_case() {
+        let json = r#"{"timeoutMs": 2500}"#;
+        let p: ConfigParser = serde_json::from_str(json).unwrap();
+        assert_eq!(p.timeout_ms, 2500);
+    }
+
+    #[test]
+    fn parser_deserializes_missing_field_via_serde_default() {
+        // Older configs lacked the timeoutMs field entirely.
+        let json = "{}";
+        let p: ConfigParser = serde_json::from_str(json).unwrap();
+        assert_eq!(p.timeout_ms, ConfigParser::DEFAULT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn parser_clamps_too_small() {
+        let p = ConfigParser { timeout_ms: 0 };
+        assert_eq!(p.effective_timeout_ms(), ConfigParser::MIN_TIMEOUT_MS);
+        let p = ConfigParser { timeout_ms: 50 };
+        assert_eq!(p.effective_timeout_ms(), ConfigParser::MIN_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn parser_clamps_too_large() {
+        let p = ConfigParser {
+            timeout_ms: 999_999,
+        };
+        assert_eq!(p.effective_timeout_ms(), ConfigParser::MAX_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn parser_passes_through_in_range_values() {
+        for ms in [100u64, 500, 1000, 2000, 30_000, 60_000] {
+            let p = ConfigParser { timeout_ms: ms };
+            assert_eq!(p.effective_timeout_ms(), ms);
+        }
+    }
+
+    #[test]
+    fn config_default_contains_parser_block() {
+        let cfg = Config::default();
+        assert_eq!(cfg.parser.timeout_ms, 1000);
+    }
+
+    #[test]
+    fn config_deserializes_legacy_payload_without_parser_block() {
+        // A persisted config from before Phase 2 lacked the `parser` key.
+        let json = r#"{
+            "displayMode": "Auto",
+            "theme": "Ocean",
+            "language": "en-US",
+            "externalTools": { "mkvToolNixPath": "", "betterMediaInfoPath": "" },
+            "profiles": [],
+            "activeProfile": "Default",
+            "window": {
+                "position": { "x": -1, "y": -1 },
+                "size": { "width": 1200, "height": 900 }
+            },
+            "update": {
+                "checkInterval": "Weekly",
+                "lastChecked": 0,
+                "lastVersion": "",
+                "ignoreVersion": ""
+            }
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.parser.timeout_ms, ConfigParser::DEFAULT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn config_round_trips_with_parser_block() {
+        let mut cfg = Config::default();
+        cfg.parser.timeout_ms = 2500;
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parser.timeout_ms, 2500);
+    }
 }

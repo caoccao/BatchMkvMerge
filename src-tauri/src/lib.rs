@@ -19,13 +19,15 @@ mod config;
 mod constants;
 mod controller;
 mod extract;
+pub mod media_metadata;
 mod mkvtoolnix;
 mod protocol;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use protocol::{UpdateCheckResult, UpdateCheckState};
+use media_metadata::model::MediaMetadata;
+use protocol::{MediaMetadataErrorPayload, UpdateCheckResult, UpdateCheckState};
 
 static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
@@ -44,8 +46,10 @@ async fn get_config() -> Result<config::Config, String> {
 }
 
 #[tauri::command]
-async fn get_mkv_files(paths: Vec<String>) -> Result<Vec<String>, String> {
-    controller::get_mkv_files(paths).await.map_err(convert_error)
+async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>, String> {
+    controller::get_media_files(paths)
+        .await
+        .map_err(convert_error)
 }
 
 #[tauri::command]
@@ -54,10 +58,12 @@ fn get_launch_args() -> Vec<String> {
 }
 
 #[tauri::command]
-async fn get_mkv_tracks(file: String) -> Result<Vec<protocol::MkvTrack>, String> {
-    mkvtoolnix::get_mkv_tracks(file)
+async fn get_media_metadata(file: String) -> Result<MediaMetadata, MediaMetadataErrorPayload> {
+    let opts = controller::parser_options_from_config(&config::get_config());
+    tauri::async_runtime::spawn_blocking(move || controller::read_media_metadata(file, opts))
         .await
-        .map_err(convert_error)
+        .map_err(|join_err| MediaMetadataErrorPayload::internal(join_err.to_string()))?
+        .map_err(|err| MediaMetadataErrorPayload::from_parse_error(&err))
 }
 
 #[tauri::command]
@@ -161,8 +167,8 @@ pub fn run() {
             get_config,
             get_extract_status,
             get_launch_args,
-            get_mkv_files,
-            get_mkv_tracks,
+            get_media_files,
+            get_media_metadata,
             get_update_result,
             is_mkvtoolnix_found,
             launch_better_media_info,

@@ -29,7 +29,7 @@ import Layout from "./components/Layout";
 import { changeLanguage } from "./i18n";
 import * as Protocol from "./protocol";
 import { QueueItemStatus } from "./protocol";
-import { detectBetterMediaInfo, getLaunchArgs, getMkvFiles } from "./service";
+import { detectBetterMediaInfo, getLaunchArgs, getMediaFiles } from "./service";
 import { useMkvStore } from "./store";
 
 function getPaletteByTheme(theme: Protocol.Theme, mode: "light" | "dark") {
@@ -149,11 +149,11 @@ function App() {
         if (cancelled || args.length === 0) {
           return;
         }
-        const mkvFiles = await getMkvFiles(args);
-        if (cancelled || mkvFiles.length === 0) {
+        const mediaFiles = await getMediaFiles(args);
+        if (cancelled || mediaFiles.length === 0) {
           return;
         }
-        useMkvStore.getState().addFiles(mkvFiles);
+        useMkvStore.getState().addFiles(mediaFiles);
       } catch (err) {
         console.error("Failed to process launch args", err);
       }

@@ -16,14 +16,16 @@
  */
 
 import { create } from "zustand";
-import { getDriveKey } from "./extract-utils";
+import { getDriveKey } from "./merge";
+import type { MediaTrack } from "./media-metadata";
+import { mediaTrackCounts, metadataToMediaTracks } from "./media-metadata";
 import type {
   About,
   Config,
   ConfigProfile,
   ExtractEntry,
   ExtractOutcome,
-  MkvTrack,
+  MediaMetadata,
 } from "./protocol";
 import {
   DEFAULT_PROFILE_NAME,
@@ -80,7 +82,11 @@ interface MkvStore {
   config: Config | null;
   queueItems: Record<string, QueueItem>;
   queueOrder: string[];
-  fileTracks: Record<string, MkvTrack[]>;
+  /** Raw parser output, kept for future detail panels. */
+  fileMetadata: Record<string, MediaMetadata>;
+  /** UI-flattened rows derived from `fileMetadata` so the selection table /
+   *  selectors don't recompute on every render. */
+  fileTracks: Record<string, MediaTrack[]>;
   fileTrackCounts: Record<string, TrackCounts>;
   fileSelectedIds: Record<string, string[]>;
   fileOutputDirs: Record<string, string>;
@@ -113,7 +119,8 @@ interface MkvStore {
     error: string | null,
   ) => void;
   clearCompletedInDrive: (drive: string) => void;
-  setFileTracks: (file: string, tracks: MkvTrack[]) => void;
+  /** Store parsed metadata for `file`; derive UI rows and counts in one shot. */
+  setFileMetadata: (file: string, metadata: MediaMetadata) => void;
   setFileTrackCounts: (file: string, counts: TrackCounts) => void;
   setFileSelectedIds: (file: string, ids: string[]) => void;
   setGroupSelectedIds: (files: string[], ids: string[]) => void;
@@ -136,6 +143,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   config: null,
   queueItems: {},
   queueOrder: [],
+  fileMetadata: {},
   fileTracks: {},
   fileTrackCounts: {},
   fileSelectedIds: {},
@@ -151,6 +159,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     }),
   removeFile: (path) =>
     set((state) => {
+      const nextMetadata = { ...state.fileMetadata };
+      delete nextMetadata[path];
       const nextTracks = { ...state.fileTracks };
       delete nextTracks[path];
       const nextCounts = { ...state.fileTrackCounts };
@@ -161,6 +171,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       delete nextOutputDirs[path];
       return {
         files: state.files.filter((f) => f !== path),
+        fileMetadata: nextMetadata,
         fileTracks: nextTracks,
         fileTrackCounts: nextCounts,
         fileSelectedIds: nextSelected,
@@ -170,6 +181,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   clearFiles: () =>
     set({
       files: [],
+      fileMetadata: {},
       fileTracks: {},
       fileTrackCounts: {},
       fileSelectedIds: {},
@@ -467,10 +479,16 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { queueItems: nextItems, queueOrder: nextOrder };
     }),
-  setFileTracks: (file, tracks) =>
-    set((state) => ({
-      fileTracks: { ...state.fileTracks, [file]: tracks },
-    })),
+  setFileMetadata: (file, metadata) =>
+    set((state) => {
+      const tracks = metadataToMediaTracks(metadata);
+      const counts = mediaTrackCounts(tracks);
+      return {
+        fileMetadata: { ...state.fileMetadata, [file]: metadata },
+        fileTracks: { ...state.fileTracks, [file]: tracks },
+        fileTrackCounts: { ...state.fileTrackCounts, [file]: counts },
+      };
+    }),
   setFileTrackCounts: (file, counts) =>
     set((state) => ({
       fileTrackCounts: { ...state.fileTrackCounts, [file]: counts },

@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "Drop .mkv files or a folder here"
+    "dropHere": "Drop media files or a folder here"
   },
   "list": {
     "delete": "Delete"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",
       "mkvmergeFailed": "mkvmerge failed: {{detail}}",
-      "parseError": "Failed to parse mkvmerge output: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",
-      "mkvmergeFailed": "mkvmerge failed: {{detail}}"
+      "parser": {
+        "io": "Could not read file: {{detail}}",
+        "unexpectedEof": "File is truncated: {{detail}}",
+        "unrecognised": "Unrecognised file format: {{detail}}",
+        "timeout": "Parser timed out after {{budgetMs}}ms at {{stage}}: {{detail}}",
+        "malformed": "Malformed file: {{detail}}",
+        "oversizedElement": "Element exceeds size limit: {{detail}}",
+        "internal": "Internal parser error: {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -117,6 +123,9 @@
     "mkvToolNixNotFound": "mkvmerge not found under MKVToolNix path.",
     "betterMediaInfoFound": "BetterMediaInfo found",
     "betterMediaInfoNotFound": "BetterMediaInfo is not detected. Please check your path and try again.",
+    "parser": "Parser",
+    "parserTimeout": "Parse timeout (ms)",
+    "parserTimeoutHint": "Per-file parse budget. Range {{min}}–{{max}} ms; default 1000. Files that take longer abort with a Timeout error.",
     "update": "Update",
     "checkNewVersion": "Check New Version",
     "daily": "Daily",
@@ -174,7 +183,7 @@
     "intro": "Batch process media files in a user friendly way. A GUI on top of mkvmerge from MKVToolNix.",
     "addFiles": "Add Files",
     "addFolder": "Add Folder",
-    "emptyHint": "Tip: you can also drag and drop .mkv files or folders into this window.",
+    "emptyHint": "Tip: you can also drag and drop media files or folders into this window.",
     "viewOnGithub": "View on GitHub"
   }
 }

@@ -21,8 +21,8 @@ import type {
   BetterMediaInfoStatus,
   Config,
   ExtractSnapshot,
+  MediaMetadata,
   MkvToolNixStatus,
-  MkvTrack,
   UpdateCheckResult,
 } from "./protocol";
 
@@ -38,8 +38,8 @@ export async function setConfig(config: Config): Promise<Config> {
   return await invoke<Config>("set_config", { config });
 }
 
-export async function getMkvFiles(paths: string[]): Promise<string[]> {
-  return await invoke<string[]>("get_mkv_files", { paths });
+export async function getMediaFiles(paths: string[]): Promise<string[]> {
+  return await invoke<string[]>("get_media_files", { paths });
 }
 
 export async function getLaunchArgs(): Promise<string[]> {
@@ -56,8 +56,8 @@ export async function isMkvtoolnixFound(
   });
 }
 
-export async function getMkvTracks(file: string): Promise<MkvTrack[]> {
-  return await invoke<MkvTrack[]>("get_mkv_tracks", { file });
+export async function getMediaMetadata(file: string): Promise<MediaMetadata> {
+  return await invoke<MediaMetadata>("get_media_metadata", { file });
 }
 
 export async function enqueueExtract(

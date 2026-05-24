@@ -22,7 +22,8 @@ import {
   join,
   sep as getSep,
 } from "@tauri-apps/api/path";
-import type { ConfigProfile, MkvTrack } from "./protocol";
+import type { MediaTrack } from "./media-metadata";
+import type { ConfigProfile } from "./protocol";
 
 export interface TemplateContext {
   fileName: string;
@@ -98,7 +99,7 @@ export function renderTemplate(
   return out;
 }
 
-export function trackKey(track: MkvTrack): string {
+export function trackKey(track: MediaTrack): string {
   return `${track.type}:${track.id}`;
 }
 
@@ -142,11 +143,11 @@ function matchesLanguage(
 
 export function makeTrackSelector(
   profile: ConfigProfile,
-): (track: MkvTrack) => boolean {
+): (track: MediaTrack) => boolean {
   const videoLangs = parseLanguageFilter(profile.videoLanguages);
   const audioLangs = parseLanguageFilter(profile.audioLanguages);
   const subtitleLangs = parseLanguageFilter(profile.subtitleLanguages);
-  return (track: MkvTrack) => {
+  return (track: MediaTrack) => {
     switch (track.type) {
       case "video":
         return (
@@ -346,7 +347,7 @@ export async function resolveOutputDir(
 
 export function buildOutputFileName(
   fileNameWithoutExt: string,
-  track: MkvTrack,
+  track: MediaTrack,
   profile: ConfigProfile,
 ): string {
   const template = pickTemplateForTrackType(profile, track.type);
@@ -371,7 +372,7 @@ interface ModeSegments {
 async function buildModeSegments(
   outputDir: string,
   fileNameWithoutExt: string,
-  tracks: MkvTrack[],
+  tracks: MediaTrack[],
   profile: ConfigProfile,
   quote: (s: string) => string,
 ): Promise<ModeSegments> {
@@ -395,7 +396,7 @@ async function buildModeSegments(
 export async function buildExtractArgs(
   file: string,
   outputDir: string,
-  tracks: MkvTrack[],
+  tracks: MediaTrack[],
   profile: ConfigProfile,
 ): Promise<string[]> {
   const fileNameWithoutExt = await getFileNameWithoutExt(file);
@@ -426,7 +427,7 @@ export async function buildCommandString(
   file: string,
   outputDir: string,
   mkvToolNixPath: string,
-  tracks: MkvTrack[],
+  tracks: MediaTrack[],
   profile: ConfigProfile,
 ): Promise<string> {
   const sep = getSep();

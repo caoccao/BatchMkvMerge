@@ -17,14 +17,13 @@
 
 import { useEffect, useMemo } from "react";
 import { Box } from "@mui/material";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
-import { formatHMS, getParentDir } from "../extract-utils";
+import { formatHMS, getParentDir } from "../merge";
 import type { ExtractionFinishedEvent } from "../protocol";
 import { QueueItemStatus } from "../protocol";
-import { getExtractStatus } from "../service";
+import { getExtractStatus, getMediaFiles } from "../service";
 import { useMkvStore } from "../store";
 import { GroupCard } from "./GroupCard";
 import { MkvFileCard } from "./MkvFileCard";
@@ -147,9 +146,9 @@ export default function FileList() {
           return;
         }
         try {
-          const mkvFiles = await invoke<string[]>("get_mkv_files", { paths });
-          if (mkvFiles.length > 0) {
-            addFiles(mkvFiles);
+          const mediaFiles = await getMediaFiles(paths);
+          if (mediaFiles.length > 0) {
+            addFiles(mediaFiles);
           }
         } catch (err) {
           console.error("Failed to resolve dropped paths", err);

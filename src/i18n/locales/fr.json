@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "Déposez des fichiers .mkv ou un dossier ici"
+    "dropHere": "Déposez des fichiers médias ou un dossier ici"
   },
   "list": {
     "delete": "Supprimer"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge n'est pas disponible. Vérifiez le chemin MKVToolNix dans Paramètres. {{detail}}",
       "mkvmergeFailed": "mkvmerge a échoué : {{detail}}",
-      "parseError": "Impossible d'analyser la sortie de mkvmerge : {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge n'est pas disponible. Vérifiez le chemin MKVToolNix dans Paramètres. {{detail}}",
-      "mkvmergeFailed": "mkvmerge a échoué : {{detail}}"
+      "parser": {
+        "io": "Impossible de lire le fichier : {{detail}}",
+        "unexpectedEof": "Fichier tronqué : {{detail}}",
+        "unrecognised": "Format de fichier non reconnu : {{detail}}",
+        "timeout": "Délai d'analyse dépassé après {{budgetMs}} ms à l'étape {{stage}} : {{detail}}",
+        "malformed": "Fichier mal formé : {{detail}}",
+        "oversizedElement": "L'élément dépasse la limite de taille : {{detail}}",
+        "internal": "Erreur interne de l'analyseur : {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -117,6 +123,9 @@
     "mkvToolNixNotFound": "mkvmerge introuvable dans le chemin MKVToolNix.",
     "betterMediaInfoFound": "BetterMediaInfo trouvé",
     "betterMediaInfoNotFound": "BetterMediaInfo n'a pas été détecté. Vérifiez le chemin et réessayez.",
+    "parser": "Analyseur",
+    "parserTimeout": "Délai d'analyse (ms)",
+    "parserTimeoutHint": "Budget d'analyse par fichier. Plage {{min}}–{{max}} ms ; valeur par défaut 1000. Les fichiers qui dépassent ce délai s'interrompent avec une erreur de délai d'expiration.",
     "update": "Mise à jour",
     "checkNewVersion": "Vérifier nouvelle version",
     "daily": "Quotidien",
@@ -174,7 +183,7 @@
     "intro": "Traitez vos fichiers médias par lots de manière conviviale. Une interface graphique au-dessus de mkvmerge de MKVToolNix.",
     "addFiles": "Ajouter des fichiers",
     "addFolder": "Ajouter un dossier",
-    "emptyHint": "Astuce : vous pouvez aussi glisser-déposer des fichiers .mkv ou des dossiers dans cette fenêtre.",
+    "emptyHint": "Astuce : vous pouvez aussi glisser-déposer des fichiers médias ou des dossiers dans cette fenêtre.",
     "viewOnGithub": "Voir sur GitHub"
   }
 }

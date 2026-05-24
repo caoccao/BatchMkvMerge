@@ -1,6 +1,6 @@
 {
   "app": {
-    "dropHere": "MKV-Dateien oder einen Ordner hier ablegen"
+    "dropHere": "Mediendateien oder einen Ordner hier ablegen"
   },
   "list": {
     "delete": "Löschen"
@@ -29,9 +29,15 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge ist nicht verfügbar. Bitte MKVToolNix-Pfad in den Einstellungen prüfen. {{detail}}",
       "mkvmergeFailed": "mkvmerge fehlgeschlagen: {{detail}}",
-      "parseError": "Konnte mkvmerge-Ausgabe nicht auswerten: {{detail}}",
-      "mkvmergeNotAvailable": "mkvmerge ist nicht verfügbar. Bitte MKVToolNix-Pfad in den Einstellungen prüfen. {{detail}}",
-      "mkvmergeFailed": "mkvmerge fehlgeschlagen: {{detail}}"
+      "parser": {
+        "io": "Datei konnte nicht gelesen werden: {{detail}}",
+        "unexpectedEof": "Datei ist abgeschnitten: {{detail}}",
+        "unrecognised": "Unbekanntes Dateiformat: {{detail}}",
+        "timeout": "Parser hat nach {{budgetMs}} ms in Phase {{stage}} das Zeitlimit überschritten: {{detail}}",
+        "malformed": "Fehlerhafte Datei: {{detail}}",
+        "oversizedElement": "Element überschreitet die Größenbeschränkung: {{detail}}",
+        "internal": "Interner Parser-Fehler: {{detail}}"
+      }
     }
   },
   "toolbar": {
@@ -117,6 +123,9 @@
     "mkvToolNixNotFound": "mkvmerge im MKVToolNix-Pfad nicht gefunden.",
     "betterMediaInfoFound": "BetterMediaInfo gefunden",
     "betterMediaInfoNotFound": "BetterMediaInfo wurde nicht erkannt. Bitte prüfe den Pfad und versuche es erneut.",
+    "parser": "Parser",
+    "parserTimeout": "Parse-Timeout (ms)",
+    "parserTimeoutHint": "Parse-Budget pro Datei. Bereich {{min}}–{{max}} ms; Standard 1000. Dateien, die länger brauchen, brechen mit einem Timeout-Fehler ab.",
     "update": "Aktualisierung",
     "checkNewVersion": "Neue Version prüfen",
     "daily": "Täglich",
@@ -174,7 +183,7 @@
     "intro": "Verarbeiten Sie Mediendateien benutzerfreundlich im Stapel. Eine GUI für mkvmerge aus MKVToolNix.",
     "addFiles": "Dateien hinzufügen",
     "addFolder": "Ordner hinzufügen",
-    "emptyHint": "Tipp: Sie können auch .mkv-Dateien oder Ordner per Drag & Drop in dieses Fenster ziehen.",
+    "emptyHint": "Tipp: Sie können auch Mediendateien oder Ordner per Drag & Drop in dieses Fenster ziehen.",
     "viewOnGithub": "Auf GitHub ansehen"
   }
 }

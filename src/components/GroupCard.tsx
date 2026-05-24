@@ -49,7 +49,7 @@ import {
   makeTrackSelector,
   resolveOutputDir,
   trackKey,
-} from "../extract-utils";
+} from "../merge";
 import { QueueItemStatus } from "../protocol";
 import { launchBetterMediaInfo } from "../service";
 import { useMkvStore } from "../store";

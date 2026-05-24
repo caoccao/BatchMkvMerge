@@ -37,18 +37,49 @@ pub struct BetterMediaInfoStatus {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MkvTrack {
-    pub id: i64,
-    pub number: i64,
-    #[serde(rename = "type")]
-    pub track_type: String,
-    pub codec: String,
-    #[serde(rename = "codecId")]
-    pub codec_id: String,
-    #[serde(rename = "trackName")]
-    pub track_name: String,
-    pub language: String,
+/// Wire payload returned when `get_media_metadata` fails. The frontend
+/// switches on `kind` to pick an i18n message; `detail` is a one-line
+/// human-readable summary.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MediaMetadataErrorPayload {
+    Io { detail: String },
+    UnexpectedEof { detail: String },
+    Unrecognised { detail: String },
+    Timeout {
+        #[serde(rename = "budgetMs")]
+        budget_ms: u64,
+        stage: String,
+        detail: String,
+    },
+    Malformed { detail: String },
+    OversizedElement { detail: String },
+    Internal { detail: String },
+}
+
+impl MediaMetadataErrorPayload {
+    pub fn from_parse_error(err: &crate::media_metadata::ParseError) -> Self {
+        use crate::media_metadata::ParseError;
+        let detail = err.to_string();
+        match err {
+            ParseError::Io { .. } => Self::Io { detail },
+            ParseError::UnexpectedEof { .. } => Self::UnexpectedEof { detail },
+            ParseError::Unrecognised => Self::Unrecognised { detail },
+            ParseError::Timeout { budget_ms, stage } => Self::Timeout {
+                budget_ms: *budget_ms,
+                stage: (*stage).to_owned(),
+                detail,
+            },
+            ParseError::Malformed { .. } => Self::Malformed { detail },
+            ParseError::OversizedElement { .. } => Self::OversizedElement { detail },
+        }
+    }
+
+    pub fn internal(detail: impl Into<String>) -> Self {
+        Self::Internal {
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

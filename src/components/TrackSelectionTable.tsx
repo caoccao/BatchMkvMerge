@@ -27,12 +27,12 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { trackKey } from "../extract-utils";
-import type { MkvTrack } from "../protocol";
+import { trackKey } from "../merge";
+import type { MediaTrack } from "../media-metadata";
 import { TrackTypeIcon } from "./TrackTypeIcon";
 
 interface TrackSelectionTableProps {
-  tracks: MkvTrack[];
+  tracks: MediaTrack[];
   selectedIds: Set<string>;
   disabled: boolean;
   emptyText: string;
@@ -111,7 +111,7 @@ export function TrackSelectionTable({
             const key = trackKey(track);
             return (
               <TableRow
-                key={track.id}
+                key={key}
                 hover
                 sx={{ cursor: disabled ? "default" : "pointer" }}
                 onClick={() => {
