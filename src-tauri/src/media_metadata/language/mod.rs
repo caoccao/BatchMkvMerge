@@ -65,11 +65,15 @@ impl Language {
     pub fn from_ietf(tag: &str) -> Option<Self> {
         let canonical_ietf = bcp47::validate(tag)?;
         let primary = bcp47::primary_subtag(tag).unwrap_or_default();
-        // Most IETF primary subtags are ISO 639-1 (2 letters).  If the
-        // primary subtag is 3 letters we can try the ISO 639-2 lookup
-        // directly — otherwise fall back to "und" so we always emit
-        // something in `iso639_2`.
+        // Most IETF primary subtags are ISO 639-1 (2 letters).  Map those
+        // back to their ISO 639-2 alpha-3 code first; 3-letter primaries hit
+        // the alpha-3 table directly.  mkvtoolnix resolves the effective
+        // language the same way (`mtx::bcp47::language_c` over the 639
+        // registry).  Unknown primaries fall back to "und".
         let iso = match primary.len() {
+            2 => iso_639::alpha2_to_alpha3(&primary)
+                .and_then(iso_639::lookup)
+                .map(|m| (m.canonical, m.name)),
             3 => iso_639::lookup(&primary).map(|m| (m.canonical, m.name)),
             _ => None,
         };
@@ -160,12 +164,23 @@ mod tests {
     }
 
     #[test]
-    fn from_ietf_simple_two_letter_keeps_ietf_only() {
+    fn from_ietf_simple_two_letter_resolves_iso() {
         let l = Language::from_ietf("en-US").unwrap();
         assert_eq!(l.ietf.as_deref(), Some("en-US"));
-        // Primary subtag is "en" (2 letters) so we cannot map to ISO 639-2
-        // directly without a 2→3 table.  Plan defers that; we record und.
-        assert_eq!(l.iso639_2, "und");
+        // Primary subtag "en" maps through the alpha-2 → alpha-3 table to eng.
+        assert_eq!(l.iso639_2, "eng");
+        assert_eq!(l.name.as_deref(), Some("English"));
+    }
+
+    #[test]
+    fn from_ietf_two_letter_bibliographic_resolves_to_terminologic() {
+        // "de" → "ger" (bibliographic) → "deu" (terminologic canonical).
+        let l = Language::from_ietf("de").unwrap();
+        assert_eq!(l.iso639_2, "deu");
+        let l = Language::from_ietf("pt-BR").unwrap();
+        assert_eq!(l.iso639_2, "por");
+        let l = Language::from_ietf("ja").unwrap();
+        assert_eq!(l.iso639_2, "jpn");
     }
 
     #[test]
@@ -195,8 +210,8 @@ mod tests {
     fn resolve_prefers_ietf_when_valid() {
         let l = Language::resolve(Some("ja"), Some("eng"), true);
         assert_eq!(l.ietf.as_deref(), Some("ja"));
-        // primary "ja" is 2 letters → iso639_2 falls back to und
-        assert_eq!(l.iso639_2, "und");
+        // primary "ja" maps through the alpha-2 table to jpn
+        assert_eq!(l.iso639_2, "jpn");
     }
 
     #[test]

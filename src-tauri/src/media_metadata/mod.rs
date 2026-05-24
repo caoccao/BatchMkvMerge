@@ -86,7 +86,8 @@ pub fn parse<P: AsRef<Path>>(
         .unwrap_or("")
         .to_string();
     let file_size = src.length().unwrap_or(0);
-    let deadline = Deadline::new(options.timeout_ms);
+    let deadline =
+        Deadline::new(options.timeout_ms).with_max_element_size(options.max_element_size);
     let mut metadata = MediaMetadata::new(file_name, file_size);
     probe::dispatch(&mut src, &deadline, &mut metadata)?;
     Ok(metadata)

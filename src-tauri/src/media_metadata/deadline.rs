@@ -19,27 +19,53 @@ use std::time::{Duration, Instant};
 
 use super::error::ParseError;
 
-/// Soft per-file parse budget. Parsers call `check(stage)` at every coarse
-/// boundary (start of each L1 EBML element, MP4 atom, Ogg page, TS packet
-/// group, etc.). The budget is supplied per-call from the user's persisted
-/// config — see [[feedback-parser-timeout]].
+/// Per-file parse context: the soft time budget plus the caller-supplied
+/// allocation ceiling. Parsers call `check(stage)` at every coarse boundary
+/// (start of each L1 EBML element, MP4 atom, Ogg page, TS packet group, etc.)
+/// and clamp every file-controlled payload allocation to
+/// [`max_element_size`](Self::max_element_size). Both knobs are supplied
+/// per-call from the user's persisted config — see [[feedback-parser-timeout]].
 #[derive(Debug, Clone, Copy)]
 pub struct Deadline {
     start: Instant,
     budget: Duration,
+    /// Hard ceiling for any single file-controlled payload read. Defaults to
+    /// `u64::MAX` (unbounded) for [`Deadline::new`] / [`Deadline::from_parts`]
+    /// so existing call sites are unaffected; the public `parse()` entry point
+    /// overrides it from `ParseOptions::max_element_size`.
+    max_element_size: u64,
 }
 
 impl Deadline {
-    /// Build a deadline from an `Instant` baseline and a budget in milliseconds.
-    /// A budget of 0 produces an instantly-expired deadline (useful in tests).
+    /// Build a deadline from a budget in milliseconds, with an unbounded
+    /// element-size ceiling. A budget of 0 produces an instantly-expired
+    /// deadline (useful in tests).
     pub fn new(budget_ms: u64) -> Self {
         Self::from_parts(Instant::now(), Duration::from_millis(budget_ms))
     }
 
     /// Inject the baseline `Instant` explicitly. Lets tests assert behaviour
-    /// without sleeping.
+    /// without sleeping. Element-size ceiling is unbounded.
     pub fn from_parts(start: Instant, budget: Duration) -> Self {
-        Self { start, budget }
+        Self {
+            start,
+            budget,
+            max_element_size: u64::MAX,
+        }
+    }
+
+    /// Builder-style override for the element-size ceiling. Used by the public
+    /// `parse()` entry point to honour `ParseOptions::max_element_size`.
+    pub fn with_max_element_size(mut self, max_element_size: u64) -> Self {
+        self.max_element_size = max_element_size;
+        self
+    }
+
+    /// The caller-supplied ceiling for any single file-controlled payload
+    /// allocation. Readers should clamp their own hard-coded safety caps with
+    /// this value (`cap.min(deadline.max_element_size())`).
+    pub fn max_element_size(&self) -> u64 {
+        self.max_element_size
     }
 
     /// `Err(Timeout)` once the elapsed time crosses the budget. Cost per call
@@ -148,5 +174,21 @@ mod tests {
         let d = Deadline::new(0);
         let err = d.check("matroska::seek_head").unwrap_err();
         assert_eq!(err.stage(), "matroska::seek_head");
+    }
+
+    #[test]
+    fn max_element_size_defaults_unbounded() {
+        assert_eq!(Deadline::new(1000).max_element_size(), u64::MAX);
+        assert_eq!(
+            Deadline::from_parts(Instant::now(), Duration::from_millis(1)).max_element_size(),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn with_max_element_size_overrides_and_preserves_budget() {
+        let d = Deadline::new(1234).with_max_element_size(16 * 1024 * 1024);
+        assert_eq!(d.max_element_size(), 16 * 1024 * 1024);
+        assert_eq!(d.budget_ms(), 1234);
     }
 }

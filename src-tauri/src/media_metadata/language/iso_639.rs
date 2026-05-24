@@ -68,6 +68,24 @@ pub fn is_valid(code: &str) -> bool {
     lookup(code).is_some()
 }
 
+/// Map an ISO 639-1 alpha-2 code (`en`, `ja`, `pt`, ...) to its ISO 639-2
+/// alpha-3 code.  The returned code may be a bibliographic alias (e.g.
+/// `de → ger`); feed it through [`lookup`] to obtain the canonical
+/// terminologic form.  Case-insensitive, whitespace-tolerant.
+///
+/// Mirrors the `alpha_2_code → alpha_3_code` column of mkvtoolnix's
+/// `common/iso639_language_list.cpp`.
+pub fn alpha2_to_alpha3(code: &str) -> Option<&'static str> {
+    let normalized = code.trim().to_ascii_lowercase();
+    if normalized.len() != 2 {
+        return None;
+    }
+    ALPHA2_TO_ALPHA3
+        .binary_search_by_key(&normalized.as_str(), |(a2, _)| a2)
+        .ok()
+        .map(|i| ALPHA2_TO_ALPHA3[i].1)
+}
+
 /// The fixed "no linguistic content" code from the registry.
 pub const ZXX: &str = "zxx";
 /// The fixed "undetermined" code from the registry.
@@ -83,6 +101,60 @@ fn bib_to_term(code: &str) -> Option<&'static str> {
         .copied()
         .find_map(|(b, t)| if b == code { Some(t) } else { None })
 }
+
+/// ISO 639-1 alpha-2 → ISO 639-2 alpha-3 mapping, sorted by alpha-2 for
+/// binary search.  Some targets are bibliographic codes (`de → ger`,
+/// `fr → fre`, `zh → chi`); [`lookup`] resolves those to the terminologic
+/// canonical form.
+#[rustfmt::skip]
+const ALPHA2_TO_ALPHA3: &[(&str, &str)] = &[
+    ("aa", "aar"), ("ab", "abk"), ("ae", "ave"), ("af", "afr"),
+    ("ak", "aka"), ("am", "amh"), ("an", "arg"), ("ar", "ara"),
+    ("as", "asm"), ("av", "ava"), ("ay", "aym"), ("az", "aze"),
+    ("ba", "bak"), ("be", "bel"), ("bg", "bul"), ("bi", "bis"),
+    ("bm", "bam"), ("bn", "ben"), ("bo", "tib"), ("br", "bre"),
+    ("bs", "bos"), ("ca", "cat"), ("ce", "che"), ("ch", "cha"),
+    ("co", "cos"), ("cr", "cre"), ("cs", "cze"), ("cu", "chu"),
+    ("cv", "chv"), ("cy", "wel"), ("da", "dan"), ("de", "ger"),
+    ("dv", "div"), ("dz", "dzo"), ("ee", "ewe"), ("el", "gre"),
+    ("en", "eng"), ("eo", "epo"), ("es", "spa"), ("et", "est"),
+    ("eu", "baq"), ("fa", "per"), ("ff", "ful"), ("fi", "fin"),
+    ("fj", "fij"), ("fo", "fao"), ("fr", "fre"), ("fy", "fry"),
+    ("ga", "gle"), ("gd", "gla"), ("gl", "glg"), ("gn", "grn"),
+    ("gu", "guj"), ("gv", "glv"), ("ha", "hau"), ("he", "heb"),
+    ("hi", "hin"), ("ho", "hmo"), ("hr", "hrv"), ("ht", "hat"),
+    ("hu", "hun"), ("hy", "arm"), ("hz", "her"), ("ia", "ina"),
+    ("id", "ind"), ("ie", "ile"), ("ig", "ibo"), ("ii", "iii"),
+    ("ik", "ipk"), ("io", "ido"), ("is", "ice"), ("it", "ita"),
+    ("iu", "iku"), ("ja", "jpn"), ("jv", "jav"), ("ka", "geo"),
+    ("kg", "kon"), ("ki", "kik"), ("kj", "kua"), ("kk", "kaz"),
+    ("kl", "kal"), ("km", "khm"), ("kn", "kan"), ("ko", "kor"),
+    ("kr", "kau"), ("ks", "kas"), ("ku", "kur"), ("kv", "kom"),
+    ("kw", "cor"), ("ky", "kir"), ("la", "lat"), ("lb", "ltz"),
+    ("lg", "lug"), ("li", "lim"), ("ln", "lin"), ("lo", "lao"),
+    ("lt", "lit"), ("lu", "lub"), ("lv", "lav"), ("mg", "mlg"),
+    ("mh", "mah"), ("mi", "mao"), ("mk", "mac"), ("ml", "mal"),
+    ("mn", "mon"), ("mr", "mar"), ("ms", "may"), ("mt", "mlt"),
+    ("my", "bur"), ("na", "nau"), ("nb", "nob"), ("nd", "nde"),
+    ("ne", "nep"), ("ng", "ndo"), ("nl", "dut"), ("nn", "nno"),
+    ("no", "nor"), ("nr", "nbl"), ("nv", "nav"), ("ny", "nya"),
+    ("oc", "oci"), ("oj", "oji"), ("om", "orm"), ("or", "ori"),
+    ("os", "oss"), ("pa", "pan"), ("pi", "pli"), ("pl", "pol"),
+    ("ps", "pus"), ("pt", "por"), ("qu", "que"), ("rm", "roh"),
+    ("rn", "run"), ("ro", "rum"), ("ru", "rus"), ("rw", "kin"),
+    ("sa", "san"), ("sc", "srd"), ("sd", "snd"), ("se", "sme"),
+    ("sg", "sag"), ("sh", "hbs"), ("si", "sin"), ("sk", "slo"),
+    ("sl", "slv"), ("sm", "smo"), ("sn", "sna"), ("so", "som"),
+    ("sq", "alb"), ("sr", "srp"), ("ss", "ssw"), ("st", "sot"),
+    ("su", "sun"), ("sv", "swe"), ("sw", "swa"), ("ta", "tam"),
+    ("te", "tel"), ("tg", "tgk"), ("th", "tha"), ("ti", "tir"),
+    ("tk", "tuk"), ("tl", "tgl"), ("tn", "tsn"), ("to", "ton"),
+    ("tr", "tur"), ("ts", "tso"), ("tt", "tat"), ("tw", "twi"),
+    ("ty", "tah"), ("ug", "uig"), ("uk", "ukr"), ("ur", "urd"),
+    ("uz", "uzb"), ("ve", "ven"), ("vi", "vie"), ("vo", "vol"),
+    ("wa", "wln"), ("wo", "wol"), ("xh", "xho"), ("yi", "yid"),
+    ("yo", "yor"), ("za", "zha"), ("zh", "chi"), ("zu", "zul"),
+];
 
 const BIB_T_PAIRS: &[(&str, &str)] = &[
     ("alb", "sqi"),
@@ -710,5 +782,61 @@ mod tests {
         // because the registry adds a code now and again.
         assert!(TABLE.len() >= 480, "table shrunk: {}", TABLE.len());
         assert!(TABLE.len() <= 520, "table is suspiciously large: {}", TABLE.len());
+    }
+
+    #[test]
+    fn alpha2_table_is_sorted_for_binary_search() {
+        for window in ALPHA2_TO_ALPHA3.windows(2) {
+            assert!(
+                window[0].0 < window[1].0,
+                "alpha-2 table not sorted: {} >= {}",
+                window[0].0,
+                window[1].0
+            );
+        }
+    }
+
+    #[test]
+    fn alpha2_maps_common_languages() {
+        assert_eq!(alpha2_to_alpha3("en"), Some("eng"));
+        assert_eq!(alpha2_to_alpha3("ja"), Some("jpn"));
+        assert_eq!(alpha2_to_alpha3("EN"), Some("eng")); // case-insensitive
+        assert_eq!(alpha2_to_alpha3(" pt "), Some("por")); // whitespace-tolerant
+    }
+
+    #[test]
+    fn alpha2_maps_bibliographic_targets_then_lookup_canonicalises() {
+        // "de" → "ger" (bib); lookup resolves to terminologic "deu".
+        assert_eq!(alpha2_to_alpha3("de"), Some("ger"));
+        assert_eq!(lookup("ger").unwrap().canonical, "deu");
+        assert_eq!(alpha2_to_alpha3("zh"), Some("chi"));
+        assert_eq!(lookup("chi").unwrap().canonical, "zho");
+    }
+
+    #[test]
+    fn alpha2_rejects_wrong_length_and_unknown() {
+        assert_eq!(alpha2_to_alpha3("eng"), None);
+        assert_eq!(alpha2_to_alpha3("e"), None);
+        assert_eq!(alpha2_to_alpha3("zz"), None);
+        assert_eq!(alpha2_to_alpha3(""), None);
+    }
+
+    #[test]
+    fn every_alpha2_target_is_resolvable() {
+        // `sh → hbs` (Serbo-Croatian) is the one alpha-2 whose target is a
+        // 639-3-only macrolanguage; mkvtoolnix flags `hbs` as not part of
+        // 639-2, so our 639-2 table omits it and `from_ietf("sh")` falls back
+        // to `und`.  Every other alpha-2 target must resolve.
+        for (a2, a3) in ALPHA2_TO_ALPHA3 {
+            if *a3 == "hbs" {
+                continue;
+            }
+            assert!(
+                lookup(a3).is_some(),
+                "alpha-2 {} maps to {} which lookup() cannot resolve",
+                a2,
+                a3
+            );
+        }
     }
 }
