@@ -6,8 +6,6 @@
 
 BatchMkvMerge is a desktop GUI that drives [mkvmerge](https://mkvtoolnix.download/doc/mkvmerge.html) from [MKVToolNix](https://mkvtoolnix.download/) across many `.mkv` files at once, so you can pull tracks, chapters, and attachments out of a whole batch without hand-writing commands.
 
-![BatchMkvMerge screenshot](docs/screenshots/group_view_extracting.png)
-
 ## Features
 
 * Cross-platform: Windows, Linux, macOS (intel + arm64)
