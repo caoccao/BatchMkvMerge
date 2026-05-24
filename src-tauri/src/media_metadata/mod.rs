@@ -23,6 +23,7 @@ pub mod avi;
 pub mod codec;
 pub mod coreaudio;
 pub mod deadline;
+pub mod elementary;
 pub mod error;
 pub mod io;
 pub mod language;

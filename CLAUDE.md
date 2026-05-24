@@ -108,7 +108,7 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phases 8-10 = elementary/subtitles/residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. Delivery is split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 
@@ -130,10 +130,11 @@ src-tauri/src/media_metadata/
 ├── mpeg_ts/            # native MPEG-TS reader (packet, pat, pmt, pes, descriptors/*, stream_table, identify, reader)
 ├── mpeg_ps/            # native MPEG-PS reader (packet, pes, stream_map, identify, reader)
 ├── audio/              # audio-only readers (id3v2, mp3, aac, ac3, dts, flac, wav, truehd, tta, wavpack)
-└── coreaudio/          # native CoreAudio CAF reader (caf, reader)
+├── coreaudio/          # native CoreAudio CAF reader (caf, reader)
+└── elementary/         # elementary video stream readers (avc/*, hevc/*, mpeg_video, vc1, dirac, dv, obu)
 ```
 
-**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS + magic-byte audio readers (FLAC / WAV / WAVPACK / TTA / CoreAudio / TrueHD) + frame-sync audio readers (AC-3 / DTS / MP3 / AAC); other formats land in subsequent phases.
+**Probe registry:** `probe::dispatch` walks `probe::registered_readers()` in priority order, calling `Reader::probe` on each. The first reader that claims the file is handed `read_headers`. Adding a new format reader is a one-line insert at the right priority level (see `probe/dispatch.rs::registered_readers`). The registry currently contains Matroska + AVI + Ogg + MP4 + MPEG-PS + MPEG-TS + magic-byte audio readers (FLAC / WAV / WAVPACK / TTA / CoreAudio / TrueHD) + elementary video readers (MPEG / VC-1 / Dirac / DV / AVC / HEVC / AV1 OBU) + frame-sync audio readers (AC-3 / DTS / MP3 / AAC); other formats land in subsequent phases.
 
 **Matroska reader:** pure-Rust port of `mkvtoolnix/src/input/r_matroska.cpp` — no libebml/libmatroska dependency. The EBML walker (`matroska/ebml.rs`) is iterator-based (callers maintain their own container stack, so user-controlled nesting depth never blows the stack). All element IDs are in `matroska/ids.rs`. SeekHead-based dispatch mirrors mkvtoolnix's `m_deferred_l1_positions` bookkeeping. Cluster payloads are never entered — header-only.
 
@@ -162,6 +163,16 @@ src-tauri/src/media_metadata/
   - `ac3.rs` — AC-3 `0x0B77` sync + bsid byte switches between AC-3 (≤10) and E-AC-3 (≥11) decode paths (port of `r_ac3.cpp`).
   - `dts.rs` — four sync words (16-bit BE/LE + 14-bit BE/LE) + DTS-HD extension `0x64582025` (port of `r_dts.cpp`).
 - **Shared:** `audio/id3v2.rs` skips ID3v2 headers + footers before the frame-sync scan; `payload_bounds` also strips ID3v1 trailers from the tail.
+
+**Elementary video readers:** seven raw-bit-stream readers under `elementary/` that probe + decode without any container.
+
+- **AVC/H.264** (`elementary/avc/`) — Annex B NAL walker with 3-/4-byte start-code detection + emulation-prevention-byte removal.  SPS decoder (port of `r_avc.cpp`) reads profile_idc, level_idc, chroma_format_idc, bit_depth_luma/chroma, pic_width/height, frame_mbs_only flag, and conformance-window cropping → `VideoCodecConfig` populated with profile name, level name (decimal-decoded), coded dimensions and display dimensions.
+- **HEVC/H.265** (`elementary/hevc/`) — Two-byte NAL header walker; VPS-id extraction + SPS decoder (port of `r_hevc.cpp`) including the `profile_tier_level` block, `conformance_window` cropping, and the high-bit-depth + Main 10 path.  Level is decimal-decoded (`120 → "4.0"`).
+- **MPEG-1/2 video ES** (`elementary/mpeg_video.rs`) — Sequence-header start code `0x000001B3` + 12+12+4+4 fixed bit-field layout for width / height / aspect-ratio / frame-rate-code.  Frame rate table covers the 8 documented codes (incl. 23.976, 29.97, 59.94 fractional rates).
+- **VC-1** (`elementary/vc1.rs`) — Advanced-profile sequence start code `0x000001 0F` + bit-decoded macroblock dimensions.
+- **Dirac** (`elementary/dirac.rs`) — `BBCD` parse-info magic + sequence-header parse-code (`0x00`).
+- **DV** (`elementary/dv.rs`) — Header DIF block `0x1F 0x07 0x00` + the `dsf` flag for NTSC/PAL classification (720×480 / 720×576).
+- **AV1 OBU** (`elementary/obu.rs`) — strict probe requires a `temporal_delimiter` OBU as the first byte (avoids collision with AC-3's `0x0B 0x77` first byte).  LEB128-decoded sizes; sequence_header OBU decode covers `seq_profile`, `max_frame_width/height`, `bit_depth` (8/10/12), `monochrome`, and chroma subsampling factors derived from the profile.
 
 The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 

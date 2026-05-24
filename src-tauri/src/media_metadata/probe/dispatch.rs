@@ -39,6 +39,9 @@ use crate::media_metadata::audio::{
 };
 use crate::media_metadata::avi::AviReader;
 use crate::media_metadata::coreaudio::CoreAudioReader;
+use crate::media_metadata::elementary::{
+    AvcReader, DiracReader, DvReader, HevcReader, MpegVideoReader, ObuReader, Vc1Reader,
+};
 use crate::media_metadata::matroska::MatroskaReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::mp4::Mp4Reader;
@@ -117,9 +120,23 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     static MP3: Mp3Reader = Mp3Reader;
     static AAC: AacReader = AacReader;
 
+    // Elementary video streams.  AVC + HEVC require an SPS NAL within the
+    // first ~64 KB; MPEG / VC-1 / Dirac / DV need their fixed start code at
+    // offset 0; AV1 OBU needs a sequence_header or temporal_delimiter as
+    // the first byte.
+    static AVC: AvcReader = AvcReader;
+    static HEVC: HevcReader = HevcReader;
+    static MPEG_VIDEO: MpegVideoReader = MpegVideoReader;
+    static VC1: Vc1Reader = Vc1Reader;
+    static DIRAC: DiracReader = DiracReader;
+    static DV: DvReader = DvReader;
+    static OBU: ObuReader = ObuReader;
+
     static REGISTRY: &[&'static (dyn Reader + Send + Sync)] = &[
         &MATROSKA, &AVI, &OGG, &MP4, &MPEG_PS, &MPEG_TS,
         &FLAC, &WAV, &WAVPACK, &TTA, &CORE_AUDIO, &TRUEHD,
+        &MPEG_VIDEO, &VC1, &DIRAC, &DV,
+        &AVC, &HEVC, &OBU,
         &AC3, &DTS, &MP3, &AAC,
     ];
     REGISTRY
