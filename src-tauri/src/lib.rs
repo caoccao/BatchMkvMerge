@@ -19,7 +19,7 @@ mod config;
 mod constants;
 mod controller;
 mod extract;
-mod media_metadata;
+pub mod media_metadata;
 mod mkvtoolnix;
 mod protocol;
 

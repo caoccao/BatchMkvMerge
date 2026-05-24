@@ -42,6 +42,7 @@ import LightModeIcon from "@mui/icons-material/LightMode";
 import MovieIcon from "@mui/icons-material/Movie";
 import PaletteIcon from "@mui/icons-material/Palette";
 import PersonIcon from "@mui/icons-material/Person";
+import TimerIcon from "@mui/icons-material/Timer";
 import UpdateIcon from "@mui/icons-material/Update";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -58,6 +59,7 @@ enum SettingsTab {
   Appearance = "Appearance",
   Profiles = "Profiles",
   Integration = "Integration",
+  Parser = "Parser",
   Update = "Update",
 }
 
@@ -586,6 +588,56 @@ export default function Settings() {
     </Box>
   );
 
+  const parserTimeoutMs =
+    config.parser?.timeoutMs ?? Protocol.PARSER_DEFAULT_TIMEOUT_MS;
+
+  const handleParserTimeoutChange = (raw: string) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    const clamped = Math.min(
+      Math.max(Math.round(parsed), Protocol.PARSER_MIN_TIMEOUT_MS),
+      Protocol.PARSER_MAX_TIMEOUT_MS,
+    );
+    if (clamped === parserTimeoutMs) {
+      return;
+    }
+    updateConfig({ parser: { timeoutMs: clamped } });
+  };
+
+  const parserPanel = (
+    <Box>
+      <SectionHeader
+        icon={<TimerIcon fontSize="small" />}
+        title={t("settings.parser")}
+      />
+      <SettingRow label={t("settings.parserTimeout")}>
+        <TextField
+          size="small"
+          type="number"
+          value={parserTimeoutMs}
+          onChange={(e) => handleParserTimeoutChange(e.target.value)}
+          slotProps={{
+            htmlInput: {
+              min: Protocol.PARSER_MIN_TIMEOUT_MS,
+              max: Protocol.PARSER_MAX_TIMEOUT_MS,
+              step: 100,
+              "aria-label": t("settings.parserTimeout"),
+            },
+          }}
+          sx={{ width: 140 }}
+        />
+      </SettingRow>
+      <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+        {t("settings.parserTimeoutHint", {
+          min: Protocol.PARSER_MIN_TIMEOUT_MS,
+          max: Protocol.PARSER_MAX_TIMEOUT_MS,
+        })}
+      </Typography>
+    </Box>
+  );
+
   const updatePanel = (
     <Box>
       <SectionHeader
@@ -667,16 +719,22 @@ export default function Settings() {
           label={t("settings.appearance")}
         />
         <Tab
-          value={SettingsTab.Profiles}
-          icon={<PersonIcon sx={{ fontSize: 18 }} />}
-          iconPosition="start"
-          label={t("settings.profiles")}
-        />
-        <Tab
           value={SettingsTab.Integration}
           icon={<ExtensionIcon sx={{ fontSize: 18 }} />}
           iconPosition="start"
           label={t("settings.integration")}
+        />
+        <Tab
+          value={SettingsTab.Parser}
+          icon={<TimerIcon sx={{ fontSize: 18 }} />}
+          iconPosition="start"
+          label={t("settings.parser")}
+        />
+        <Tab
+          value={SettingsTab.Profiles}
+          icon={<PersonIcon sx={{ fontSize: 18 }} />}
+          iconPosition="start"
+          label={t("settings.profiles")}
         />
         <Tab
           value={SettingsTab.Update}
@@ -696,8 +754,9 @@ export default function Settings() {
         }}
       >
         {tab === SettingsTab.Appearance && appearancePanel}
-        {tab === SettingsTab.Profiles && profilesPanel}
         {tab === SettingsTab.Integration && integrationPanel}
+        {tab === SettingsTab.Parser && parserPanel}
+        {tab === SettingsTab.Profiles && profilesPanel}
         {tab === SettingsTab.Update && updatePanel}
       </Box>
     </Box>

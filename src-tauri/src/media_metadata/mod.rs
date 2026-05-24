@@ -18,13 +18,19 @@
 // `unsafe` is forbidden throughout the parser sub-tree — see plan §6.5.
 #![forbid(unsafe_code)]
 
+pub mod codec;
 pub mod deadline;
 pub mod error;
 pub mod io;
+pub mod language;
+pub mod model;
 pub mod reader;
 
 pub use deadline::Deadline;
 pub use error::ParseError;
+pub use model::{
+    MediaMetadata, PARSER_PROTOCOL_VERSION,
+};
 pub use reader::Reader;
 
 use std::path::Path;

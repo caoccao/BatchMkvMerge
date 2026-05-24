@@ -10,6 +10,7 @@ pnpm tauri dev                   # run the desktop app with frontend + Rust hot-
 pnpm tauri build                 # build installers for the current platform
 pnpm build                       # tsc + vite build (type-check + frontend bundle only)
 cd src-tauri && cargo check      # fast Rust type-check without linking
+cd src-tauri && cargo test       # run the Rust unit + integration test suite
 ```
 
 Version bumps are done with a Deno script — edit the two arguments at the bottom of `scripts/ts/change-version.ts` and run:
@@ -20,7 +21,19 @@ cd scripts/ts && deno task change-version
 
 That rewrites `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and all three `.github/workflows/*.yml` files.
 
-There is no test runner wired up; the CI workflows run `cargo test -r` but the crate has no tests yet. `pnpm build` is the primary smoke test while iterating.
+### Rust toolchain
+
+The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.94.0**). The pin is required by `specta-2.0.0-rc.25`, which relies on `debug_closure_helpers` (stable since 1.91). The GitHub Actions workflows use `actions-rust-lang/setup-rust-toolchain@v1`, which honours the pin. They also clear `rustflags` so the action's default `-D warnings` doesn't fail CI on intentionally-not-yet-consumed parser surface during phased delivery.
+
+### Tests
+
+The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+
+```bash
+cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
+```
+
+The non-regen run of that test fails with a line-by-line diff when the checked-in file is stale — CI catches drift automatically.
 
 ## Platform-specific notes
 
@@ -84,11 +97,46 @@ Config is stored per-OS:
 - Linux — `$XDG_CONFIG_HOME/BatchMkvMerge/`, else `$HOME/.config/BatchMkvMerge/`.
 - macOS — `~/Library/Application Support/BatchMkvMerge/`.
 
-Detection lives in `src-tauri/src/config.rs::get_config_dir`. Old config files from earlier schema versions still load because every new field has `#[serde(default = "...")]`.
+Detection lives in `src-tauri/src/config.rs::get_config_dir`. Old config files from earlier schema versions still load because every new field has `#[serde(default = "...")]`. Notable nested blocks:
+
+- `config.externalTools` — MKVToolNix + BetterMediaInfo paths.
+- `config.parser.timeoutMs` — per-file parse budget for the native parser (default 1000, clamped to 100–60000 ms by `ConfigParser::effective_timeout_ms`). Exposed in Settings → Parser tab.
 
 ### i18n
 
 Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`). When adding a user-facing string, add the key to **all nine** files under `src/i18n/locales/`. Missing keys fall back to `en-US` via i18next, but that's not a design pattern to lean on.
+
+### Native media-metadata parser
+
+A pure-Rust header-only parser is being phased in under `src-tauri/src/media_metadata/`. It will replace the `mkvmerge -J` subprocess shellout in `mkvtoolnix.rs::get_mkv_tracks` and broaden the drag-drop filter beyond `.mkv`. The plan is `D:/documents/public/Diary/Common/Prompts/BatchMkvMerge/plan-parser-01.md` (12 phases; Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI). Each phase lands as one Conventional Commits commit on the `implement-parser` branch.
+
+Layout (one module tree per format family — every file under 1000 LOC, matching plan §5):
+
+```
+src-tauri/src/media_metadata/
+├── mod.rs              # `pub fn parse(path, ParseOptions)`; ParseError; Deadline
+├── error.rs            # ParseError enum (Timeout / Io / Malformed / OversizedElement / ...)
+├── deadline.rs         # soft per-file budget; `check(stage)` at every coarse boundary
+├── reader.rs           # `trait Reader { probe; read_headers }` + registry surface
+├── io/                 # FileSource, BufReader-wrapped, BitReader, endian, VINT decoders
+├── codec/              # Matroska CodecID + FOURCC + MPEG-TS stream_type lookup tables
+├── language/           # ISO 639-2 alpha-3 table + BCP-47 wrapper (`language-tags` crate)
+└── model/              # Wire-format structs — camelCase, nested, never flattened
+```
+
+The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
+
+**Wire-format invariants** (see [[feedback_protocol_shape]] memory):
+
+- camelCase via `#[serde(rename_all = "camelCase")]` everywhere.
+- Domain sub-trees (`video / audio / subtitle`) live as `Option<_>` on `TrackProperties` — never flattened into the parent.
+- Fields containing digits use explicit `#[serde(rename = "...")]` because serde's `camelCase` rule mangles them (e.g. `iso639_2` → `iso6392` without the override).
+- `u64` / `i64` fields **must** carry `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>`) — specta-typescript otherwise rejects them to prevent JS precision loss. Accept the loss explicitly via the override.
+- `protocol_version: u32` (currently 1) is ours; bump it on breaking changes.
+
+The TypeScript counterpart `src/protocol.generated.ts` is **auto-generated by specta** from the model structs and **must be regenerated** any time a model struct changes (`BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`). The non-regen run of the same test asserts the checked-in file matches what specta would emit, so CI catches drift. Don't edit it by hand.
+
+**Configurable timeout** (see [[feedback_parser_timeout]] memory): the per-file budget comes from `config.parser.timeoutMs` (default 1000, clamped 100–60000). On expiry the parser returns `Err(ParseError::Timeout { budget_ms, stage })` immediately — no partial result. The `BMM_PARSER_BUDGET_MS` env var is kept as a dev-only override; the persisted config wins when both are set.
 
 ### External tools
 
@@ -106,3 +154,6 @@ Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfo
 - macOS `Stack` alignment must use `sx={{ alignItems: "center" }}`, not the `alignItems` prop — MUI v9 dropped the prop.
 - When cards register their `handleExtract` into `fileExtractHandlers`, the signature is `() => Promise<void>`. The toolbar's Extract All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
 - All `if-else` must have braces.
+- Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase, each closing a phase number in `plan-parser-01.md`.
+- When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.
+- Never edit `src/protocol.generated.ts` by hand — it is regenerated from the Rust model.

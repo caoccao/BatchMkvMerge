@@ -65,10 +65,20 @@ jobs:
       with:
         version: 11
 
-    - name: Build BatchMkvMerge
+    - name: Install JS deps and build frontend
+      # `pnpm build` runs first so `tauri_build::build()` (invoked from
+      # src-tauri/build.rs at every cargo invocation) sees the frontendDist
+      # directory. Without it `cargo test` can't even compile.
       run: |
         pnpm install --frozen-lockfile
-        pnpm tauri build
+        pnpm build
+
+    - name: Run Rust tests
+      working-directory: src-tauri
+      run: cargo test -r
+
+    - name: Build BatchMkvMerge
+      run: pnpm tauri build
 
     - name: Upload the Artifact
       uses: actions/upload-artifact@v7

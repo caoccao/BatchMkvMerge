@@ -30,4 +30,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 ureq = { version = "2", features = ["json"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-serde = "0.0.12"
+specta-typescript = "0.0.12"
+language-tags = "0.3"
 

@@ -121,6 +121,18 @@ export interface ConfigProfile {
   defaultGroupMode: boolean;
 }
 
+export interface ConfigParser {
+  timeoutMs: number;
+}
+
+export const PARSER_DEFAULT_TIMEOUT_MS = 1000;
+export const PARSER_MIN_TIMEOUT_MS = 100;
+export const PARSER_MAX_TIMEOUT_MS = 60000;
+
+export function createDefaultParserConfig(): ConfigParser {
+  return { timeoutMs: PARSER_DEFAULT_TIMEOUT_MS };
+}
+
 export interface Config {
   displayMode: DisplayMode;
   theme: Theme;
@@ -130,6 +142,7 @@ export interface Config {
   activeProfile: string;
   window: ConfigWindow;
   update: ConfigUpdate;
+  parser: ConfigParser;
 }
 
 export const DEFAULT_PROFILE_NAME = "Default";

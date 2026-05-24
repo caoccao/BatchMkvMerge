@@ -118,11 +118,20 @@ mod tests {
         assert!(d.check("late").is_err());
     }
 
+    /// Build an [`Instant`] that is `offset` in the past.  On platforms where
+    /// `Instant` is backed by a clock with a recent epoch (Windows QPC, fresh
+    /// boots) plain subtraction underflows; `checked_sub` lets us fall back
+    /// to the current `Instant`, which is harmless for tests that pair the
+    /// baseline with a `ZERO` budget.
+    fn past(offset: Duration) -> Instant {
+        Instant::now().checked_sub(offset).unwrap_or_else(Instant::now)
+    }
+
     #[test]
     fn from_parts_lets_tests_set_a_past_baseline() {
-        // 1 hour in the past with a 1-second budget — instantly expired.
-        let past = Instant::now() - Duration::from_secs(3600);
-        let d = Deadline::from_parts(past, Duration::from_secs(1));
+        // Past baseline + zero budget → guaranteed expired regardless of
+        // whether the platform allows a real subtraction.
+        let d = Deadline::from_parts(past(Duration::from_secs(3600)), Duration::ZERO);
         assert!(d.is_expired());
         let err = d.check("synthetic").unwrap_err();
         assert!(matches!(err, ParseError::Timeout { .. }));
@@ -130,8 +139,7 @@ mod tests {
 
     #[test]
     fn remaining_saturates_at_zero_when_expired() {
-        let past = Instant::now() - Duration::from_secs(10);
-        let d = Deadline::from_parts(past, Duration::from_millis(1));
+        let d = Deadline::from_parts(past(Duration::from_secs(10)), Duration::ZERO);
         assert_eq!(d.remaining(), Duration::ZERO);
     }
 
