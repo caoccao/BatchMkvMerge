@@ -90,8 +90,17 @@ fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
                 (codec_id, codec_name, None, Some(video), None, None)
             }
             (TrackType::Audio, Some(StreamFormat::Audio(wf))) => {
-                let codec_id = format!("0x{:04X}", wf.format_tag);
-                let codec_name = name_from_wave_tag(wf.format_tag);
+                // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real format tag in
+                // the SubFormat GUID's data1 field (PARSER-059): the 18-byte
+                // WAVEFORMATEX is followed by wValidBitsPerSample(2) +
+                // dwChannelMask(4) + GUID, so data1 sits at extra offset 6.
+                let effective_tag = if wf.format_tag == 0xFFFE && wf.extra.len() >= 10 {
+                    u16::from_le_bytes([wf.extra[6], wf.extra[7]])
+                } else {
+                    wf.format_tag
+                };
+                let codec_id = format!("0x{:04X}", effective_tag);
+                let codec_name = name_from_wave_tag(effective_tag);
                 let private = if wf.extra.is_empty() {
                     None
                 } else {
@@ -100,12 +109,20 @@ fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
                 let audio = audio_properties(&wf);
                 (codec_id, codec_name, private, None, Some(audio), None)
             }
-            (TrackType::Subtitles, _) => {
-                let codec_id = fourcc_to_string(&header.fcc_handler);
+            (TrackType::Subtitles, fmt) => {
+                // VirtualDub embeds SRT/SSA subtitles as a GAB2 block in the
+                // text stream's strf (PARSER-060).
+                let (codec_id, variant) = fmt
+                    .as_ref()
+                    .and_then(gab2_codec)
+                    .map(|(id, name)| (id.to_string(), name.to_string()))
+                    .unwrap_or_else(|| {
+                        (fourcc_to_string(&header.fcc_handler), "AVI Text".to_string())
+                    });
                 let subtitle = Some(SubtitleTrackProperties {
                     text_subtitles: true,
                     encoding: None,
-                    variant: Some("AVI Text".to_string()),
+                    variant: Some(variant),
                     teletext_page: None,
                 });
                 (codec_id, None, None, None, None, subtitle)
@@ -199,6 +216,42 @@ fn fourcc_to_string(bytes: &[u8; 4]) -> String {
             }
         })
         .collect()
+}
+
+/// Detect a GAB2 subtitle block (VirtualDub) in a text stream's strf and
+/// classify it as SRT or SSA/ASS (PARSER-060). The block is `"GAB2\0"`
+/// followed by `(u16 type, u32 size, data)` entries; type 4 carries the
+/// subtitle file content.
+fn gab2_codec(fmt: &StreamFormat) -> Option<(&'static str, &'static str)> {
+    let StreamFormat::Other(bytes) = fmt else {
+        return None;
+    };
+    if bytes.len() < 5 || &bytes[0..4] != b"GAB2" {
+        return None;
+    }
+    let mut pos = 5usize; // skip "GAB2\0"
+    while pos + 6 <= bytes.len() {
+        let block_type = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+        let size =
+            u32::from_le_bytes([bytes[pos + 2], bytes[pos + 3], bytes[pos + 4], bytes[pos + 5]])
+                as usize;
+        let data_start = pos + 6;
+        let data_end = (data_start + size).min(bytes.len());
+        if block_type == 4 {
+            let data = &bytes[data_start..data_end];
+            let head = &data[..data.len().min(512)];
+            let text = String::from_utf8_lossy(head);
+            if text.contains("[Script Info]") || text.contains("Styles") {
+                return Some(("S_TEXT/ASS", "SSA/ASS (GAB2)"));
+            }
+            if text.contains("-->") {
+                return Some(("S_TEXT/UTF8", "SRT (GAB2)"));
+            }
+            return Some(("S_TEXT/UTF8", "GAB2 Subtitle"));
+        }
+        pos = data_end;
+    }
+    None
 }
 
 fn name_from_wave_tag(tag: u16) -> Option<String> {
@@ -379,6 +432,65 @@ mod tests {
         let sub = track.properties.subtitle.unwrap();
         assert!(sub.text_subtitles);
         assert_eq!(track.properties.common.track_name.as_deref(), Some("English"));
+    }
+
+    // ---- PARSER-059: WAVEFORMATEXTENSIBLE resolution ---------------------
+
+    #[test]
+    fn extensible_audio_resolves_subformat_tag() {
+        // wValidBitsPerSample(2) + dwChannelMask(4) + GUID(16); data1 = 0x0001.
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&16u16.to_le_bytes()); // valid bits
+        extra.extend_from_slice(&3u32.to_le_bytes()); // channel mask
+        extra.extend_from_slice(&1u32.to_le_bytes()); // GUID data1 = PCM
+        extra.extend_from_slice(&[0u8; 12]); // rest of GUID
+        let wf = WaveFormatEx {
+            format_tag: 0xFFFE,
+            channels: 2,
+            samples_per_sec: 48000,
+            avg_bytes_per_sec: 192000,
+            block_align: 4,
+            bits_per_sample: 16,
+            extra,
+        };
+        let builder = StreamBuilder {
+            header: Some(dummy_audio_header()),
+            format: Some(StreamFormat::Audio(wf)),
+            name: None,
+            private: None,
+        };
+        let track = make_track(1, builder).unwrap();
+        assert_eq!(track.codec.id, "0x0001");
+        assert_eq!(track.codec.name.as_deref(), Some("PCM"));
+    }
+
+    // ---- PARSER-060: GAB2 embedded subtitles -----------------------------
+
+    #[test]
+    fn gab2_srt_subtitle_classified() {
+        let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello\r\n";
+        let mut gab2 = b"GAB2\0".to_vec();
+        // filename block (type 2)
+        gab2.extend_from_slice(&2u16.to_le_bytes());
+        gab2.extend_from_slice(&4u32.to_le_bytes());
+        gab2.extend_from_slice(b"a.sr");
+        // subtitle data block (type 4)
+        gab2.extend_from_slice(&4u16.to_le_bytes());
+        gab2.extend_from_slice(&(srt.len() as u32).to_le_bytes());
+        gab2.extend_from_slice(srt);
+        let builder = StreamBuilder {
+            header: Some(dummy_text_header()),
+            format: Some(StreamFormat::Other(gab2)),
+            name: None,
+            private: None,
+        };
+        let track = make_track(2, builder).unwrap();
+        assert_eq!(track.track_type, TrackType::Subtitles);
+        assert_eq!(track.codec.id, "S_TEXT/UTF8");
+        assert_eq!(
+            track.properties.subtitle.unwrap().variant.as_deref(),
+            Some("SRT (GAB2)")
+        );
     }
 
     #[test]

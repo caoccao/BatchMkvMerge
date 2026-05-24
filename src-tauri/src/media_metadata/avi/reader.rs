@@ -45,7 +45,9 @@ impl Reader for AviReader {
         if read < 12 {
             return Ok(false);
         }
-        Ok(&head[0..4] == b"RIFF" && (&head[8..12] == b"AVI " || &head[8..12] == b"AVIX"))
+        // Only a primary `RIFF/AVI ` file is claimed. `AVIX` chunks are OpenDML
+        // extension segments, not standalone files (PARSER-061).
+        Ok(&head[0..4] == b"RIFF" && &head[8..12] == b"AVI ")
     }
 
     fn read_headers(
@@ -122,7 +124,7 @@ impl Reader for AviReader {
                 match &sub {
                     b"hdrl" => {
                         found_hdrl = true;
-                        parse_hdrl(src, &child, deadline, &mut avih, &mut streams)?;
+                        parse_hdrl(src, &child, deadline, &mut avih, &mut streams, &mut odml_info)?;
                     }
                     b"odml" => {
                         odml_info = odml::parse_odml_list(src, &child, deadline)?;
@@ -154,6 +156,7 @@ fn parse_hdrl(
     deadline: &Deadline,
     avih: &mut Option<MainAviHeader>,
     streams: &mut Vec<StreamBuilder>,
+    odml_info: &mut OdmlInfo,
 ) -> Result<(), ParseError> {
     riff::walk_list_children(
         src,
@@ -166,11 +169,14 @@ fn parse_hdrl(
                 Ok(ChildAction::Consumed)
             }
             b"LIST" => {
-                // Could be a strl sub-list — peek the sub-type to decide.
+                // Peek the sub-type: strl (per-stream) or odml (OpenDML header,
+                // which conventionally lives inside hdrl — PARSER-058).
                 let sub = riff::read_list_subtype(src)?;
                 src.seek_to(child.payload_start())?;
-                if &sub == b"strl" {
-                    streams.push(strl::parse_strl(src, child, deadline)?);
+                match &sub {
+                    b"strl" => streams.push(strl::parse_strl(src, child, deadline)?),
+                    b"odml" => *odml_info = odml::parse_odml_list(src, child, deadline)?,
+                    _ => {}
                 }
                 Ok(ChildAction::Skip)
             }
@@ -270,6 +276,18 @@ mod tests {
         let mut bytes = b"RIFF".to_vec();
         bytes.extend_from_slice(&100u32.to_le_bytes());
         bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(&[0u8; 4]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        assert!(!AviReader.probe(&mut s).unwrap());
+    }
+
+    // ---- PARSER-061: standalone AVIX is not a primary AVI file -------------
+
+    #[test]
+    fn probe_rejects_standalone_avix() {
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&100u32.to_le_bytes());
+        bytes.extend_from_slice(b"AVIX");
         bytes.extend_from_slice(&[0u8; 4]);
         let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
         assert!(!AviReader.probe(&mut s).unwrap());
