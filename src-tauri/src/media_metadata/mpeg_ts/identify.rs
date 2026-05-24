@@ -31,6 +31,16 @@ use crate::media_metadata::model::MediaMetadata;
 use super::stream_table::StreamRow;
 
 pub fn finalise(rows: Vec<StreamRow>, out: &mut MediaMetadata) {
+    finalise_with_sdt(rows, &std::collections::HashMap::new(), out);
+}
+
+/// As [`finalise`], but also applies SDT service provider/name keyed by
+/// program (service id) — PARSER-055.
+pub fn finalise_with_sdt(
+    rows: Vec<StreamRow>,
+    sdt: &std::collections::HashMap<u16, (String, String)>,
+    out: &mut MediaMetadata,
+) {
     out.container.format = ContainerFormat::MpegTs;
     out.container.recognized = true;
     out.container.supported = true;
@@ -49,6 +59,17 @@ pub fn finalise(rows: Vec<StreamRow>, out: &mut MediaMetadata) {
         });
         if entry.service_name.is_none() {
             entry.service_name = row.service_name.clone();
+        }
+    }
+    // Apply SDT provider + service name keyed by service id (= program number).
+    for (service_id, (provider, name)) in sdt {
+        if let Some(entry) = seen_programs.get_mut(service_id) {
+            if !provider.is_empty() {
+                entry.service_provider = Some(provider.clone());
+            }
+            if !name.is_empty() {
+                entry.service_name = Some(name.clone());
+            }
         }
     }
 

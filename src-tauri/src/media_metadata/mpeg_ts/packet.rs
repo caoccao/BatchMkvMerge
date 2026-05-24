@@ -116,34 +116,40 @@ pub fn payload_slice<'a>(packet: &'a [u8], header: &PacketHeader) -> &'a [u8] {
     &packet[offset..]
 }
 
-/// Sniff the packet size by counting sync bytes at the three candidate
-/// strides over a 1024-byte probe.
-pub fn detect_packet_size(probe: &[u8]) -> Option<usize> {
-    let candidates = [PACKET_SIZE_STANDARD, PACKET_SIZE_BD_M2TS, PACKET_SIZE_FEC];
-    let mut best: Option<(usize, usize)> = None;
-    for &size in &candidates {
-        let offset = match size {
-            PACKET_SIZE_BD_M2TS => 4, // 4-byte timecode prefix before each packet
-            _ => 0,
-        };
-        let max_packets = probe.len().saturating_sub(offset) / size;
-        let mut hits = 0usize;
-        for i in 0..max_packets {
-            let idx = offset + i * size;
-            if probe.get(idx) == Some(&TS_SYNC_BYTE) {
-                hits += 1;
-            }
+/// Number of consecutive in-stride sync bytes required to lock onto a packet
+/// size — mirrors mkvtoolnix's many-matching-sync-bytes requirement.
+const SYNC_CONFIRMATIONS: usize = 5;
+/// How far into the probe we look for the first aligned packet (tolerates
+/// leading garbage / partial packets).
+const MAX_ALIGN_SCAN: usize = 64 * 1024;
+
+/// Detect the packet size *and* the byte offset of the first whole packet,
+/// scanning for an alignment where [`SYNC_CONFIRMATIONS`] consecutive packets
+/// all carry a sync byte (PARSER-053). For BD M2TS the sync sits 4 bytes into
+/// each 192-byte unit; the returned offset is the unit start.
+pub fn detect_packet_size_aligned(probe: &[u8]) -> Option<(usize, usize)> {
+    for &size in &[PACKET_SIZE_STANDARD, PACKET_SIZE_BD_M2TS, PACKET_SIZE_FEC] {
+        let sync_off = if size == PACKET_SIZE_BD_M2TS { 4 } else { 0 };
+        let need = size * (SYNC_CONFIRMATIONS - 1) + sync_off + 1;
+        if probe.len() < need {
+            continue;
         }
-        // Require at least 3 hits to be confident; the first stride that
-        // achieves a perfect match wins.
-        if hits >= 3 {
-            let score = hits;
-            if best.map(|(b, _)| score > b).unwrap_or(true) {
-                best = Some((score, size));
+        let max_start = probe.len().saturating_sub(need).min(MAX_ALIGN_SCAN);
+        for start in 0..=max_start {
+            let aligned = (0..SYNC_CONFIRMATIONS)
+                .all(|k| probe.get(start + k * size + sync_off) == Some(&TS_SYNC_BYTE));
+            if aligned {
+                return Some((size, start));
             }
         }
     }
-    best.map(|(_, size)| size)
+    None
+}
+
+/// Sniff just the packet size (used by the probe). See
+/// [`detect_packet_size_aligned`].
+pub fn detect_packet_size(probe: &[u8]) -> Option<usize> {
+    detect_packet_size_aligned(probe).map(|(size, _)| size)
 }
 
 /// `true` for the conventional system-PID values mkvtoolnix recognises.

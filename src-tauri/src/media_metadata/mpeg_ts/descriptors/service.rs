@@ -50,6 +50,27 @@ pub fn decode(body: &[u8]) -> Option<String> {
     Some(decode_dvb_string(raw))
 }
 
+/// Decode both the provider name and service name (PARSER-055).
+pub fn decode_full(body: &[u8]) -> Option<(String, String)> {
+    if body.len() < 2 {
+        return None;
+    }
+    let provider_len = body[1] as usize;
+    let after_provider = 2 + provider_len;
+    if after_provider >= body.len() {
+        return None;
+    }
+    let provider = decode_dvb_string(&body[2..after_provider]);
+    let service_name_len = body[after_provider] as usize;
+    let name_start = after_provider + 1;
+    let name_end = name_start + service_name_len;
+    if name_end > body.len() {
+        return None;
+    }
+    let name = decode_dvb_string(&body[name_start..name_end]);
+    Some((provider, name))
+}
+
 fn decode_dvb_string(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return String::new();
