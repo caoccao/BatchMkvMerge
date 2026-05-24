@@ -43,6 +43,13 @@ impl<'a> BitReader<'a> {
         self.bit_pos
     }
 
+    /// Absolute seek to a bit offset. Mirrors `mtx::bits::reader_c::set_bit_position`.
+    /// The position may exceed the buffer; subsequent reads then fail with
+    /// `UnexpectedEof`, matching the C++ behaviour of throwing on the next read.
+    pub fn set_bit_position(&mut self, pos: u64) {
+        self.bit_pos = pos;
+    }
+
     pub fn position_bytes(&self) -> u64 {
         self.bit_pos / 8
     }
