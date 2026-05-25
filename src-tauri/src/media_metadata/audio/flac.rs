@@ -33,6 +33,7 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
+use crate::media_metadata::model::attachment::Attachment;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::duration::DurationValue;
 use crate::media_metadata::model::tag::TagEntry;
@@ -49,10 +50,13 @@ use super::id3v2;
 
 const BLOCK_TYPE_STREAMINFO: u8 = 0;
 const BLOCK_TYPE_VORBIS_COMMENT: u8 = 4;
+const BLOCK_TYPE_PICTURE: u8 = 6;
 /// Safety cap on the number of metadata blocks walked.
 const MAX_META_BLOCKS: usize = 4096;
 /// Cap on a single VORBIS_COMMENT block read.
 const MAX_COMMENT_BYTES: u64 = 16 * 1024 * 1024;
+/// Cap on a PICTURE block header (excluding payload) read into memory.
+const MAX_PICTURE_HEADER_BYTES: u64 = 1024 * 1024;
 
 /// Byte offset where the FLAC stream starts, skipping a leading ID3v2 tag.
 /// Mirrors `r_flac.cpp`'s `mtx::id3::skip_v2_tag` (PARSER-023).
@@ -119,6 +123,16 @@ pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseE
                     metadata.tags = c.entries;
                 }
             }
+            BLOCK_TYPE_PICTURE => {
+                src.seek_to(body_pos)?;
+                let header_want = length.min(MAX_PICTURE_HEADER_BYTES) as usize;
+                let mut body = vec![0u8; header_want];
+                let n = src.read_at_most(&mut body)?;
+                body.truncate(n);
+                if let Some(p) = decode_picture(&body) {
+                    metadata.pictures.push(p);
+                }
+            }
             _ => {}
         }
 
@@ -149,6 +163,19 @@ pub struct FlacMetadata {
     pub streaminfo: Option<FlacStreaminfo>,
     pub vendor: Option<String>,
     pub tags: Vec<TagEntry>,
+    pub pictures: Vec<FlacPicture>,
+}
+
+/// Decoded FLAC PICTURE metadata block — mirrors mkvtoolnix's
+/// `FLAC__StreamMetadata_Picture` (PARSER-097).  Payload data length is the
+/// declared length, even when the file is truncated — matches the on-disk
+/// value advertised by the producer.
+#[derive(Debug, Clone)]
+pub struct FlacPicture {
+    pub picture_type: u32,
+    pub mime_type: String,
+    pub description: String,
+    pub data_length: u32,
 }
 
 pub fn parse(bytes: &[u8]) -> Option<FlacMetadata> {
@@ -183,6 +210,11 @@ pub fn parse(bytes: &[u8]) -> Option<FlacMetadata> {
                     metadata.tags = c.entries;
                 }
             }
+            BLOCK_TYPE_PICTURE => {
+                if let Some(p) = decode_picture(body) {
+                    metadata.pictures.push(p);
+                }
+            }
             _ => {}
         }
         pos = body_end;
@@ -191,6 +223,95 @@ pub fn parse(bytes: &[u8]) -> Option<FlacMetadata> {
         }
     }
     Some(metadata)
+}
+
+/// Decode the first portion of a FLAC PICTURE metadata block.  Matches the
+/// fixed prefix in FLAC spec §8.4: picture-type / MIME / description / dims /
+/// declared data length, all big-endian u32 except the strings.  We deliberately
+/// do **not** materialise the picture body itself — the declared length lets us
+/// emit it as an [`Attachment`] with the correct size.
+fn decode_picture(body: &[u8]) -> Option<FlacPicture> {
+    let mut pos = 0usize;
+    let picture_type = read_be_u32(body, &mut pos)?;
+    let mime_len = read_be_u32(body, &mut pos)? as usize;
+    let mime_type = read_string(body, &mut pos, mime_len)?;
+    let desc_len = read_be_u32(body, &mut pos)? as usize;
+    let description = read_string(body, &mut pos, desc_len)?;
+    // width, height, colour-depth, colours-used — skip four u32 fields.
+    for _ in 0..4 {
+        let _ = read_be_u32(body, &mut pos)?;
+    }
+    let data_length = read_be_u32(body, &mut pos)?;
+    Some(FlacPicture {
+        picture_type,
+        mime_type,
+        description,
+        data_length,
+    })
+}
+
+fn read_be_u32(body: &[u8], pos: &mut usize) -> Option<u32> {
+    if *pos + 4 > body.len() {
+        return None;
+    }
+    let v = u32::from_be_bytes([body[*pos], body[*pos + 1], body[*pos + 2], body[*pos + 3]]);
+    *pos += 4;
+    Some(v)
+}
+
+fn read_string(body: &[u8], pos: &mut usize, len: usize) -> Option<String> {
+    if *pos + len > body.len() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&body[*pos..*pos + len]).into_owned();
+    *pos += len;
+    Some(s)
+}
+
+/// Picture-type → file-base-name mapping — port of
+/// `mtx::flac::file_base_name_for_picture_type` in `common/flac.cpp:355-377`.
+fn picture_type_name(t: u32) -> &'static str {
+    match t {
+        0 => "other",
+        1 => "icon",
+        2 => "other icon",
+        3 => "cover",
+        4 => "cover (back)",
+        5 => "leaflet page",
+        6 => "media",
+        7 => "lead artist - lead performer - soloist",
+        8 => "artist - performer",
+        9 => "conductor",
+        10 => "band - orchestra",
+        11 => "composer",
+        12 => "lyricist - text writer",
+        13 => "recording location",
+        14 => "during recording",
+        15 => "during performance",
+        16 => "movie - video screen capture",
+        17 => "a bright colored fish",
+        18 => "illustration",
+        19 => "band - artist logotype",
+        20 => "publisher - Studio logotype",
+        _ => "unknown",
+    }
+}
+
+/// Approximate `mtx::mime::primary_file_extension_for_type` — covers the
+/// image MIME types FLAC PICTURE blocks declare in practice.  Returns the
+/// extension without a leading dot, or empty if unknown.
+fn primary_extension_for_mime(mime: &str) -> &'static str {
+    match mime.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/jfif" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/bmp" | "image/x-bmp" => "bmp",
+        "image/webp" => "webp",
+        "image/tiff" => "tiff",
+        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
+        "-->" => "",
+        _ => "",
+    }
 }
 
 fn decode_streaminfo(body: &[u8]) -> FlacStreaminfo {
@@ -298,6 +419,39 @@ impl Reader for FlacReader {
                 ..TrackProperties::default()
             },
         });
+
+        // PARSER-097: FLAC PICTURE blocks become attachments.  mkvtoolnix's
+        // `r_flac.cpp::handle_picture_metadata` drops pictures with empty MIME
+        // or generated name — mirror that gate exactly.
+        let mut next_id: u32 = (out.attachments.len() as u32) + 1;
+        for picture in metadata.pictures {
+            if picture.mime_type.is_empty() {
+                continue;
+            }
+            let base = picture_type_name(picture.picture_type);
+            let ext = primary_extension_for_mime(&picture.mime_type);
+            let file_name = if ext.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}.{ext}")
+            };
+            if file_name.is_empty() {
+                continue;
+            }
+            out.attachments.push(Attachment {
+                id: next_id,
+                file_name,
+                mime_type: Some(picture.mime_type),
+                description: if picture.description.is_empty() {
+                    None
+                } else {
+                    Some(picture.description)
+                },
+                size: picture.data_length as u64,
+                uid_hex: None,
+            });
+            next_id += 1;
+        }
         Ok(())
     }
 }
@@ -333,10 +487,35 @@ fn block_header(last: bool, block_type: u8, length: usize) -> Vec<u8> {
     h
 }
 
+/// Build a valid FLAC PICTURE block payload (header + data bytes).  Mirrors
+/// the FLAC spec §8.4 layout used by the decoder above.
+#[cfg(test)]
+fn build_picture_block(
+    picture_type: u32,
+    mime: &str,
+    description: &str,
+    data_length: u32,
+) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&picture_type.to_be_bytes());
+    b.extend_from_slice(&(mime.len() as u32).to_be_bytes());
+    b.extend_from_slice(mime.as_bytes());
+    b.extend_from_slice(&(description.len() as u32).to_be_bytes());
+    b.extend_from_slice(description.as_bytes());
+    // width, height, depth, colours used — values irrelevant for the parser.
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&data_length.to_be_bytes());
+    b.extend(vec![0xCDu8; data_length as usize]);
+    b
+}
+
 /// Build a native FLAC stream with STREAMINFO, a large PICTURE block, then a
 /// VORBIS_COMMENT block — exercising the >64 KiB metadata walk.
 #[cfg(test)]
-fn build_flac_with_picture_and_comment(picture_len: usize) -> Vec<u8> {
+fn build_flac_with_picture_and_comment(picture_data_len: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"fLaC");
     // STREAMINFO (type 0, not last).
@@ -347,9 +526,10 @@ fn build_flac_with_picture_and_comment(picture_len: usize) -> Vec<u8> {
     let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 96_000u64;
     info[10..18].copy_from_slice(&packed.to_be_bytes());
     bytes.extend(info);
-    // PICTURE (type 6, not last) — large.
-    bytes.extend(block_header(false, 6, picture_len));
-    bytes.extend(vec![0xCDu8; picture_len]);
+    // PICTURE (type 6, not last) — front-cover JPEG of the requested size.
+    let picture = build_picture_block(3, "image/jpeg", "Front cover", picture_data_len as u32);
+    bytes.extend(block_header(false, 6, picture.len()));
+    bytes.extend(picture);
     // VORBIS_COMMENT (type 4, last).
     let comment = comments::build_block("ref enc", &[("TITLE", "Far")]);
     bytes.extend(block_header(true, 4, comment.len()));
@@ -438,6 +618,44 @@ mod tests {
         assert_eq!(m.tags.len(), 1);
         assert_eq!(m.tags[0].name, "TITLE");
         assert_eq!(m.tags[0].value, "Far");
+    }
+
+    // ---- PARSER-097: PICTURE blocks become attachments ------------------
+
+    #[test]
+    fn picture_blocks_become_attachments_with_generated_name() {
+        use crate::media_metadata::deadline::Deadline;
+        let bytes = build_flac_with_picture_and_comment(2048);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.flac", 0);
+        FlacReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert_eq!(out.attachments.len(), 1);
+        let att = &out.attachments[0];
+        assert_eq!(att.id, 1);
+        assert_eq!(att.file_name, "cover.jpg");
+        assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(att.description.as_deref(), Some("Front cover"));
+        assert_eq!(att.size, 2048);
+    }
+
+    #[test]
+    fn picture_with_empty_mime_is_skipped() {
+        let mut bytes = b"fLaC".to_vec();
+        bytes.extend(block_header(false, 0, 34));
+        let mut info = vec![0u8; 34];
+        info[..2].copy_from_slice(&4096u16.to_be_bytes());
+        info[2..4].copy_from_slice(&4096u16.to_be_bytes());
+        let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 0u64;
+        info[10..18].copy_from_slice(&packed.to_be_bytes());
+        bytes.extend(info);
+        let picture = build_picture_block(3, "", "", 16);
+        bytes.extend(block_header(true, 6, picture.len()));
+        bytes.extend(picture);
+        use crate::media_metadata::deadline::Deadline;
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.flac", 0);
+        FlacReader.read_headers(&mut s, &Deadline::new(60_000), &mut out).unwrap();
+        assert!(out.attachments.is_empty());
     }
 
     #[test]
