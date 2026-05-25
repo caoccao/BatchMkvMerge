@@ -170,6 +170,10 @@ enum DataValue {
   },
 }
 
+/// Text / integer `data` values are buffered up to this cap; image payloads
+/// (`covr` artwork) are never buffered — only their declared length is needed.
+const TEXT_VALUE_CAP: usize = 16 * 1024;
+
 fn read_data_value(
   src: &mut FileSource,
   parent: &BoxHeader,
@@ -180,29 +184,43 @@ fn read_data_value(
     if !child.kind.eq_ascii(b"data") {
       return Ok(ChildAction::Skip);
     }
-    let payload = atom::read_payload(src, child, 16 * 1024)?;
-    if payload.len() < 8 {
+    let payload_size = child.payload_size().unwrap_or(0);
+    if payload_size < 8 {
       return Ok(ChildAction::Consumed);
     }
-    let type_code = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x00FF_FFFF;
-    // skip 4 bytes of locale (payload[4..8])
-    let body = &payload[8..];
+    // The 8-byte fixed prefix is `type_code` (u32) + `locale` (u32).
+    let mut head = [0u8; 8];
+    src.read_exact(&mut head)?;
+    let type_code = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) & 0x00FF_FFFF;
+    // PARSER-162: album art (`covr`) routinely exceeds 16 KiB. We only need
+    // the MIME type and the declared body length, so for image payloads we
+    // derive the length from the box size and never buffer the bytes — the
+    // walker re-aligns to the child's end. mkvtoolnix likewise records the
+    // full `covr` payload size as an attachment (r_qtmp4.cpp:1087-1120).
+    let body_len = (payload_size - 8) as usize;
     result = match type_code {
-      TYPE_UTF8 => Some(DataValue::Text(String::from_utf8_lossy(body).into_owned())),
-      TYPE_UTF16 => Some(DataValue::Text(decode_utf16_be(body))),
-      TYPE_SIGNED_INT => Some(DataValue::Int(decode_signed_int(body))),
       TYPE_JPEG => Some(DataValue::Image {
         mime_type: "image/jpeg",
-        length: body.len(),
+        length: body_len,
       }),
       TYPE_PNG => Some(DataValue::Image {
         mime_type: "image/png",
-        length: body.len(),
+        length: body_len,
       }),
       TYPE_BMP => Some(DataValue::Image {
         mime_type: "image/bmp",
-        length: body.len(),
+        length: body_len,
       }),
+      TYPE_UTF8 | TYPE_UTF16 | TYPE_SIGNED_INT => {
+        let read_len = body_len.min(TEXT_VALUE_CAP);
+        let mut body = vec![0u8; read_len];
+        src.read_exact(&mut body)?;
+        match type_code {
+          TYPE_UTF8 => Some(DataValue::Text(String::from_utf8_lossy(&body).into_owned())),
+          TYPE_UTF16 => Some(DataValue::Text(decode_utf16_be(&body))),
+          _ => Some(DataValue::Int(decode_signed_int(&body))),
+        }
+      }
       _ => None,
     };
     Ok(ChildAction::Consumed)
@@ -354,6 +372,19 @@ mod tests {
     assert_eq!(att.file_name, "cover.jpg");
     assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
     assert_eq!(att.size, 256);
+  }
+
+  #[test]
+  fn covr_larger_than_16kib_is_not_dropped() {
+    // PARSER-162: a 64 KiB JPEG cover must still be exposed as an attachment
+    // (the old 16 KiB payload cap silently discarded it).
+    let payload = build_ilst_tag(b"covr", build_data_box(TYPE_JPEG, &vec![0u8; 64 * 1024]));
+    let m = run(payload);
+    assert_eq!(m.attachments.len(), 1);
+    let att = &m.attachments[0];
+    assert_eq!(att.file_name, "cover.jpg");
+    assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(att.size, 64 * 1024);
   }
 
   #[test]

@@ -29,10 +29,10 @@
 
 use std::collections::HashMap;
 
-use crate::media_metadata::audio::{ac3, mp3};
+use crate::media_metadata::audio::{aac, ac3, mp3};
 use crate::media_metadata::codec::TrackKind;
 use crate::media_metadata::deadline::Deadline;
-use crate::media_metadata::elementary::{avc, mpeg_video};
+use crate::media_metadata::elementary::{avc, hevc, mpeg_video, vc1};
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::MediaMetadata;
@@ -40,7 +40,7 @@ use crate::media_metadata::reader::Reader;
 
 use super::descriptors::DescriptorSummary;
 use super::descriptors::service;
-use super::identify;
+use super::identify::{self, EsEnrichment};
 use super::packet::{self, PACKET_SIZE_BD_M2TS, detect_packet_size_aligned};
 use super::pat;
 use super::pmt;
@@ -50,8 +50,14 @@ const MAX_PACKETS: usize = 64 * 1024;
 const PROBE_BYTES: usize = 16 * 1024;
 const SDT_PID: u16 = 0x0011;
 const NULL_PID: u16 = 0x1FFF;
-const UNLISTED_PAYLOAD_CAP: usize = 16 * 1024;
-const MAX_UNLISTED_PIDS: usize = 16;
+/// PARSER-158: bounded per-PID PES accumulation for codec probing.  We hold up
+/// to 64 KiB of each candidate stream's payload — enough for an AVC/HEVC SPS or
+/// the first audio frame header — across at most this many PIDs.
+const PES_PAYLOAD_CAP: usize = 64 * 1024;
+const MAX_PES_PIDS: usize = 32;
+/// Packet budget scanned (after all PMTs are seen) before stopping, so the
+/// per-PID PES buffers have a chance to fill for the header probe.
+const PES_PROBE_PACKET_BUDGET: usize = 4096;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MpegTsReader;
@@ -139,7 +145,10 @@ impl Reader for MpegTsReader {
     let mut sdt_map: HashMap<u16, (String, String)> = HashMap::new();
     let mut assemblers: HashMap<u16, SectionAssembler> = HashMap::new();
     let mut pmt_stream_pids: std::collections::HashSet<u16> = Default::default();
-    let mut unlisted: HashMap<u16, Vec<u8>> = HashMap::new();
+    // PARSER-056 / PARSER-158: bounded per-PID PES payload accumulation, used
+    // both to sniff unlisted PIDs and to probe codec parameters for listed
+    // tracks.
+    let mut pes_payloads: HashMap<u16, Vec<u8>> = HashMap::new();
 
     let mut packet_buf = vec![0u8; packet_size];
     let mut packet_count = 0usize;
@@ -185,21 +194,26 @@ impl Reader for MpegTsReader {
             handle_pmt(&section, prog, &mut rows, &mut pmt_stream_pids);
           }
         }
-      } else if header.pid != NULL_PID && header.payload_unit_start {
-        // Candidate unlisted PES PID (PARSER-056) — record its payload.
-        if payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1 {
-          if unlisted.len() < MAX_UNLISTED_PIDS || unlisted.contains_key(&header.pid) {
-            let buf = unlisted.entry(header.pid).or_default();
-            if buf.len() < UNLISTED_PAYLOAD_CAP {
-              let take = (UNLISTED_PAYLOAD_CAP - buf.len()).min(payload.len());
-              buf.extend_from_slice(&payload[..take]);
-            }
+      } else if header.pid != NULL_PID {
+        // Candidate PES PID (PARSER-056 / PARSER-158).  Start a buffer at the
+        // first PES-start packet, then keep appending continuation packets up
+        // to the cap so the codec probe has enough of the elementary stream.
+        let is_pes_start =
+          header.payload_unit_start && payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1;
+        let known = pes_payloads.contains_key(&header.pid);
+        if known || (is_pes_start && pes_payloads.len() < MAX_PES_PIDS) {
+          let buf = pes_payloads.entry(header.pid).or_default();
+          if buf.len() < PES_PAYLOAD_CAP {
+            let take = (PES_PAYLOAD_CAP - buf.len()).min(payload.len());
+            buf.extend_from_slice(&payload[..take]);
           }
         }
       }
 
-      // Stop once every known PMT is processed and (if present) the SDT.
-      if !pmt_pids.is_empty() && seen_pmt_pids.len() == pmt_pids.len() && (!sdt_map.is_empty() || packet_count > 4096) {
+      // Stop once every known PMT is processed and the PES probe budget is
+      // spent (PARSER-158: scan far enough to fill the per-PID buffers rather
+      // than bailing the moment the SDT arrives).
+      if !pmt_pids.is_empty() && seen_pmt_pids.len() == pmt_pids.len() && packet_count > PES_PROBE_PACKET_BUDGET {
         break;
       }
     }
@@ -207,13 +221,13 @@ impl Reader for MpegTsReader {
     // Fallback content detection for unlisted PES PIDs (PARSER-056): only
     // when no PMT-listed streams were found, and only on a confident sniff.
     if rows.is_empty() {
-      let mut pids: Vec<u16> = unlisted.keys().copied().collect();
+      let mut pids: Vec<u16> = pes_payloads.keys().copied().collect();
       pids.sort_unstable();
       for pid in pids {
         if pmt_stream_pids.contains(&pid) {
           continue;
         }
-        if let Some((kind, id, name)) = sniff_codec(&unlisted[&pid]) {
+        if let Some((kind, id, name)) = sniff_codec(strip_pes_header(&pes_payloads[&pid])) {
           rows.push(StreamRow {
             pid,
             stream_type: 0,
@@ -231,9 +245,158 @@ impl Reader for MpegTsReader {
       }
     }
 
-    identify::finalise_with_sdt(rows, &sdt_map, out);
+    // PARSER-158: probe each track's PES payload for codec parameters the PMT
+    // alone cannot supply (audio channels / sampling rate, video dimensions).
+    let enrichment = compute_enrichment(&rows, &pes_payloads);
+
+    identify::finalise_with_sdt(rows, &sdt_map, &enrichment, out);
     Ok(())
   }
+}
+
+/// PARSER-158: strip the PES packet header so codec probes see the elementary
+/// stream bytes.  Streams carrying the full optional header (`PTS_DTS_flags`
+/// etc.) start their payload at `9 + PES_header_data_length`; the few stream
+/// ids that never carry it (program stream map / padding / private-2 / ECM /
+/// EMM / directory / DSMCC / H.222.1-E) start right after the 6-byte prefix.
+fn strip_pes_header(bytes: &[u8]) -> &[u8] {
+  if bytes.len() < 6 || bytes[0..3] != [0x00, 0x00, 0x01] {
+    return bytes;
+  }
+  match bytes[3] {
+    0xBC | 0xBE | 0xBF | 0xF0 | 0xF1 | 0xF2 | 0xF8 | 0xFF => bytes.get(6..).unwrap_or(&[]),
+    _ => {
+      if bytes.len() < 9 {
+        return &[];
+      }
+      let header_data_len = bytes[8] as usize;
+      bytes.get(9 + header_data_len..).unwrap_or(&[])
+    }
+  }
+}
+
+/// PARSER-158: build the per-PID enrichment map by running the codec-specific
+/// header probe over the accumulated elementary stream.  One entry per PID
+/// (the primary stream); the TrueHD/AC-3 coupled case (stream_type 0x83) is
+/// skipped because its embedded sub-stream needs the demux-time splitter.
+fn compute_enrichment(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> HashMap<u16, EsEnrichment> {
+  let mut map: HashMap<u16, EsEnrichment> = HashMap::new();
+  for row in rows {
+    if map.contains_key(&row.pid) || row.stream_type == 0x83 {
+      continue;
+    }
+    let Some(raw) = pes.get(&row.pid) else {
+      continue;
+    };
+    if let Some(enrichment) = enrich_for_codec(&row.codec_id, strip_pes_header(raw)) {
+      map.insert(row.pid, enrichment);
+    }
+  }
+  map
+}
+
+/// Decode the codec-specific header at the start of an elementary stream into
+/// the parameters mkvmerge recovers from its bounded probe.
+fn enrich_for_codec(codec_id: &str, es: &[u8]) -> Option<EsEnrichment> {
+  match codec_id {
+    "V_MPEG4/ISO/AVC" => {
+      for nal in avc::nal::split_nal_units(es) {
+        if nal.nal_unit_type == 7 {
+          let rbsp = avc::nal::strip_emulation_prevention(nal.payload);
+          if let Ok(sps) = avc::sps::parse(&rbsp) {
+            return Some(EsEnrichment {
+              pixel_dimensions: Some((sps.display_width, sps.display_height)),
+              ..EsEnrichment::default()
+            });
+          }
+        }
+      }
+      None
+    }
+    "V_MPEGH/ISO/HEVC" | "V_HEVC" => {
+      for nal in hevc::nal::split_nal_units(es) {
+        // HEVC SPS_NUT == 33.
+        if nal.nal_unit_type == 33 {
+          let rbsp = hevc::nal::strip_emulation_prevention(nal.payload);
+          if let Ok(sps) = hevc::sps::parse(&rbsp) {
+            return Some(EsEnrichment {
+              pixel_dimensions: Some((sps.display_width, sps.display_height)),
+              ..EsEnrichment::default()
+            });
+          }
+        }
+      }
+      None
+    }
+    "V_MPEG1" | "V_MPEG2" => mpeg_video::decode_sequence_header(es).map(|h| EsEnrichment {
+      pixel_dimensions: Some((h.horizontal_size, h.vertical_size)),
+      ..EsEnrichment::default()
+    }),
+    "V_VC1" => vc1::decode_sequence_header(es).map(|h| EsEnrichment {
+      pixel_dimensions: Some((h.max_coded_width, h.max_coded_height)),
+      ..EsEnrichment::default()
+    }),
+    "A_AC3" | "A_EAC3" => {
+      // The PMT already tells us this is AC-3, so probe the first decodable
+      // frame at a sync word rather than requiring several consecutive frames
+      // (a bounded PES sample may carry only one).
+      let frame = first_ac3_frame(es)?;
+      Some(EsEnrichment {
+        channels: Some(frame.channels),
+        sampling_frequency: Some(frame.sample_rate as f64),
+        ..EsEnrichment::default()
+      })
+    }
+    "A_MPEG/L3" => {
+      let (_, header) = mp3::find_consecutive_mp3_headers(es, 1)?;
+      Some(EsEnrichment {
+        channels: Some(header.channels),
+        sampling_frequency: Some(header.sampling_frequency as f64),
+        ..EsEnrichment::default()
+      })
+    }
+    "A_AAC" => {
+      let header = first_adts_header(es)?;
+      Some(EsEnrichment {
+        channels: Some(header.channels),
+        sampling_frequency: Some(header.sample_rate as f64),
+        ..EsEnrichment::default()
+      })
+    }
+    _ => None,
+  }
+}
+
+/// Decode the first ADTS frame found at a `0xFFF` sync in `es` — the PMT stream
+/// type already identified AAC, so one frame is enough (no multi-frame
+/// confirmation required).
+fn first_adts_header(es: &[u8]) -> Option<aac::AacHeader> {
+  let mut i = 0;
+  while i + 7 <= es.len() {
+    if es[i] == 0xFF && (es[i + 1] & 0xF0) == 0xF0 {
+      if let Some(header) = aac::decode_adts(&es[i..]) {
+        return Some(header);
+      }
+    }
+    i += 1;
+  }
+  None
+}
+
+/// Decode the first AC-3 frame found at a `0x0B77` sync word in `es`.  Unlike
+/// [`ac3::find_frame_sync`], this does not require several confirming frames —
+/// the PMT stream type already identified the codec.
+fn first_ac3_frame(es: &[u8]) -> Option<ac3::Ac3Frame> {
+  let mut i = 0;
+  while i + 2 <= es.len() {
+    if es[i] == 0x0B && es[i + 1] == 0x77 {
+      if let Some(frame) = ac3::decode_frame(&es[i..]) {
+        return Some(frame);
+      }
+    }
+    i += 1;
+  }
+  None
 }
 
 fn handle_pat(section: &[u8], pmt_pids: &mut HashMap<u16, u16>) {
@@ -496,6 +659,96 @@ mod tests {
     let prog = &out.container.properties.programs[0];
     assert_eq!(prog.service_name.as_deref(), Some("Channel One"));
     assert_eq!(prog.service_provider.as_deref(), Some("ACME"));
+  }
+
+  #[test]
+  fn read_headers_enriches_ac3_audio_from_pes_payload() {
+    // PARSER-158: a Blu-ray AC-3 stream (stream_type 0x81) carrying a real
+    // AC-3 frame in its PES payload must surface channels + sampling frequency
+    // probed from that frame, not an empty audio struct.
+    let pmt_pid = 0x100u16;
+    let ac3_pid = 0x111u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x81, ac3_pid, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+
+    // fscod=0 (48 kHz), bsid=8 (AC-3), acmod=7 (3/2) + LFE → 6 channels.
+    let frame = crate::media_metadata::audio::ac3::build_ac3_frame_full(0, 0, 8, 7, true);
+    let mut pes = vec![0x00, 0x00, 0x01, 0xBD]; // private_stream_1
+    let pes_len = (3 + frame.len()) as u16; // flags(2) + header_data_length(1) + ES
+    pes.extend_from_slice(&pes_len.to_be_bytes());
+    pes.push(0x80); // '10' marker + flags
+    pes.push(0x00); // no PTS/DTS
+    pes.push(0x00); // PES_header_data_length = 0
+    pes.extend_from_slice(&frame);
+    let pes_pkt = packet::build_packet(ac3_pid, true, &pes);
+
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_pkt);
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_AC3");
+    let a = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(6));
+    assert_eq!(a.sampling_frequency, Some(48000.0));
+  }
+
+  #[test]
+  fn strip_pes_header_handles_both_stream_forms() {
+    // Extended-header stream (video 0xE0): ES starts at 9 + header_data_len.
+    let mut pes = vec![0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x00, 0x02, 0xAA, 0xBB];
+    pes.extend_from_slice(&[0x11, 0x22, 0x33]); // ES
+    assert_eq!(strip_pes_header(&pes), &[0x11, 0x22, 0x33]);
+
+    // Padding stream (0xBE) carries no optional header — ES right after byte 6.
+    let pad = vec![0x00, 0x00, 0x01, 0xBE, 0x00, 0x00, 0x44, 0x55];
+    assert_eq!(strip_pes_header(&pad), &[0x44, 0x55]);
+
+    // Non-PES bytes pass through unchanged.
+    assert_eq!(strip_pes_header(&[0x01, 0x02]), &[0x01, 0x02]);
+  }
+
+  #[test]
+  fn enrich_for_codec_decodes_each_supported_codec() {
+    use crate::media_metadata::audio::{aac, ac3, mp3};
+    use crate::media_metadata::elementary::{mpeg_video, vc1};
+
+    // MPEG-2 video → pixel dimensions.
+    let es = mpeg_video::build_sequence_header(1280, 720, 4);
+    assert_eq!(enrich_for_codec("V_MPEG2", &es).unwrap().pixel_dimensions, Some((1280, 720)));
+
+    // VC-1 → pixel dimensions.
+    let es = vc1::build_sequence_header(1920, 1080);
+    assert_eq!(enrich_for_codec("V_VC1", &es).unwrap().pixel_dimensions, Some((1920, 1080)));
+
+    // MP3 → channels + sampling frequency.
+    let es = mp3::build_mp3_frame_v1(128, 44100, false);
+    let m = enrich_for_codec("A_MPEG/L3", &es).unwrap();
+    assert_eq!(m.channels, Some(2));
+    assert_eq!(m.sampling_frequency, Some(44100.0));
+
+    // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2).
+    let es = aac::build_adts_frame(1, 3, 2);
+    let m = enrich_for_codec("A_AAC", &es).unwrap();
+    assert_eq!(m.channels, Some(2));
+    assert_eq!(m.sampling_frequency, Some(48000.0));
+
+    // AC-3 (acmod 7 + LFE = 6 channels, 48 kHz).
+    let es = ac3::build_ac3_frame_full(0, 0, 8, 7, true);
+    let m = enrich_for_codec("A_AC3", &es).unwrap();
+    assert_eq!(m.channels, Some(6));
+    assert_eq!(m.sampling_frequency, Some(48000.0));
+
+    // Unknown / unprobeable codec yields nothing.
+    assert!(enrich_for_codec("S_HDMV/PGS", &es).is_none());
+    assert!(enrich_for_codec("A_AC3", &[0u8; 4]).is_none());
   }
 
   #[test]

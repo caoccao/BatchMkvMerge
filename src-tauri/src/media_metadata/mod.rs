@@ -205,6 +205,9 @@ mod tests {
       item.extend([0u8; 3]);
       item.extend(0u32.to_be_bytes());
       item.extend(45_000u32.to_be_bytes());
+      item.extend([0u8; 12]); // UO mask + flags
+      item.extend([0u8; 4]); // STN length + reserved
+      item.extend([0u8; 12]); // STN: 7 count bytes (no streams) + 5 reserved
       let mut framed = (item.len() as u16).to_be_bytes().to_vec();
       framed.extend(item);
       playlist.extend(framed);

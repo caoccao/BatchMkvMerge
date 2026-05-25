@@ -371,11 +371,15 @@ mod tests {
     cfg
   }
 
+  /// Serialises the tests that read/write the process-global
+  /// `BMM_PARSER_BUDGET_MS` env var so they cannot race each other under
+  /// cargo's parallel test runner. Poison from a panicking test is tolerated.
+  static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
   #[test]
   fn parser_options_from_config_default_uses_default_timeout() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
-    // SAFETY: unsetting env vars in tests is racy across threads but this
-    // suite never sets it; cargo runs us in process isolation per binary.
     unsafe {
       std::env::remove_var("BMM_PARSER_BUDGET_MS");
     }
@@ -392,12 +396,13 @@ mod tests {
 
   #[test]
   fn parser_options_from_config_honours_pinned_value_over_env() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = cfg_with_timeout(2500);
     unsafe {
       std::env::set_var("BMM_PARSER_BUDGET_MS", "9999");
     }
     let opts = parser_options_from_config(&cfg);
-    // SAFETY: see above; we always restore.
+    // Always restore so other tests see a clean environment.
     unsafe {
       std::env::remove_var("BMM_PARSER_BUDGET_MS");
     }

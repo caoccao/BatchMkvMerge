@@ -223,14 +223,14 @@ fn remember_header_packet(idx: usize, packet: &[u8], states: &mut [BitstreamStat
   let Some(metadata) = state.metadata.as_ref() else {
     return;
   };
-  if state.header_packets.len() < identify::header_packet_target(metadata.codec_id) {
+  if state.header_packets.len() < identify::header_packet_target(&metadata.codec_id) {
     state.header_packets.push(packet.to_vec());
   }
 }
 
 fn try_decode_comment_packet(packet: &[u8], idx: usize, states: &mut [BitstreamState], out: &mut MediaMetadata) {
   let state = &mut states[idx];
-  let codec_id = state.metadata.as_ref().map(|m| m.codec_id).unwrap_or_default();
+  let codec_id = state.metadata.as_ref().map(|m| m.codec_id.as_str()).unwrap_or_default();
   let Some(decoded) = decode_comment_packet(packet, codec_id) else {
     return;
   };

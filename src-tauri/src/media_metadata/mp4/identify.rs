@@ -39,12 +39,16 @@ pub fn finalise(
 
   let mvex = &moov.mvex_defaults;
   let movie_matrix = moov.movie_matrix;
+  // PARSER-161: assign ids compactly — a `trak` we end up dropping (metadata
+  // handler, unknown handler, invalid timing, unsupported `mp4a`, missing AAC
+  // config) must not burn an id, so the next emitted track keeps the lower
+  // number.  Mirrors `r_qtmp4.cpp:720-743` where `dmx->id = m_demuxers.size()`
+  // is set only after the demuxer is successfully handled and pushed.
   let mut next_id: i64 = 0;
   for builder in moov.tracks {
-    let track = build_track(builder, next_id, mvex, &fragment_track_counts, &movie_matrix);
-    next_id += 1;
-    if let Some(t) = track {
+    if let Some(t) = build_track(builder, next_id, mvex, &fragment_track_counts, &movie_matrix) {
       out.tracks.push(t);
+      next_id += 1;
     }
   }
   // Defensive: derive display_dimensions where missing.

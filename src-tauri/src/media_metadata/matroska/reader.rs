@@ -313,7 +313,12 @@ fn walk_segment_l1(
     match header.id {
       ids::SEEK_HEAD => {
         walk.seek_head_seen = true;
+        // PARSER-168: collect_deferred swallows structural SeekHead damage
+        // (only Timeout still propagates), so re-align to the element's end
+        // afterwards — on a tolerated error the cursor may be stranded mid-
+        // payload, and the L1 walk must resume at the next sibling.
         seek_head::collect_deferred(src, &header, deadline, deferred, payload_start)?;
+        ebml::skip_payload(src, &header)?;
       }
       ids::INFO => {
         deferred.push(DeferredL1::Info, header.start);
@@ -624,6 +629,31 @@ mod tests {
     assert_eq!(out.tags.global.len(), 1, "late global tag recovered via tail scan");
     assert_eq!(out.tags.global[0].name, "TITLE");
     assert_eq!(out.tags.global[0].value, "Late");
+  }
+
+  // ---- PARSER-168: damaged SeekHead is non-fatal -----------------------
+
+  #[test]
+  fn damaged_seek_head_does_not_block_directly_reachable_tracks() {
+    // A SeekHead whose only Seek child overruns the SeekHead payload (claims
+    // 1000 bytes that are not there). The element is followed by a directly
+    // reachable Tracks. Before PARSER-168 the malformed walk aborted the whole
+    // parse; now it is tolerated and the Tracks are still identified.
+    let mut bad_seek = encode_id(ids::SEEK, 2);
+    bad_seek.extend(encode_size(1000));
+    let seek_head = encode_element(ids::SEEK_HEAD, 4, &bad_seek);
+
+    let mut seg = seek_head;
+    seg.extend(minimal_audio_tracks());
+    let segment = encode_element(ids::SEGMENT, 4, &seg);
+    let mut bytes = ebml_head();
+    bytes.extend(segment);
+
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1, "Tracks recovered despite the broken SeekHead");
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
   }
 
   fn build_minimal_matroska(doc_type: &str) -> Vec<u8> {

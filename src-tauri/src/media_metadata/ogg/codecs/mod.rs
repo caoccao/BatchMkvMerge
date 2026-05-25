@@ -34,51 +34,63 @@ use crate::media_metadata::model::track_properties_video::VideoTrackProperties;
 /// Typed metadata extracted from the first packet of a bitstream.  We avoid
 /// `Default` here because `TrackType` doesn't implement it — each sniffer
 /// initialises the struct explicitly.
+///
+/// `codec_id` / `codec_name` are owned because OGM MS-compatible video maps
+/// the stream-header FOURCC to a per-file codec id (PARSER-164), which is not
+/// a compile-time constant.
 #[derive(Debug, Clone)]
 pub struct BitstreamMetadata {
-  pub codec_id: &'static str,
-  pub codec_name: &'static str,
+  pub codec_id: String,
+  pub codec_name: String,
   pub track_type: TrackType,
   pub video: Option<VideoTrackProperties>,
   pub audio: Option<AudioTrackProperties>,
   pub language: Option<String>,
   pub frame_duration_ns: Option<u64>,
+  /// True for OGM "new stream header" MS-compatible video demuxers (both the
+  /// VfW and the AVC path).  mkvtoolnix promotes such a stream's `TITLE`
+  /// comment to the container title rather than the track name
+  /// (`r_ogm.cpp:677-681, 692-693, 804-806`).  PARSER-165.
+  pub ms_compat: bool,
 }
 
 impl BitstreamMetadata {
-  pub fn audio_only(codec_id: &'static str, codec_name: &'static str) -> Self {
+  pub fn audio_only(codec_id: impl Into<String>, codec_name: impl Into<String>) -> Self {
     Self {
-      codec_id,
-      codec_name,
+      codec_id: codec_id.into(),
+      codec_name: codec_name.into(),
       track_type: TrackType::Audio,
       video: None,
       audio: Some(AudioTrackProperties::default()),
       language: None,
       frame_duration_ns: None,
+      ms_compat: false,
     }
   }
 
-  pub fn video_only(codec_id: &'static str, codec_name: &'static str) -> Self {
+  pub fn video_only(codec_id: impl Into<String>, codec_name: impl Into<String>) -> Self {
     Self {
-      codec_id,
-      codec_name,
+      codec_id: codec_id.into(),
+      codec_name: codec_name.into(),
       track_type: TrackType::Video,
       video: Some(VideoTrackProperties::default()),
       audio: None,
       language: None,
       frame_duration_ns: None,
+      ms_compat: false,
     }
   }
 
-  pub fn subtitle(codec_id: &'static str, codec_name: &'static str) -> Self {
+  pub fn subtitle(codec_id: impl Into<String>, codec_name: impl Into<String>) -> Self {
     Self {
-      codec_id,
-      codec_name,
+      codec_id: codec_id.into(),
+      codec_name: codec_name.into(),
       track_type: TrackType::Subtitles,
       video: None,
       audio: None,
       language: None,
       frame_duration_ns: None,
+      ms_compat: false,
     }
   }
 }

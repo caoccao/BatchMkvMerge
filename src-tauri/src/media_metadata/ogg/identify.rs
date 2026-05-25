@@ -42,12 +42,33 @@ pub fn finalise(states: Vec<BitstreamState>, out: &mut MediaMetadata) {
   out.container.recognized = true;
   out.container.supported = true;
 
-  for (idx, state) in states.into_iter().enumerate() {
+  // PARSER-165: the first MS-compatible OGM video stream's TITLE comment is
+  // the container/segment title, not a track name (r_ogm.cpp:677-681, 804-806).
+  if out.container.properties.title.is_none() {
+    if let Some(title) = states.iter().find_map(|s| {
+      let md = s.metadata.as_ref()?;
+      if !md.ms_compat {
+        return None;
+      }
+      s.vorbis_tags
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case("TITLE"))
+        .map(|t| t.value.clone())
+    }) {
+      out.container.properties.title = Some(title);
+    }
+  }
+
+  // PARSER-166: assign track ids compactly — a BOS stream we could not
+  // identify (metadata == None) must not consume an id (r_ogm.cpp:629-633,
+  // 685-716 only bumps track_id for emitted tracks).
+  let mut track_id = 0i64;
+  for state in states.into_iter() {
     let Some(metadata) = state.metadata else {
       continue;
     };
     let track = make_track(
-      idx as i64,
+      track_id,
       state.serial,
       state.vendor,
       state.vorbis_tags,
@@ -56,6 +77,7 @@ pub fn finalise(states: Vec<BitstreamState>, out: &mut MediaMetadata) {
       metadata,
     );
     out.tracks.push(track);
+    track_id += 1;
   }
 
   out.tags.per_track_count = out.tracks.iter().map(|t| t.properties.tags.len() as u32).sum();
@@ -102,15 +124,17 @@ fn make_track(
   if let Some(lang) = language_hint {
     common.language = Some(Language::resolve(Some(&lang), None, false));
   }
-  // PARSER-082: a TITLE Vorbis comment becomes the track name (mkvtoolnix
-  // `r_ogm.cpp:793-808`).  Stream-level comments map to the track; if no
-  // TITLE is present the track stays unnamed.
-  if let Some(title) = tags
-    .iter()
-    .find(|t| t.name.eq_ignore_ascii_case("TITLE"))
-    .map(|t| t.value.clone())
-  {
-    common.track_name = Some(title);
+  // PARSER-082 / PARSER-165: a TITLE Vorbis comment becomes the track name —
+  // except for MS-compatible OGM video, where mkvtoolnix promotes it to the
+  // container title instead and leaves the track unnamed (`r_ogm.cpp:692-693`).
+  if !metadata.ms_compat {
+    if let Some(title) = tags
+      .iter()
+      .find(|t| t.name.eq_ignore_ascii_case("TITLE"))
+      .map(|t| t.value.clone())
+    {
+      common.track_name = Some(title);
+    }
   }
 
   let mut properties = TrackProperties {
@@ -124,7 +148,7 @@ fn make_track(
     properties.subtitle = Some(SubtitleTrackProperties {
       text_subtitles: true,
       encoding: None,
-      variant: Some(metadata.codec_name.to_string()),
+      variant: Some(metadata.codec_name.clone()),
       teletext_page: None,
     });
   }
@@ -132,13 +156,14 @@ fn make_track(
     video.default_duration_ns.get_or_insert(ns);
   }
 
+  let codec_private = codec_private_for(&metadata.codec_id, &header_packets);
   Track {
     id,
     track_type: metadata.track_type,
     codec: CodecInfo {
-      id: metadata.codec_id.to_string(),
-      name: Some(metadata.codec_name.to_string()),
-      codec_private: codec_private_for(metadata.codec_id, &header_packets),
+      id: metadata.codec_id,
+      name: Some(metadata.codec_name),
+      codec_private,
     },
     properties,
   }
@@ -246,6 +271,59 @@ mod tests {
     let mut m = MediaMetadata::new("clip.ogg", 0);
     finalise(vec![state], &mut m);
     assert!(m.tracks.is_empty());
+  }
+
+  #[test]
+  fn ms_compat_video_title_becomes_container_title_not_track_name() {
+    // PARSER-165
+    let mut metadata = BitstreamMetadata::video_only("XVID", "Xvid");
+    metadata.ms_compat = true;
+    let state = BitstreamState {
+      serial: 7,
+      first_packet: Vec::new(),
+      header_packets: vec![b"hdr".to_vec()],
+      metadata: Some(metadata),
+      vorbis_tags: vec![TagEntry {
+        name: "TITLE".to_string(),
+        value: "My Movie".to_string(),
+        language: None,
+      }],
+      comment_language: None,
+      vendor: None,
+    };
+    let mut m = MediaMetadata::new("clip.ogm", 0);
+    finalise(vec![state], &mut m);
+    assert_eq!(m.container.properties.title.as_deref(), Some("My Movie"));
+    assert!(m.tracks[0].properties.common.track_name.is_none());
+  }
+
+  #[test]
+  fn non_ms_compat_title_stays_on_track_name() {
+    // A Vorbis audio TITLE is a track name, not a container title.
+    let state = state_with_vorbis();
+    let mut m = MediaMetadata::new("clip.ogg", 0);
+    finalise(vec![state], &mut m);
+    assert!(m.container.properties.title.is_none());
+    assert_eq!(m.tracks[0].properties.common.track_name.as_deref(), Some("Track"));
+  }
+
+  #[test]
+  fn unidentified_bos_stream_does_not_consume_a_track_id() {
+    // PARSER-166: a None-metadata stream before a recognised one must not push
+    // the recognised track's id off 0.
+    let skipped = BitstreamState {
+      serial: 1,
+      first_packet: Vec::new(),
+      header_packets: Vec::new(),
+      metadata: None,
+      vorbis_tags: Vec::new(),
+      comment_language: None,
+      vendor: None,
+    };
+    let mut m = MediaMetadata::new("clip.ogg", 0);
+    finalise(vec![skipped, state_with_vorbis()], &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].id, 0);
   }
 
   #[test]

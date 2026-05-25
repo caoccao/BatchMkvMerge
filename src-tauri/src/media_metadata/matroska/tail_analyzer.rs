@@ -21,15 +21,26 @@
 //! `Tracks`, `Attachments`, `Chapters`, and `Tags` that appear after the
 //! clusters in files written without a usable `SeekHead`.
 //!
-//! mkvtoolnix's analyzer re-syncs to known level-1 IDs with
-//! `libebml::EbmlStream::FindNextElement`. We mirror that by reading the tail
-//! into memory once and scanning for the canonical 4-byte element IDs, then
-//! validating each candidate against an `ElementHeader` read at that offset
-//! (the size VINT must be finite and the element must fit inside the segment).
-//! The bounded 5 MiB window keeps this inside the configured parse timeout.
+//! mkvtoolnix's analyzer (`kax_analyzer_c` in `parse_mode_full`) re-syncs to a
+//! level-1 element boundary with `libebml::EbmlStream::FindNextElement` and
+//! then walks the level-1 chain **contiguously**, skipping each element by its
+//! declared size — it never inspects the bytes *inside* a Cluster payload
+//! (`kax_analyzer.cpp:360-410`).  PARSER-167: the previous implementation
+//! recorded *every* byte offset whose 4 bytes matched a canonical level-1 id,
+//! so arbitrary media bytes inside a Cluster could be mistaken for a late
+//! `Tracks` / `Tags` / `Chapters` / `Attachments` / `Info` element.
+//!
+//! We mirror the analyzer instead: read the last 5 MiB into memory once, then
+//! resync to the earliest offset whose level-1 element chain tiles
+//! *contiguously and exactly* to the segment end.  Only that chain's elements
+//! are recorded; cluster payloads are jumped over by size and never scanned.
+//! A chain that diverges before reaching the segment end is discarded and the
+//! scan resumes from the divergence point, so the walk stays linear in the
+//! window size and inside the configured parse timeout.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::io::file_source::FileSource;
+use crate::media_metadata::io::varint::{self, VintKind};
 
 use super::ebml::{self, ElementHeader};
 use super::ids;
@@ -37,6 +48,10 @@ use super::reader::{DeferredL1, DeferredL1Positions};
 
 /// Last-5-MiB window mkvtoolnix's analyzer inspects.
 const TAIL_WINDOW: u64 = 5 * 1024 * 1024;
+
+/// Hard cap on the number of contiguous level-1 elements walked in a single
+/// chain attempt — a corrupt size VINT cannot drive an unbounded loop.
+const MAX_CHAIN_ELEMENTS: usize = 4_000_000;
 
 /// Scan the file tail for late level-1 elements and push their absolute
 /// positions into `deferred`.  Best-effort: any I/O hiccup leaves `deferred`
@@ -84,21 +99,137 @@ fn run(
     return Ok(());
   }
 
-  let scan_end = buf.len() - 4;
-  for i in 0..=scan_end {
-    if (i & 0xFFFF) == 0 {
+  // The contiguous chain must tile exactly to the segment end; trailing bytes
+  // beyond what we buffered cannot be validated, so clamp the target there.
+  let buf_end_abs = start + buf.len() as u64;
+  let limit_abs = segment_end.min(buf_end_abs);
+
+  // Resync to the earliest offset whose level-1 chain tiles to `limit_abs`,
+  // then record its elements.  At most one such chain can exist (two chains
+  // tiling to the same end would have to overlap), so the first hit wins.
+  let mut i = 0usize;
+  let mut steps = 0usize;
+  while i + 1 < buf.len() {
+    if (steps & 0xFFFF) == 0 {
       deadline.check("matroska::tail_analyzer")?;
     }
-    let sig = u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
-    let Some(kind) = classify(sig) else {
-      continue;
-    };
-    let abs = start + i as u64;
-    if validate(src, sig, abs, segment_end).unwrap_or(false) {
-      deferred.push(kind, abs);
+    steps += 1;
+    let walk = walk_chain(&buf, i, start, limit_abs);
+    if walk.reached_end {
+      for (kind, abs) in walk.records {
+        deferred.push(kind, abs);
+      }
+      break;
     }
+    // Resume past the elements we just walked (a contiguous but
+    // non-terminating chain), or advance one byte when nothing decoded.
+    i = walk.next_index.max(i + 1);
   }
   Ok(())
+}
+
+/// Outcome of walking a contiguous level-1 chain from one buffer offset.
+struct ChainWalk {
+  /// Of-interest elements (`Info` / `Tracks` / …) found along the chain.
+  records: Vec<(DeferredL1, u64)>,
+  /// Buffer index where the walk stopped (the divergence point, or the index
+  /// of `limit_abs` when the chain tiled exactly to the segment end).
+  next_index: usize,
+  /// True when the chain tiled contiguously and exactly to `limit_abs`.
+  reached_end: bool,
+}
+
+/// Walk level-1 elements contiguously from buffer index `i0`, decoding each
+/// header and jumping over its payload by the declared size.  The chain is
+/// only accepted (`reached_end == true`) when its elements tile exactly to
+/// `limit_abs`; this is the structured-walk invariant that keeps Cluster-
+/// internal bytes from being mistaken for late headers.
+fn walk_chain(buf: &[u8], i0: usize, start: u64, limit_abs: u64) -> ChainWalk {
+  let mut i = i0;
+  let mut records = Vec::new();
+  let mut walked = 0usize;
+  loop {
+    let abs = start + i as u64;
+    if abs == limit_abs {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: true,
+      };
+    }
+    if abs > limit_abs {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    }
+    let Some((id, size, header_len)) = decode_header_at(buf, i) else {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    };
+    // Only canonical level-1 ids form the chain (Cluster / Cues / SeekHead /
+    // Void / CRC-32 are valid links we step over but never record).
+    if !ebml::is_segment_level_1(id) {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    }
+    // An unknown-size element cannot be skipped deterministically, so it ends
+    // the contiguous walk.
+    let Some(size) = size else {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    };
+    let end_abs = abs + header_len as u64 + size;
+    if end_abs > limit_abs {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    }
+    if let Some(kind) = classify(id) {
+      records.push((kind, abs));
+    }
+    // `end_abs <= limit_abs <= buf_end_abs`, so this fits in the buffer.
+    i = (end_abs - start) as usize;
+    walked += 1;
+    if walked > MAX_CHAIN_ELEMENTS {
+      return ChainWalk {
+        records,
+        next_index: i,
+        reached_end: false,
+      };
+    }
+  }
+}
+
+/// Decode an EBML element header (id + size) straight from the in-memory tail
+/// buffer at `i`.  Returns `None` when the bytes do not form a level-1-width
+/// id (≤ 4 bytes) followed by a size VINT.
+fn decode_header_at(buf: &[u8], i: usize) -> Option<(u32, Option<u64>, usize)> {
+  let slice = buf.get(i..)?;
+  let (id_vint, id_len) = varint::decode(slice, VintKind::IdMarker).ok()?;
+  if id_vint.width > 4 || id_vint.value > u32::MAX as u64 {
+    return None;
+  }
+  let rest = slice.get(id_len..)?;
+  let (size_vint, size_len) = varint::decode(rest, VintKind::Stripped).ok()?;
+  let size = if size_vint.is_unknown_size() {
+    None
+  } else {
+    Some(size_vint.value)
+  };
+  Some((id_vint.value as u32, size, id_len + size_len))
 }
 
 /// The five element kinds mkvtoolnix's analyzer registers — not SeekHead and
@@ -114,32 +245,10 @@ fn classify(id: u32) -> Option<DeferredL1> {
   }
 }
 
-/// Confirm a signature match is a genuine element: the header must decode to
-/// the expected id with a finite size whose payload stays inside the segment.
-fn validate(
-  src: &mut FileSource,
-  expected_id: u32,
-  abs: u64,
-  segment_end: u64,
-) -> Result<bool, crate::media_metadata::error::ParseError> {
-  src.seek_to(abs)?;
-  let header = match ebml::read_element_header(src) {
-    Ok(h) => h,
-    Err(_) => return Ok(false),
-  };
-  if header.id != expected_id {
-    return Ok(false);
-  }
-  match header.end() {
-    Some(end) if end <= segment_end => Ok(true),
-    _ => Ok(false),
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::media_metadata::matroska::ebml::{encode_element, encode_element_uint};
+  use crate::media_metadata::matroska::ebml::{encode_element, encode_element_uint, encode_id, encode_size};
   use std::io::Cursor;
 
   fn no_deadline() -> Deadline {
@@ -222,6 +331,55 @@ mod tests {
     assert_eq!(deferred.take(DeferredL1::Info), vec![info_pos]);
     assert_eq!(deferred.take(DeferredL1::Chapters), vec![chap_pos]);
     assert_eq!(deferred.take(DeferredL1::Attachments), vec![att_pos]);
+  }
+
+  #[test]
+  fn cluster_internal_signature_is_not_recorded() {
+    // PARSER-167: a Cluster payload that happens to contain bytes matching a
+    // canonical level-1 id (here a fake TRACKS element with a fitting size)
+    // must be skipped over by size, not mistaken for a late Tracks element.
+    let fake_inner = {
+      let mut v = encode_id(ids::TRACKS, 4);
+      v.extend(encode_size(0)); // size 0 — would have validated under the old scan
+      v.extend([0xAB, 0xCD, 0xEF]); // arbitrary trailing cluster bytes
+      v
+    };
+    let cluster = encode_element(ids::CLUSTER, 4, &fake_inner);
+    let real_tracks = {
+      let entry = encode_element_uint(ids::TRACK_NUMBER, 1, 1);
+      encode_element(ids::TRACKS, 4, &encode_element(ids::TRACK_ENTRY, 1, &entry))
+    };
+
+    let mut bytes = Vec::new();
+    bytes.extend(&cluster);
+    let real_tracks_pos = bytes.len() as u64;
+    bytes.extend(&real_tracks);
+
+    let seg = segment_header(bytes.len() as u64);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut deferred = DeferredL1Positions::default();
+    find_level1_elements(&mut s, &seg, 0, &no_deadline(), &mut deferred);
+
+    // Only the genuine Tracks element after the cluster is recorded — the
+    // fake id buried in the cluster payload is invisible to the chain walk.
+    assert_eq!(deferred.take(DeferredL1::Tracks), vec![real_tracks_pos]);
+  }
+
+  #[test]
+  fn chain_that_does_not_tile_to_segment_end_is_ignored() {
+    // A valid Tracks element followed by trailing junk that is not a level-1
+    // element: the chain never tiles exactly to the segment end, so nothing
+    // is recorded (mirrors the analyzer refusing a broken chain).
+    let tracks = encode_element(ids::TRACKS, 4, &encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+    let mut bytes = Vec::new();
+    bytes.extend(&tracks);
+    bytes.extend([0x11, 0x22, 0x33, 0x44]); // junk past the Tracks element
+
+    let seg = segment_header(bytes.len() as u64);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut deferred = DeferredL1Positions::default();
+    find_level1_elements(&mut s, &seg, 0, &no_deadline(), &mut deferred);
+    assert!(deferred.take(DeferredL1::Tracks).is_empty());
   }
 
   #[test]

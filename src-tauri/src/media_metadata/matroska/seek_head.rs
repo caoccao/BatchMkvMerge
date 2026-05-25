@@ -40,6 +40,15 @@ use super::reader::{DeferredL1, DeferredL1Positions};
 /// per the Matroska spec, so we translate them via the same arithmetic
 /// `libmatroska::KaxSegment::GetGlobalPosition` performs
 /// (`global = relative + segment_payload_start`).
+///
+/// PARSER-168: a malformed SeekHead must not abort identification.
+/// `r_matroska.cpp::handle_seek_head` (lines 1519-1577) wraps the whole walk
+/// in `try { … } catch (...) { return; }`, so structural damage — a child that
+/// overruns the SeekHead, a truncated entry header, an oversized leaf — is
+/// swallowed and later parsing paths (the linear L1 walk, the tail analyzer)
+/// still run.  We mirror that, keeping only [`ParseError::Timeout`] fatal so
+/// the per-file budget is still honoured.  Whatever entries were decoded
+/// before the damage remain queued.
 pub(crate) fn collect_deferred(
   src: &mut FileSource,
   parent: &ElementHeader,
@@ -47,7 +56,7 @@ pub(crate) fn collect_deferred(
   deferred: &mut DeferredL1Positions,
   segment_payload_start: u64,
 ) -> Result<(), ParseError> {
-  ebml::walk_children(src, parent, "matroska::seek_head", deadline, |src, child| {
+  let result = ebml::walk_children(src, parent, "matroska::seek_head", deadline, |src, child| {
     if child.id != ids::SEEK {
       return Ok(ChildAction::Skip);
     }
@@ -68,7 +77,13 @@ pub(crate) fn collect_deferred(
       deferred.push(kind, absolute);
     }
     Ok(ChildAction::Consumed)
-  })
+  });
+  match result {
+    Ok(()) => Ok(()),
+    // The parse budget must still win — everything else is non-fatal.
+    Err(e @ ParseError::Timeout { .. }) => Err(e),
+    Err(_) => Ok(()),
+  }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -244,6 +259,46 @@ mod tests {
     let mut deferred = DeferredL1Positions::default();
     collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
     assert_eq!(deferred.take(DeferredL1::Tracks), vec![250]);
+  }
+
+  #[test]
+  fn structural_damage_is_tolerated_and_earlier_entries_kept() {
+    // PARSER-168: a good entry followed by a Seek child that overruns the
+    // SeekHead payload. The walker errors on the bad child, but
+    // collect_deferred swallows it and keeps the already-decoded Tracks entry.
+    let good = build_seek_entry(ids::TRACKS, 250);
+    // A Seek element header claiming 1000 payload bytes that are not present.
+    let mut bad = encode_element(ids::SEEK, 2, &[]);
+    // Overwrite the size VINT to claim a huge payload (header is SEEK id [2] +
+    // size [1]); rebuild manually to keep it explicit.
+    bad.clear();
+    bad.extend(crate::media_metadata::matroska::ebml::encode_id(ids::SEEK, 2));
+    bad.extend(crate::media_metadata::matroska::ebml::encode_size(1000));
+
+    let mut payload = good;
+    payload.extend(&bad);
+    // SeekHead size spans only the bytes actually present, so the bad child
+    // overruns the parent → walker raises Malformed.
+    let head = encode_element(ids::SEEK_HEAD, 4, &payload);
+
+    let mut s = src(head);
+    let parent = ebml::read_element_header(&mut s).unwrap();
+    let mut deferred = DeferredL1Positions::default();
+    collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
+    assert_eq!(deferred.take(DeferredL1::Tracks), vec![250]);
+  }
+
+  #[test]
+  fn timeout_still_propagates_through_collect_deferred() {
+    let payload = build_seek_entry(ids::INFO, 10);
+    let head = encode_element(ids::SEEK_HEAD, 4, &payload);
+    let mut s = src(head);
+    let parent = ebml::read_element_header(&mut s).unwrap();
+    let mut deferred = DeferredL1Positions::default();
+    let deadline = Deadline::new(0);
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let err = collect_deferred(&mut s, &parent, &deadline, &mut deferred, 0).unwrap_err();
+    assert!(matches!(err, ParseError::Timeout { .. }));
   }
 
   #[test]

@@ -46,11 +46,12 @@ impl Reader for Mp4Reader {
     if read < 8 {
       return Ok(false);
     }
-    // Recognise: ftyp / moov / mdat / pnot / styp / free / skip / wide / sidx
+    // Recognise the top-level atoms a file may start with.  PARSER-163 adds
+    // `pdin` and `mfra` to match mkvtoolnix's `s_top_level_atoms`.
     let kind = &head[4..8];
     Ok(matches!(
       kind,
-      b"ftyp" | b"moov" | b"mdat" | b"pnot" | b"styp" | b"sidx" | b"free" | b"skip" | b"wide"
+      b"ftyp" | b"pdin" | b"moov" | b"moof" | b"mfra" | b"mdat" | b"pnot" | b"styp" | b"sidx" | b"free" | b"skip" | b"wide"
     ))
   }
 
@@ -84,7 +85,7 @@ impl Reader for Mp4Reader {
         // malformed.  Mirror that here for `Malformed` outcomes — the
         // alternative would be aborting parse on first bad atom.
         Err(ParseError::Malformed { .. }) => {
-          if !resync_to_top_level_atom(src, stream_end)? {
+          if !resync_to_top_level_atom(src, stream_end, deadline)? {
             break;
           }
           continue;
@@ -119,7 +120,10 @@ impl Reader for Mp4Reader {
           have_mdat = true;
           atom::skip_payload(src, &header)?;
         }
-        b"free" | b"skip" | b"wide" | b"pnot" | b"sidx" => {
+        // PARSER-163: `pdin` (progressive download info) and `mfra` (movie
+        // fragment random access) are valid top-level atoms — skip past them
+        // rather than treating them as unknown junk.
+        b"free" | b"skip" | b"wide" | b"pnot" | b"sidx" | b"pdin" | b"mfra" => {
           atom::skip_payload(src, &header)?;
         }
         b"meta" => {
@@ -138,7 +142,7 @@ impl Reader for Mp4Reader {
           let printable = header.kind.0.iter().all(|b| (0x20..=0x7E).contains(b));
           if !printable {
             src.seek_to(box_start)?;
-            if !resync_to_top_level_atom(src, stream_end)? {
+            if !resync_to_top_level_atom(src, stream_end, deadline)? {
               break;
             }
             continue;
@@ -183,46 +187,110 @@ impl Reader for Mp4Reader {
   }
 }
 
-/// PARSER-076: port of `r_qtmp4.cpp::resync_to_top_level_atom`.  Scan forward
-/// from the current cursor for the next byte sequence that looks like a
-/// recognised top-level atom signature (`ftyp`, `moov`, `mdat`, `moof`,
-/// `meta`, `free`, `skip`, `wide`, `pnot`, `sidx`, `styp`, `uuid`).  We test
-/// `(size, fourcc)` pairs: the size must be 8..=64 MiB or the size-0 (to-EOF)
-/// sentinel.  On a match we leave the cursor positioned at the start of the
-/// recovered atom so the outer loop's next `read_box_header` succeeds.
-/// Returns `Ok(true)` when a known atom was located.
-fn resync_to_top_level_atom(src: &mut FileSource, stream_end: Option<u64>) -> Result<bool, ParseError> {
-  const KNOWN: &[&[u8; 4]] = &[
-    b"ftyp", b"moov", b"mdat", b"moof", b"meta", b"free", b"skip", b"wide", b"pnot", b"sidx", b"styp", b"uuid",
-  ];
-  const MAX_RESYNC_BYTES: u64 = 64 * 1024;
+/// Recognised top-level atom signatures for resync.  PARSER-163 adds `pdin`
+/// and `mfra` to match `r_qtmp4.cpp:222`'s `s_top_level_atoms`
+/// `{ ftyp, pdin, moov, moof, mfra, mdat, free, skip }`.  `meta` / `uuid` /
+/// `pnot` / `sidx` / `styp` / `wide` are kept as additional valid box types
+/// our dispatch loop also handles.
+const RESYNC_KNOWN_ATOMS: &[&[u8; 4]] = &[
+  b"ftyp", b"pdin", b"moov", b"moof", b"mfra", b"mdat", b"free", b"skip", b"meta", b"wide", b"pnot", b"sidx",
+  b"styp", b"uuid",
+];
+
+/// Largest declared atom size accepted during resync when the stream length is
+/// unknown — guards against locking onto a coincidental match with a bogus
+/// multi-gigabyte size.
+const RESYNC_MAX_ATOM_SIZE: u64 = 256 * 1024 * 1024;
+
+/// PARSER-076 / PARSER-163: port of `r_qtmp4.cpp::resync_to_top_level_atom`.
+/// Scan forward from the current cursor for the next byte sequence that looks
+/// like a recognised top-level atom signature, testing each `(size, fourcc)`
+/// candidate: the size must be the size-0 (to-EOF) sentinel, the size-1
+/// (64-bit) form, or `8..=stream_end - pos` so the atom fits inside the file
+/// (`r_qtmp4.cpp:228` checks `pos + size <= m_size`).
+///
+/// PARSER-163: unlike the previous 64 KiB-capped single read, we scan all the
+/// way to EOF — mkvtoolnix's `shift_read` loop never gives up early — but in
+/// bounded, overlapping windows so memory stays flat and the parse deadline is
+/// honoured.  On a match we leave the cursor at the start of the recovered
+/// atom so the outer loop's next `read_box_header` succeeds.  The recovered
+/// position is always strictly past `start`, guaranteeing forward progress
+/// (a malformed atom at `start` can never re-lock onto itself).
+fn resync_to_top_level_atom(src: &mut FileSource, stream_end: Option<u64>, deadline: &Deadline) -> Result<bool, ParseError> {
+  const CHUNK: usize = 64 * 1024;
+  // Overlap so an 8-byte (size + fourcc) signature straddling a chunk boundary
+  // is still tested in the following window.
+  const OVERLAP: usize = 7;
+
   let start = src.position();
-  let limit_from_size = stream_end
-    .map(|end| end.saturating_sub(start))
-    .unwrap_or(MAX_RESYNC_BYTES);
-  let limit = limit_from_size.min(MAX_RESYNC_BYTES);
-  if limit < 8 {
-    return Ok(false);
-  }
-  let mut buf = vec![0u8; limit as usize];
-  let read = src.read_at_most(&mut buf)?;
-  let bytes = &buf[..read];
-  for offset in 0..bytes.len().saturating_sub(8) {
-    let kind: [u8; 4] = [
-      bytes[offset + 4],
-      bytes[offset + 5],
-      bytes[offset + 6],
-      bytes[offset + 7],
-    ];
-    if KNOWN.iter().any(|k| **k == kind) {
-      let size = u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]);
-      if size == 0 || size == 1 || (size >= 8 && size <= 64 * 1024 * 1024) {
-        src.seek_to(start + offset as u64)?;
-        return Ok(true);
+  let mut chunk_pos = start; // absolute offset of the next chunk to read
+  let mut carry: Vec<u8> = Vec::new(); // trailing OVERLAP bytes of the prior window
+
+  loop {
+    deadline.check("mp4::resync")?;
+    src.seek_to(chunk_pos)?;
+    let mut buf = vec![0u8; CHUNK];
+    let read = src.read_at_most(&mut buf)?;
+    if read == 0 {
+      break;
+    }
+    let window_start = chunk_pos - carry.len() as u64;
+    let mut window = std::mem::take(&mut carry);
+    window.extend_from_slice(&buf[..read]);
+
+    if window.len() >= 8 {
+      for offset in 0..=window.len() - 8 {
+        let kind: [u8; 4] = [
+          window[offset + 4],
+          window[offset + 5],
+          window[offset + 6],
+          window[offset + 7],
+        ];
+        if !RESYNC_KNOWN_ATOMS.iter().any(|k| **k == kind) {
+          continue;
+        }
+        let atom_abs = window_start + offset as u64;
+        if atom_abs <= start {
+          continue; // guarantee progress past the failing atom
+        }
+        let size = u32::from_be_bytes([window[offset], window[offset + 1], window[offset + 2], window[offset + 3]]) as u64;
+        if resync_size_plausible(size, atom_abs, stream_end) {
+          src.seek_to(atom_abs)?;
+          return Ok(true);
+        }
       }
     }
+
+    chunk_pos += read as u64;
+    if let Some(end) = stream_end {
+      if chunk_pos >= end {
+        break;
+      }
+    }
+    if read < CHUNK {
+      break; // short read ⇒ EOF
+    }
+    // Carry the last OVERLAP bytes forward for boundary-spanning signatures.
+    let keep = window.len().min(OVERLAP);
+    carry = window[window.len() - keep..].to_vec();
   }
   Ok(false)
+}
+
+/// True when a candidate atom's declared `size` is structurally plausible at
+/// `atom_abs`: the to-EOF/64-bit sentinels, or a 32-bit size that fits inside
+/// the file (or under a sanity cap when the length is unknown).
+fn resync_size_plausible(size: u64, atom_abs: u64, stream_end: Option<u64>) -> bool {
+  match size {
+    // Size 0 (to-EOF) and size 1 (64-bit large size) are validated by the
+    // outer read_box_header; accept them as plausible candidates.
+    0 | 1 => true,
+    n if n < 8 => false,
+    n => match stream_end {
+      Some(end) => atom_abs.saturating_add(n) <= end,
+      None => n <= RESYNC_MAX_ATOM_SIZE,
+    },
+  }
 }
 
 #[cfg(test)]
@@ -555,6 +623,68 @@ mod tests {
     let mut out = MediaMetadata::new("clip.mp4", 0);
     Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.container.format, ContainerFormat::Mp4);
+    assert_eq!(out.tracks.len(), 1);
+  }
+
+  /// A `trak` with a `hint` handler is classified as a non-track and dropped
+  /// by `build_track`, so it is useful for the compact-id test.
+  fn build_dropped_trak(track_id: u32) -> Vec<u8> {
+    let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(track_id, 0, 0));
+    let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(1000, 0, "und"));
+    let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"hint", "HintHandler"));
+    let entry = build_video_sample_entry(b"avc1", 16, 16, 24, &[]);
+    let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
+    let stbl = encode_box(b"stbl", &stsd);
+    let minf = encode_box(b"minf", &stbl);
+    let mut mdia = mdhd;
+    mdia.extend(hdlr);
+    mdia.extend(minf);
+    let mdia = encode_box(b"mdia", &mdia);
+    let mut trak = tkhd;
+    trak.extend(mdia);
+    encode_box(b"trak", &trak)
+  }
+
+  #[test]
+  fn dropped_leading_track_does_not_shift_ids() {
+    // PARSER-161: a dropped (hint-handler) trak ahead of a real video trak
+    // must not push the video track's id off 0.
+    let dropped = build_dropped_trak(1);
+    let video = build_video_trak(2, b"avc1", "eng", 320, 240);
+    let bytes = build_minimal_mp4(b"mp42", vec![dropped, video]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].id, 0, "compact id assignment");
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+  }
+
+  #[test]
+  fn file_starting_with_pdin_is_recognised() {
+    // PARSER-163: a leading `pdin` atom must be accepted and skipped.
+    let trak = build_video_trak(1, b"avc1", "eng", 320, 240);
+    let mp4 = build_minimal_mp4(b"mp42", vec![trak]);
+    let mut bytes = encode_box(b"pdin", &[0u8; 12]);
+    bytes.extend(mp4);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(Mp4Reader.probe(&mut s).unwrap());
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+  }
+
+  #[test]
+  fn resync_scans_past_more_than_64kib_of_leading_junk() {
+    // PARSER-163: over 64 KiB of leading junk must not defeat the resync —
+    // mkvtoolnix scans to EOF, not a fixed 64 KiB window.
+    let trak = build_video_trak(1, b"avc1", "eng", 320, 240);
+    let mp4 = build_minimal_mp4(b"mp42", vec![trak]);
+    let mut bytes = vec![0u8; 70 * 1024]; // junk larger than the old cap
+    bytes.extend(mp4);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 1);
   }
 

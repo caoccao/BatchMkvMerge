@@ -210,19 +210,43 @@ pub fn build_rows(
     kind = TrackKind::Audio;
   }
 
-  vec![StreamRow {
+  let primary = StreamRow {
     pid,
     stream_type: entry.stream_type,
     program_number,
-    language,
+    language: language.clone(),
     teletext_page: stream_desc.teletext_page,
-    service_name,
+    service_name: service_name.clone(),
     codec_id,
     codec_name,
     track_kind: kind,
     codec_private: None,
     hearing_impaired: None,
-  }]
+  };
+
+  // PARSER-159: a Blu-ray TrueHD stream (stream_type 0x83) carries an embedded
+  // AC-3 compatibility sub-stream.  mkvtoolnix creates a coupled `A_AC3` track
+  // on the same PID right after the primary `A_TRUEHD` track
+  // (`r_mpeg_ts.cpp:1050-1062, 1897-1903`); we mirror that so track counts and
+  // codec lists match.
+  if entry.stream_type == 0x83 {
+    let coupled = StreamRow {
+      pid,
+      stream_type: entry.stream_type,
+      program_number,
+      language,
+      teletext_page: None,
+      service_name,
+      codec_id: "A_AC3".to_string(),
+      codec_name: "AC-3".to_string(),
+      track_kind: TrackKind::Audio,
+      codec_private: None,
+      hearing_impaired: None,
+    };
+    return vec![primary, coupled];
+  }
+
+  vec![primary]
 }
 
 /// Thin back-compat wrapper that returns the *first* row produced by
@@ -252,6 +276,28 @@ mod tests {
       elementary_pid: 0x1234,
       descriptors,
     }
+  }
+
+  #[test]
+  fn truehd_stream_type_emits_coupled_ac3_track() {
+    // PARSER-159: stream_type 0x83 yields the primary TrueHD track plus a
+    // coupled AC-3 compatibility track on the same PID.
+    let rows = build_rows(0x1100, 1, &entry(0x83, vec![]), &DescriptorSummary::default());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].codec_id, "A_TRUEHD");
+    assert_eq!(rows[0].track_kind, TrackKind::Audio);
+    assert_eq!(rows[1].codec_id, "A_AC3");
+    assert_eq!(rows[1].track_kind, TrackKind::Audio);
+    assert_eq!(rows[1].pid, 0x1100);
+  }
+
+  #[test]
+  fn truehd_coupled_ac3_inherits_language() {
+    let descs = build_descriptor(TAG_ISO_639_LANGUAGE, b"eng\x00");
+    let rows = build_rows(0x1100, 1, &entry(0x83, descs), &DescriptorSummary::default());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].language.as_deref(), Some("eng"));
+    assert_eq!(rows[1].language.as_deref(), Some("eng"));
   }
 
   #[test]
