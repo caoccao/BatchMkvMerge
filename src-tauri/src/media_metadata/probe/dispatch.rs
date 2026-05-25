@@ -80,7 +80,49 @@ pub fn dispatch(
     deadline: &Deadline,
     out: &mut MediaMetadata,
 ) -> Result<DispatchOutcome, ParseError> {
+    dispatch_with_hints(src, deadline, out, &[])
+}
+
+/// Like [`dispatch`], but additionally biases the reader cascade so that
+/// readers whose names match any of `hints` are tried first.  Mirrors
+/// mkvtoolnix's "extension-hinted" phase
+/// (`reader_detection_and_creation.cpp:302-310`).  PARSER-062.
+pub fn dispatch_with_hints(
+    src: &mut FileSource,
+    deadline: &Deadline,
+    out: &mut MediaMetadata,
+    hints: &[super::extension_hint::FileTypeHint],
+) -> Result<DispatchOutcome, ParseError> {
+    // PARSER-063: unsupported-signature prober runs first.  mkvtoolnix calls
+    // this at the top of `probe_file_format`
+    // (`reader_detection_and_creation.cpp:266`) so that ADIF AAC / ASF /
+    // CDXA / HD-Sub / IVR / WinTV DVR files are reported as recognised but
+    // unsupported instead of unrecognised.
+    src.seek_to(0)?;
+    deadline.check("probe")?;
+    if let Some(format) = super::unsupported::probe(src)? {
+        out.container.format = format;
+        out.container.recognized = true;
+        out.container.supported = false;
+        return Ok(DispatchOutcome::Claimed("unsupported"));
+    }
+    let mut order: Vec<&'static (dyn Reader + Send + Sync)> = Vec::new();
+    let hinted_names = hints_to_reader_names(hints);
+    // PARSER-062: front-load every reader whose name matches an extension hint
+    // so ambiguous formats (`.mp4` → MP4 / AAC / ALAC; `.ogg` → Ogg / FLAC)
+    // are tried in the order the extension implies.  The remaining readers run
+    // in their original priority order.
     for reader in registered_readers() {
+        if hinted_names.iter().any(|n| *n == reader.name()) {
+            order.push(*reader);
+        }
+    }
+    for reader in registered_readers() {
+        if !order.iter().any(|r| std::ptr::eq(*r, *reader)) {
+            order.push(*reader);
+        }
+    }
+    for reader in order {
         // Each probe call must see a freshly-positioned cursor; the trait
         // contract requires probes to rewind on return, but we re-seek defensively
         // so a misbehaving probe can't leak position across registry entries.
@@ -95,6 +137,70 @@ pub fn dispatch(
         return Ok(DispatchOutcome::Claimed(reader.name()));
     }
     Err(ParseError::Unrecognised)
+}
+
+/// Translate [`FileTypeHint`] values into the reader names registered in
+/// [`registered_readers`].  A hint may resolve to multiple reader names when
+/// the extension is genuinely ambiguous (e.g. `mp4` → mp4 + aac, `ogg` → ogg
+/// + flac).
+fn hints_to_reader_names(
+    hints: &[super::extension_hint::FileTypeHint],
+) -> Vec<&'static str> {
+    use super::extension_hint::FileTypeHint;
+    let mut names = Vec::new();
+    for hint in hints {
+        let resolved: &[&'static str] = match hint {
+            FileTypeHint::Aac => &["aac"],
+            FileTypeHint::Ac3 => &["ac3"],
+            FileTypeHint::AvcEs => &["avc"],
+            FileTypeHint::Avi => &["avi"],
+            FileTypeHint::CoreAudio => &["coreaudio"],
+            FileTypeHint::Dirac => &["dirac"],
+            FileTypeHint::Dts => &["dts"],
+            FileTypeHint::Dv => &["dv"],
+            FileTypeHint::Flac => &["flac"],
+            FileTypeHint::Flv => &["flv"],
+            FileTypeHint::HevcEs => &["hevc"],
+            FileTypeHint::Ivf => &["ivf"],
+            FileTypeHint::Matroska => &["matroska"],
+            FileTypeHint::MicroDvd => &["microdvd"],
+            FileTypeHint::Mp3 => &["mp3"],
+            FileTypeHint::MpegEs => &["mpeg_video"],
+            FileTypeHint::MpegPs => &["mpeg_ps"],
+            FileTypeHint::MpegTs => &["mpeg_ts"],
+            FileTypeHint::Ogm => &["ogg"],
+            FileTypeHint::PgsSup => &["pgs"],
+            FileTypeHint::QtMp4 => &["mp4"],
+            FileTypeHint::Real => &["realmedia"],
+            FileTypeHint::Srt => &["srt"],
+            FileTypeHint::Ssa => &["ssa"],
+            FileTypeHint::TrueHd => &["truehd"],
+            FileTypeHint::Tta => &["tta"],
+            FileTypeHint::Usf => &["usf"],
+            FileTypeHint::Vc1 => &["vc1"],
+            FileTypeHint::VobButton => &["vobbtn"],
+            FileTypeHint::VobSub => &["vobsub"],
+            FileTypeHint::Wav => &["wav"],
+            FileTypeHint::Wavpack4 => &["wavpack"],
+            FileTypeHint::WebVtt => &["webvtt"],
+            FileTypeHint::HdmvTextSt => &["hdmv_textst"],
+            FileTypeHint::Obu => &["obu"],
+            FileTypeHint::Alac => &["mp4", "coreaudio"],
+            // Hint values without dedicated readers — no-op.
+            FileTypeHint::Asf
+            | FileTypeHint::Cdxa
+            | FileTypeHint::Chapters
+            | FileTypeHint::HdSub
+            | FileTypeHint::AviDv1
+            | FileTypeHint::BlurayPlaylist => &[],
+        };
+        for n in resolved {
+            if !names.contains(n) {
+                names.push(*n);
+            }
+        }
+    }
+    names
 }
 
 /// The active reader registry. Order matches mkvtoolnix's probe cascade so
@@ -218,6 +324,39 @@ mod tests {
         let mut out = MediaMetadata::new("garbage", 16);
         let _ = dispatch(&mut src, &deadline, &mut out);
         assert!(deadline.check("post-dispatch").is_ok());
+    }
+
+    // ---- PARSER-063: unsupported signatures ----------------------------
+
+    #[test]
+    fn dispatch_marks_asf_signature_recognised_but_unsupported() {
+        let bytes = vec![0x30, 0x26, 0xB2, 0x75, 0x00, 0x00, 0x00, 0x00];
+        let mut src = src_for(&bytes);
+        let deadline = Deadline::new(60_000);
+        let mut out = MediaMetadata::new("clip.wma", bytes.len() as u64);
+        let outcome = dispatch(&mut src, &deadline, &mut out).unwrap();
+        assert!(matches!(outcome, DispatchOutcome::Claimed("unsupported")));
+        assert!(out.container.recognized);
+        assert!(!out.container.supported);
+        assert_eq!(
+            out.container.format,
+            crate::media_metadata::model::container::ContainerFormat::Asf
+        );
+    }
+
+    #[test]
+    fn dispatch_marks_adif_aac_signature_recognised_but_unsupported() {
+        let bytes = b"ADIF\x00\x00\x00\x00".to_vec();
+        let mut src = src_for(&bytes);
+        let deadline = Deadline::new(60_000);
+        let mut out = MediaMetadata::new("clip.aac", bytes.len() as u64);
+        dispatch(&mut src, &deadline, &mut out).unwrap();
+        assert!(out.container.recognized);
+        assert!(!out.container.supported);
+        assert_eq!(
+            out.container.format,
+            crate::media_metadata::model::container::ContainerFormat::Aac
+        );
     }
 
     #[test]

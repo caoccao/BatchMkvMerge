@@ -113,7 +113,12 @@ fn parse_with_extension_fallback(
     metadata: &mut MediaMetadata,
     path: &Path,
 ) -> Result<(), ParseError> {
-    match probe::dispatch(src, deadline, metadata) {
+    // PARSER-062: feed extension hints into the dispatcher so ambiguous
+    // formats (`.mp4`, `.ogg`, `.m4a`, ...) are tried in the order the
+    // extension implies — mirrors mkvtoolnix's
+    // `reader_detection_and_creation.cpp:302-310` extension-hinted phase.
+    let hints = probe::extension_hint::hints_for_path(path);
+    match probe::dispatch::dispatch_with_hints(src, deadline, metadata, &hints) {
         Ok(_) => Ok(()),
         Err(ParseError::Unrecognised) => {
             // PARSER-088: mkvtoolnix accepts text-subtitle files of size <= 1
