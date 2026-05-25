@@ -53,6 +53,16 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MediaHeader, Pa
   }
   let version = src.read_u8()?;
   let _flags = [src.read_u8()?, src.read_u8()?, src.read_u8()?];
+  // PARSER-146: mkvtoolnix accepts only mdhd versions 0 and 1
+  // (r_qtmp4.cpp:655-682) — any other version means the field layout would
+  // be misread, so reject the track.
+  if version > 1 {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.start,
+      reason: format!("unsupported mdhd version {version}"),
+    });
+  }
   let (timescale, duration) = match version {
     0 => {
       src.skip(8)?; // creation + modification
@@ -63,6 +73,15 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MediaHeader, Pa
       (src.read_u32_be()?, src.read_u64_be()?)
     }
   };
+  // PARSER-146: a zero media timescale yields unusable timing — mkvtoolnix
+  // errors out (r_qtmp4.cpp:686-687).
+  if timescale == 0 {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.start,
+      reason: "mdhd media timescale is zero".to_string(),
+    });
+  }
   let raw_language = src.read_u16_be()?;
   let language = decode_packed_language(raw_language);
   // skip pre_defined (2 bytes)

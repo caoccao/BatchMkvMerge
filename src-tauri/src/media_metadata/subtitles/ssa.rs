@@ -36,6 +36,13 @@ use super::encoding;
 
 const PROBE_BYTES: usize = 16 * 1024;
 
+/// PARSER-153: mkvtoolnix builds its `ssa_parser_c` over the whole text input,
+/// so the complete global header is used as codec private data and embedded
+/// fonts anywhere in the file are gathered.  We read up to this many bytes for
+/// header parsing (well past the 16 KiB probe window) so large `[V4+ Styles]`
+/// sections and trailing `[Fonts]` blocks are not truncated.
+const MAX_PARSE_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsaVariant {
   Ssa,
@@ -159,11 +166,20 @@ impl Reader for SsaReader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
+    // PARSER-153: read the whole file (bounded) so the global header and any
+    // embedded `[Fonts]` past the 16 KiB probe window are parsed in full.
+    let cap = src
+      .length()
+      .map(|l| l as usize)
+      .unwrap_or(MAX_PARSE_BYTES)
+      .min(MAX_PARSE_BYTES)
+      .max(PROBE_BYTES);
+    let mut buf = vec![0u8; cap];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut buf)?;
-    let detected = encoding::detect(&buf[..read]);
-    let text = encoding::decode_lossy(&buf[..read]);
+    buf.truncate(read);
+    let detected = encoding::detect(&buf);
+    let text = encoding::decode_lossy(&buf);
     let variant = classify(&text).ok_or(ParseError::Unrecognised)?;
     let private = global_header(&text);
 
@@ -287,5 +303,37 @@ mod tests {
     assert_eq!(attachments.len(), 1);
     assert_eq!(attachments[0].file_name, "Test.ttf");
     assert_eq!(attachments[0].size, 8);
+  }
+
+  // ---- PARSER-153: full-file header / font parsing (past 16 KiB) --------
+
+  fn build_large_ass_with_late_fonts() -> Vec<u8> {
+    let mut s = String::new();
+    s.push_str("[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\n");
+    // Pad the styles section past the 16 KiB probe window.
+    while s.len() < PROBE_BYTES + 4096 {
+      s.push_str("Style: Filler,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H80000000\n");
+    }
+    s.push_str("\n[Fonts]\nfontname: Late.ttf\nQUJDRA==\nRUZHSA==\n\n[Events]\nFormat: Layer, Start, End\n");
+    s.into_bytes()
+  }
+
+  #[test]
+  fn read_headers_recovers_fonts_past_probe_window() {
+    use crate::media_metadata::deadline::Deadline;
+    let blob = build_large_ass_with_late_fonts();
+    assert!(blob.len() > PROBE_BYTES, "fixture must exceed the probe window");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ass", 0);
+    SsaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    // The [Fonts] block lives past 16 KiB, so the old probe-window-only parse
+    // missed it; the full-file parse now recovers it.
+    assert_eq!(out.attachments.len(), 1);
+    assert_eq!(out.attachments[0].file_name, "Late.ttf");
+    // The codec private (global header) includes the full styles section.
+    let private = out.tracks[0].codec.codec_private.as_ref().unwrap();
+    assert!(private.length as usize > PROBE_BYTES);
   }
 }

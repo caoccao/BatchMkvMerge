@@ -41,16 +41,14 @@ pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
   let _pre_skip = u16::from_le_bytes([packet[10], packet[11]]);
   let input_sample_rate = u32::from_le_bytes([packet[12], packet[13], packet[14], packet[15]]);
   let mut metadata = BitstreamMetadata::audio_only("A_OPUS", "Opus");
-  // Decode rate is always 48 kHz per RFC 7845; report the original encoder
-  // rate as input_sample_rate when present.
+  // PARSER-152: mkvtoolnix identifies the audio sampling frequency as the
+  // OpusHead `input_sample_rate` (r_ogm.cpp:1275-1278, 705-706), not the fixed
+  // 48 kHz decode rate.  Pre-skip / seek-preroll are handled by the packetizer
+  // and never substituted for the identified rate, so we report the input rate
+  // verbatim and leave `output_sampling_frequency` unset.
   metadata.audio = Some(AudioTrackProperties {
     channels: Some(channels),
-    sampling_frequency: Some(48_000.0),
-    output_sampling_frequency: if input_sample_rate == 0 {
-      None
-    } else {
-      Some(input_sample_rate as f64)
-    },
+    sampling_frequency: Some(input_sample_rate as f64),
     ..AudioTrackProperties::default()
   });
   Some(metadata)
@@ -80,15 +78,26 @@ mod tests {
     assert_eq!(m.codec_id, "A_OPUS");
     let a = m.audio.unwrap();
     assert_eq!(a.channels, Some(2));
+    // PARSER-152: the reported sampling frequency is the input rate.
     assert_eq!(a.sampling_frequency, Some(48000.0));
-    assert_eq!(a.output_sampling_frequency, Some(48000.0));
+    assert!(a.output_sampling_frequency.is_none());
   }
 
   #[test]
-  fn output_sample_rate_none_when_input_is_zero() {
+  fn non_48khz_input_rate_is_reported_verbatim() {
+    // PARSER-152: a 44.1 kHz original rate must be reported as-is, not the
+    // fixed 48 kHz decode rate.
+    let pkt = build_identification_packet(2, 44100);
+    let a = sniff(&pkt).unwrap().audio.unwrap();
+    assert_eq!(a.sampling_frequency, Some(44100.0));
+    assert!(a.output_sampling_frequency.is_none());
+  }
+
+  #[test]
+  fn zero_input_rate_reported_as_zero() {
     let pkt = build_identification_packet(1, 0);
-    let m = sniff(&pkt).unwrap();
-    let a = m.audio.unwrap();
+    let a = sniff(&pkt).unwrap().audio.unwrap();
+    assert_eq!(a.sampling_frequency, Some(0.0));
     assert!(a.output_sampling_frequency.is_none());
   }
 

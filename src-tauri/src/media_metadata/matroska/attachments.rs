@@ -42,14 +42,19 @@ pub fn parse(
   deadline: &Deadline,
   out: &mut MediaMetadata,
 ) -> Result<(), ParseError> {
-  let mut next_id: u32 = (out.attachments.len() as u32) + 1;
+  // PARSER-140: mkvtoolnix increments `m_attachment_id` for *every*
+  // AttachedFile element it encounters — including ones it later skips — and
+  // only assigns that id after the filtering test passes
+  // (r_matroska.cpp:914-934). Mirror that so emitted ids keep their original
+  // 1-based positions even when intervening attachments are dropped.
+  let mut attachment_id: u32 = out.attachments.len() as u32;
   ebml::walk_children(src, parent, "matroska::attachments", deadline, |src, child| {
     if child.id != ids::ATTACHED_FILE {
       return Ok(ChildAction::Skip);
     }
-    if let Some(att) = read_one(src, child, deadline, next_id)? {
+    attachment_id += 1;
+    if let Some(att) = read_one(src, child, deadline, attachment_id)? {
       out.attachments.push(att);
-      next_id += 1;
     }
     Ok(ChildAction::Consumed)
   })
@@ -92,17 +97,41 @@ fn read_one(
     Ok(ChildAction::Consumed)
   })?;
   // mkvtoolnix skips attachments missing FileData (r_matroska.cpp:917).
-  let Some(_) = data_size else {
+  let Some(data_size) = data_size else {
     return Ok(None);
   };
+  // PARSER-140: drop empty payloads and empty MIME types
+  // (r_matroska.cpp:929-931), and normalise legacy font MIME types to their
+  // current `font/*` form via `mtx::mime::get_font_mime_type_to_use`.
+  if data_size == 0 {
+    return Ok(None);
+  }
+  let mime = mime.map(|m| normalize_font_mime_type(&m).to_string());
+  match mime.as_deref() {
+    None | Some("") => return Ok(None),
+    _ => {}
+  }
   Ok(Some(Attachment {
     id,
     file_name: name.unwrap_or_default(),
     mime_type: mime,
     description,
-    size: data_size.unwrap_or(0),
+    size: data_size,
     uid_hex: uid.map(|u| format!("{:016x}", u)),
   }))
+}
+
+/// Map a legacy font MIME type to the current `font/*` equivalent, leaving
+/// every other MIME type untouched.  Port of the `legacy → current` branch of
+/// `mtx::mime::get_font_mime_type_to_use` (common/mime.cpp:114-139); mkvtoolnix
+/// defaults to the current mapping unless `--engage use_legacy_font_mime_types`
+/// is set, which the identification path never does.
+fn normalize_font_mime_type(mime: &str) -> &str {
+  match mime {
+    "application/vnd.ms-opentype" | "application/x-font-otf" => "font/otf",
+    "application/x-font-ttf" | "application/x-truetype-font" => "font/ttf",
+    other => other,
+  }
 }
 
 #[cfg(test)]
@@ -194,10 +223,75 @@ mod tests {
     assert_eq!(v[0].file_name, "");
   }
 
+  // ---- PARSER-140: filtering, IDs, font MIME normalization --------------
+
+  #[test]
+  fn skipped_attachment_still_consumes_an_id() {
+    // First AttachedFile has empty data → skipped, but it still claims id 1,
+    // so the second (valid) attachment is reported as id 2 (matching
+    // mkvtoolnix's m_attachment_id bookkeeping).
+    let empty = build_attached_file("empty.bin", "application/octet-stream", 1, &[]);
+    let valid = build_attached_file("real.bin", "application/octet-stream", 2, &[0u8; 8]);
+    let mut payload = Vec::new();
+    payload.extend(empty);
+    payload.extend(valid);
+    let v = parse_attachments(payload);
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].file_name, "real.bin");
+    assert_eq!(v[0].id, 2);
+  }
+
+  #[test]
+  fn empty_payload_attachment_is_skipped() {
+    let payload = build_attached_file("zero.bin", "application/octet-stream", 1, &[]);
+    let v = parse_attachments(payload);
+    assert!(v.is_empty());
+  }
+
+  #[test]
+  fn empty_mime_type_attachment_is_skipped() {
+    let payload = build_attached_file("nomime.bin", "", 1, &[0u8; 4]);
+    let v = parse_attachments(payload);
+    assert!(v.is_empty());
+  }
+
+  #[test]
+  fn missing_mime_type_attachment_is_skipped() {
+    let mut payload = Vec::new();
+    payload.extend(encode_element_string(ids::FILE_NAME, 2, "nomime.bin"));
+    payload.extend(encode_element(ids::FILE_DATA, 2, &[0u8; 4]));
+    let bytes = encode_element(ids::ATTACHED_FILE, 2, &payload);
+    let v = parse_attachments(bytes);
+    assert!(v.is_empty());
+  }
+
+  #[test]
+  fn legacy_font_mime_types_are_normalized() {
+    for (legacy, current) in [
+      ("application/vnd.ms-opentype", "font/otf"),
+      ("application/x-font-otf", "font/otf"),
+      ("application/x-font-ttf", "font/ttf"),
+      ("application/x-truetype-font", "font/ttf"),
+    ] {
+      let payload = build_attached_file("font.bin", legacy, 1, &[0u8; 16]);
+      let v = parse_attachments(payload);
+      assert_eq!(v.len(), 1, "{legacy} should be kept");
+      assert_eq!(v[0].mime_type.as_deref(), Some(current), "{legacy} → {current}");
+    }
+  }
+
+  #[test]
+  fn current_font_mime_type_passes_through_unchanged() {
+    let payload = build_attached_file("font.ttf", "font/ttf", 1, &[0u8; 16]);
+    let v = parse_attachments(payload);
+    assert_eq!(v[0].mime_type.as_deref(), Some("font/ttf"));
+  }
+
   #[test]
   fn description_round_trips() {
     let mut payload = Vec::new();
     payload.extend(encode_element_string(ids::FILE_NAME, 2, "x"));
+    payload.extend(encode_element_string(ids::FILE_MIME_TYPE, 2, "image/jpeg"));
     payload.extend(encode_element_string(ids::FILE_DESCRIPTION, 2, "Front cover"));
     payload.extend(encode_element(ids::FILE_DATA, 2, &[0u8; 1]));
     let bytes = encode_element(ids::ATTACHED_FILE, 2, &payload);

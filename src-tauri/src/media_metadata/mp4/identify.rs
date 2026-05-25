@@ -38,9 +38,10 @@ pub fn finalise(
   out.container.properties.is_fragmented = Some(is_fragmented);
 
   let mvex = &moov.mvex_defaults;
+  let movie_matrix = moov.movie_matrix;
   let mut next_id: i64 = 0;
   for builder in moov.tracks {
-    let track = build_track(builder, next_id, mvex, &fragment_track_counts);
+    let track = build_track(builder, next_id, mvex, &fragment_track_counts, &movie_matrix);
     next_id += 1;
     if let Some(t) = track {
       out.tracks.push(t);
@@ -62,7 +63,13 @@ fn build_track(
   id: i64,
   mvex: &TrexDefaults,
   fragment_track_counts: &std::collections::HashMap<u32, u32>,
+  movie_matrix: &[[i32; 3]; 3],
 ) -> Option<Track> {
+  // PARSER-146: tracks whose mdhd was unsupported / had a zero timescale are
+  // dropped (mkvtoolnix skips them rather than emitting bad timing).
+  if builder.media_invalid {
+    return None;
+  }
   let mut codec_id = builder.codec_id_str.clone().unwrap_or_default();
   if codec_id.is_empty() {
     return None;
@@ -84,13 +91,33 @@ fn build_track(
   // refined to the real codec from the esds objectTypeIndication so MP3, AC-3,
   // DTS, AAC, AVC, etc. are not all reported as "mp4a"/"mp4v".
   let mut codec_name = builder.codec_name.clone();
-  if matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ") {
+  let is_mp4_system_entry = matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ");
+  if is_mp4_system_entry {
     if let Some(ot) = builder.esds_object_type {
       if let Some((id, name)) = codec_from_object_type(ot) {
         codec_id = id.to_string();
         codec_name = Some(name.to_string());
       }
     }
+  }
+
+  // PARSER-150: mkvtoolnix drops `mp4a` tracks whose esds objectTypeIndication
+  // is missing or unsupported (r_qtmp4.cpp:3733-3739) instead of emitting a
+  // generic, unusable `mp4a` track.
+  if codec_id == "mp4a" {
+    return None;
+  }
+  // PARSER-150: AAC tracks require the esds DecoderSpecificInfo
+  // (AudioSpecificConfig); without it the track cannot be muxed faithfully,
+  // so it is skipped (r_qtmp4.cpp:3741-3743).
+  if codec_id == "A_AAC"
+    && builder
+      .audio_codec_config
+      .as_ref()
+      .and_then(|c| c.aac_object_type)
+      .is_none()
+  {
+    return None;
   }
 
   let mut common = CommonTrackProperties::default();
@@ -101,6 +128,12 @@ fn build_track(
   });
   if let Some(enabled) = builder.enabled {
     common.enabled = crate::media_metadata::model::track_properties_common::TrackFlag::from_bool(enabled);
+  }
+  // PARSER-145: report the per-track index-entry count.  A non-fragmented
+  // track's count comes from the `stsz` sample count; a fragmented track's
+  // from the aggregated `trun` sample counts.
+  if let Some(count) = builder.sample_count {
+    common.num_index_entries = Some(count as u64);
   }
   if let Some(track_id) = builder.track_id {
     if let Some(count) = fragment_track_counts.get(&track_id) {
@@ -150,6 +183,23 @@ fn build_track(
         }
       }
       video.default_duration_ns = default_duration_ns;
+      // PARSER-147: combine the track and movie matrices to recover the
+      // projection yaw/roll, including non-cardinal rotations the simple
+      // tkhd rotation field cannot express.
+      if let Some(track_matrix) = builder.display_matrix {
+        if let Some((yaw, roll)) = compute_projection_pose(&track_matrix, movie_matrix) {
+          if yaw != 0.0 || roll.abs() >= 0.5 {
+            let projection = video
+              .projection
+              .get_or_insert_with(crate::media_metadata::model::track_properties_video::ProjectionMetadata::default);
+            projection.pose = Some(crate::media_metadata::model::track_properties_video::ProjectionPose {
+              yaw,
+              pitch: 0.0,
+              roll,
+            });
+          }
+        }
+      }
       properties.video = Some(video);
     }
     TrackType::Audio => {
@@ -199,6 +249,38 @@ fn codec_from_object_type(object_type: u8) -> Option<(&'static str, &'static str
     0x6C => ("V_MJPEG", "JPEG"),
     _ => return None,
   })
+}
+
+/// Combine the track and movie display matrices and derive `(yaw, roll)` in
+/// degrees, or `None` when the result is not an orthogonal transform.  Port of
+/// `r_qtmp4.cpp:1572-1618`: columns 0/1 are 16.16 fixed-point, column 2 is
+/// 2.30, so the products are shifted by `[16, 16, 30]` before summing.
+fn compute_projection_pose(track: &[[i32; 3]; 3], movie: &[[i32; 3]; 3]) -> Option<(f64, f64)> {
+  const SHIFTS: [i32; 3] = [16, 16, 30];
+  let mut m = [[0i64; 3]; 3];
+  for i in 0..3 {
+    for j in 0..3 {
+      for k in 0..3 {
+        m[i][j] += ((track[i][k] as i64) * (movie[k][j] as i64)) >> SHIFTS[k];
+      }
+    }
+  }
+  // Reject affine (perspective) transforms and singular 2×2 blocks.
+  if m[0][2] != 0 || m[1][2] != 0 {
+    return None;
+  }
+  if m[0][0] == 0 && m[0][1] == 0 {
+    return None;
+  }
+  let yaw = if m[0][0] == m[1][1] && -m[0][1] == m[1][0] {
+    0.0
+  } else if -m[0][0] == m[1][1] && m[0][1] == m[1][0] {
+    180.0
+  } else {
+    return None;
+  };
+  let roll = (m[1][0] as f64).atan2(m[1][1] as f64) * 180.0 / std::f64::consts::PI;
+  Some((yaw, roll))
 }
 
 fn display_from_fixed(width_fixed: Option<u32>, height_fixed: Option<u32>) -> (Option<u32>, Option<u32>) {
@@ -251,6 +333,17 @@ mod tests {
         ..Default::default()
       },
     );
+    // A bare `mp4a` entry needs an esds object type + AudioSpecificConfig to
+    // survive PARSER-150's filtering; give it an AAC decoder config.
+    if codec == "mp4a" {
+      b.esds_object_type = Some(0x40);
+      b.audio_codec_config = Some(
+        crate::media_metadata::model::track_properties_audio::AudioCodecConfig {
+          aac_object_type: Some(2),
+          ..Default::default()
+        },
+      );
+    }
     b
   }
 
@@ -373,6 +466,129 @@ mod tests {
     let mut m = MediaMetadata::new("clip.mp4", 0);
     finalise(moov, true, counts, &mut m);
     assert_eq!(m.tracks[0].properties.common.num_index_entries, Some(120));
+  }
+
+  // ---- PARSER-147: combined matrix yaw/roll ----------------------------
+
+  fn fixed_matrix(cells: [[f64; 3]; 3]) -> [[i32; 3]; 3] {
+    let mut m = [[0i32; 3]; 3];
+    for i in 0..3 {
+      for j in 0..3 {
+        let scale = if j == 2 { 1u64 << 30 } else { 1u64 << 16 } as f64;
+        m[i][j] = (cells[i][j] * scale) as i32;
+      }
+    }
+    m
+  }
+
+  #[test]
+  fn projection_pose_identity_is_none_worthwhile() {
+    let id = super::super::moov::mvhd::IDENTITY_MATRIX;
+    let (yaw, roll) = compute_projection_pose(&id, &id).unwrap();
+    assert_eq!(yaw, 0.0);
+    assert!(roll.abs() < 0.01);
+  }
+
+  #[test]
+  fn projection_pose_90_degree_track_matrix() {
+    // 90° rotation track matrix, identity movie matrix.
+    let track = fixed_matrix([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+    let movie = super::super::moov::mvhd::IDENTITY_MATRIX;
+    let (yaw, roll) = compute_projection_pose(&track, &movie).unwrap();
+    assert_eq!(yaw, 0.0);
+    assert!((roll.abs() - 90.0).abs() < 0.01);
+  }
+
+  #[test]
+  fn projection_pose_flip_reports_yaw_180() {
+    // Horizontal flip + rotation: yaw 180 branch.
+    let track = fixed_matrix([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    let movie = super::super::moov::mvhd::IDENTITY_MATRIX;
+    let (yaw, _roll) = compute_projection_pose(&track, &movie).unwrap();
+    assert_eq!(yaw, 180.0);
+  }
+
+  #[test]
+  fn projection_pose_rejects_affine() {
+    let mut track = super::super::moov::mvhd::IDENTITY_MATRIX;
+    track[0][2] = 0x1000; // non-zero perspective column → rejected
+    let movie = super::super::moov::mvhd::IDENTITY_MATRIX;
+    assert!(compute_projection_pose(&track, &movie).is_none());
+  }
+
+  #[test]
+  fn video_track_gets_projection_pose_from_rotated_matrix() {
+    let mut moov = MoovBuilder::default();
+    let mut b = video_builder(1, "avc1", None);
+    b.display_matrix = Some(fixed_matrix([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]));
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    let v = m.tracks[0].properties.video.as_ref().unwrap();
+    let pose = v.projection.as_ref().and_then(|p| p.pose).unwrap();
+    assert!((pose.roll.abs() - 90.0).abs() < 0.01);
+  }
+
+  // ---- PARSER-146: invalid mdhd drops the track ------------------------
+
+  #[test]
+  fn media_invalid_track_dropped() {
+    let mut moov = MoovBuilder::default();
+    let mut b = video_builder(1, "avc1", Some("eng"));
+    b.media_invalid = true;
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert!(m.tracks.is_empty());
+  }
+
+  // ---- PARSER-150: unsupported mp4a / missing AAC config dropped --------
+
+  #[test]
+  fn bare_mp4a_without_esds_object_type_dropped() {
+    let mut moov = MoovBuilder::default();
+    let mut b = audio_builder(2, "mp4a");
+    b.esds_object_type = None; // unsupported / missing object type
+    b.audio_codec_config = None;
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert!(m.tracks.is_empty());
+  }
+
+  #[test]
+  fn aac_without_decoder_config_dropped() {
+    let mut moov = MoovBuilder::default();
+    let mut b = audio_builder(2, "mp4a");
+    b.esds_object_type = Some(0x40); // AAC object type, but no AudioSpecificConfig
+    b.audio_codec_config = None;
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert!(m.tracks.is_empty());
+  }
+
+  #[test]
+  fn aac_with_decoder_config_kept() {
+    let mut moov = MoovBuilder::default();
+    moov.tracks.push(audio_builder(2, "mp4a")); // helper sets object type + config
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].codec.id, "A_AAC");
+  }
+
+  // ---- PARSER-145: stsz sample count → num_index_entries ---------------
+
+  #[test]
+  fn sample_count_routed_to_num_index_entries() {
+    let mut moov = MoovBuilder::default();
+    let mut b = video_builder(1, "avc1", None);
+    b.sample_count = Some(250);
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks[0].properties.common.num_index_entries, Some(250));
   }
 
   #[test]

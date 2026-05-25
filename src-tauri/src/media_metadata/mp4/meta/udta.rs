@@ -33,6 +33,9 @@ use crate::media_metadata::mp4::atom::{self, BoxHeader, ChildAction};
 
 use super::ilst;
 
+/// QuickTime `©nam` title atom FOURCC (`0xA9 'n' 'a' 'm'`).
+const COPYRIGHT_NAME: [u8; 4] = [0xA9, b'n', b'a', b'm'];
+
 pub fn parse_udta(
   src: &mut FileSource,
   parent: &BoxHeader,
@@ -43,10 +46,74 @@ pub fn parse_udta(
     if child.kind.eq_ascii(b"meta") {
       parse_meta(src, child, deadline, out)?;
       Ok(ChildAction::Consumed)
+    } else if &child.kind.0 == b"chpl" {
+      // PARSER-143: Nero-style chapter list (r_qtmp4.cpp:987-1018).
+      parse_chpl(src, child, out)?;
+      Ok(ChildAction::Consumed)
+    } else if child.kind.0 == COPYRIGHT_NAME {
+      // PARSER-144: a direct QuickTime `udta/©nam` carries the file title for
+      // older files without an iTunes `meta/ilst` wrapper
+      // (r_qtmp4.cpp:974-979).
+      parse_copyright_name(src, child, out)?;
+      Ok(ChildAction::Consumed)
     } else {
       Ok(ChildAction::Skip)
     }
   })
+}
+
+/// Read a direct `udta/©nam` string atom.  Layout: 2-byte text length +
+/// 2-byte language code, then the UTF-8 string.  mkvtoolnix reads from
+/// offset 4 to the end of the atom and strips surrounding whitespace.
+fn parse_copyright_name(src: &mut FileSource, header: &BoxHeader, out: &mut MediaMetadata) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, 64 * 1024)?;
+  if payload.len() <= 4 {
+    return Ok(());
+  }
+  let text = String::from_utf8_lossy(&payload[4..]).trim().to_string();
+  if !text.is_empty() {
+    out.container.properties.title = Some(text);
+  }
+  Ok(())
+}
+
+/// Parse a Nero `chpl` chapter list.  Layout: version(1) + flags(3) +
+/// reserved(4) + count(1), then `count` entries of `timestamp(8, 100 ns
+/// units) + name_len(1) + name`.  We surface the entry count as a single
+/// chapter edition (titles/timecodes are not extracted at identification).
+fn parse_chpl(src: &mut FileSource, header: &BoxHeader, out: &mut MediaMetadata) -> Result<(), ParseError> {
+  // mkvtoolnix only keeps the first chapter source it sees.
+  if out.chapters.num_entries != 0 {
+    return Ok(());
+  }
+  let payload = atom::read_payload(src, header, 1024 * 1024)?;
+  if payload.len() < 9 {
+    return Ok(());
+  }
+  let count = payload[8] as usize;
+  if count == 0 {
+    return Ok(());
+  }
+  // Validate by walking the variable-length entries; stop early on truncation
+  // so we report only the entries that are actually present.
+  let mut pos = 9usize;
+  let mut entries = 0u32;
+  for _ in 0..count {
+    if pos + 9 > payload.len() {
+      break;
+    }
+    let name_len = payload[pos + 8] as usize;
+    pos += 9 + name_len;
+    if pos > payload.len() {
+      break;
+    }
+    entries += 1;
+  }
+  if entries != 0 {
+    out.chapters.num_entries = entries;
+    out.chapters.num_editions = 1;
+  }
+  Ok(())
 }
 
 pub fn parse_meta(
@@ -136,6 +203,85 @@ mod tests {
     let mut m = MediaMetadata::new("clip.mp4", 0);
     parse_meta(&mut s, &h, &dl(), &mut m).unwrap();
     assert!(m.container.properties.title.is_none());
+  }
+
+  // ---- PARSER-144: direct udta/©nam title ------------------------------
+
+  #[test]
+  fn direct_udta_copyright_name_sets_title() {
+    let mut nam_payload = vec![0u8; 4]; // 2-byte length + 2-byte language
+    nam_payload.extend_from_slice(b"Direct Title");
+    let nam = encode_box(&COPYRIGHT_NAME, &nam_payload);
+    let udta = encode_box(b"udta", &nam);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(udta));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    parse_udta(&mut s, &h, &dl(), &mut m).unwrap();
+    assert_eq!(m.container.properties.title.as_deref(), Some("Direct Title"));
+  }
+
+  #[test]
+  fn empty_copyright_name_atom_ignored() {
+    let nam = encode_box(&COPYRIGHT_NAME, &[0u8; 4]);
+    let udta = encode_box(b"udta", &nam);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(udta));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    parse_udta(&mut s, &h, &dl(), &mut m).unwrap();
+    assert!(m.container.properties.title.is_none());
+  }
+
+  // ---- PARSER-143: Nero chpl chapters ----------------------------------
+
+  fn build_chpl(chapters: &[(u64, &str)]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.push(1); // version
+    p.extend_from_slice(&[0u8; 3]); // flags
+    p.extend_from_slice(&[0u8; 4]); // reserved
+    p.push(chapters.len() as u8);
+    for (ts, name) in chapters {
+      p.extend_from_slice(&ts.to_be_bytes());
+      p.push(name.len() as u8);
+      p.extend_from_slice(name.as_bytes());
+    }
+    p
+  }
+
+  #[test]
+  fn nero_chpl_sets_chapter_count() {
+    let chpl = encode_box(b"chpl", &build_chpl(&[(0, "Intro"), (600_000_000, "Part 2"), (1_200_000_000, "End")]));
+    let udta = encode_box(b"udta", &chpl);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(udta));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    parse_udta(&mut s, &h, &dl(), &mut m).unwrap();
+    assert_eq!(m.chapters.num_entries, 3);
+    assert_eq!(m.chapters.num_editions, 1);
+  }
+
+  #[test]
+  fn nero_chpl_with_zero_count_adds_nothing() {
+    let chpl = encode_box(b"chpl", &build_chpl(&[]));
+    let udta = encode_box(b"udta", &chpl);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(udta));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    parse_udta(&mut s, &h, &dl(), &mut m).unwrap();
+    assert_eq!(m.chapters.num_entries, 0);
+  }
+
+  #[test]
+  fn nero_chpl_truncated_counts_only_present_entries() {
+    // Declares 3 chapters but the payload only carries 1 complete entry.
+    let mut p = build_chpl(&[(0, "Only")]);
+    p[8] = 3; // overstate the count
+    let chpl = encode_box(b"chpl", &p);
+    let udta = encode_box(b"udta", &chpl);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(udta));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    parse_udta(&mut s, &h, &dl(), &mut m).unwrap();
+    assert_eq!(m.chapters.num_entries, 1);
   }
 
   #[test]

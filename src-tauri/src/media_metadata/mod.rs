@@ -34,6 +34,7 @@ pub mod model;
 pub mod mp4;
 pub mod mpeg_ps;
 pub mod mpeg_ts;
+pub mod mpls;
 pub mod ogg;
 pub mod probe;
 pub mod reader;
@@ -106,6 +107,17 @@ fn parse_with_extension_fallback(
   // extension implies — mirrors mkvtoolnix's
   // `reader_detection_and_creation.cpp:302-310` extension-hinted phase.
   let hints = probe::extension_hint::hints_for_path(path);
+
+  // PARSER-142: Blu-ray `.mpls` playlists are opened as MPEG-TS playlists
+  // before the normal probe cascade, mirroring
+  // `reader_detection_and_creation.cpp:97-107` →
+  // `mm_mpls_multi_file_io_c::open_multi`.
+  if hints.contains(&probe::extension_hint::FileTypeHint::BlurayPlaylist)
+    && mpls::try_open(src, path, deadline, metadata)?
+  {
+    return Ok(());
+  }
+
   match probe::dispatch::dispatch_with_hints(src, deadline, metadata, &hints) {
     Ok(_) => Ok(()),
     Err(ParseError::Unrecognised) => {
@@ -173,6 +185,66 @@ mod tests {
       m.tracks[0].track_type,
       crate::media_metadata::model::track::TrackType::Subtitles
     );
+  }
+
+  // ---- PARSER-142: .mpls playlist parsed end-to-end -------------------
+
+  #[test]
+  fn mpls_playlist_is_recognised_through_parse() {
+    use crate::media_metadata::model::container::ContainerFormat;
+    // Minimal one-item MPLS (clip 00001, 0..45000 ticks = 1 s), no chapters.
+    let mpls = {
+      let mut playlist = Vec::new();
+      playlist.extend(0u32.to_be_bytes());
+      playlist.extend(0u16.to_be_bytes());
+      playlist.extend(1u16.to_be_bytes());
+      playlist.extend(0u16.to_be_bytes());
+      let mut item = Vec::new();
+      item.extend(b"00001");
+      item.extend(b"M2TS");
+      item.extend([0u8; 3]);
+      item.extend(0u32.to_be_bytes());
+      item.extend(45_000u32.to_be_bytes());
+      let mut framed = (item.len() as u16).to_be_bytes().to_vec();
+      framed.extend(item);
+      playlist.extend(framed);
+      let mut chapters = Vec::new();
+      chapters.extend(0u32.to_be_bytes());
+      chapters.extend(0u16.to_be_bytes());
+      let playlist_pos = 40u32;
+      let chapter_pos = playlist_pos + playlist.len() as u32;
+      let mut buf = Vec::new();
+      buf.extend(b"MPLS");
+      buf.extend(b"0200");
+      buf.extend(playlist_pos.to_be_bytes());
+      buf.extend(chapter_pos.to_be_bytes());
+      buf.extend(0u32.to_be_bytes());
+      while (buf.len() as u32) < playlist_pos {
+        buf.push(0);
+      }
+      buf.extend(playlist);
+      buf.extend(chapters);
+      buf
+    };
+
+    let root = std::env::temp_dir().join(format!("bmm-mpls-parse-{}", std::process::id()));
+    let bdmv = root.join("BDMV");
+    std::fs::create_dir_all(bdmv.join("PLAYLIST")).unwrap();
+    std::fs::create_dir_all(bdmv.join("STREAM")).unwrap();
+    std::fs::write(bdmv.join("index.bdmv"), b"INDX0200").unwrap();
+    std::fs::write(bdmv.join("STREAM").join("00001.m2ts"), [0u8; 64]).unwrap();
+    let mpls_path = bdmv.join("PLAYLIST").join("00000.mpls");
+    std::fs::write(&mpls_path, &mpls).unwrap();
+
+    let result = parse(&mpls_path, ParseOptions::default());
+    let _ = std::fs::remove_dir_all(&root);
+
+    let m = result.unwrap();
+    assert!(m.container.recognized);
+    assert_eq!(m.container.format, ContainerFormat::MpegTs);
+    let pl = m.container.properties.playlist.unwrap();
+    assert_eq!(pl.files.len(), 1);
+    assert_eq!(pl.duration.unwrap().ns, 1_000_000_000);
   }
 
   #[test]

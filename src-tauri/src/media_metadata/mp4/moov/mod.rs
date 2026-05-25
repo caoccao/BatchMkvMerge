@@ -50,13 +50,29 @@ pub use trak::TrackBuilder;
 const CMOV_CAP: u64 = 64 * 1024 * 1024;
 
 /// Movie-level information collected during a `moov` walk.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MoovBuilder {
   pub timescale: Option<u32>,
   pub duration_units: Option<u64>,
   pub next_track_id: Option<u32>,
   pub tracks: Vec<TrackBuilder>,
   pub mvex_defaults: super::fragments::TrexDefaults,
+  /// Movie-level display matrix (PARSER-147).  Defaults to identity until an
+  /// `mvhd` supplies one.
+  pub movie_matrix: [[i32; 3]; 3],
+}
+
+impl Default for MoovBuilder {
+  fn default() -> Self {
+    Self {
+      timescale: None,
+      duration_units: None,
+      next_track_id: None,
+      tracks: Vec::new(),
+      mvex_defaults: super::fragments::TrexDefaults::default(),
+      movie_matrix: mvhd::IDENTITY_MATRIX,
+    }
+  }
 }
 
 impl MoovBuilder {
@@ -89,6 +105,12 @@ pub fn parse(
       builder.timescale = Some(h.timescale);
       builder.duration_units = Some(h.duration);
       builder.next_track_id = Some(h.next_track_id);
+      // PARSER-147: keep the movie matrix only when it is non-zero; a zero
+      // matrix (some muxers leave it blank) would null out every track's
+      // orientation, so fall back to identity in that case.
+      if h.matrix != [[0i32; 3]; 3] {
+        builder.movie_matrix = h.matrix;
+      }
       Ok(ChildAction::Consumed)
     }
     b"trak" => {

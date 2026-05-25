@@ -250,6 +250,13 @@ fn decode_picture(body: &[u8]) -> Option<FlacPicture> {
     let _ = read_be_u32(body, &mut pos)?;
   }
   let data_length = read_be_u32(body, &mut pos)?;
+  // PARSER-154: mkvtoolnix drops pictures whose data is missing or whose
+  // declared length is zero (r_flac.cpp:249-253). Require the declared bytes
+  // to be non-empty and actually present in the (complete) metadata block so
+  // zero-byte / truncated cover-art attachments are not reported.
+  if data_length == 0 || pos.saturating_add(data_length as usize) > body.len() {
+    return None;
+  }
   Some(FlacPicture {
     picture_type,
     mime_type,
@@ -683,6 +690,55 @@ mod tests {
     assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
     assert_eq!(att.description.as_deref(), Some("Front cover"));
     assert_eq!(att.size, 2048);
+  }
+
+  // ---- PARSER-154: zero-length / absent picture data is dropped --------
+
+  #[test]
+  fn decode_picture_rejects_zero_data_length() {
+    let block = build_picture_block(3, "image/jpeg", "Front", 0);
+    assert!(decode_picture(&block).is_none());
+  }
+
+  #[test]
+  fn decode_picture_rejects_truncated_data() {
+    // Declares 64 bytes of data but the block only carries 8.
+    let mut block = build_picture_block(3, "image/jpeg", "Front", 8);
+    let len = block.len();
+    // Overwrite the data_length field (last 4 bytes before the data) to claim 64.
+    block[len - 8 - 4..len - 8].copy_from_slice(&64u32.to_be_bytes());
+    assert!(decode_picture(&block).is_none());
+  }
+
+  #[test]
+  fn decode_picture_accepts_present_non_empty_data() {
+    let block = build_picture_block(3, "image/jpeg", "Front", 32);
+    let p = decode_picture(&block).unwrap();
+    assert_eq!(p.data_length, 32);
+    assert_eq!(p.mime_type, "image/jpeg");
+  }
+
+  #[test]
+  fn zero_length_picture_does_not_become_attachment() {
+    let mut bytes = b"fLaC".to_vec();
+    bytes.extend(block_header(false, 0, 34));
+    let mut info = vec![0u8; 34];
+    info[..2].copy_from_slice(&4096u16.to_be_bytes());
+    info[2..4].copy_from_slice(&4096u16.to_be_bytes());
+    let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 0u64;
+    info[10..18].copy_from_slice(&packed.to_be_bytes());
+    bytes.extend(info);
+    // A PICTURE block with a valid MIME but zero data length must be dropped.
+    let picture = build_picture_block(3, "image/jpeg", "Front cover", 0);
+    bytes.extend(block_header(true, 6, picture.len()));
+    bytes.extend(picture);
+    use crate::media_metadata::deadline::Deadline;
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.flac", 0);
+    FlacReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.attachments.is_empty());
   }
 
   #[test]

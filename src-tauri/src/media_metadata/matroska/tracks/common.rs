@@ -19,6 +19,7 @@
 //! Mirrors the corresponding section of `r_matroska.cpp::read_headers_tracks`
 //! (lines 1383-1456 + the BlockAdditionMapping loop).
 
+use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::language::Language;
@@ -79,7 +80,12 @@ impl CommonBuilder {
     )
   }
 
-  pub fn consume_child(&mut self, src: &mut FileSource, child: &ElementHeader) -> Result<(), ParseError> {
+  pub fn consume_child(
+    &mut self,
+    src: &mut FileSource,
+    child: &ElementHeader,
+    deadline: &Deadline,
+  ) -> Result<(), ParseError> {
     match child.id {
       ids::TRACK_NUMBER => self.number = Some(ebml::read_uint(src, child)?),
       ids::TRACK_UID => {
@@ -127,7 +133,7 @@ impl CommonBuilder {
       }
       ids::CONTENT_ENCODINGS => {
         // Defer to dedicated walker — this is the only nested element.
-        read_content_encodings(src, child, &mut self.content_encodings)?;
+        read_content_encodings(src, child, deadline, &mut self.content_encodings)?;
       }
       _ => {
         // Caller filtered via `owns_id` before getting here.
@@ -195,21 +201,23 @@ fn resolve_language(ietf: &Option<String>, iso639: &Option<String>) -> Option<La
 fn read_content_encodings(
   src: &mut FileSource,
   parent: &ElementHeader,
+  deadline: &Deadline,
   encodings: &mut Vec<String>,
 ) -> Result<(), ParseError> {
-  use crate::media_metadata::deadline::Deadline;
-  let no_deadline = Deadline::new(60_000);
+  // PARSER-141: honour the caller's parse deadline for every nested walk
+  // rather than spinning up a private 60-second budget. A pathological
+  // ContentEncodings tree must not be able to outlive the configured timeout.
   ebml::walk_children(
     src,
     parent,
     "matroska::content_encodings",
-    &no_deadline,
+    deadline,
     |src, child| {
       if child.id != ids::CONTENT_ENCODING {
         return Ok(ebml::ChildAction::Skip);
       }
       let mut name: Option<String> = None;
-      ebml::walk_children(src, child, "matroska::content_encoding", &no_deadline, |src, inner| {
+      ebml::walk_children(src, child, "matroska::content_encoding", deadline, |src, inner| {
         match inner.id {
           ids::CONTENT_COMPRESSION => {
             // Walk into compression to find algo
@@ -217,7 +225,7 @@ fn read_content_encodings(
               src,
               inner,
               "matroska::content_compression",
-              &no_deadline,
+              deadline,
               |src, leaf| {
                 if leaf.id == ids::CONTENT_COMP_ALGO {
                   let algo = ebml::read_uint(src, leaf)?;
@@ -274,7 +282,7 @@ mod tests {
     let d = Deadline::new(60_000);
     ebml::walk_children(&mut s, &header, "test", &d, |src, ch| {
       if CommonBuilder::owns_id(ch.id) {
-        builder.consume_child(src, ch)?;
+        builder.consume_child(src, ch, &d)?;
         Ok(ebml::ChildAction::Consumed)
       } else {
         Ok(ebml::ChildAction::Skip)
@@ -398,6 +406,27 @@ mod tests {
     let builder = walk_into_builder(ces);
     let c = builder.build();
     assert_eq!(c.content_encodings, vec!["zlib".to_string()]);
+  }
+
+  // ---- PARSER-141: ContentEncodings honours the caller's deadline -------
+
+  #[test]
+  fn content_encodings_respects_expired_deadline() {
+    let mut comp_payload = Vec::new();
+    comp_payload.extend(encode_element_uint(ids::CONTENT_COMP_ALGO, 2, 0));
+    let comp = encode_element(ids::CONTENT_COMPRESSION, 2, &comp_payload);
+    let ce = encode_element(ids::CONTENT_ENCODING, 2, &comp);
+    let ces = encode_element(ids::CONTENT_ENCODINGS, 2, &ce);
+
+    let mut s = src(ces);
+    let header = ebml::read_element_header(&mut s).unwrap();
+    // An already-expired deadline must abort the nested walk instead of
+    // running under a private 60-second budget.
+    let expired = Deadline::new(0);
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let mut encodings = Vec::new();
+    let err = read_content_encodings(&mut s, &header, &expired, &mut encodings).unwrap_err();
+    assert!(matches!(err, ParseError::Timeout { .. }));
   }
 
   #[test]

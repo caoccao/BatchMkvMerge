@@ -147,17 +147,16 @@ fn route_tag(out: &mut MediaMetadata, parsed: ParsedTag) {
       // Convert the numeric UID to the same hex form we stored on
       // the track's CommonTrackProperties.uid_hex.
       let target_hex = format!("{:016x}", uid_hex_target);
-      let mut routed = false;
       for track in &mut out.tracks {
         if track.properties.common.uid_hex.as_deref() == Some(&target_hex) {
-          track.properties.tags.extend(entries.clone());
-          routed = true;
-          break;
+          track.properties.tags.extend(entries);
+          return;
         }
       }
-      if !routed {
-        out.tags.global.extend(entries);
-      }
+      // PARSER-139: a tag carrying a KaxTagTrackUID is non-global. When the
+      // target track is missing or was filtered out, mkvtoolnix deletes the
+      // tag (r_matroska.cpp:1018-1052) rather than promoting it to a
+      // file-wide tag — dropping it preserves that meaning.
     }
     None => {
       out.tags.global.extend(entries);
@@ -251,11 +250,27 @@ mod tests {
     assert_eq!(m.tags.per_track_count, 1);
   }
 
+  // ---- PARSER-139: tag targeting a missing TrackUID is dropped ----------
+
   #[test]
-  fn per_track_tag_with_unknown_uid_falls_back_to_global() {
+  fn per_track_tag_with_unknown_uid_is_dropped() {
+    // A tag carrying a TrackUID that matches no track is non-global and must
+    // be discarded, not promoted to the file-wide tag list.
     let tag = build_tag(Some(0xDEAD), vec![build_simple_tag("X", "Y", None)]);
     let m = parse_tags(tag, vec![]);
-    assert_eq!(m.tags.global.len(), 1);
+    assert!(m.tags.global.is_empty());
+    assert_eq!(m.tags.per_track_count, 0);
+  }
+
+  #[test]
+  fn per_track_tag_with_unknown_uid_does_not_touch_other_tracks() {
+    // Present a track whose UID does NOT match the tag's target; the tag must
+    // still be dropped rather than attaching to the unrelated track or global.
+    let other = make_track(&format!("{:016x}", 0x1111u64));
+    let tag = build_tag(Some(0xDEAD), vec![build_simple_tag("X", "Y", None)]);
+    let m = parse_tags(tag, vec![other]);
+    assert!(m.tags.global.is_empty());
+    assert!(m.tracks[0].properties.tags.is_empty());
   }
 
   #[test]

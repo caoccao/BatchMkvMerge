@@ -125,7 +125,7 @@ fn read_track_entry(
       }
       other => {
         if common::CommonBuilder::owns_id(other) {
-          common.consume_child(src, child)?;
+          common.consume_child(src, child, deadline)?;
           Ok(ChildAction::Consumed)
         } else {
           Ok(ChildAction::Skip)

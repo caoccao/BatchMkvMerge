@@ -212,7 +212,9 @@ export type CommonTrackProperties = {
 	multiplexedWith: number[],
 	/**
 	 *  Lowest cluster / segment-start timestamp seen during header walk.
-	 *  Matroska-specific; `None` for all other containers.
+	 *  Matroska-specific; `None` for all other containers.  Signed because
+	 *  CodecDelay / negative cue offsets can push the first block's global
+	 *  timestamp below zero (PARSER-138).
 	 */
 	minimumTimestampNs: number | null,
 	/**  Number of Matroska Cue entries pointing at this track. */

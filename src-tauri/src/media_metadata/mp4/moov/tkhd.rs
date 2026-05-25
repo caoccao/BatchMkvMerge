@@ -43,6 +43,9 @@ pub struct TrackHeader {
   /// `true` when the matrix flips one axis (horizontal or vertical
   /// reflection).  Derived from the determinant of the 2×2 block.
   pub flipped: bool,
+  /// The raw 3×3 track display matrix (16.16 / 2.30 fixed-point).  Combined
+  /// with the movie matrix to compute yaw/roll (PARSER-147).
+  pub matrix: [[i32; 3]; 3],
 }
 
 const FLAG_TRACK_ENABLED: u32 = 0x000001;
@@ -83,6 +86,7 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<TrackHeader, Pa
   let width_fixed = src.read_u32_be()?;
   let height_fixed = src.read_u32_be()?;
   let (rotation_degrees, flipped) = decode_matrix(&matrix);
+  let cells = matrix_cells(&matrix);
   Ok(TrackHeader {
     version,
     track_id,
@@ -91,6 +95,7 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<TrackHeader, Pa
     enabled: flags & FLAG_TRACK_ENABLED != 0,
     rotation_degrees,
     flipped,
+    matrix: cells,
   })
 }
 
@@ -102,6 +107,16 @@ pub fn fixed_to_pixels(fixed: u32) -> u32 {
   // The high 16 bits are the integer part; the low 16 bits the fraction.
   // Add 0x8000 (= 0.5) before truncating to round-half-up.
   fixed.saturating_add(0x8000) >> 16
+}
+
+/// Unpack the 36-byte display matrix into nine big-endian `i32` cells.
+fn matrix_cells(matrix: &[u8; 36]) -> [[i32; 3]; 3] {
+  let mut m = [[0i32; 3]; 3];
+  for (idx, cell) in m.iter_mut().flatten().enumerate() {
+    let off = idx * 4;
+    *cell = i32::from_be_bytes([matrix[off], matrix[off + 1], matrix[off + 2], matrix[off + 3]]);
+  }
+  m
 }
 
 /// Decode the 3×3 ISO BMFF display matrix into a rotation/flip pair.  The

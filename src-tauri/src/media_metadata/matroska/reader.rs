@@ -42,12 +42,15 @@ use crate::media_metadata::reader::Reader;
 
 use super::attachments;
 use super::chapters;
+use super::cluster_timestamps;
+use super::cues;
 use super::ebml::{self, ChildAction, ElementHeader};
 use super::identify;
 use super::ids;
 use super::info;
 use super::seek_head;
 use super::tags;
+use super::tail_analyzer;
 use super::tracks;
 
 /// Soft cap on the segment-info / tracks / attachments element size. We never
@@ -67,6 +70,8 @@ pub(crate) enum DeferredL1 {
   Attachments,
   Chapters,
   Tags,
+  /// Cue index — counted per track for `num_index_entries` (PARSER-137).
+  Cues,
   /// A SeekHead that another SeekHead points at (chained SeekHeads,
   /// PARSER-038).
   SeekHead,
@@ -143,11 +148,12 @@ impl Reader for MatroskaReader {
 
     // Walk Segment's L1 children. Hand each one off; defer or dispatch.
     let mut deferred = DeferredL1Positions::default();
-    walk_segment_l1(src, &segment, deadline, &mut deferred, out)?;
+    let walk = walk_segment_l1(src, &segment, deadline, &mut deferred, out)?;
 
     // Follow chained SeekHeads first (PARSER-038): a SeekHead may point at
     // another SeekHead. Drain the bucket until no new unhandled positions
     // remain (the handled-set guards against cycles).
+    let mut seek_head_handled = walk.seek_head_seen;
     loop {
       let positions = deferred.take(DeferredL1::SeekHead);
       if positions.is_empty() {
@@ -160,6 +166,7 @@ impl Reader for MatroskaReader {
         }
         deferred.mark_handled(DeferredL1::SeekHead, pos);
         made_progress = true;
+        seek_head_handled = true;
         if src.seek_to(pos).is_err() {
           continue;
         }
@@ -175,14 +182,26 @@ impl Reader for MatroskaReader {
       }
     }
 
+    // PARSER-136: when no SeekHead drove discovery, mkvtoolnix scans the file
+    // tail with `kax_analyzer_c` for late Info / Tracks / Attachments /
+    // Chapters / Tags that live after the clusters. We only bother when a
+    // cluster was actually seen — otherwise the linear L1 walk already
+    // observed every header.
+    if !seek_head_handled {
+      if let Some(cluster_pos) = walk.first_cluster_pos {
+        tail_analyzer::find_level1_elements(src, &segment, cluster_pos, deadline, &mut deferred);
+      }
+    }
+
     // Process deferred elements in mkvmerge order: Info, Tracks,
-    // Attachments, Tags, Chapters.
+    // Attachments, Tags, Chapters, Cues.
     for kind in [
       DeferredL1::Info,
       DeferredL1::Tracks,
       DeferredL1::Attachments,
       DeferredL1::Tags,
       DeferredL1::Chapters,
+      DeferredL1::Cues,
     ] {
       for pos in deferred.take(kind) {
         if deferred.has_been_handled(kind, pos) {
@@ -192,6 +211,17 @@ impl Reader for MatroskaReader {
         process_deferred(src, kind, pos, deadline, out, &mut deferred)?;
       }
     }
+
+    // PARSER-138: derive each track's minimum timestamp from the opening
+    // clusters' block headers (bounded by the parse deadline).
+    if let Some(cluster_pos) = walk.first_cluster_pos {
+      let tc_scale = out.container.properties.timestamp_scale.unwrap_or(1_000_000);
+      cluster_timestamps::determine_minimum_timestamps(src, &segment, cluster_pos, tc_scale, deadline, out);
+    }
+
+    // PARSER-137: mkvtoolnix always reports num_index_entries (0 when a track
+    // has no cue points), so backfill the tracks no cue referenced.
+    cues::default_missing_counts(out);
 
     identify::finalise(out);
     Ok(())
@@ -240,6 +270,15 @@ fn locate_segment(src: &mut FileSource, deadline: &Deadline) -> Result<ElementHe
   }
 }
 
+/// Outcome of the linear Segment-L1 walk.  Carries the two facts the later
+/// passes need: whether a SeekHead drove discovery (gates the tail analyzer)
+/// and where the first Cluster begins (anchors the minimum-timestamp pass).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct SegmentWalk {
+  pub(crate) seek_head_seen: bool,
+  pub(crate) first_cluster_pos: Option<u64>,
+}
+
 /// Walk the Segment's L1 children once, classifying each.  Stops at Cluster
 /// or at the Segment payload boundary — we never descend into Clusters.
 fn walk_segment_l1(
@@ -248,11 +287,12 @@ fn walk_segment_l1(
   deadline: &Deadline,
   deferred: &mut DeferredL1Positions,
   out: &mut MediaMetadata,
-) -> Result<(), ParseError> {
+) -> Result<SegmentWalk, ParseError> {
   let payload_start = segment.payload_start();
   src.seek_to(payload_start)?;
   let segment_end = segment.end();
   let stream_end = src.length();
+  let mut walk = SegmentWalk::default();
 
   loop {
     deadline.check("matroska::walk_segment_l1")?;
@@ -272,6 +312,7 @@ fn walk_segment_l1(
 
     match header.id {
       ids::SEEK_HEAD => {
+        walk.seek_head_seen = true;
         seek_head::collect_deferred(src, &header, deadline, deferred, payload_start)?;
       }
       ids::INFO => {
@@ -294,9 +335,14 @@ fn walk_segment_l1(
         deferred.push(DeferredL1::Tags, header.start);
         ebml::skip_payload(src, &header)?;
       }
+      ids::CUES => {
+        deferred.push(DeferredL1::Cues, header.start);
+        ebml::skip_payload(src, &header)?;
+      }
       ids::CLUSTER => {
-        // First cluster = header-only parse complete. Save position
-        // for the minimum-timestamp pass (we don't do that yet).
+        // First cluster = header-only L1 walk complete. Record its position
+        // for the minimum-timestamp pass and the tail analyzer gate.
+        walk.first_cluster_pos = Some(header.start);
         break;
       }
       ids::VOID | ids::CRC32 => {
@@ -314,7 +360,7 @@ fn walk_segment_l1(
   }
 
   let _ = out; // unused for now; warnings vec may be populated in later phases
-  Ok(())
+  Ok(walk)
 }
 
 fn process_deferred(
@@ -345,6 +391,9 @@ fn process_deferred(
     }
     DeferredL1::Tags => {
       tags::parse(src, &header, deadline, out)?;
+    }
+    DeferredL1::Cues => {
+      cues::parse(src, &header, deadline, out)?;
     }
     // SeekHeads are drained in read_headers before this loop runs.
     DeferredL1::SeekHead => {}
@@ -438,16 +487,18 @@ mod tests {
     const HUGE: u64 = 100_000_000;
     // FileData header declaring 100 MB but with no actual payload bytes.
     let filename = encode_element_string(ids::FILE_NAME, 2, "big.bin");
+    let mime = encode_element_string(ids::FILE_MIME_TYPE, 2, "application/octet-stream");
     let mut filedata = encode_id(ids::FILE_DATA, 2);
     filedata.extend(encode_size(HUGE));
 
     // AttachedFile: declared payload includes the 100 MB FileData payload,
     // but only the header bytes are actually present.
-    let af_declared = filename.len() as u64 + filedata.len() as u64 + HUGE;
+    let af_declared = filename.len() as u64 + mime.len() as u64 + filedata.len() as u64 + HUGE;
     let mut attached = encode_id(ids::ATTACHED_FILE, 2);
     attached.extend(encode_size(af_declared));
     let af_header_len = attached.len() as u64;
     attached.extend(&filename);
+    attached.extend(&mime);
     attached.extend(&filedata);
 
     // Attachments: declared payload spans the whole (oversized) AttachedFile;
@@ -467,6 +518,112 @@ mod tests {
     MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
     assert_eq!(out.attachments.len(), 1);
     assert_eq!(out.attachments[0].size, 100_000_000);
+  }
+
+  // ---- PARSER-137: Cues → num_index_entries ----------------------------
+
+  fn cue_point_for_track(time: u64, track_number: u64) -> Vec<u8> {
+    let mut positions = Vec::new();
+    positions.extend(encode_element_uint(ids::CUE_TRACK, 1, track_number));
+    positions.extend(encode_element_uint(ids::CUE_CLUSTER_POSITION, 1, 0));
+    let positions = encode_element(ids::CUE_TRACK_POSITIONS, 1, &positions);
+    let mut p = Vec::new();
+    p.extend(encode_element_uint(ids::CUE_TIME, 1, time));
+    p.extend(positions);
+    encode_element(ids::CUE_POINT, 1, &p)
+  }
+
+  #[test]
+  fn cues_populate_num_index_entries() {
+    let mut cues_payload = Vec::new();
+    cues_payload.extend(cue_point_for_track(0, 1));
+    cues_payload.extend(cue_point_for_track(1000, 1));
+    let cues = encode_element(ids::CUES, 4, &cues_payload);
+
+    let mut seg = minimal_audio_tracks();
+    seg.extend(cues);
+    let segment = encode_element(ids::SEGMENT, 4, &seg);
+    let mut bytes = ebml_head();
+    bytes.extend(segment);
+
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].properties.common.num_index_entries, Some(2));
+  }
+
+  #[test]
+  fn tracks_default_num_index_entries_to_zero_without_cues() {
+    let segment = encode_element(ids::SEGMENT, 4, &minimal_audio_tracks());
+    let mut bytes = ebml_head();
+    bytes.extend(segment);
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.tracks[0].properties.common.num_index_entries, Some(0));
+  }
+
+  // ---- PARSER-138: minimum timestamp from first cluster ----------------
+
+  fn simple_block(track_number: u8, relative_ts: i16) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.push(0x80 | track_number);
+    payload.extend(relative_ts.to_be_bytes());
+    payload.push(0x00);
+    payload.extend([0u8; 4]);
+    encode_element(ids::CLUSTER_SIMPLE_BLOCK, 1, &payload)
+  }
+
+  #[test]
+  fn minimum_timestamp_derived_from_first_cluster() {
+    let mut cluster_payload = Vec::new();
+    cluster_payload.extend(encode_element_uint(ids::CLUSTER_TIMESTAMP, 1, 0));
+    cluster_payload.extend(simple_block(1, 30));
+    let cluster = encode_element(ids::CLUSTER, 4, &cluster_payload);
+
+    let mut seg = minimal_audio_tracks();
+    seg.extend(cluster);
+    let segment = encode_element(ids::SEGMENT, 4, &seg);
+    let mut bytes = ebml_head();
+    bytes.extend(segment);
+
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    // (0 + 30) ticks * 1_000_000 ns/tick
+    assert_eq!(out.tracks[0].properties.common.minimum_timestamp_ns, Some(30_000_000));
+  }
+
+  // ---- PARSER-136: late Tags recovered by the tail analyzer -------------
+
+  #[test]
+  fn tail_analyzer_recovers_tags_after_cluster() {
+    // No SeekHead; a global Tag lives after the cluster, so only the tail
+    // scan can find it.
+    let mut simple = Vec::new();
+    simple.extend(encode_element_string(ids::TAG_NAME, 2, "TITLE"));
+    simple.extend(encode_element_string(ids::TAG_STRING, 2, "Late"));
+    let simple = encode_element(ids::TAG_SIMPLE, 2, &simple);
+    let tag = encode_element(ids::TAG, 2, &simple);
+    let tags = encode_element(ids::TAGS, 4, &tag);
+
+    let cluster = encode_element(ids::CLUSTER, 4, &[0u8; 8]);
+
+    let mut seg = minimal_audio_tracks();
+    seg.extend(cluster);
+    seg.extend(tags);
+    let segment = encode_element(ids::SEGMENT, 4, &seg);
+    let mut bytes = ebml_head();
+    bytes.extend(segment);
+
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.tags.global.len(), 1, "late global tag recovered via tail scan");
+    assert_eq!(out.tags.global[0].name, "TITLE");
+    assert_eq!(out.tags.global[0].value, "Late");
   }
 
   fn build_minimal_matroska(doc_type: &str) -> Vec<u8> {

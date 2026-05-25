@@ -316,12 +316,22 @@ fn walk_sample_entry_children(
       b"colr" => codec_specific::colr::parse(src, &child, builder)?,
       b"pasp" => codec_specific::pasp::parse(src, &child, builder)?,
       b"dvcC" | b"dvvC" => codec_specific::dvcc::parse(src, &child, builder)?,
+      // PARSER-149: the `hvcE` Dolby Vision enhancement-layer config sits on
+      // the same parser path as its `dvcC` / `dvvC` siblings
+      // (r_qtmp4.cpp:3374-3378), but mkvtoolnix keeps it as opaque
+      // block-addition data — it is not a DV configuration record — so we
+      // preserve its bytes without fabricating a profile string.
+      b"hvcE" => parse_hvce(src, &child, builder)?,
       // QuickTime nests codec-config atoms (esds, dOps, ...) inside a
       // `wave` container (PARSER-044) — recurse into it.
       b"wave" => walk_sample_entry_children(src, &child, deadline, builder)?,
       // Opus / FLAC private boxes (PARSER-045).
       b"dOps" => parse_dops(src, &child, builder)?,
       b"dfLa" => parse_dfla(src, &child, builder)?,
+      // PARSER-148: ALAC magic cookie (ALACSpecificConfig) — refines the
+      // channel / bit-depth / sample-rate placeholders left by the sample
+      // entry (r_qtmp4.cpp:3705-3716).
+      b"alac" => parse_alac(src, &child, builder)?,
       _ => {}
     }
     atom::skip_payload(src, &child)?;
@@ -374,6 +384,48 @@ fn parse_dfla(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
   }
   audio.channels = Some(channels);
   audio.bit_depth = Some(bits);
+  Ok(())
+}
+
+/// Parse an `alac` magic cookie (ALACSpecificConfig).  PARSER-148.  The box is
+/// a FullBox (4-byte version+flags) followed by the 24-byte ALACSpecificConfig:
+/// `frameLength(4) compatibleVersion(1) bitDepth(1) pb(1) mb(1) kb(1)
+/// numChannels(1) maxRun(2) maxFrameBytes(4) avgBitRate(4) sampleRate(4)`.
+/// mkvtoolnix reads channel count, bit depth and sample rate from this cookie
+/// (r_qtmp4.cpp:3705-3716) and carries the cookie as codec private data.
+fn parse_alac(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, 4096)?;
+  builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
+  // FullBox header (4) + ALACSpecificConfig (24) = 28 bytes minimum.
+  if payload.len() < 28 {
+    return Ok(());
+  }
+  let cfg = &payload[4..];
+  let bit_depth = cfg[5] as u32;
+  let num_channels = cfg[9] as u32;
+  let sample_rate = u32::from_be_bytes([cfg[20], cfg[21], cfg[22], cfg[23]]);
+  let audio = builder.audio.get_or_insert_with(AudioTrackProperties::default);
+  if num_channels != 0 {
+    audio.channels = Some(num_channels);
+  }
+  if bit_depth != 0 {
+    audio.bit_depth = Some(bit_depth);
+  }
+  if sample_rate != 0 {
+    audio.sampling_frequency = Some(sample_rate as f64);
+  }
+  Ok(())
+}
+
+/// Preserve a Dolby Vision enhancement-layer `hvcE` box as opaque codec
+/// private data (PARSER-149).  Unlike `dvcC` / `dvvC`, `hvcE` is not a DV
+/// configuration record, so we only record the bytes when nothing else has
+/// claimed the codec-private slot.
+fn parse_hvce(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, 64 * 1024)?;
+  if builder.codec_private_hex.is_none() {
+    builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
+  }
   Ok(())
 }
 
@@ -723,6 +775,46 @@ mod tests {
     let c = v.color.unwrap();
     assert_eq!(c.primaries, Some(9));
     assert_eq!(c.matrix_coefficients, Some(9));
+  }
+
+  // ---- PARSER-148: ALAC magic cookie -----------------------------------
+
+  fn build_alac_config(channels: u8, bit_depth: u8, sample_rate: u32) -> Vec<u8> {
+    let mut cfg = vec![0u8; 4]; // FullBox version+flags
+    let mut spec = vec![0u8; 24];
+    spec[5] = bit_depth; // bitDepth
+    spec[9] = channels; // numChannels
+    spec[20..24].copy_from_slice(&sample_rate.to_be_bytes());
+    cfg.extend(spec);
+    encode_box(b"alac", &cfg)
+  }
+
+  #[test]
+  fn alac_cookie_refines_channels_bitdepth_and_rate() {
+    // Sample entry leaves placeholder channels/bits; the ALAC cookie carries
+    // the real values (6 channels, 24-bit, 96 kHz).
+    let alac = build_alac_config(6, 24, 96_000);
+    let entry = build_audio_sample_entry_v0(b"alac", 2, 16, 44_100, &alac);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"soun");
+    let a = b.audio.unwrap();
+    assert_eq!(a.channels, Some(6));
+    assert_eq!(a.bit_depth, Some(24));
+    assert_eq!(a.sampling_frequency, Some(96_000.0));
+    assert!(b.codec_private_hex.is_some());
+  }
+
+  // ---- PARSER-149: hvcE preserved as opaque private data ---------------
+
+  #[test]
+  fn hvce_box_recorded_without_fabricating_dv_profile() {
+    let hvce = encode_box(b"hvcE", &[0x01, 0x02, 0x03, 0x04, 0x05]);
+    let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &hvce);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    // hvcE bytes preserved as codec private; no DV profile fabricated.
+    assert_eq!(b.codec_private_hex.as_deref(), Some("0102030405"));
+    assert!(b.video_codec_config.is_none());
   }
 
   #[test]

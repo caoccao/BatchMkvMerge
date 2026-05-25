@@ -293,6 +293,10 @@ pub const CUE_TRACK_POSITIONS: u32 = 0xB7;
 pub const CUE_TRACK: u32 = 0xF7;
 pub const CUE_CLUSTER_POSITION: u32 = 0xF1;
 
+// Block elements inside a Cluster (read header-only for minimum-timestamp
+// discovery — we never decode frame payloads).
+pub const CLUSTER_BLOCK: u32 = 0xA1;
+
 #[cfg(test)]
 mod tests {
   use super::*;

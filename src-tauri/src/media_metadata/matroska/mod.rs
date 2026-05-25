@@ -36,6 +36,8 @@
 
 pub mod attachments;
 pub mod chapters;
+pub mod cluster_timestamps;
+pub mod cues;
 pub mod ebml;
 pub mod identify;
 pub mod ids;
@@ -43,6 +45,7 @@ pub mod info;
 pub mod reader;
 pub mod seek_head;
 pub mod tags;
+pub mod tail_analyzer;
 pub mod tracks;
 pub mod writing_app;
 

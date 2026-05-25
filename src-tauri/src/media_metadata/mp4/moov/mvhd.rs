@@ -36,6 +36,29 @@ pub struct MovieHeader {
   pub timescale: u32,
   pub duration: u64,
   pub next_track_id: u32,
+  /// 3×3 display matrix (16.16 fixed-point columns 0/1, 2.30 column 2).
+  /// PARSER-147 — combined with each track's matrix to derive orientation.
+  pub matrix: [[i32; 3]; 3],
+}
+
+/// The ISO BMFF identity display matrix (`{1,0,0, 0,1,0, 0,0,1}` in the mixed
+/// 16.16 / 2.30 fixed-point form).  Used as the neutral element when a movie
+/// or track omits its matrix.
+pub const IDENTITY_MATRIX: [[i32; 3]; 3] = [
+  [0x0001_0000, 0, 0],
+  [0, 0x0001_0000, 0],
+  [0, 0, 0x4000_0000],
+];
+
+/// Read a 3×3 display matrix (9 × big-endian i32) from the current cursor.
+pub fn read_matrix(src: &mut FileSource) -> Result<[[i32; 3]; 3], ParseError> {
+  let mut m = [[0i32; 3]; 3];
+  for row in m.iter_mut() {
+    for cell in row.iter_mut() {
+      *cell = src.read_u32_be()? as i32;
+    }
+  }
+  Ok(m)
 }
 
 pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MovieHeader, ParseError> {
@@ -66,14 +89,19 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MovieHeader, Pa
       (ts, dur)
     }
   };
-  // Skip rate (4) + volume (2) + reserved (10) + matrix (36) + pre_defined (24) = 76 bytes
-  src.skip(4 + 2 + 10 + 36 + 24)?;
+  // Skip rate (4) + volume (2) + reserved (10) = 16 bytes, then read the
+  // 36-byte display matrix (PARSER-147), skip pre_defined (24), read
+  // next_track_id (4).
+  src.skip(4 + 2 + 10)?;
+  let matrix = read_matrix(src)?;
+  src.skip(24)?;
   let next_track_id = src.read_u32_be()?;
   Ok(MovieHeader {
     version,
     timescale,
     duration,
     next_track_id,
+    matrix,
   })
 }
 

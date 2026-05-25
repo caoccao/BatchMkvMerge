@@ -125,6 +125,8 @@ fn classify_seek_id(id: u32) -> Option<DeferredL1> {
     ids::ATTACHMENTS => Some(DeferredL1::Attachments),
     ids::CHAPTERS => Some(DeferredL1::Chapters),
     ids::TAGS => Some(DeferredL1::Tags),
+    // Cues are counted per track for num_index_entries (PARSER-137).
+    ids::CUES => Some(DeferredL1::Cues),
     // A SeekHead may point at another SeekHead (PARSER-038).
     ids::SEEK_HEAD => Some(DeferredL1::SeekHead),
     _ => None,
@@ -186,7 +188,6 @@ mod tests {
   fn collect_ignores_unknown_seek_ids() {
     let mut payload = Vec::new();
     payload.extend(build_seek_entry(0x12345678, 42));
-    payload.extend(build_seek_entry(ids::CUES, 99));
     let head = encode_element(ids::SEEK_HEAD, 4, &payload);
 
     let mut s = src(head);
@@ -196,6 +197,17 @@ mod tests {
 
     assert!(deferred.take(DeferredL1::Info).is_empty());
     assert!(deferred.take(DeferredL1::Tracks).is_empty());
+  }
+
+  #[test]
+  fn collect_classifies_cues() {
+    let payload = build_seek_entry(ids::CUES, 99);
+    let head = encode_element(ids::SEEK_HEAD, 4, &payload);
+    let mut s = src(head);
+    let parent = ebml::read_element_header(&mut s).unwrap();
+    let mut deferred = DeferredL1Positions::default();
+    collect_deferred(&mut s, &parent, &no_deadline(), &mut deferred, 0).unwrap();
+    assert_eq!(deferred.take(DeferredL1::Cues), vec![99]);
   }
 
   #[test]
@@ -259,7 +271,7 @@ mod tests {
     assert_eq!(classify_seek_id(ids::ATTACHMENTS), Some(DeferredL1::Attachments));
     assert_eq!(classify_seek_id(ids::CHAPTERS), Some(DeferredL1::Chapters));
     assert_eq!(classify_seek_id(ids::TAGS), Some(DeferredL1::Tags));
+    assert_eq!(classify_seek_id(ids::CUES), Some(DeferredL1::Cues));
     assert_eq!(classify_seek_id(ids::CLUSTER), None);
-    assert_eq!(classify_seek_id(ids::CUES), None);
   }
 }

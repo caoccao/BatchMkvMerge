@@ -36,10 +36,20 @@ pub fn parse(
 ) -> Result<(), ParseError> {
   atom::walk_children(src, parent, "mp4::mdia", deadline, |src, child| match &child.kind.0 {
     b"mdhd" => {
-      let m = mdhd::parse(src, child)?;
-      builder.media_timescale = Some(m.timescale);
-      builder.media_duration_units = Some(m.duration);
-      builder.language_iso_639_2 = Some(m.language_iso_639_2);
+      // PARSER-146: an unsupported / zero-timescale mdhd marks the track
+      // invalid (dropped later) instead of aborting the whole file parse —
+      // mkvtoolnix skips just the offending track.
+      match mdhd::parse(src, child) {
+        Ok(m) => {
+          builder.media_timescale = Some(m.timescale);
+          builder.media_duration_units = Some(m.duration);
+          builder.language_iso_639_2 = Some(m.language_iso_639_2);
+        }
+        Err(ParseError::Malformed { .. }) => {
+          builder.media_invalid = true;
+        }
+        Err(e) => return Err(e),
+      }
       Ok(ChildAction::Consumed)
     }
     b"hdlr" => {

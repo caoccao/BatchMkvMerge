@@ -73,9 +73,11 @@ pub struct CommonTrackProperties {
   #[specta(type = Vec<Number>)]
   pub multiplexed_with: Vec<i64>,
   /// Lowest cluster / segment-start timestamp seen during header walk.
-  /// Matroska-specific; `None` for all other containers.
+  /// Matroska-specific; `None` for all other containers.  Signed because
+  /// CodecDelay / negative cue offsets can push the first block's global
+  /// timestamp below zero (PARSER-138).
   #[specta(type = Option<Number>)]
-  pub minimum_timestamp_ns: Option<u64>,
+  pub minimum_timestamp_ns: Option<i64>,
   /// Number of Matroska Cue entries pointing at this track.
   #[specta(type = Option<Number>)]
   pub num_index_entries: Option<u64>,

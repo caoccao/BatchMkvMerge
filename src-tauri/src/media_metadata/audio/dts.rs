@@ -44,6 +44,12 @@ use super::id3v2;
 
 const PROBE_BYTES: usize = 128 * 1024;
 
+/// DTS-HD chunk magics (8 ASCII bytes read as a big-endian u64).  PARSER-151.
+const CHUNK_DTSHDHDR: u64 = 0x4454_5348_4448_4452; // "DTSHDHDR"
+const CHUNK_STRMDATA: u64 = 0x5354_524d_4441_5441; // "STRMDATA"
+/// Safety cap on the chunk walk so a corrupt header cannot stall the probe.
+const MAX_DTS_CHUNKS: usize = 1024;
+
 const SYNC_CORE: u32 = 0x7ffe8001;
 const SYNC_EXSS: u32 = 0x64582025;
 const SYNC_X96: u32 = 0x1d95f262;
@@ -998,6 +1004,40 @@ fn apply_transform(src: &[u8], convert_14_to_16: bool, swap_bytes: bool) -> Vec<
   buf
 }
 
+/// Locate the DTS audio payload.  Port of `dts_reader_c::scan_chunks` +
+/// `probe_file` (r_dts.cpp:31-41, 206-240).  DTS-HD files begin with a
+/// `DTSHDHDR` chunk and store the actual DTS frames in a later `STRMDATA`
+/// chunk; we walk the `[type(8)][size(8)][data]` chain to find it.  Plain
+/// `.dts`/`.dtshd` core streams have no chunk header, so the payload starts at
+/// byte 0.  PARSER-151.
+fn strmdata_offset(src: &mut FileSource) -> Result<u64, ParseError> {
+  let file_size = src.length().unwrap_or(0);
+  if file_size < 16 {
+    return Ok(0);
+  }
+  src.seek_to(0)?;
+  if src.read_u64_be()? != CHUNK_DTSHDHDR {
+    return Ok(0);
+  }
+  let mut next = 0u64;
+  for _ in 0..MAX_DTS_CHUNKS {
+    if next + 16 >= file_size {
+      break;
+    }
+    src.seek_to(next)?;
+    let chunk_type = src.read_u64_be()?;
+    let raw_size = src.read_u64_be()?;
+    let data_start = next + 16;
+    let data_size = raw_size.min(file_size - data_start);
+    if chunk_type == CHUNK_STRMDATA && data_size > 1 {
+      return Ok(data_start);
+    }
+    next = data_start + data_size;
+  }
+  // No STRMDATA chunk found — fall back to byte 0 (treat as a bare stream).
+  Ok(0)
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DtsReader;
 
@@ -1007,6 +1047,9 @@ impl Reader for DtsReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
+    // PARSER-151: read from the STRMDATA chunk for DTS-HD files, else byte 0.
+    let offset = strmdata_offset(src)?;
+    src.seek_to(offset)?;
     let mut probe = vec![0u8; PROBE_BYTES];
     let read = src.read_at_most(&mut probe)?;
     src.seek_to(0)?;
@@ -1025,7 +1068,9 @@ impl Reader for DtsReader {
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     let mut probe = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
+    // PARSER-151: DTS-HD frames live in the STRMDATA chunk, not at byte 0.
+    let offset = strmdata_offset(src)?;
+    src.seek_to(offset)?;
     let read = src.read_at_most(&mut probe)?;
     let (start, _end) = id3v2::payload_bounds(&probe[..read]);
     let bytes = &probe[start..read];
@@ -1372,6 +1417,68 @@ mod tests {
     assert_eq!(audio.channels, Some(3));
     assert_eq!(audio.sampling_frequency, Some(48_000.0));
     assert_eq!(audio.bit_depth, Some(16));
+  }
+
+  // ---- PARSER-151: DTS-HD chunked (DTSHDHDR / STRMDATA) ----------------
+
+  fn build_dts_chunk(magic: u64, data: &[u8]) -> Vec<u8> {
+    let mut c = Vec::new();
+    c.extend_from_slice(&magic.to_be_bytes());
+    c.extend_from_slice(&(data.len() as u64).to_be_bytes());
+    c.extend_from_slice(data);
+    c
+  }
+
+  fn build_dtshd_file() -> Vec<u8> {
+    // DTSHDHDR chunk (16-byte metadata) + a FILEINFO-style chunk + STRMDATA
+    // chunk carrying the real DTS core frames.
+    let mut bytes = build_dts_chunk(CHUNK_DTSHDHDR, &[0u8; 16]);
+    bytes.extend(build_dts_chunk(0x4649_4C45_494E_464F, &[0u8; 8])); // "FILEINFO"
+    let stream = build_dts_stream(2, 6, 13);
+    bytes.extend(build_dts_chunk(CHUNK_STRMDATA, &stream));
+    bytes
+  }
+
+  #[test]
+  fn strmdata_offset_finds_stream_chunk() {
+    let bytes = build_dtshd_file();
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    let offset = strmdata_offset(&mut s).unwrap();
+    // DTSHDHDR(16+16) + FILEINFO(16+8) = 56 byte header region; STRMDATA data
+    // starts 16 bytes after the chunk header at offset 56.
+    assert_eq!(offset, 16 + 16 + 16 + 8 + 16);
+    // The bytes at that offset begin a DTS core frame.
+    let frame = &bytes[offset as usize..offset as usize + 4];
+    assert_eq!(u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]), SYNC_CORE);
+  }
+
+  #[test]
+  fn strmdata_offset_zero_for_bare_stream() {
+    let bytes = build_dts_stream(2, 6, 13);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert_eq!(strmdata_offset(&mut s).unwrap(), 0);
+  }
+
+  #[test]
+  fn probe_accepts_dtshd_chunked_file() {
+    let bytes = build_dtshd_file();
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(DtsReader.probe(&mut s).unwrap());
+    assert_eq!(s.position(), 0);
+  }
+
+  #[test]
+  fn read_headers_emits_track_from_dtshd_chunk() {
+    let bytes = build_dtshd_file();
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.dtshd", 0);
+    DtsReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Dts);
+    assert_eq!(out.tracks[0].codec.id, "A_DTS");
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(48_000.0));
   }
 
   #[test]

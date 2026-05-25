@@ -265,7 +265,13 @@ mod tests {
     let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(track_id, 0, 0));
     let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(sample_rate, 0, lang));
     let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"soun", "SoundHandler"));
-    let entry = build_audio_sample_entry_v0(codec, channels, 16, sample_rate, &[]);
+    // mp4a needs an esds with an AAC AudioSpecificConfig to survive PARSER-150
+    // filtering, matching how real AAC-in-MP4 files are laid out.
+    let esds = encode_box(
+      b"esds",
+      &crate::media_metadata::mp4::codec_specific::esds::build_esds_payload(0x40, &[0x12, 0x10]),
+    );
+    let entry = build_audio_sample_entry_v0(codec, channels, 16, sample_rate, &esds);
     let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
     let stbl = encode_box(b"stbl", &stsd);
     let minf = encode_box(b"minf", &stbl);

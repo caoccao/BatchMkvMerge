@@ -42,6 +42,9 @@ pub struct TrackBuilder {
   pub rotation_degrees: Option<u32>,
   /// `true` when the tkhd matrix signals a horizontal flip.
   pub flipped: bool,
+  /// Raw 3×3 track display matrix, combined with the movie matrix to derive
+  /// yaw/roll (PARSER-147).
+  pub display_matrix: Option<[[i32; 3]; 3]>,
 
   pub media_timescale: Option<u32>,
   pub media_duration_units: Option<u64>,
@@ -83,6 +86,16 @@ pub struct TrackBuilder {
   /// `esds` objectTypeIndication — distinguishes AAC / MP3 / AC-3 / DTS for
   /// generic `mp4a` / `mp4v` sample entries (PARSER-043).
   pub esds_object_type: Option<u8>,
+
+  /// Set when the track's `mdhd` is unsupported / malformed (bad version or
+  /// zero timescale).  Such tracks are dropped from the output rather than
+  /// failing the whole file — mirrors mkvtoolnix skipping the track
+  /// (PARSER-146).
+  pub media_invalid: bool,
+
+  /// Number of samples in the (non-fragmented) track, taken from `stsz`.
+  /// Surfaced as `num_index_entries` (PARSER-145).
+  pub sample_count: Option<u32>,
 }
 
 impl TrackBuilder {
@@ -132,6 +145,7 @@ pub fn parse(src: &mut FileSource, parent: &BoxHeader, deadline: &Deadline) -> R
       builder.enabled = Some(t.enabled);
       builder.rotation_degrees = t.rotation_degrees;
       builder.flipped = t.flipped;
+      builder.display_matrix = Some(t.matrix);
       Ok(ChildAction::Consumed)
     }
     b"mdia" => {
