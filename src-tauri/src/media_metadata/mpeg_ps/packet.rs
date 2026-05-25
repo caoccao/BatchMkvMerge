@@ -38,6 +38,8 @@ pub const PRIVATE_STREAM_1: u8 = 0xBD;
 pub const PADDING: u8 = 0xBE;
 pub const PRIVATE_STREAM_2: u8 = 0xBF;
 pub const PROGRAM_END_CODE: u8 = 0xB9;
+/// VC-1 video PES stream id (mkvtoolnix `r_mpeg_ps.cpp:925`).  PARSER-094.
+pub const VC1_VIDEO: u8 = 0xFD;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartCode {
@@ -65,6 +67,7 @@ impl StartCode {
             PROGRAM_END_CODE => Self::ProgramEnd,
             0xC0..=0xDF => Self::Audio(b),
             0xE0..=0xEF => Self::Video(b),
+            VC1_VIDEO => Self::Video(b),
             other => Self::Other(other),
         }
     }

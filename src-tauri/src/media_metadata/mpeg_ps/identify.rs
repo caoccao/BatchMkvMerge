@@ -30,6 +30,7 @@ use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
 use crate::media_metadata::model::track_properties_audio::AudioTrackProperties;
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
+use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::model::track_properties_video::{Dimensions2D, VideoTrackProperties};
 use crate::media_metadata::model::MediaMetadata;
 
@@ -71,21 +72,27 @@ fn codec_from_stream_type(stream_type: u8) -> Option<Codec> {
 }
 
 /// `0xBD` private-stream-1 substream classification (PARSER-050).
-fn codec_from_sub_id(sub_id: u8) -> Codec {
-    match sub_id {
+///
+/// PARSER-095: unknown sub-IDs are returned as `None`; mkvtoolnix sets
+/// `track->type = '?'` and then drops the track instead of defaulting to AC-3
+/// (see `r_mpeg_ps.cpp:1031-1033`).
+fn codec_from_sub_id(sub_id: u8) -> Option<Codec> {
+    Some(match sub_id {
         0x20..=0x3F => Codec { kind: TrackKind::Subtitle, id: "S_VOBSUB", name: "VobSub" },
         0x80..=0x87 | 0xC0..=0xC7 => Codec { kind: TrackKind::Audio, id: "A_AC3", name: "AC-3" },
         0x88..=0x9F => Codec { kind: TrackKind::Audio, id: "A_DTS", name: "DTS" },
         0xA0..=0xA7 => Codec { kind: TrackKind::Audio, id: "A_PCM/INT/BIG", name: "LPCM" },
         0xB0..=0xBF => Codec { kind: TrackKind::Audio, id: "A_TRUEHD", name: "TrueHD" },
-        _ => Codec { kind: TrackKind::Audio, id: "A_AC3", name: "AC-3 (Private Stream 1)" },
-    }
+        _ => return None,
+    })
 }
 
+/// PARSER-094: stream id `0xFD` is VC-1 (mkvtoolnix `r_mpeg_ps.cpp:1042-1044`).
 fn codec_from_bare_id(id: u8) -> Option<Codec> {
     match id {
         0xC0..=0xDF => Some(Codec { kind: TrackKind::Audio, id: "A_MPEG/L3", name: "MPEG-1/2 Audio" }),
         0xE0..=0xEF => Some(Codec { kind: TrackKind::Video, id: "V_MPEG2", name: "MPEG-2 Video" }),
+        0xFD => Some(Codec { kind: TrackKind::Video, id: "V_VC1", name: "VC-1" }),
         _ => None,
     }
 }
@@ -108,7 +115,7 @@ fn resolve_codec(obs: &StreamObservation) -> Option<Codec> {
         }
     }
     if obs.stream_id == 0xBD {
-        return obs.sub_id.map(codec_from_sub_id);
+        return obs.sub_id.and_then(codec_from_sub_id);
     }
     codec_from_bare_id(obs.stream_id)
 }
@@ -197,6 +204,9 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
         let mut common = CommonTrackProperties::default();
         common.number = Some((idx as u64) + 1);
         common.stream_id = Some(obs.stream_id as u32);
+        if let Some(sub) = obs.sub_id {
+            common.sub_stream_id = Some(sub as u32);
+        }
         let mut properties = TrackProperties {
             common,
             ..TrackProperties::default()
@@ -204,6 +214,15 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
         match track_type {
             TrackType::Video => properties.video = Some(video.unwrap_or_default()),
             TrackType::Audio => properties.audio = Some(audio.unwrap_or_default()),
+            TrackType::Subtitles => {
+                // PARSER-096: VobSub on private-stream-1 (sub-id 0x20..=0x3F).
+                properties.subtitle = Some(SubtitleTrackProperties {
+                    text_subtitles: false,
+                    encoding: None,
+                    variant: Some("VobSub".to_string()),
+                    teletext_page: None,
+                });
+            }
             _ => {}
         }
         out.tracks.push(Track {
@@ -261,6 +280,41 @@ mod tests {
         assert_eq!(m.tracks[0].track_type, TrackType::Video);
         assert_eq!(m.tracks[1].track_type, TrackType::Audio);
         assert_eq!(m.tracks[0].properties.common.stream_id, Some(0xE0));
+    }
+
+    // ---- PARSER-094: VC-1 stream id 0xFD --------------------------------
+
+    #[test]
+    fn vc1_stream_id_classified_as_video() {
+        let c = resolve_codec(&obs(0xFD, None, None)).unwrap();
+        assert_eq!(c.id, "V_VC1");
+        assert_eq!(c.kind, TrackKind::Video);
+    }
+
+    // ---- PARSER-095: unknown sub-IDs are dropped ------------------------
+
+    #[test]
+    fn unknown_private_substream_is_not_classified() {
+        // 0x40 / 0x70 / 0xD0 are not in any documented sub-id range.
+        assert!(resolve_codec(&obs(0xBD, Some(0x40), None)).is_none());
+        assert!(resolve_codec(&obs(0xBD, Some(0x70), None)).is_none());
+        assert!(resolve_codec(&obs(0xBD, Some(0xD0), None)).is_none());
+    }
+
+    // ---- PARSER-096: VobSub subtitle props ------------------------------
+
+    #[test]
+    fn vobsub_subtitle_track_has_subtitle_props() {
+        let mut m = MediaMetadata::new("clip.vob", 0);
+        finalise(vec![obs(0xBD, Some(0x20), None)], &mut m);
+        assert_eq!(m.tracks.len(), 1);
+        let t = &m.tracks[0];
+        assert_eq!(t.track_type, TrackType::Subtitles);
+        let sub = t.properties.subtitle.as_ref().unwrap();
+        assert!(!sub.text_subtitles);
+        assert_eq!(sub.variant.as_deref(), Some("VobSub"));
+        assert_eq!(t.properties.common.stream_id, Some(0xBD));
+        assert_eq!(t.properties.common.sub_stream_id, Some(0x20));
     }
 
     #[test]

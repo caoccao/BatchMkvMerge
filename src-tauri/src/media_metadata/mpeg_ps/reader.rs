@@ -266,12 +266,15 @@ mod tests {
 
     #[test]
     fn read_headers_collects_unique_stream_ids() {
+        // 0xBD packets with all-zero payload have sub-id 0x00 which is *not*
+        // a documented private-stream-1 substream — mkvtoolnix drops them, so
+        // we expect just the two unique audio/video stream ids (PARSER-095).
         let bytes = build_ps(&[0xE0, 0xC0, 0xE0, 0xC0, 0xBD]);
         let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
         let mut out = MediaMetadata::new("clip.mpg", 0);
         MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
         assert_eq!(out.container.format, ContainerFormat::MpegPs);
-        assert_eq!(out.tracks.len(), 3);
+        assert_eq!(out.tracks.len(), 2);
         let kinds: Vec<TrackType> = out.tracks.iter().map(|t| t.track_type).collect();
         assert!(kinds.contains(&TrackType::Video));
         assert!(kinds.contains(&TrackType::Audio));
@@ -314,6 +317,24 @@ mod tests {
         MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
         assert_eq!(out.tracks.len(), 1);
         assert_eq!(out.tracks[0].codec.id, "A_DTS");
+    }
+
+    // ---- PARSER-094: VC-1 stream id 0xFD --------------------------------
+
+    #[test]
+    fn vc1_stream_id_fd_is_collected() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&start_code(PACK_HEADER));
+        bytes.extend_from_slice(&[0u8; 10]);
+        bytes.extend_from_slice(&start_code(0xFD));
+        bytes.extend_from_slice(&8u16.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+        let mut out = MediaMetadata::new("clip.mpg", 0);
+        MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].codec.id, "V_VC1");
+        assert_eq!(out.tracks[0].track_type, TrackType::Video);
     }
 
     // ---- PARSER-051: Program Stream Map ----------------------------------
