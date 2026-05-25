@@ -29,3 +29,7 @@ SRT is represented directly through the shared track model; helper functions per
 ## Gaps and Handling
 
 The probe now matches upstream's index-line-then-timestamp-line structure, so text files containing an incidental timestamp line are no longer misclassified as SRT. The timestamp grammar itself is still not byte-identical to upstream's regex (the arrow form is matched on `" --> "` rather than the looser `[\-\s]+>`), and cue-level validation remains outside the current single-track model.
+
+## Open Issues
+
+- `PARSER-235`: The timestamp arrow grammar is stricter than mkvmerge's regex. Native requires the exact `" --> "` substring, while mkvmerge accepts flexible whitespace/hyphen forms like `00:00:01,000-->00:00:02,000` and `00:00:01,000 -> 00:00:02,000`.

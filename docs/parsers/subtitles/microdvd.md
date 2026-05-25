@@ -26,3 +26,7 @@ There are no parser-specific persistent structures.
 ## Gaps and Handling
 
 Upstream checks a smaller, more specific set of early short lines. Rust scans any matching line in the initial text window, which is more tolerant but less exact. Since the format remains unsupported, the practical outcome is still a recognised unsupported container with no extractable tracks.
+
+## Open Issues
+
+- `PARSER-237`: MicroDVD probing scans any matching line in the first 16 KiB. mkvmerge only checks the first non-empty line among at most 20 short lines, so ordinary text with a later `{1}{2}...` line can be reported as unsupported MicroDVD by native while mkvmerge would not claim it.

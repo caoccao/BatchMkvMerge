@@ -43,3 +43,9 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely.
+
+## Open Issues
+
+- `PARSER-229`: Multi-entry `stsd` handling over-applies last-entry-wins to the sample-entry FOURCC. mkvmerge parses every entry but keeps the first differing FOURCC and only warns about later ones; native resets `codec_id_str` for each entry, so a mixed-`stsd` track can be identified as the last codec instead of the first.
+- `PARSER-230`: Vorbis-in-MP4 `esds` decoder config is not unlaced into the three Vorbis private headers and is not validated with the Vorbis header parser. mkvmerge derives channels/rate from that private data and rejects invalid headers; native only records the object type/length, so Vorbis tracks can be dropped for zero audio fields or kept without required codec private data.
+- `PARSER-231`: MP4 Opus and FLAC audio verification is incomplete. mkvmerge rejects Opus without an `OpusHead` private blob of at least 19 bytes and FLAC without exactly one private `dfLa` blob; native's verifier only checks generic channels/rate, so malformed `Opus`/`fLaC` sample entries can survive if the sample entry itself carries nonzero audio fields.

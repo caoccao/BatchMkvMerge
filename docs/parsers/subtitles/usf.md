@@ -44,3 +44,7 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. quick-xml's namespace-aware local names are compared, so namespaced documents are tolerated.
+
+## Open Issues
+
+- `PARSER-236`: USF probing uses a broader XML-marker window and namespace-stripped root comparison. mkvmerge only looks for `<?xml` or `<!--` in the first roughly 1000 characters and requires the document element name to be exactly `USFSubtitles`; native scans the full 10 MiB decoded document and accepts namespaced roots such as `<usf:USFSubtitles>`.

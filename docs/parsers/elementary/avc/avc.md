@@ -33,3 +33,8 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Upstream can scan much farther and uses a fuller elementary-stream parser with slice/access-unit state and `might_be_xyzvc` guards. Rust scans the first 64 KiB and focuses on SPS/PPS metadata. Pixel aspect ratio extraction and some upstream default-duration behavior are incomplete, so the parser reports only fields it can derive confidently from the SPS and VUI timing.
+
+## Open Issues
+
+- `PARSER-238`: Raw AVC VUI default-duration math is doubled relative to mkvmerge identify output. Native reports `2 * num_units_in_tick * 1e9 / time_scale`, while mkvmerge's `timing_info_t::default_duration()` and `r_avc.cpp::identify` report `num_units_in_tick * 1e9 / time_scale`.
+- `PARSER-240`: AVC VUI sample aspect ratio is skipped and display dimensions are left equal to cropped pixel dimensions. mkvmerge extracts PAR from the AVC configuration record and sets display dimensions from the bitstream when no user override exists; native loses that header-level display metadata.

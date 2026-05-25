@@ -34,3 +34,7 @@ Key structures are EBML `ElementHeader`, deferred level-1 position records, trac
 ## Gaps and Handling
 
 Upstream uses libebml/libmatroska and performs full packetizer checks, content decoding, and cluster processing for muxing. Rust is header-only and does not validate every obscure codec or content-encoding path. Unsupported or unknown details are preserved as structured codec IDs, codec-private blobs, warnings, or omitted fields rather than triggering packetizer-level behavior.
+
+## Open Issues
+
+- `PARSER-228`: `BlockAdditionMapping` is parsed with `BlockAddIDName`, `BlockAddIDValue`, `BlockAddIDType`, and `BlockAddIDExtraData`, but the shared model only exposes `id_type` and `data_hex`. mkvmerge keeps name and value too; mappings that rely on `BlockAddIDValue` or carry a useful name lose that information in native metadata.

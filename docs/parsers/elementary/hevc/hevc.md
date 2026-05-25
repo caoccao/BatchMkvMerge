@@ -33,3 +33,8 @@ Key structures are `HevcNalUnit`, `HevcSps`, `HevcTier`, `VpsSummary`, and the i
 ## Gaps and Handling
 
 The Rust parser scans a 64 KiB prefix while upstream can scan much farther. It does not fully cross-check SPS/VPS IDs, does not require a first access unit, and omits some VUI fields such as pixel aspect ratio and color export. Dolby Vision/RPU/enhancement-layer handling and complete hvcC parity are not yet implemented. The parser handles this by emitting only stable base-layer metadata and treating uncertain streams as unrecognised rather than fabricating advanced fields.
+
+## Open Issues
+
+- `PARSER-239`: HEVC VUI timing extraction bails out before VUI when valid SPS structures such as scaling-list data, short-term reference picture sets, or long-term references are present. mkvmerge consumes those structures and still reaches `vui_timing_info_present_flag`, so native can miss default duration on ordinary HEVC streams.
+- `PARSER-240`: HEVC VUI sample aspect ratio is skipped and display dimensions are left equal to cropped luma dimensions. mkvmerge extracts PAR from the HEVC configuration record and sets display dimensions from the bitstream when no user override exists; native loses that header-level display metadata.

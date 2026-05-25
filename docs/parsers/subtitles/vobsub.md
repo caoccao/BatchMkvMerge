@@ -43,3 +43,8 @@ Codec private is built from the filtered `idx_data`: the per-track control lines
 ## Gaps and Handling
 
 Header-only: the `.sub` MPEG-PS payload is never demuxed, so per-entry SPU durations and `spu_size`/`overhead` accounting from `extract_one_spu_packet` are not computed. The `.idx` manifest is decoded up to a bounded 64 KiB prefix (these manifests are tiny in practice). These are intentional header-only departures and do not affect the track listing, languages, entry counts, or codec-private parity.
+
+## Open Issues
+
+- `PARSER-232`: Path-aware VobSub parsing does not require the sibling `.sub` data file. mkvmerge opens `.idx` and `.sub` in `read_headers` and errors when the `.sub` cannot be opened; native still claims the manifest and records tracks, listing subtitles that mkvmerge cannot actually read.
+- `PARSER-233`: The VobSub probe rejects old index versions before claiming the file. mkvmerge probes only the banner, then `read_headers` reports the explicit "v7 and newer" unsupported-header error for v6 and older files; native treats them as unrecognised and may fall through to unrelated readers.

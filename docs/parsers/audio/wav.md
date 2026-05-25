@@ -33,3 +33,7 @@ Important structures are `WavType`, `WaveFormat`, `WavMetadata`, and internal ch
 ## Gaps and Handling
 
 Upstream has additional repair logic for very large or broken data-length fields and may aggregate more than one data chunk. The Rust parser uses the first usable data chunk for duration and reports unsupported format tags through the structured model instead of matching mkvmerge's exact text output.
+
+## Open Issues
+
+- `PARSER-227`: Duration and byte accounting still use the first `data` chunk only. mkvmerge accumulates all RIFF/Wave64 data chunks and reads them in sequence, so files with multiple data chunks are under-reported and may be classified from the wrong payload prefix.

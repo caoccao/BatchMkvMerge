@@ -36,3 +36,7 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details. The Rust parser does not fully mirror ER AAC ELD/CELP paths or mkvmerge's exact search for the first nonzero usable header. Those gaps are handled by returning conservative metadata from the first stable frame sequence and by keeping malformed or underspecified data out of the track list instead of guessing unsupported details.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+- `PARSER-224`: Raw AAC `read_headers` still emits the first header from the confirmed frame run. mkvmerge drains parsed frames until it finds one with both nonzero sample rate and channel count, so ADTS/LOAS streams whose first confirmed header has channel configuration 0 without a parsed PCE can be reported with missing audio properties instead of advancing to the first usable frame.
