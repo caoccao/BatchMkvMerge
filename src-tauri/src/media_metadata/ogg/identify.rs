@@ -88,11 +88,23 @@ fn make_track(
     }
 
     let mut common = CommonTrackProperties::default();
-    common.number = Some((id as u64) + 1);
+    // PARSER-081: mkvtoolnix's `r_ogm.cpp:671-724` keys tracks on serialno;
+    // we surface the same value so the number is a stable cross-process id.
+    common.number = Some(serial as u64);
     common.stream_id = Some(serial);
     let language_hint = comment_language.or(metadata.language.clone());
     if let Some(lang) = language_hint {
         common.language = Some(Language::resolve(Some(&lang), None, false));
+    }
+    // PARSER-082: a TITLE Vorbis comment becomes the track name (mkvtoolnix
+    // `r_ogm.cpp:793-808`).  Stream-level comments map to the track; if no
+    // TITLE is present the track stays unnamed.
+    if let Some(title) = tags
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case("TITLE"))
+        .map(|t| t.value.clone())
+    {
+        common.track_name = Some(title);
     }
 
     let mut properties = TrackProperties {

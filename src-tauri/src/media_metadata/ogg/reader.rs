@@ -35,6 +35,9 @@ use super::page;
 /// from every bitstream.
 const MAX_PAGES: usize = 2048;
 const PAGE_PAYLOAD_CAP: u64 = 256 * 1024;
+/// Cap on the running buffer used to reassemble multi-page packets
+/// (PARSER-078).  16 MiB is more than enough for any sane comment block.
+const PACKET_REASSEMBLY_CAP: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OggReader;
@@ -63,7 +66,18 @@ impl Reader for OggReader {
         // Map serial → state.  Preserve insertion order via a parallel Vec.
         let mut states: Vec<BitstreamState> = Vec::new();
         let mut serial_to_index: HashMap<u32, usize> = HashMap::new();
+        // PARSER-078: per-serial running packet buffer used to reassemble
+        // packets that span multiple pages.  `header_count` tracks how many
+        // *complete* packets have been observed so we can stop once each
+        // bitstream has its identification + comment headers.
+        let mut reassembly: HashMap<u32, PacketReassembly> = HashMap::new();
         let mut pages_consumed = 0usize;
+        // `true` once the cascade has consumed at least one non-BOS page.
+        // mkvtoolnix waits until the BOS run is over before declaring the
+        // stream table closed (`r_ogm.cpp:598-633`); without this guard we'd
+        // terminate after the first stream's comment block lands but before
+        // later BOS pages can introduce additional streams.
+        let mut past_bos_run = false;
 
         loop {
             deadline.check("ogg::reader")?;
@@ -85,12 +99,28 @@ impl Reader for OggReader {
             pages_consumed += 1;
 
             let payload = page::read_page_payload(src, &header, PAGE_PAYLOAD_CAP)?;
-            handle_page(&header, &payload, &mut states, &mut serial_to_index);
+            let is_bos = header.is_beginning_of_stream();
+            handle_page(
+                &header,
+                &payload,
+                &mut states,
+                &mut serial_to_index,
+                &mut reassembly,
+                out,
+            );
+            if !is_bos {
+                past_bos_run = true;
+            }
 
-            // Stop once every BOS stream has at least two packets (BOS + comment)
-            // and the next page would be a continuation cluster.  This keeps
-            // identification fast for huge files.
-            if all_streams_have_comments(&states) && pages_consumed > 4 {
+            // PARSER-080: stop once every in-use bitstream has its
+            // identification + comment headers parsed AND we've moved
+            // far enough into the file that no more BOS pages can plausibly
+            // arrive.  Mirrors mkvtoolnix's `r_ogm.cpp:598-633` which rewinds
+            // once `headers_read` is true for every active stream.  The
+            // `pages_consumed > 4` guard keeps non-conformant inputs that
+            // sandwich a late BOS page from being truncated by an over-eager
+            // early break.
+            if past_bos_run && pages_consumed > 4 && all_streams_have_comments(&states) {
                 break;
             }
 
@@ -105,11 +135,23 @@ impl Reader for OggReader {
     }
 }
 
+/// Per-bitstream packet reassembly state (PARSER-078).
+#[derive(Default)]
+struct PacketReassembly {
+    /// Bytes accumulated from continuation segments so far.
+    buffer: Vec<u8>,
+    /// `true` while the running buffer is the tail of a packet that
+    /// `continues_on_next_page`; reset to `false` once we emit a packet.
+    pending: bool,
+}
+
 fn handle_page(
     header: &page::PageHeader,
     payload: &[u8],
     states: &mut Vec<BitstreamState>,
     serial_to_index: &mut HashMap<u32, usize>,
+    reassembly: &mut HashMap<u32, PacketReassembly>,
+    out: &mut MediaMetadata,
 ) {
     if header.is_beginning_of_stream() {
         let idx = states.len();
@@ -121,7 +163,8 @@ fn handle_page(
             comment_language: None,
             vendor: None,
         };
-        // The BOS packet must be wholly contained in this page.
+        // The BOS packet must be wholly contained in this page (per RFC
+        // 3533) — reassembly isn't needed for identification packets.
         if let Some(first_span) = header.packet_layout().first() {
             let end = (first_span.bytes as usize).min(payload.len());
             state.first_packet = payload[..end].to_vec();
@@ -132,30 +175,90 @@ fn handle_page(
         return;
     }
 
-    // Non-BOS page: look up the bitstream and try to extract a comment block
-    // from its second packet (the VorbisComment / OpusTags / Theora comments).
     let Some(&idx) = serial_to_index.get(&header.bitstream_serial) else {
         return;
     };
-    let state = &mut states[idx];
-    if state.metadata.is_none() {
+    if states[idx].metadata.is_none() {
         return;
     }
-    if !state.vorbis_tags.is_empty() {
-        return; // already populated
+    if !states[idx].vorbis_tags.is_empty() {
+        // Comment block already collected — keep walking later pages so
+        // additional streams can complete, but skip this one.
+        return;
     }
-    if let Some(first_span) = header.packet_layout().first() {
-        let end = (first_span.bytes as usize).min(payload.len());
-        let packet = &payload[..end];
-        let codec_id = state
-            .metadata
-            .as_ref()
-            .map(|m| m.codec_id)
-            .unwrap_or_default();
-        if let Some(comments) = decode_comment_packet(packet, codec_id) {
-            state.vendor = Some(comments.vendor);
-            state.comment_language = comments::extract_language(&comments.entries);
-            state.vorbis_tags = comments.entries;
+
+    // PARSER-078 + PARSER-079: walk *every* packet on the page, threading
+    // through the per-serial reassembly buffer so packets that cross page
+    // boundaries are reconstructed.
+    let layout = header.packet_layout();
+    let mut offset = 0usize;
+    let entry = reassembly.entry(header.bitstream_serial).or_default();
+    for (i, span) in layout.iter().enumerate() {
+        let end = (offset + span.bytes as usize).min(payload.len());
+        let segment = &payload[offset..end];
+        offset = end;
+        let is_first_on_page = i == 0;
+        if is_first_on_page && !header.is_continuation() && entry.pending {
+            // The previous page advertised a continuation but the next page
+            // does not flag it — drop the partial packet.
+            entry.buffer.clear();
+            entry.pending = false;
+        }
+        if (entry.buffer.len() + segment.len()) <= PACKET_REASSEMBLY_CAP {
+            entry.buffer.extend_from_slice(segment);
+        } else {
+            entry.buffer.clear();
+            entry.pending = false;
+            return;
+        }
+        if span.continues_on_next_page {
+            entry.pending = true;
+            // Wait for the rest of the packet on the next page.
+            continue;
+        }
+        // Complete packet now in `entry.buffer`.
+        let packet = std::mem::take(&mut entry.buffer);
+        entry.pending = false;
+        // First non-continuation packet is the codec-defined comment header.
+        try_decode_comment_packet(&packet, idx, states, out);
+        if !states[idx].vorbis_tags.is_empty() {
+            return;
+        }
+    }
+}
+
+fn try_decode_comment_packet(
+    packet: &[u8],
+    idx: usize,
+    states: &mut [BitstreamState],
+    out: &mut MediaMetadata,
+) {
+    let state = &mut states[idx];
+    let codec_id = state
+        .metadata
+        .as_ref()
+        .map(|m| m.codec_id)
+        .unwrap_or_default();
+    let Some(decoded) = decode_comment_packet(packet, codec_id) else {
+        return;
+    };
+    state.vendor = Some(decoded.vendor);
+    state.comment_language = comments::extract_language(&decoded.entries);
+    // PARSER-083: convert METADATA_BLOCK_PICTURE comments into attachments
+    // before we hand the rest of the tag list to the track.
+    let (pictures, remaining): (Vec<_>, Vec<_>) = decoded
+        .entries
+        .into_iter()
+        .partition(|t| t.name.eq_ignore_ascii_case("METADATA_BLOCK_PICTURE"));
+    state.vorbis_tags = remaining;
+    let mut next_id = (out.attachments.len() as u32) + 1;
+    for tag in pictures {
+        if let Some(att) = super::comments::metadata_block_picture_to_attachment(
+            &tag.value,
+            next_id,
+        ) {
+            out.attachments.push(att);
+            next_id += 1;
         }
     }
 }

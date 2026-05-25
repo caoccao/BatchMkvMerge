@@ -32,6 +32,7 @@
 //! prefix), Opus (with "OpusTags" prefix), and Theora (with packet type
 //! 0x81 + "theora" prefix).  We hand off the prefix stripping to the caller.
 
+use crate::media_metadata::model::attachment::Attachment;
 use crate::media_metadata::model::tag::TagEntry;
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,126 @@ pub fn parse(bytes: &[u8]) -> Option<VorbisComments> {
         vendor,
         entries,
     })
+}
+
+/// Convert a `METADATA_BLOCK_PICTURE` Vorbis comment value (base64-encoded
+/// FLAC PICTURE block, per Xiph spec) into an [`Attachment`].  Returns `None`
+/// when the base64 decode fails or the embedded PICTURE block is truncated.
+/// PARSER-083.
+pub fn metadata_block_picture_to_attachment(
+    base64_value: &str,
+    id: u32,
+) -> Option<Attachment> {
+    let bytes = decode_base64(base64_value)?;
+    // PICTURE block layout matches the FLAC spec §8.4: picture-type (u32 BE),
+    // MIME length + bytes, description length + bytes, four u32 dimension
+    // fields, then declared data length.  We don't need the actual image
+    // body — only the declared metadata.
+    let mut pos = 0usize;
+    let _picture_type = read_be_u32(&bytes, &mut pos)?;
+    let mime_len = read_be_u32(&bytes, &mut pos)? as usize;
+    let mime_type = read_utf8(&bytes, &mut pos, mime_len)?;
+    let desc_len = read_be_u32(&bytes, &mut pos)? as usize;
+    let description = read_utf8(&bytes, &mut pos, desc_len)?;
+    for _ in 0..4 {
+        let _ = read_be_u32(&bytes, &mut pos)?;
+    }
+    let data_length = read_be_u32(&bytes, &mut pos)?;
+    if mime_type.is_empty() {
+        return None;
+    }
+    let extension = primary_extension_for_mime(&mime_type);
+    let file_name = if extension.is_empty() {
+        "cover".to_string()
+    } else {
+        format!("cover.{extension}")
+    };
+    Some(Attachment {
+        id,
+        file_name,
+        mime_type: Some(mime_type),
+        description: if description.is_empty() {
+            None
+        } else {
+            Some(description)
+        },
+        size: data_length as u64,
+        uid_hex: None,
+    })
+}
+
+fn read_be_u32(body: &[u8], pos: &mut usize) -> Option<u32> {
+    if *pos + 4 > body.len() {
+        return None;
+    }
+    let v = u32::from_be_bytes([body[*pos], body[*pos + 1], body[*pos + 2], body[*pos + 3]]);
+    *pos += 4;
+    Some(v)
+}
+
+fn read_utf8(body: &[u8], pos: &mut usize, len: usize) -> Option<String> {
+    if *pos + len > body.len() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&body[*pos..*pos + len]).into_owned();
+    *pos += len;
+    Some(s)
+}
+
+fn primary_extension_for_mime(mime: &str) -> &'static str {
+    match mime.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/jfif" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/bmp" | "image/x-bmp" => "bmp",
+        "image/webp" => "webp",
+        "image/tiff" => "tiff",
+        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
+        _ => "",
+    }
+}
+
+/// Tiny base64 decoder — sufficient for the
+/// `METADATA_BLOCK_PICTURE` payloads emitted by encoders that follow the
+/// Xiph spec.  Returns `None` on any non-alphabet byte (whitespace skipped).
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    fn value(b: u8) -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut buf = [0u8; 4];
+    let mut filled = 0usize;
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    for &b in input.as_bytes() {
+        if b.is_ascii_whitespace() {
+            continue;
+        }
+        if b == b'=' {
+            buf[filled] = 0;
+            filled += 1;
+        } else {
+            buf[filled] = value(b)?;
+            filled += 1;
+        }
+        if filled == 4 {
+            out.push((buf[0] << 2) | (buf[1] >> 4));
+            out.push((buf[1] << 4) | (buf[2] >> 2));
+            out.push((buf[2] << 6) | buf[3]);
+            filled = 0;
+        }
+    }
+    // Trim padding bytes implied by trailing `=`.
+    let pad_count = input.bytes().rev().take_while(|b| *b == b'=').count();
+    for _ in 0..pad_count {
+        out.pop();
+    }
+    Some(out)
 }
 
 /// Pull the language out of the comment list, if any (`LANGUAGE=xx` is the
@@ -191,6 +312,75 @@ mod tests {
     fn extract_language_returns_none_when_missing() {
         let v = parse(&build_block("v", &[("ARTIST", "A")])).unwrap();
         assert!(extract_language(&v.entries).is_none());
+    }
+
+    // ---- PARSER-083: METADATA_BLOCK_PICTURE → attachment -----------------
+
+    fn encode_base64(bytes: &[u8]) -> String {
+        const ALPHA: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+        let mut iter = bytes.chunks_exact(3);
+        for chunk in &mut iter {
+            let n =
+                ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | chunk[2] as u32;
+            out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+            out.push(ALPHA[(n & 0x3F) as usize] as char);
+        }
+        let rem = iter.remainder();
+        match rem.len() {
+            1 => {
+                let n = (rem[0] as u32) << 16;
+                out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+                out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+                out.push('=');
+                out.push('=');
+            }
+            2 => {
+                let n = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
+                out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+                out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+                out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+                out.push('=');
+            }
+            _ => {}
+        }
+        out
+    }
+
+    fn build_picture_block(mime: &str, desc: &str, data_length: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&3u32.to_be_bytes()); // front cover
+        b.extend_from_slice(&(mime.len() as u32).to_be_bytes());
+        b.extend_from_slice(mime.as_bytes());
+        b.extend_from_slice(&(desc.len() as u32).to_be_bytes());
+        b.extend_from_slice(desc.as_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes()); // width
+        b.extend_from_slice(&0u32.to_be_bytes()); // height
+        b.extend_from_slice(&0u32.to_be_bytes()); // depth
+        b.extend_from_slice(&0u32.to_be_bytes()); // colours used
+        b.extend_from_slice(&data_length.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn metadata_block_picture_decodes_to_attachment() {
+        let block = build_picture_block("image/jpeg", "Front", 1024);
+        let value = encode_base64(&block);
+        let att = metadata_block_picture_to_attachment(&value, 1).unwrap();
+        assert_eq!(att.file_name, "cover.jpg");
+        assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(att.description.as_deref(), Some("Front"));
+        assert_eq!(att.size, 1024);
+    }
+
+    #[test]
+    fn metadata_block_picture_empty_mime_is_rejected() {
+        let block = build_picture_block("", "", 0);
+        let value = encode_base64(&block);
+        assert!(metadata_block_picture_to_attachment(&value, 1).is_none());
     }
 
     #[test]
