@@ -34,6 +34,11 @@ pub struct StreamRow {
     pub codec_id: String,
     pub codec_name: String,
     pub track_kind: TrackKind,
+    /// PARSER-091: 5-byte DVB subtitling codec_private as written by
+    /// mkvtoolnix's S_DVBSUB packetizer.
+    pub codec_private: Option<Vec<u8>>,
+    /// PARSER-092: hearing-impaired flag for teletext type 5 entries.
+    pub hearing_impaired: Option<bool>,
 }
 
 /// Canonical Matroska-style codec id string for known MPEG-TS stream types.
@@ -65,21 +70,20 @@ fn canonical_codec_id(stream_type: u8) -> Option<&'static str> {
     })
 }
 
-/// Build one row per `PmtStreamEntry`, applying descriptor overrides where
-/// applicable (e.g. an AC-3 descriptor on a private-data stream_type
-/// promotes it to the AC-3 codec).
-pub fn build_row(
+/// Build one or more rows per `PmtStreamEntry`, applying descriptor overrides
+/// where applicable.  Returns multiple rows when a teletext or DVB subtitling
+/// descriptor declares multiple per-language subtitle pages (PARSER-091..092).
+pub fn build_rows(
     pid: u16,
     program_number: u16,
     entry: &PmtStreamEntry,
     program_descriptors: &DescriptorSummary,
-) -> StreamRow {
+) -> Vec<StreamRow> {
     let stream_desc = super::descriptors::walk(&entry.descriptors);
-    let language = stream_desc
-        .language_iso_639_2
+    let stream_language = stream_desc.language_iso_639_2.clone();
+    let language = stream_language
         .clone()
         .or_else(|| program_descriptors.language_iso_639_2.clone());
-    let teletext_page = stream_desc.teletext_page;
     let service_name = program_descriptors.service_name.clone();
 
     let from_table = mpegts_stream_types::lookup(entry.stream_type);
@@ -90,6 +94,29 @@ pub fn build_row(
         .map(|e| e.name.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
     let mut kind = from_table.map(|e| e.kind).unwrap_or(TrackKind::Unknown);
+
+    // PARSER-090: registration descriptor (0x05) overrides codec on private
+    // PES streams (stream_type 0x06).  `HDMV` carries an embedded Blu-ray
+    // stream_coding_type byte; every other FourCC is looked up directly.
+    if entry.stream_type == 0x06 {
+        if let Some(reg) = &stream_desc.registration {
+            if reg.format_identifier == "HDMV" {
+                if let Some(sct) = reg.hdmv_stream_coding_type {
+                    if let Some((cid, cname, ck)) = super::descriptors::registration::hdmv_codec(sct) {
+                        codec_id = cid.to_string();
+                        codec_name = cname.to_string();
+                        kind = ck;
+                    }
+                }
+            } else if let Some((cid, cname, ck)) = super::descriptors::registration::codec_for_fourcc(
+                reg.format_identifier.as_str(),
+            ) {
+                codec_id = cid.to_string();
+                codec_name = cname.to_string();
+                kind = ck;
+            }
+        }
+    }
 
     // Descriptor-driven overrides — handle the common "stream_type = 0x06
     // private data + a descriptor that disambiguates the codec" pattern.
@@ -106,10 +133,6 @@ pub fn build_row(
             codec_id = "A_DTS".to_string();
             codec_name = "DTS".to_string();
             kind = TrackKind::Audio;
-        } else if teletext_page.is_some() {
-            codec_id = "S_TELETEXT".to_string();
-            codec_name = "DVB Teletext".to_string();
-            kind = TrackKind::Subtitle;
         }
     }
     // HEVC descriptor disambiguates 0x24 → HEVC.
@@ -119,17 +142,101 @@ pub fn build_row(
         kind = TrackKind::Video;
     }
 
-    StreamRow {
+    // PARSER-091: DVB subtitling descriptor (0x59) on a private PES stream
+    // creates one S_DVBSUB track per language entry.
+    if entry.stream_type == 0x06 && !stream_desc.subtitling_entries.is_empty() {
+        return stream_desc
+            .subtitling_entries
+            .iter()
+            .map(|sub| StreamRow {
+                pid,
+                stream_type: entry.stream_type,
+                program_number,
+                language: Some(sub.language_iso_639_2.clone()),
+                teletext_page: None,
+                service_name: service_name.clone(),
+                codec_id: "S_DVBSUB".to_string(),
+                codec_name: "DVB Subtitles".to_string(),
+                track_kind: TrackKind::Subtitle,
+                codec_private: Some(sub.codec_private().to_vec()),
+                hearing_impaired: None,
+            })
+            .collect();
+    }
+
+    // PARSER-092: teletext descriptor (0x56) — emit one S_TELETEXT track
+    // per type=2 or type=5 entry; track hearing-impaired flag for type 5.
+    if entry.stream_type == 0x06 && !stream_desc.teletext_entries.is_empty() {
+        let subtitle_entries: Vec<_> = stream_desc
+            .teletext_entries
+            .iter()
+            .filter(|e| e.is_subtitle())
+            .cloned()
+            .collect();
+        if !subtitle_entries.is_empty() {
+            return subtitle_entries
+                .iter()
+                .map(|e| StreamRow {
+                    pid,
+                    stream_type: entry.stream_type,
+                    program_number,
+                    language: Some(e.language_iso_639_2.clone()),
+                    teletext_page: Some(e.page),
+                    service_name: service_name.clone(),
+                    codec_id: "S_TELETEXT".to_string(),
+                    codec_name: "DVB Teletext".to_string(),
+                    track_kind: TrackKind::Subtitle,
+                    codec_private: None,
+                    hearing_impaired: Some(e.is_hearing_impaired()),
+                })
+                .collect();
+        }
+        // All teletext entries are non-subtitle (initial pages etc).
+        // Drop the track — mkvtoolnix records the pages in
+        // `m_ttx_known_non_subtitle_pages` and creates no demuxed track.
+        kind = TrackKind::Unknown;
+    }
+
+    // PARSER-093: stream_type 0x06 with no disambiguating descriptor defaults
+    // to AC-3 audio (mkvtoolnix `r_mpeg_ts.cpp:1890-1895`).
+    if entry.stream_type == 0x06
+        && kind != TrackKind::Audio
+        && kind != TrackKind::Video
+        && kind != TrackKind::Subtitle
+        && !stream_desc.has_disambiguating_tag
+    {
+        codec_id = "A_AC3".to_string();
+        codec_name = "AC-3".to_string();
+        kind = TrackKind::Audio;
+    }
+
+    vec![StreamRow {
         pid,
         stream_type: entry.stream_type,
         program_number,
         language,
-        teletext_page,
+        teletext_page: stream_desc.teletext_page,
         service_name,
         codec_id,
         codec_name,
         track_kind: kind,
-    }
+        codec_private: None,
+        hearing_impaired: None,
+    }]
+}
+
+/// Thin back-compat wrapper that returns the *first* row produced by
+/// [`build_rows`].  Old callers/tests rely on a single-row signature; new
+/// callers should use `build_rows` to surface DVB subtitling and teletext
+/// multi-entry tracks.
+pub fn build_row(
+    pid: u16,
+    program_number: u16,
+    entry: &PmtStreamEntry,
+    program_descriptors: &DescriptorSummary,
+) -> StreamRow {
+    let mut rows = build_rows(pid, program_number, entry, program_descriptors);
+    rows.swap_remove(0)
 }
 
 #[cfg(test)]
@@ -191,11 +298,106 @@ mod tests {
 
     #[test]
     fn teletext_descriptor_on_private_data_promotes_to_subtitle() {
-        let descs = build_descriptor(TAG_TELETEXT, &[b'e', b'n', b'g', 0x08, 0x88]);
+        // Use teletext type 2 (subtitle page) in the top 5 bits — PARSER-092
+        // gates subtitle promotion on types 2 / 5 only.
+        let descs = build_descriptor(TAG_TELETEXT, &[b'e', b'n', b'g', (2 << 3), 0x88]);
+        let rows = build_rows(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].codec_id, "S_TELETEXT");
+        assert_eq!(rows[0].track_kind, TrackKind::Subtitle);
+        assert_eq!(rows[0].teletext_page, Some(888));
+    }
+
+    // ---- PARSER-090: registration descriptor ----------------------------
+
+    #[test]
+    fn hdmv_registration_promotes_to_ac3() {
+        // HDMV + stuffing byte 0xFF + stream_coding_type 0x81 (AC-3).
+        let descs = build_descriptor(
+            super::super::descriptors::TAG_REGISTRATION,
+            &[b'H', b'D', b'M', b'V', 0xFF, 0x81, 0x00, 0x00],
+        );
         let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
-        assert_eq!(row.codec_id, "S_TELETEXT");
-        assert_eq!(row.track_kind, TrackKind::Subtitle);
-        assert_eq!(row.teletext_page, Some(888));
+        assert_eq!(row.codec_id, "A_AC3");
+        assert_eq!(row.track_kind, TrackKind::Audio);
+    }
+
+    #[test]
+    fn registration_vc1_promotes_to_vc1_video() {
+        let descs = build_descriptor(
+            super::super::descriptors::TAG_REGISTRATION,
+            &[b'V', b'C', b'-', b'1'],
+        );
+        let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(row.codec_id, "V_VC1");
+        assert_eq!(row.track_kind, TrackKind::Video);
+    }
+
+    // ---- PARSER-091: DVB subtitling descriptor --------------------------
+
+    #[test]
+    fn subtitling_descriptor_creates_one_track_per_language() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[b'e', b'n', b'g', 0x10, 0x00, 0x01, 0x00, 0x02]);
+        body.extend_from_slice(&[b'd', b'e', b'u', 0x20, 0x00, 0x03, 0x00, 0x04]);
+        let descs = build_descriptor(super::super::descriptors::TAG_SUBTITLING, &body);
+        let rows = build_rows(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].language.as_deref(), Some("eng"));
+        assert_eq!(rows[0].codec_id, "S_DVBSUB");
+        assert_eq!(rows[0].codec_private.as_deref(), Some(&[0x00u8, 0x01, 0x00, 0x02, 0x10][..]));
+        assert_eq!(rows[1].language.as_deref(), Some("deu"));
+        assert_eq!(rows[1].codec_private.as_deref(), Some(&[0x00u8, 0x03, 0x00, 0x04, 0x20][..]));
+    }
+
+    // ---- PARSER-092: multi-page teletext --------------------------------
+
+    #[test]
+    fn teletext_descriptor_emits_one_track_per_subtitle_page() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[b'e', b'n', b'g', (2 << 3) | 0x01, 0x50]); // subtitle 150
+        body.extend_from_slice(&[b'd', b'e', b'u', (5 << 3) | 0x02, 0x12]); // hearing impaired 212
+        body.extend_from_slice(&[b'f', b'r', b'a', 0x00, 0x88]);             // initial page (filtered)
+        let descs = build_descriptor(TAG_TELETEXT, &body);
+        let rows = build_rows(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].language.as_deref(), Some("eng"));
+        assert_eq!(rows[0].teletext_page, Some(150));
+        assert_eq!(rows[0].hearing_impaired, Some(false));
+        assert_eq!(rows[1].language.as_deref(), Some("deu"));
+        assert_eq!(rows[1].teletext_page, Some(212));
+        assert_eq!(rows[1].hearing_impaired, Some(true));
+    }
+
+    #[test]
+    fn teletext_with_only_non_subtitle_types_is_dropped() {
+        // Type 0 (reserved) and type 1 (initial page) — neither is a subtitle.
+        let mut body = Vec::new();
+        body.extend_from_slice(&[b'e', b'n', b'g', 0x00, 0x10]);
+        body.extend_from_slice(&[b'e', b'n', b'g', (1 << 3), 0x88]);
+        let descs = build_descriptor(TAG_TELETEXT, &body);
+        let rows = build_rows(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].track_kind, TrackKind::Unknown);
+    }
+
+    // ---- PARSER-093: default 0x06 to AC-3 ------------------------------
+
+    #[test]
+    fn stream_type_06_with_no_descriptor_defaults_to_ac3() {
+        let row = build_row(0x1234, 1, &entry(0x06, vec![]), &DescriptorSummary::default());
+        assert_eq!(row.codec_id, "A_AC3");
+        assert_eq!(row.track_kind, TrackKind::Audio);
+    }
+
+    #[test]
+    fn stream_type_06_with_only_iso_639_still_defaults_to_ac3() {
+        // ISO-639 (0x0A) does *not* clear the missing-tag bit, so the
+        // AC-3 fallback still kicks in (mkvtoolnix `r_mpeg_ts.cpp:1861-1862`).
+        let descs = build_descriptor(TAG_ISO_639_LANGUAGE, b"fra\x00");
+        let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+        assert_eq!(row.codec_id, "A_AC3");
+        assert_eq!(row.language.as_deref(), Some("fra"));
     }
 
     #[test]

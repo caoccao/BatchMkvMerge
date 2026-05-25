@@ -233,6 +233,8 @@ impl Reader for MpegTsReader {
                         codec_id: id.to_string(),
                         codec_name: name.to_string(),
                         track_kind: kind,
+                        codec_private: None,
+                        hearing_impaired: None,
                     });
                 }
             }
@@ -261,13 +263,13 @@ fn handle_pmt(
     let program_descriptors: DescriptorSummary = super::descriptors::walk(&pmt.program_descriptors);
     for entry in pmt.streams {
         stream_pids.insert(entry.elementary_pid);
-        let row = stream_table::build_row(
+        let new_rows = stream_table::build_rows(
             entry.elementary_pid,
             program_number,
             &entry,
             &program_descriptors,
         );
-        rows.push(row);
+        rows.extend(new_rows);
     }
     let _ = (pmt.program_number, pmt.pcr_pid);
 }

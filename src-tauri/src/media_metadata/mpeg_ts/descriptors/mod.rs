@@ -25,11 +25,15 @@ pub mod dts;
 pub mod eac3;
 pub mod hevc;
 pub mod iso_639_language;
+pub mod registration;
 pub mod service;
+pub mod subtitling;
 pub mod teletext;
 
+pub const TAG_REGISTRATION: u8 = 0x05;
 pub const TAG_ISO_639_LANGUAGE: u8 = 0x0A;
 pub const TAG_TELETEXT: u8 = 0x56;
+pub const TAG_SUBTITLING: u8 = 0x59;
 pub const TAG_AC3: u8 = 0x6A;
 pub const TAG_DTS: u8 = 0x7B;
 pub const TAG_EAC3: u8 = 0x7A;
@@ -42,13 +46,25 @@ pub const TAG_DOVI: u8 = 0xB0;
 #[derive(Debug, Default, Clone)]
 pub struct DescriptorSummary {
     pub language_iso_639_2: Option<String>,
+    /// First teletext page across all entries — kept for back-compat with
+    /// pre-multi-page callers; full table is in [`teletext_entries`].
     pub teletext_page: Option<u32>,
+    /// Every teletext entry decoded from a 0x56 descriptor (PARSER-092).
+    pub teletext_entries: Vec<teletext::TeletextEntry>,
     pub is_ac3: bool,
     pub is_eac3: bool,
     pub is_dts: bool,
     pub is_hevc: bool,
     pub dovi_profile: Option<u32>,
     pub service_name: Option<String>,
+    /// DVB subtitling descriptor (0x59) entries — PARSER-091.
+    pub subtitling_entries: Vec<subtitling::SubtitlingEntry>,
+    /// Registration descriptor (0x05) information — PARSER-090.
+    pub registration: Option<registration::RegistrationDescriptor>,
+    /// `true` once any tag other than ISO-639 language (0x0A) has been
+    /// observed.  Mirrors mkvtoolnix's `missing_tag` flag used to decide
+    /// whether stream_type 0x06 should default to AC-3 (PARSER-093).
+    pub has_disambiguating_tag: bool,
 }
 
 /// Walk a descriptor list and accumulate findings.
@@ -64,16 +80,32 @@ pub fn walk(descriptors: &[u8]) -> DescriptorSummary {
             break;
         }
         let body = &descriptors[body_start..body_end];
+        // PARSER-093: mkvtoolnix sets `missing_tag = false` for any tag
+        // other than 0x0A (ISO-639 language).  Track the same state so the
+        // stream-table can decide whether stream_type 0x06 should default
+        // to AC-3.
+        if tag != TAG_ISO_639_LANGUAGE {
+            summary.has_disambiguating_tag = true;
+        }
         match tag {
+            TAG_REGISTRATION => {
+                if let Some(r) = registration::decode(body) {
+                    summary.registration = Some(r);
+                }
+            }
             TAG_ISO_639_LANGUAGE => {
                 if let Some(lang) = iso_639_language::decode(body) {
                     summary.language_iso_639_2 = Some(lang);
                 }
             }
             TAG_TELETEXT => {
-                if let Some(page) = teletext::decode(body) {
-                    summary.teletext_page = Some(page);
+                summary.teletext_entries = teletext::decode_all(body);
+                if let Some(first) = summary.teletext_entries.first() {
+                    summary.teletext_page = Some(first.page);
                 }
+            }
+            TAG_SUBTITLING => {
+                summary.subtitling_entries = subtitling::decode_all(body);
             }
             TAG_AC3 => {
                 summary.is_ac3 = ac3::decode(body);

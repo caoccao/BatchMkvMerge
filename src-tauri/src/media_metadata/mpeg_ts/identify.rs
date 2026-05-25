@@ -21,7 +21,9 @@
 use crate::media_metadata::language::Language;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::program::Program;
-use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
+use crate::media_metadata::model::track::{
+    CodecInfo, CodecPrivate, Track, TrackProperties, TrackType,
+};
 use crate::media_metadata::model::track_properties_audio::AudioTrackProperties;
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
@@ -104,6 +106,7 @@ fn make_track(id: i64, row: &StreamRow) -> Track {
     common.stream_id = Some(row.pid as u32);
     common.program_number = Some(row.program_number as u32);
     common.teletext_page = row.teletext_page;
+    common.hearing_impaired = row.hearing_impaired;
     if let Some(lang) = &row.language {
         common.language = Some(Language::resolve(None, Some(lang), false));
     }
@@ -131,13 +134,18 @@ fn make_track(id: i64, row: &StreamRow) -> Track {
         _ => {}
     }
 
+    let codec_private = row
+        .codec_private
+        .as_ref()
+        .map(|bytes| CodecPrivate::from_bytes(bytes));
+
     Track {
         id,
         track_type,
         codec: CodecInfo {
             id: row.codec_id.clone(),
             name: Some(row.codec_name.clone()),
-            codec_private: None,
+            codec_private,
         },
         properties,
     }
@@ -159,6 +167,8 @@ mod tests {
             codec_id: codec_id.to_string(),
             codec_name: codec_id.to_string(),
             track_kind: kind,
+            codec_private: None,
+            hearing_impaired: None,
         }
     }
 
