@@ -30,5 +30,5 @@ pub mod extension_hint;
 pub mod signatures;
 pub mod unsupported;
 
-pub use dispatch::{dispatch, registered_readers, DispatchOutcome};
-pub use extension_hint::{is_supported_media_extension, FileTypeHint};
+pub use dispatch::{DispatchOutcome, dispatch, registered_readers};
+pub use extension_hint::{FileTypeHint, is_supported_media_extension};

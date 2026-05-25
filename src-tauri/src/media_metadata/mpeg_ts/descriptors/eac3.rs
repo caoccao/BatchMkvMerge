@@ -19,15 +19,15 @@
 //! treatment as AC-3: presence flag only.
 
 pub fn decode(_body: &[u8]) -> bool {
-    true
+  true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn presence_flags_eac3() {
-        assert!(decode(&[]));
-    }
+  #[test]
+  fn presence_flags_eac3() {
+    assert!(decode(&[]));
+  }
 }

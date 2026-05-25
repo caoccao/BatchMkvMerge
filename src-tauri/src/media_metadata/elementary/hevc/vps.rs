@@ -23,56 +23,56 @@ use crate::media_metadata::io::bit_reader::BitReader;
 
 #[derive(Debug, Clone, Copy)]
 pub struct VpsSummary {
-    pub vps_id: u8,
-    pub max_layers_minus1: u8,
-    pub max_sub_layers_minus1: u8,
+  pub vps_id: u8,
+  pub max_layers_minus1: u8,
+  pub max_sub_layers_minus1: u8,
 }
 
 pub fn parse(rbsp: &[u8]) -> Result<VpsSummary, ParseError> {
-    if rbsp.is_empty() {
-        return Err(ParseError::Malformed {
-            format: "hevc",
-            offset: 0,
-            reason: "empty VPS RBSP".to_string(),
-        });
-    }
-    let mut reader = BitReader::from_rbsp(rbsp);
-    let vps_id = reader.read_bits(4)? as u8;
-    let _base_layer_internal = reader.read_bit()?;
-    let _base_layer_available = reader.read_bit()?;
-    let max_layers_minus1 = reader.read_bits(6)? as u8;
-    let max_sub_layers_minus1 = reader.read_bits(3)? as u8;
-    Ok(VpsSummary {
-        vps_id,
-        max_layers_minus1,
-        max_sub_layers_minus1,
-    })
+  if rbsp.is_empty() {
+    return Err(ParseError::Malformed {
+      format: "hevc",
+      offset: 0,
+      reason: "empty VPS RBSP".to_string(),
+    });
+  }
+  let mut reader = BitReader::from_rbsp(rbsp);
+  let vps_id = reader.read_bits(4)? as u8;
+  let _base_layer_internal = reader.read_bit()?;
+  let _base_layer_available = reader.read_bit()?;
+  let max_layers_minus1 = reader.read_bits(6)? as u8;
+  let max_sub_layers_minus1 = reader.read_bits(3)? as u8;
+  Ok(VpsSummary {
+    vps_id,
+    max_layers_minus1,
+    max_sub_layers_minus1,
+  })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn parses_vps_with_id_zero() {
-        // Hand-pack bits per MSB-first BitReader:
-        //   byte 0: 0000 1 1 00 = 0b0000_1100
-        //     - vps_id = 0000 (4 bits)
-        //     - base_layer_internal = 1
-        //     - base_layer_available = 1
-        //     - max_layers_minus1 high nibble = 00 (2 bits)
-        //   byte 1: 0000 010_ = 0b0000_0100
-        //     - max_layers_minus1 low nibble = 0000 (4 bits → total = 0)
-        //     - max_sub_layers_minus1 = 010 (3 bits = 2)
-        let rbsp = [0b0000_1100, 0b0000_0100, 0x80];
-        let vps = parse(&rbsp).unwrap();
-        assert_eq!(vps.vps_id, 0);
-        assert_eq!(vps.max_layers_minus1, 0);
-        assert_eq!(vps.max_sub_layers_minus1, 2);
-    }
+  #[test]
+  fn parses_vps_with_id_zero() {
+    // Hand-pack bits per MSB-first BitReader:
+    //   byte 0: 0000 1 1 00 = 0b0000_1100
+    //     - vps_id = 0000 (4 bits)
+    //     - base_layer_internal = 1
+    //     - base_layer_available = 1
+    //     - max_layers_minus1 high nibble = 00 (2 bits)
+    //   byte 1: 0000 010_ = 0b0000_0100
+    //     - max_layers_minus1 low nibble = 0000 (4 bits → total = 0)
+    //     - max_sub_layers_minus1 = 010 (3 bits = 2)
+    let rbsp = [0b0000_1100, 0b0000_0100, 0x80];
+    let vps = parse(&rbsp).unwrap();
+    assert_eq!(vps.vps_id, 0);
+    assert_eq!(vps.max_layers_minus1, 0);
+    assert_eq!(vps.max_sub_layers_minus1, 2);
+  }
 
-    #[test]
-    fn rejects_empty_rbsp() {
-        assert!(matches!(parse(&[]), Err(ParseError::Malformed { .. })));
-    }
+  #[test]
+  fn rejects_empty_rbsp() {
+    assert!(matches!(parse(&[]), Err(ParseError::Malformed { .. })));
+  }
 }

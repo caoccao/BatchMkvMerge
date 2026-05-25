@@ -27,31 +27,31 @@
 //! Identification only needs the profile.
 
 pub fn decode(body: &[u8]) -> Option<u32> {
-    if body.len() < 3 {
-        return None;
-    }
-    let profile = (body[2] >> 1) & 0x7F;
-    Some(profile as u32)
+  if body.len() < 3 {
+    return None;
+  }
+  let profile = (body[2] >> 1) & 0x7F;
+  Some(profile as u32)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn extracts_profile_5() {
-        let body = [1u8, 0, (5 << 1) & 0xFE];
-        assert_eq!(decode(&body), Some(5));
-    }
+  #[test]
+  fn extracts_profile_5() {
+    let body = [1u8, 0, (5 << 1) & 0xFE];
+    assert_eq!(decode(&body), Some(5));
+  }
 
-    #[test]
-    fn extracts_profile_8() {
-        let body = [1u8, 0, (8 << 1) & 0xFE];
-        assert_eq!(decode(&body), Some(8));
-    }
+  #[test]
+  fn extracts_profile_8() {
+    let body = [1u8, 0, (8 << 1) & 0xFE];
+    assert_eq!(decode(&body), Some(8));
+  }
 
-    #[test]
-    fn rejects_truncated_body() {
-        assert!(decode(&[1u8, 0]).is_none());
-    }
+  #[test]
+  fn rejects_truncated_body() {
+    assert!(decode(&[1u8, 0]).is_none());
+  }
 }

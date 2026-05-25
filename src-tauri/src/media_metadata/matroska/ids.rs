@@ -32,8 +32,8 @@
 //! reviewers can spot omissions by reading the spec in order.
 
 #![allow(dead_code)] // Several IDs are reserved for later phases (chapters,
-                     // tags, cues …). Suppress unused warnings until those
-                     // call sites land.
+// tags, cues …). Suppress unused warnings until those
+// call sites land.
 
 // =============================================================================
 //   EBML header (top-level)
@@ -295,58 +295,58 @@ pub const CUE_CLUSTER_POSITION: u32 = 0xF1;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn well_known_ebml_constants_match_spec() {
-        assert_eq!(EBML, 0x1A45_DFA3);
-        assert_eq!(SEGMENT, 0x1853_8067);
-        assert_eq!(SEEK_HEAD, 0x114D_9B74);
-        assert_eq!(INFO, 0x1549_A966);
-        assert_eq!(TRACKS, 0x1654_AE6B);
-        assert_eq!(ATTACHMENTS, 0x1941_A469);
-        assert_eq!(CHAPTERS, 0x1043_A770);
-        assert_eq!(TAGS, 0x1254_C367);
-        assert_eq!(CUES, 0x1C53_BB6B);
-        assert_eq!(CLUSTER, 0x1F43_B675);
-        assert_eq!(VOID, 0xEC);
-        assert_eq!(CRC32, 0xBF);
-    }
+  #[test]
+  fn well_known_ebml_constants_match_spec() {
+    assert_eq!(EBML, 0x1A45_DFA3);
+    assert_eq!(SEGMENT, 0x1853_8067);
+    assert_eq!(SEEK_HEAD, 0x114D_9B74);
+    assert_eq!(INFO, 0x1549_A966);
+    assert_eq!(TRACKS, 0x1654_AE6B);
+    assert_eq!(ATTACHMENTS, 0x1941_A469);
+    assert_eq!(CHAPTERS, 0x1043_A770);
+    assert_eq!(TAGS, 0x1254_C367);
+    assert_eq!(CUES, 0x1C53_BB6B);
+    assert_eq!(CLUSTER, 0x1F43_B675);
+    assert_eq!(VOID, 0xEC);
+    assert_eq!(CRC32, 0xBF);
+  }
 
-    #[test]
-    fn one_byte_ids_have_marker_bit() {
-        for id in [VOID, CRC32, TRACK_ENTRY, CODEC_ID, TRACK_TYPE, TRACK_NUMBER] {
-            // 1-byte IDs always have the top bit set (marker for VINT width 1)
-            assert!(id <= 0xFF);
-            assert!(id & 0x80 != 0, "id {id:#x} should have top bit set");
-        }
+  #[test]
+  fn one_byte_ids_have_marker_bit() {
+    for id in [VOID, CRC32, TRACK_ENTRY, CODEC_ID, TRACK_TYPE, TRACK_NUMBER] {
+      // 1-byte IDs always have the top bit set (marker for VINT width 1)
+      assert!(id <= 0xFF);
+      assert!(id & 0x80 != 0, "id {id:#x} should have top bit set");
     }
+  }
 
-    #[test]
-    fn two_byte_ids_have_correct_marker() {
-        // Spot-check a handful of well-known width-2 element IDs.
-        for id in [TRACK_UID, FLAG_FORCED, TRACK_NAME, SEEK] {
-            assert!(id > 0xFF && id <= 0xFFFF);
-            // Top byte high nibble bit 6 (`0x40`) is the width-2 marker.
-            assert!(((id >> 8) & 0x40) != 0, "id {id:#x} should have width-2 marker bit");
-        }
+  #[test]
+  fn two_byte_ids_have_correct_marker() {
+    // Spot-check a handful of well-known width-2 element IDs.
+    for id in [TRACK_UID, FLAG_FORCED, TRACK_NAME, SEEK] {
+      assert!(id > 0xFF && id <= 0xFFFF);
+      // Top byte high nibble bit 6 (`0x40`) is the width-2 marker.
+      assert!(((id >> 8) & 0x40) != 0, "id {id:#x} should have width-2 marker bit");
     }
+  }
 
-    #[test]
-    fn four_byte_ids_match_libmatroska() {
-        assert_eq!(VIDEO_COLOR_SPACE, 0x2EB5_24);
-        assert_eq!(TRACK_LANGUAGE, 0x22B5_9C);
-        assert_eq!(LANGUAGE_IETF, 0x22B5_9D);
-        assert_eq!(DEFAULT_DURATION, 0x23E3_83);
-        assert_eq!(VIDEO_FRAME_RATE, 0x2383_E3);
-    }
+  #[test]
+  fn four_byte_ids_match_libmatroska() {
+    assert_eq!(VIDEO_COLOR_SPACE, 0x2EB5_24);
+    assert_eq!(TRACK_LANGUAGE, 0x22B5_9C);
+    assert_eq!(LANGUAGE_IETF, 0x22B5_9D);
+    assert_eq!(DEFAULT_DURATION, 0x23E3_83);
+    assert_eq!(VIDEO_FRAME_RATE, 0x2383_E3);
+  }
 
-    #[test]
-    fn projection_block_ids_form_contiguous_range() {
-        assert_eq!(VIDEO_PROJECTION_TYPE, VIDEO_PROJECTION + 1);
-        assert_eq!(VIDEO_PROJECTION_PRIVATE, VIDEO_PROJECTION + 2);
-        assert_eq!(VIDEO_PROJECTION_POSE_YAW, VIDEO_PROJECTION + 3);
-        assert_eq!(VIDEO_PROJECTION_POSE_PITCH, VIDEO_PROJECTION + 4);
-        assert_eq!(VIDEO_PROJECTION_POSE_ROLL, VIDEO_PROJECTION + 5);
-    }
+  #[test]
+  fn projection_block_ids_form_contiguous_range() {
+    assert_eq!(VIDEO_PROJECTION_TYPE, VIDEO_PROJECTION + 1);
+    assert_eq!(VIDEO_PROJECTION_PRIVATE, VIDEO_PROJECTION + 2);
+    assert_eq!(VIDEO_PROJECTION_POSE_YAW, VIDEO_PROJECTION + 3);
+    assert_eq!(VIDEO_PROJECTION_POSE_PITCH, VIDEO_PROJECTION + 4);
+    assert_eq!(VIDEO_PROJECTION_POSE_ROLL, VIDEO_PROJECTION + 5);
+  }
 }

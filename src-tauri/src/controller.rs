@@ -27,105 +27,102 @@ use crate::media_metadata::{ParseError, ParseOptions};
 use crate::protocol::{About, BetterMediaInfoStatus, UpdateCheckResult};
 
 pub async fn get_about() -> Result<About> {
-    Ok(About {
-        app_version: get_app_version().to_owned(),
-    })
+  Ok(About {
+    app_version: get_app_version().to_owned(),
+  })
 }
 
 pub async fn get_config() -> Result<config::Config> {
-    Ok(config::get_config())
+  Ok(config::get_config())
 }
 
 pub async fn set_config(config: config::Config) -> Result<config::Config> {
-    config::set_config(config)?;
-    Ok(config::get_config())
+  config::set_config(config)?;
+  Ok(config::get_config())
 }
 
 pub fn get_app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+  env!("CARGO_PKG_VERSION")
 }
 
 pub fn is_newer_version(latest: &str, current: &str) -> bool {
-    let latest = latest.trim_start_matches('v');
-    let current = current.trim_start_matches('v');
-    let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-    let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-    let len = latest_parts.len().max(current_parts.len());
-    for i in 0..len {
-        let l = latest_parts.get(i).copied().unwrap_or(0);
-        let c = current_parts.get(i).copied().unwrap_or(0);
-        if l > c {
-            return true;
-        }
-        if l < c {
-            return false;
-        }
+  let latest = latest.trim_start_matches('v');
+  let current = current.trim_start_matches('v');
+  let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
+  let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+  let len = latest_parts.len().max(current_parts.len());
+  for i in 0..len {
+    let l = latest_parts.get(i).copied().unwrap_or(0);
+    let c = current_parts.get(i).copied().unwrap_or(0);
+    if l > c {
+      return true;
     }
-    false
+    if l < c {
+      return false;
+    }
+  }
+  false
 }
 
 pub fn check_for_updates() -> Result<UpdateCheckResult> {
-    let app_version = get_app_version();
-    log::info!("Checking for updates. Current version: {}", app_version);
-    let resp = ureq::get("https://api.github.com/repos/caoccao/BatchMkvMerge/releases")
-        .set("User-Agent", APP_NAME)
-        .call()
-        .map_err(|e| anyhow::anyhow!("Failed to fetch releases: {}", e))?;
-    let json: serde_json::Value = resp
-        .into_json()
-        .map_err(|e| anyhow::anyhow!("Failed to parse releases: {}", e))?;
-    if let Some(first) = json.as_array().and_then(|arr| arr.first()) {
-        let tag = first["tag_name"].as_str().unwrap_or("");
-        log::info!("Latest release tag: {}", tag);
-        if is_newer_version(tag, app_version) {
-            let version = tag.trim_start_matches('v').to_owned();
-            return Ok(UpdateCheckResult {
-                has_update: true,
-                latest_version: Some(version),
-            });
-        }
+  let app_version = get_app_version();
+  log::info!("Checking for updates. Current version: {}", app_version);
+  let resp = ureq::get("https://api.github.com/repos/caoccao/BatchMkvMerge/releases")
+    .set("User-Agent", APP_NAME)
+    .call()
+    .map_err(|e| anyhow::anyhow!("Failed to fetch releases: {}", e))?;
+  let json: serde_json::Value = resp
+    .into_json()
+    .map_err(|e| anyhow::anyhow!("Failed to parse releases: {}", e))?;
+  if let Some(first) = json.as_array().and_then(|arr| arr.first()) {
+    let tag = first["tag_name"].as_str().unwrap_or("");
+    log::info!("Latest release tag: {}", tag);
+    if is_newer_version(tag, app_version) {
+      let version = tag.trim_start_matches('v').to_owned();
+      return Ok(UpdateCheckResult {
+        has_update: true,
+        latest_version: Some(version),
+      });
     }
-    Ok(UpdateCheckResult {
-        has_update: false,
-        latest_version: None,
-    })
+  }
+  Ok(UpdateCheckResult {
+    has_update: false,
+    latest_version: None,
+  })
 }
 
 pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
-    let mut result: Vec<String> = Vec::new();
-    for input in paths {
-        let path = Path::new(input.as_str());
-        if !path.exists() {
-            continue;
-        }
-        if path.is_dir() {
-            let mut entries: Vec<PathBuf> = path
-                .read_dir()
-                .map_err(anyhow::Error::msg)?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_file() && is_supported_media_path(p))
-                .collect();
-            entries.sort();
-            for p in entries {
-                if let Some(s) = p.to_str() {
-                    result.push(s.to_owned());
-                }
-            }
-        } else if path.is_file() && is_supported_media_path(path) {
-            result.push(input);
-        }
+  let mut result: Vec<String> = Vec::new();
+  for input in paths {
+    let path = Path::new(input.as_str());
+    if !path.exists() {
+      continue;
     }
-    Ok(result)
+    if path.is_dir() {
+      let mut entries: Vec<PathBuf> = path
+        .read_dir()
+        .map_err(anyhow::Error::msg)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && is_supported_media_path(p))
+        .collect();
+      entries.sort();
+      for p in entries {
+        if let Some(s) = p.to_str() {
+          result.push(s.to_owned());
+        }
+      }
+    } else if path.is_file() && is_supported_media_path(path) {
+      result.push(input);
+    }
+  }
+  Ok(result)
 }
 
 /// Resolve the file's media metadata using the native parser. Extracted as a
 /// plain function (no `#[tauri::command]`) so unit tests can exercise it
 /// without spinning up Tauri.
-pub fn read_media_metadata(
-    file: String,
-    options: ParseOptions,
-) -> Result<MediaMetadata, ParseError> {
-    media_metadata::parse(Path::new(&file), options)
+pub fn read_media_metadata(file: String, options: ParseOptions) -> Result<MediaMetadata, ParseError> {
+  media_metadata::parse(Path::new(&file), options)
 }
 
 /// Build the per-invocation [`ParseOptions`] from the persisted config. The
@@ -134,291 +131,283 @@ pub fn read_media_metadata(
 /// value through Settings (i.e. when `parser.timeoutMs` matches the default).
 /// See [[feedback-parser-timeout]].
 pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
-    let timeout_ms = if cfg.parser.timeout_ms == config::ConfigParser::DEFAULT_TIMEOUT_MS {
-        std::env::var("BMM_PARSER_BUDGET_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
-    } else {
-        cfg.parser.effective_timeout_ms()
-    };
-    ParseOptions {
-        timeout_ms,
-        subtitle_charset: cfg.parser.subtitle_charset.clone(),
-        ..ParseOptions::default()
-    }
+  let timeout_ms = if cfg.parser.timeout_ms == config::ConfigParser::DEFAULT_TIMEOUT_MS {
+    std::env::var("BMM_PARSER_BUDGET_MS")
+      .ok()
+      .and_then(|v| v.parse::<u64>().ok())
+      .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
+  } else {
+    cfg.parser.effective_timeout_ms()
+  };
+  ParseOptions {
+    timeout_ms,
+    subtitle_charset: cfg.parser.subtitle_charset.clone(),
+    ..ParseOptions::default()
+  }
 }
 
 pub async fn check_output_path_writable(path: String) -> Result<bool> {
-    let mut current = PathBuf::from(&path);
-    loop {
-        if current.exists() {
-            break;
-        }
-        let Some(parent) = current.parent() else {
-            return Ok(false);
-        };
-        current = parent.to_path_buf();
+  let mut current = PathBuf::from(&path);
+  loop {
+    if current.exists() {
+      break;
     }
-    if !current.is_dir() {
-        return Ok(false);
+    let Some(parent) = current.parent() else {
+      return Ok(false);
+    };
+    current = parent.to_path_buf();
+  }
+  if !current.is_dir() {
+    return Ok(false);
+  }
+  let test_name = format!(".batchmkvmerge_writecheck_{}", std::process::id());
+  let test_path = current.join(&test_name);
+  match std::fs::File::create(&test_path) {
+    Ok(_) => {
+      let _ = std::fs::remove_file(&test_path);
+      Ok(true)
     }
-    let test_name = format!(".batchmkvmerge_writecheck_{}", std::process::id());
-    let test_path = current.join(&test_name);
-    match std::fs::File::create(&test_path) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&test_path);
-            Ok(true)
-        }
-        Err(_) => Ok(false),
-    }
+    Err(_) => Ok(false),
+  }
 }
 
 pub async fn ensure_output_path(path: String) -> Result<()> {
-    let p = Path::new(&path);
-    if p.exists() {
-        if !p.is_dir() {
-            anyhow::bail!("{path} exists but is not a directory");
-        }
-        return Ok(());
+  let p = Path::new(&path);
+  if p.exists() {
+    if !p.is_dir() {
+      anyhow::bail!("{path} exists but is not a directory");
     }
-    std::fs::create_dir_all(p).map_err(anyhow::Error::msg)?;
-    Ok(())
+    return Ok(());
+  }
+  std::fs::create_dir_all(p).map_err(anyhow::Error::msg)?;
+  Ok(())
 }
 
 fn better_media_info_exe_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "BetterMediaInfo.exe"
-    } else {
-        "BetterMediaInfo"
-    }
+  if cfg!(target_os = "windows") {
+    "BetterMediaInfo.exe"
+  } else {
+    "BetterMediaInfo"
+  }
 }
 
 pub fn find_running_process_dir(exe_name: &str) -> Option<PathBuf> {
-    let sys = sysinfo::System::new_all();
-    for process in sys.processes().values() {
-        let name = process.name().to_string_lossy();
-        if !name.eq_ignore_ascii_case(exe_name) {
-            continue;
-        }
-        if let Some(exe) = process.exe() {
-            if let Some(parent) = exe.parent() {
-                return Some(parent.to_path_buf());
-            }
-        }
+  let sys = sysinfo::System::new_all();
+  for process in sys.processes().values() {
+    let name = process.name().to_string_lossy();
+    if !name.eq_ignore_ascii_case(exe_name) {
+      continue;
     }
-    None
+    if let Some(exe) = process.exe() {
+      if let Some(parent) = exe.parent() {
+        return Some(parent.to_path_buf());
+      }
+    }
+  }
+  None
 }
 
 fn find_running_better_media_info_dir() -> Option<PathBuf> {
-    find_running_process_dir(better_media_info_exe_name())
+  find_running_process_dir(better_media_info_exe_name())
 }
 
 fn find_better_media_info_dir(path: &Path) -> Option<PathBuf> {
-    if !path.exists() {
-        return None;
+  if !path.exists() {
+    return None;
+  }
+  let exe_name = better_media_info_exe_name();
+  if path.is_file() {
+    let matches = path
+      .file_name()
+      .and_then(|n| n.to_str())
+      .map(|n| n.eq_ignore_ascii_case(exe_name))
+      .unwrap_or(false);
+    if matches {
+      return path.parent().map(|p| p.to_path_buf());
     }
-    let exe_name = better_media_info_exe_name();
-    if path.is_file() {
-        let matches = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.eq_ignore_ascii_case(exe_name))
-            .unwrap_or(false);
-        if matches {
-            return path.parent().map(|p| p.to_path_buf());
-        }
-        return None;
-    }
-    if path.is_dir() && path.join(exe_name).is_file() {
-        return Some(path.to_path_buf());
-    }
-    None
+    return None;
+  }
+  if path.is_dir() && path.join(exe_name).is_file() {
+    return Some(path.to_path_buf());
+  }
+  None
 }
 
 fn common_better_media_info_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    #[cfg(target_os = "windows")]
-    {
-        for env_var in ["LOCALAPPDATA"] {
-            if let Ok(value) = std::env::var(env_var) {
-                if !value.is_empty() {
-                    dirs.push(PathBuf::from(value).join("Programs").join("BetterMediaInfo"));
-                }
-            }
+  let mut dirs: Vec<PathBuf> = Vec::new();
+  #[cfg(target_os = "windows")]
+  {
+    for env_var in ["LOCALAPPDATA"] {
+      if let Ok(value) = std::env::var(env_var) {
+        if !value.is_empty() {
+          dirs.push(PathBuf::from(value).join("Programs").join("BetterMediaInfo"));
         }
-        for env_var in ["ProgramFiles", "ProgramFiles(x86)"] {
-            if let Ok(value) = std::env::var(env_var) {
-                if !value.is_empty() {
-                    dirs.push(PathBuf::from(value).join("BetterMediaInfo"));
-                }
-            }
+      }
+    }
+    for env_var in ["ProgramFiles", "ProgramFiles(x86)"] {
+      if let Ok(value) = std::env::var(env_var) {
+        if !value.is_empty() {
+          dirs.push(PathBuf::from(value).join("BetterMediaInfo"));
         }
+      }
     }
-    #[cfg(target_os = "macos")]
-    {
-        dirs.push(PathBuf::from(
-            "/Applications/BetterMediaInfo.app/Contents/MacOS",
-        ));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        dirs.push(PathBuf::from("/usr/bin"));
-        dirs.push(PathBuf::from("/usr/local/bin"));
-    }
-    dirs
+  }
+  #[cfg(target_os = "macos")]
+  {
+    dirs.push(PathBuf::from("/Applications/BetterMediaInfo.app/Contents/MacOS"));
+  }
+  #[cfg(target_os = "linux")]
+  {
+    dirs.push(PathBuf::from("/usr/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+  }
+  dirs
 }
 
 #[cfg(target_os = "macos")]
 fn find_macos_app_bundle(bin: &Path) -> Option<PathBuf> {
-    // The Mach-O binary lives at `<bundle>.app/Contents/MacOS/BetterMediaInfo`,
-    // so the `.app` ancestor is at most three levels up. Walk a bounded number
-    // of parents instead of looping unbounded.
-    let mut current = bin.parent()?;
-    for _ in 0..4 {
-        if current.extension().and_then(|s| s.to_str()) == Some("app") {
-            return Some(current.to_path_buf());
-        }
-        current = current.parent()?;
+  // The Mach-O binary lives at `<bundle>.app/Contents/MacOS/BetterMediaInfo`,
+  // so the `.app` ancestor is at most three levels up. Walk a bounded number
+  // of parents instead of looping unbounded.
+  let mut current = bin.parent()?;
+  for _ in 0..4 {
+    if current.extension().and_then(|s| s.to_str()) == Some("app") {
+      return Some(current.to_path_buf());
     }
-    None
+    current = current.parent()?;
+  }
+  None
 }
 
 pub async fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
-    let cfg = config::get_config();
-    let configured = cfg.external_tools.better_media_info_path.trim().to_owned();
-    if configured.is_empty() {
-        anyhow::bail!("BetterMediaInfo path is not set");
-    }
-    let exe = Path::new(&configured).join(better_media_info_exe_name());
-    if !exe.is_file() {
-        anyhow::bail!(
-            "BetterMediaInfo executable not found at {}",
-            exe.display()
-        );
-    }
+  let cfg = config::get_config();
+  let configured = cfg.external_tools.better_media_info_path.trim().to_owned();
+  if configured.is_empty() {
+    anyhow::bail!("BetterMediaInfo path is not set");
+  }
+  let exe = Path::new(&configured).join(better_media_info_exe_name());
+  if !exe.is_file() {
+    anyhow::bail!("BetterMediaInfo executable not found at {}", exe.display());
+  }
 
-    // On macOS, going through `open` lets Launch Services activate the bundle
-    // cleanly — spawning the bundle's Mach-O binary directly causes a brief
-    // window flash because the child never goes through proper app activation.
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(app_bundle) = find_macos_app_bundle(&exe) {
-            let mut cmd = std::process::Command::new("/usr/bin/open");
-            cmd.arg("-a").arg(&app_bundle);
-            if !paths.is_empty() {
-                cmd.arg("--args").args(&paths);
-            }
-            cmd.stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            cmd.spawn()
-                .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo via open: {}", e))?;
-            return Ok(());
-        }
-    }
-
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.args(&paths)
+  // On macOS, going through `open` lets Launch Services activate the bundle
+  // cleanly — spawning the bundle's Mach-O binary directly causes a brief
+  // window flash because the child never goes through proper app activation.
+  #[cfg(target_os = "macos")]
+  {
+    if let Some(app_bundle) = find_macos_app_bundle(&exe) {
+      let mut cmd = std::process::Command::new("/usr/bin/open");
+      cmd.arg("-a").arg(&app_bundle);
+      if !paths.is_empty() {
+        cmd.arg("--args").args(&paths);
+      }
+      cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+      cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo via open: {}", e))?;
+      return Ok(());
     }
-    cmd.spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo: {}", e))?;
-    Ok(())
+  }
+
+  let mut cmd = std::process::Command::new(&exe);
+  cmd
+    .args(&paths)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+  #[cfg(target_os = "windows")]
+  {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+  }
+  cmd
+    .spawn()
+    .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo: {}", e))?;
+  Ok(())
 }
 
-pub async fn detect_better_media_info(
-    user_path: String,
-    check_running: bool,
-) -> Result<BetterMediaInfoStatus> {
-    if check_running {
-        if let Some(dir) = find_running_better_media_info_dir() {
-            return Ok(BetterMediaInfoStatus {
-                found: true,
-                path: dir.to_string_lossy().to_string(),
-            });
-        }
+pub async fn detect_better_media_info(user_path: String, check_running: bool) -> Result<BetterMediaInfoStatus> {
+  if check_running {
+    if let Some(dir) = find_running_better_media_info_dir() {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: dir.to_string_lossy().to_string(),
+      });
     }
-    let trimmed = user_path.trim();
-    if !trimmed.is_empty() {
-        if let Some(found) = find_better_media_info_dir(Path::new(trimmed)) {
-            return Ok(BetterMediaInfoStatus {
-                found: true,
-                path: found.to_string_lossy().to_string(),
-            });
-        }
+  }
+  let trimmed = user_path.trim();
+  if !trimmed.is_empty() {
+    if let Some(found) = find_better_media_info_dir(Path::new(trimmed)) {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: found.to_string_lossy().to_string(),
+      });
     }
-    for dir in common_better_media_info_dirs() {
-        if let Some(found) = find_better_media_info_dir(&dir) {
-            return Ok(BetterMediaInfoStatus {
-                found: true,
-                path: found.to_string_lossy().to_string(),
-            });
-        }
+  }
+  for dir in common_better_media_info_dirs() {
+    if let Some(found) = find_better_media_info_dir(&dir) {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: found.to_string_lossy().to_string(),
+      });
     }
-    Ok(BetterMediaInfoStatus {
-        found: false,
-        path: String::new(),
-    })
+  }
+  Ok(BetterMediaInfoStatus {
+    found: false,
+    path: String::new(),
+  })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    fn cfg_with_timeout(ms: u64) -> config::Config {
-        let mut cfg = config::Config::default();
-        cfg.parser.timeout_ms = ms;
-        cfg
-    }
+  fn cfg_with_timeout(ms: u64) -> config::Config {
+    let mut cfg = config::Config::default();
+    cfg.parser.timeout_ms = ms;
+    cfg
+  }
 
-    #[test]
-    fn parser_options_from_config_default_uses_default_timeout() {
-        let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
-        // SAFETY: unsetting env vars in tests is racy across threads but this
-        // suite never sets it; cargo runs us in process isolation per binary.
-        unsafe {
-            std::env::remove_var("BMM_PARSER_BUDGET_MS");
-        }
-        let opts = parser_options_from_config(&cfg);
-        assert_eq!(opts.timeout_ms, config::ConfigParser::DEFAULT_TIMEOUT_MS);
+  #[test]
+  fn parser_options_from_config_default_uses_default_timeout() {
+    let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
+    // SAFETY: unsetting env vars in tests is racy across threads but this
+    // suite never sets it; cargo runs us in process isolation per binary.
+    unsafe {
+      std::env::remove_var("BMM_PARSER_BUDGET_MS");
     }
+    let opts = parser_options_from_config(&cfg);
+    assert_eq!(opts.timeout_ms, config::ConfigParser::DEFAULT_TIMEOUT_MS);
+  }
 
-    #[test]
-    fn parser_options_from_config_clamps_pinned_value() {
-        let cfg = cfg_with_timeout(1);
-        let opts = parser_options_from_config(&cfg);
-        assert_eq!(opts.timeout_ms, config::ConfigParser::MIN_TIMEOUT_MS);
-    }
+  #[test]
+  fn parser_options_from_config_clamps_pinned_value() {
+    let cfg = cfg_with_timeout(1);
+    let opts = parser_options_from_config(&cfg);
+    assert_eq!(opts.timeout_ms, config::ConfigParser::MIN_TIMEOUT_MS);
+  }
 
-    #[test]
-    fn parser_options_from_config_honours_pinned_value_over_env() {
-        let cfg = cfg_with_timeout(2500);
-        unsafe {
-            std::env::set_var("BMM_PARSER_BUDGET_MS", "9999");
-        }
-        let opts = parser_options_from_config(&cfg);
-        // SAFETY: see above; we always restore.
-        unsafe {
-            std::env::remove_var("BMM_PARSER_BUDGET_MS");
-        }
-        assert_eq!(opts.timeout_ms, 2500);
+  #[test]
+  fn parser_options_from_config_honours_pinned_value_over_env() {
+    let cfg = cfg_with_timeout(2500);
+    unsafe {
+      std::env::set_var("BMM_PARSER_BUDGET_MS", "9999");
     }
+    let opts = parser_options_from_config(&cfg);
+    // SAFETY: see above; we always restore.
+    unsafe {
+      std::env::remove_var("BMM_PARSER_BUDGET_MS");
+    }
+    assert_eq!(opts.timeout_ms, 2500);
+  }
 
-    #[test]
-    fn read_media_metadata_propagates_io_error_for_missing_file() {
-        let opts = ParseOptions::default();
-        let err = read_media_metadata(
-            "this-file-does-not-exist-12345.mkv".to_owned(),
-            opts,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ParseError::Io { .. }));
-    }
+  #[test]
+  fn read_media_metadata_propagates_io_error_for_missing_file() {
+    let opts = ParseOptions::default();
+    let err = read_media_metadata("this-file-does-not-exist-12345.mkv".to_owned(), opts).unwrap_err();
+    assert!(matches!(err, ParseError::Io { .. }));
+  }
 }

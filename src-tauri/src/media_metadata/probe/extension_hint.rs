@@ -32,111 +32,111 @@ use std::path::Path;
 /// matching format module lands in a later phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileTypeHint {
-    Aac,
-    Ac3,
-    Asf,
-    AvcEs,
-    Avi,
-    Cdxa,
-    Chapters,
-    CoreAudio,
-    Dirac,
-    Dts,
-    Dv,
-    Flac,
-    Flv,
-    HevcEs,
-    HdSub,
-    Ivf,
-    Matroska,
-    MicroDvd,
-    Mp3,
-    MpegEs,
-    MpegPs,
-    MpegTs,
-    Ogm,
-    PgsSup,
-    QtMp4,
-    Real,
-    Srt,
-    Ssa,
-    TrueHd,
-    Tta,
-    Usf,
-    Vc1,
-    VobButton,
-    VobSub,
-    Wav,
-    Wavpack4,
-    WebVtt,
-    HdmvTextSt,
-    Obu,
-    AviDv1,
-    /// `mpls` blu-ray playlist — recognised but no dedicated reader; mkvtoolnix
-    /// also tags it `is_unknown` (see file_types.cpp:48).
-    BlurayPlaylist,
-    /// `caf` / `m4a` / `mp4` ALAC variant — recognised, dispatched into the
-    /// MP4 reader at parse time (file_types.cpp:32).
-    Alac,
+  Aac,
+  Ac3,
+  Asf,
+  AvcEs,
+  Avi,
+  Cdxa,
+  Chapters,
+  CoreAudio,
+  Dirac,
+  Dts,
+  Dv,
+  Flac,
+  Flv,
+  HevcEs,
+  HdSub,
+  Ivf,
+  Matroska,
+  MicroDvd,
+  Mp3,
+  MpegEs,
+  MpegPs,
+  MpegTs,
+  Ogm,
+  PgsSup,
+  QtMp4,
+  Real,
+  Srt,
+  Ssa,
+  TrueHd,
+  Tta,
+  Usf,
+  Vc1,
+  VobButton,
+  VobSub,
+  Wav,
+  Wavpack4,
+  WebVtt,
+  HdmvTextSt,
+  Obu,
+  AviDv1,
+  /// `mpls` blu-ray playlist — recognised but no dedicated reader; mkvtoolnix
+  /// also tags it `is_unknown` (see file_types.cpp:48).
+  BlurayPlaylist,
+  /// `caf` / `m4a` / `mp4` ALAC variant — recognised, dispatched into the
+  /// MP4 reader at parse time (file_types.cpp:32).
+  Alac,
 }
 
 impl FileTypeHint {
-    /// Stable identifier used for log lines and dispatch ordering.  Matches
-    /// the lower-case variant name.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Aac => "aac",
-            Self::Ac3 => "ac3",
-            Self::Asf => "asf",
-            Self::AvcEs => "avc_es",
-            Self::Avi => "avi",
-            Self::Cdxa => "cdxa",
-            Self::Chapters => "chapters",
-            Self::CoreAudio => "coreaudio",
-            Self::Dirac => "dirac",
-            Self::Dts => "dts",
-            Self::Dv => "dv",
-            Self::Flac => "flac",
-            Self::Flv => "flv",
-            Self::HevcEs => "hevc_es",
-            Self::HdSub => "hdsub",
-            Self::Ivf => "ivf",
-            Self::Matroska => "matroska",
-            Self::MicroDvd => "microdvd",
-            Self::Mp3 => "mp3",
-            Self::MpegEs => "mpeg_es",
-            Self::MpegPs => "mpeg_ps",
-            Self::MpegTs => "mpeg_ts",
-            Self::Ogm => "ogm",
-            Self::PgsSup => "pgssup",
-            Self::QtMp4 => "qtmp4",
-            Self::Real => "real",
-            Self::Srt => "srt",
-            Self::Ssa => "ssa",
-            Self::TrueHd => "truehd",
-            Self::Tta => "tta",
-            Self::Usf => "usf",
-            Self::Vc1 => "vc1",
-            Self::VobButton => "vobbtn",
-            Self::VobSub => "vobsub",
-            Self::Wav => "wav",
-            Self::Wavpack4 => "wavpack4",
-            Self::WebVtt => "webvtt",
-            Self::HdmvTextSt => "hdmv_textst",
-            Self::Obu => "obu",
-            Self::AviDv1 => "avi_dv_1",
-            Self::BlurayPlaylist => "bluray_playlist",
-            Self::Alac => "alac",
-        }
+  /// Stable identifier used for log lines and dispatch ordering.  Matches
+  /// the lower-case variant name.
+  pub fn name(self) -> &'static str {
+    match self {
+      Self::Aac => "aac",
+      Self::Ac3 => "ac3",
+      Self::Asf => "asf",
+      Self::AvcEs => "avc_es",
+      Self::Avi => "avi",
+      Self::Cdxa => "cdxa",
+      Self::Chapters => "chapters",
+      Self::CoreAudio => "coreaudio",
+      Self::Dirac => "dirac",
+      Self::Dts => "dts",
+      Self::Dv => "dv",
+      Self::Flac => "flac",
+      Self::Flv => "flv",
+      Self::HevcEs => "hevc_es",
+      Self::HdSub => "hdsub",
+      Self::Ivf => "ivf",
+      Self::Matroska => "matroska",
+      Self::MicroDvd => "microdvd",
+      Self::Mp3 => "mp3",
+      Self::MpegEs => "mpeg_es",
+      Self::MpegPs => "mpeg_ps",
+      Self::MpegTs => "mpeg_ts",
+      Self::Ogm => "ogm",
+      Self::PgsSup => "pgssup",
+      Self::QtMp4 => "qtmp4",
+      Self::Real => "real",
+      Self::Srt => "srt",
+      Self::Ssa => "ssa",
+      Self::TrueHd => "truehd",
+      Self::Tta => "tta",
+      Self::Usf => "usf",
+      Self::Vc1 => "vc1",
+      Self::VobButton => "vobbtn",
+      Self::VobSub => "vobsub",
+      Self::Wav => "wav",
+      Self::Wavpack4 => "wavpack4",
+      Self::WebVtt => "webvtt",
+      Self::HdmvTextSt => "hdmv_textst",
+      Self::Obu => "obu",
+      Self::AviDv1 => "avi_dv_1",
+      Self::BlurayPlaylist => "bluray_playlist",
+      Self::Alac => "alac",
     }
+  }
 }
 
 /// One (extension, candidate type) entry.  Mirrors the `(extensions, file_type_e)`
 /// pairs in `file_types.cpp::get_supported`.  An extension can appear more
 /// than once when it is ambiguous (e.g. `mp4` → AAC, ALAC, QtMp4).
 struct Entry {
-    ext: &'static str,
-    hint: FileTypeHint,
+  ext: &'static str,
+  hint: FileTypeHint,
 }
 
 /// Full extension table.  Source-of-truth file is
@@ -270,162 +270,148 @@ const TABLE: &[Entry] = &[
 /// Returns an empty slice for unknown extensions.  Duplicates for the same
 /// extension reflect the genuinely ambiguous cases (e.g. `mp4`).
 pub fn hints_for_extension(ext: &str) -> Vec<FileTypeHint> {
-    let needle = ext.trim_start_matches('.').to_ascii_lowercase();
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    TABLE
-        .iter()
-        .filter(|e| e.ext == needle)
-        .map(|e| e.hint)
-        .collect()
+  let needle = ext.trim_start_matches('.').to_ascii_lowercase();
+  if needle.is_empty() {
+    return Vec::new();
+  }
+  TABLE.iter().filter(|e| e.ext == needle).map(|e| e.hint).collect()
 }
 
 /// Pull the extension off a path and look it up.  Returns an empty `Vec` if
 /// the path has no extension component.
 pub fn hints_for_path<P: AsRef<Path>>(path: P) -> Vec<FileTypeHint> {
-    let p = path.as_ref();
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    hints_for_extension(ext)
+  let p = path.as_ref();
+  let ext = p.extension().and_then(|e| e.to_str()).unwrap_or_default();
+  hints_for_extension(ext)
 }
 
 /// Coarse drag-drop accept predicate — was `mkvtoolnix.rs::is_mkv`. Returns
 /// `true` for every extension `mkvmerge -J` would recognise. The MKV-only
 /// historical restriction is dropped here.
 pub fn is_supported_media_extension(ext: &str) -> bool {
-    !hints_for_extension(ext).is_empty()
+  !hints_for_extension(ext).is_empty()
 }
 
 /// Convenience wrapper for whole paths.
 pub fn is_supported_media_path<P: AsRef<Path>>(path: P) -> bool {
-    !hints_for_path(path).is_empty()
+  !hints_for_path(path).is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn unknown_extension_returns_empty() {
-        assert!(hints_for_extension("xyz").is_empty());
-        assert!(!is_supported_media_extension("xyz"));
-    }
+  #[test]
+  fn unknown_extension_returns_empty() {
+    assert!(hints_for_extension("xyz").is_empty());
+    assert!(!is_supported_media_extension("xyz"));
+  }
 
-    #[test]
-    fn empty_extension_returns_empty() {
-        assert!(hints_for_extension("").is_empty());
-        assert!(!is_supported_media_extension(""));
-    }
+  #[test]
+  fn empty_extension_returns_empty() {
+    assert!(hints_for_extension("").is_empty());
+    assert!(!is_supported_media_extension(""));
+  }
 
-    #[test]
-    fn leading_dot_is_stripped() {
-        assert_eq!(hints_for_extension(".mkv"), hints_for_extension("mkv"));
-    }
+  #[test]
+  fn leading_dot_is_stripped() {
+    assert_eq!(hints_for_extension(".mkv"), hints_for_extension("mkv"));
+  }
 
-    #[test]
-    fn case_insensitive_match() {
-        let lower = hints_for_extension("mkv");
-        let upper = hints_for_extension("MKV");
-        let mixed = hints_for_extension("Mkv");
-        assert_eq!(lower, upper);
-        assert_eq!(lower, mixed);
-        assert_eq!(lower, vec![FileTypeHint::Matroska]);
-    }
+  #[test]
+  fn case_insensitive_match() {
+    let lower = hints_for_extension("mkv");
+    let upper = hints_for_extension("MKV");
+    let mixed = hints_for_extension("Mkv");
+    assert_eq!(lower, upper);
+    assert_eq!(lower, mixed);
+    assert_eq!(lower, vec![FileTypeHint::Matroska]);
+  }
 
-    #[test]
-    fn ambiguous_mp4_returns_all_candidates() {
-        let hints = hints_for_extension("mp4");
-        assert!(hints.contains(&FileTypeHint::Aac));
-        assert!(hints.contains(&FileTypeHint::Alac));
-        assert!(hints.contains(&FileTypeHint::QtMp4));
-    }
+  #[test]
+  fn ambiguous_mp4_returns_all_candidates() {
+    let hints = hints_for_extension("mp4");
+    assert!(hints.contains(&FileTypeHint::Aac));
+    assert!(hints.contains(&FileTypeHint::Alac));
+    assert!(hints.contains(&FileTypeHint::QtMp4));
+  }
 
-    #[test]
-    fn ambiguous_ogg_returns_ogm_and_flac() {
-        let hints = hints_for_extension("ogg");
-        assert!(hints.contains(&FileTypeHint::Ogm));
-        assert!(hints.contains(&FileTypeHint::Flac));
-    }
+  #[test]
+  fn ambiguous_ogg_returns_ogm_and_flac() {
+    let hints = hints_for_extension("ogg");
+    assert!(hints.contains(&FileTypeHint::Ogm));
+    assert!(hints.contains(&FileTypeHint::Flac));
+  }
 
-    #[test]
-    fn extension_table_covers_matroska_family() {
-        for ext in ["mkv", "mka", "mks", "mk3d", "webm", "weba", "webmv", "webma"] {
-            assert_eq!(
-                hints_for_extension(ext),
-                vec![FileTypeHint::Matroska],
-                "{ext} should map to matroska only"
-            );
-        }
+  #[test]
+  fn extension_table_covers_matroska_family() {
+    for ext in ["mkv", "mka", "mks", "mk3d", "webm", "weba", "webmv", "webma"] {
+      assert_eq!(
+        hints_for_extension(ext),
+        vec![FileTypeHint::Matroska],
+        "{ext} should map to matroska only"
+      );
     }
+  }
 
-    #[test]
-    fn dot_path_lookup() {
-        assert!(is_supported_media_path("foo/bar/clip.mkv"));
-        assert!(is_supported_media_path("foo.MP4"));
-        assert!(!is_supported_media_path("foo.unknownext"));
-        // No extension at all
-        assert!(!is_supported_media_path("Makefile"));
-    }
+  #[test]
+  fn dot_path_lookup() {
+    assert!(is_supported_media_path("foo/bar/clip.mkv"));
+    assert!(is_supported_media_path("foo.MP4"));
+    assert!(!is_supported_media_path("foo.unknownext"));
+    // No extension at all
+    assert!(!is_supported_media_path("Makefile"));
+  }
 
-    #[test]
-    fn historical_mkv_predicate_now_covers_all_supported_extensions() {
-        // Spot-check that the historic mkv-only restriction has been broadened.
-        for ext in [
-            "mkv", "webm", "mp4", "mov", "avi", "mp3", "aac", "flac", "wav",
-            "ts", "m2ts", "h264", "265", "av1", "srt", "ass", "sup", "vtt",
-            "ogg", "opus", "thd", "dts", "rm", "vc1", "idx", "ivf",
-        ] {
-            assert!(is_supported_media_extension(ext), "{ext} should be supported");
-        }
+  #[test]
+  fn historical_mkv_predicate_now_covers_all_supported_extensions() {
+    // Spot-check that the historic mkv-only restriction has been broadened.
+    for ext in [
+      "mkv", "webm", "mp4", "mov", "avi", "mp3", "aac", "flac", "wav", "ts", "m2ts", "h264", "265", "av1", "srt",
+      "ass", "sup", "vtt", "ogg", "opus", "thd", "dts", "rm", "vc1", "idx", "ivf",
+    ] {
+      assert!(is_supported_media_extension(ext), "{ext} should be supported");
     }
+  }
 
-    #[test]
-    fn webvtt_canonical_extension_is_supported() {
-        assert!(is_supported_media_extension("vtt"));
-        assert!(is_supported_media_extension("webvtt"));
-        assert_eq!(
-            hints_for_extension("vtt"),
-            vec![FileTypeHint::WebVtt],
-        );
-    }
+  #[test]
+  fn webvtt_canonical_extension_is_supported() {
+    assert!(is_supported_media_extension("vtt"));
+    assert!(is_supported_media_extension("webvtt"));
+    assert_eq!(hints_for_extension("vtt"), vec![FileTypeHint::WebVtt],);
+  }
 
-    #[test]
-    fn truehd_alternate_spellings_supported() {
-        for ext in ["thd", "mlp", "truehd", "true-hd", "thd+ac3"] {
-            assert_eq!(
-                hints_for_extension(ext),
-                vec![FileTypeHint::TrueHd],
-                "{ext} should map to truehd",
-            );
-        }
+  #[test]
+  fn truehd_alternate_spellings_supported() {
+    for ext in ["thd", "mlp", "truehd", "true-hd", "thd+ac3"] {
+      assert_eq!(
+        hints_for_extension(ext),
+        vec![FileTypeHint::TrueHd],
+        "{ext} should map to truehd",
+      );
     }
+  }
 
-    #[test]
-    fn file_type_hint_name_is_stable_and_unique() {
-        // Make sure every hint has a non-empty stable name.
-        let all: Vec<&'static str> = TABLE.iter().map(|e| e.hint.name()).collect();
-        for name in &all {
-            assert!(!name.is_empty());
-        }
+  #[test]
+  fn file_type_hint_name_is_stable_and_unique() {
+    // Make sure every hint has a non-empty stable name.
+    let all: Vec<&'static str> = TABLE.iter().map(|e| e.hint.name()).collect();
+    for name in &all {
+      assert!(!name.is_empty());
     }
+  }
 
-    #[test]
-    fn path_with_no_extension_returns_empty() {
-        assert!(hints_for_path("/tmp/anonymous_blob").is_empty());
-        assert!(hints_for_path(".hidden").is_empty()); // extension parser treats whole thing as stem
-    }
+  #[test]
+  fn path_with_no_extension_returns_empty() {
+    assert!(hints_for_path("/tmp/anonymous_blob").is_empty());
+    assert!(hints_for_path(".hidden").is_empty()); // extension parser treats whole thing as stem
+  }
 
-    #[test]
-    fn bluray_playlist_recognised_but_no_dedicated_reader() {
-        // .mpls is recognised so we don't reject it from drag-drop, but it has
-        // its own hint flag distinct from QtMp4 / Matroska.
-        assert_eq!(
-            hints_for_extension("mpls"),
-            vec![FileTypeHint::BlurayPlaylist],
-        );
-        assert!(is_supported_media_extension("mpls"));
-    }
+  #[test]
+  fn bluray_playlist_recognised_but_no_dedicated_reader() {
+    // .mpls is recognised so we don't reject it from drag-drop, but it has
+    // its own hint flag distinct from QtMp4 / Matroska.
+    assert_eq!(hints_for_extension("mpls"), vec![FileTypeHint::BlurayPlaylist],);
+    assert!(is_supported_media_extension("mpls"));
+  }
 }

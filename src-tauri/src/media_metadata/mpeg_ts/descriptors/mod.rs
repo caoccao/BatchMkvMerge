@@ -45,137 +45,137 @@ pub const TAG_DOVI: u8 = 0xB0;
 /// field; unknown descriptors are silently skipped.
 #[derive(Debug, Default, Clone)]
 pub struct DescriptorSummary {
-    pub language_iso_639_2: Option<String>,
-    /// First teletext page across all entries — kept for back-compat with
-    /// pre-multi-page callers; full table is in [`teletext_entries`].
-    pub teletext_page: Option<u32>,
-    /// Every teletext entry decoded from a 0x56 descriptor (PARSER-092).
-    pub teletext_entries: Vec<teletext::TeletextEntry>,
-    pub is_ac3: bool,
-    pub is_eac3: bool,
-    pub is_dts: bool,
-    pub is_hevc: bool,
-    pub dovi_profile: Option<u32>,
-    pub service_name: Option<String>,
-    /// DVB subtitling descriptor (0x59) entries — PARSER-091.
-    pub subtitling_entries: Vec<subtitling::SubtitlingEntry>,
-    /// Registration descriptor (0x05) information — PARSER-090.
-    pub registration: Option<registration::RegistrationDescriptor>,
-    /// `true` once any tag other than ISO-639 language (0x0A) has been
-    /// observed.  Mirrors mkvtoolnix's `missing_tag` flag used to decide
-    /// whether stream_type 0x06 should default to AC-3 (PARSER-093).
-    pub has_disambiguating_tag: bool,
+  pub language_iso_639_2: Option<String>,
+  /// First teletext page across all entries — kept for back-compat with
+  /// pre-multi-page callers; full table is in [`teletext_entries`].
+  pub teletext_page: Option<u32>,
+  /// Every teletext entry decoded from a 0x56 descriptor (PARSER-092).
+  pub teletext_entries: Vec<teletext::TeletextEntry>,
+  pub is_ac3: bool,
+  pub is_eac3: bool,
+  pub is_dts: bool,
+  pub is_hevc: bool,
+  pub dovi_profile: Option<u32>,
+  pub service_name: Option<String>,
+  /// DVB subtitling descriptor (0x59) entries — PARSER-091.
+  pub subtitling_entries: Vec<subtitling::SubtitlingEntry>,
+  /// Registration descriptor (0x05) information — PARSER-090.
+  pub registration: Option<registration::RegistrationDescriptor>,
+  /// `true` once any tag other than ISO-639 language (0x0A) has been
+  /// observed.  Mirrors mkvtoolnix's `missing_tag` flag used to decide
+  /// whether stream_type 0x06 should default to AC-3 (PARSER-093).
+  pub has_disambiguating_tag: bool,
 }
 
 /// Walk a descriptor list and accumulate findings.
 pub fn walk(descriptors: &[u8]) -> DescriptorSummary {
-    let mut summary = DescriptorSummary::default();
-    let mut pos = 0usize;
-    while pos + 2 <= descriptors.len() {
-        let tag = descriptors[pos];
-        let len = descriptors[pos + 1] as usize;
-        let body_start = pos + 2;
-        let body_end = body_start + len;
-        if body_end > descriptors.len() {
-            break;
-        }
-        let body = &descriptors[body_start..body_end];
-        // PARSER-093: mkvtoolnix sets `missing_tag = false` for any tag
-        // other than 0x0A (ISO-639 language).  Track the same state so the
-        // stream-table can decide whether stream_type 0x06 should default
-        // to AC-3.
-        if tag != TAG_ISO_639_LANGUAGE {
-            summary.has_disambiguating_tag = true;
-        }
-        match tag {
-            TAG_REGISTRATION => {
-                if let Some(r) = registration::decode(body) {
-                    summary.registration = Some(r);
-                }
-            }
-            TAG_ISO_639_LANGUAGE => {
-                if let Some(lang) = iso_639_language::decode(body) {
-                    summary.language_iso_639_2 = Some(lang);
-                }
-            }
-            TAG_TELETEXT => {
-                summary.teletext_entries = teletext::decode_all(body);
-                if let Some(first) = summary.teletext_entries.first() {
-                    summary.teletext_page = Some(first.page);
-                }
-            }
-            TAG_SUBTITLING => {
-                summary.subtitling_entries = subtitling::decode_all(body);
-            }
-            TAG_AC3 => {
-                summary.is_ac3 = ac3::decode(body);
-            }
-            TAG_EAC3 => {
-                summary.is_eac3 = eac3::decode(body);
-            }
-            TAG_DTS => {
-                summary.is_dts = dts::decode(body);
-            }
-            TAG_HEVC => {
-                summary.is_hevc = hevc::decode(body);
-            }
-            TAG_DOVI => {
-                summary.dovi_profile = dovi::decode(body);
-            }
-            TAG_SERVICE => {
-                if let Some(name) = service::decode(body) {
-                    summary.service_name = Some(name);
-                }
-            }
-            _ => {}
-        }
-        pos = body_end;
+  let mut summary = DescriptorSummary::default();
+  let mut pos = 0usize;
+  while pos + 2 <= descriptors.len() {
+    let tag = descriptors[pos];
+    let len = descriptors[pos + 1] as usize;
+    let body_start = pos + 2;
+    let body_end = body_start + len;
+    if body_end > descriptors.len() {
+      break;
     }
-    summary
+    let body = &descriptors[body_start..body_end];
+    // PARSER-093: mkvtoolnix sets `missing_tag = false` for any tag
+    // other than 0x0A (ISO-639 language).  Track the same state so the
+    // stream-table can decide whether stream_type 0x06 should default
+    // to AC-3.
+    if tag != TAG_ISO_639_LANGUAGE {
+      summary.has_disambiguating_tag = true;
+    }
+    match tag {
+      TAG_REGISTRATION => {
+        if let Some(r) = registration::decode(body) {
+          summary.registration = Some(r);
+        }
+      }
+      TAG_ISO_639_LANGUAGE => {
+        if let Some(lang) = iso_639_language::decode(body) {
+          summary.language_iso_639_2 = Some(lang);
+        }
+      }
+      TAG_TELETEXT => {
+        summary.teletext_entries = teletext::decode_all(body);
+        if let Some(first) = summary.teletext_entries.first() {
+          summary.teletext_page = Some(first.page);
+        }
+      }
+      TAG_SUBTITLING => {
+        summary.subtitling_entries = subtitling::decode_all(body);
+      }
+      TAG_AC3 => {
+        summary.is_ac3 = ac3::decode(body);
+      }
+      TAG_EAC3 => {
+        summary.is_eac3 = eac3::decode(body);
+      }
+      TAG_DTS => {
+        summary.is_dts = dts::decode(body);
+      }
+      TAG_HEVC => {
+        summary.is_hevc = hevc::decode(body);
+      }
+      TAG_DOVI => {
+        summary.dovi_profile = dovi::decode(body);
+      }
+      TAG_SERVICE => {
+        if let Some(name) = service::decode(body) {
+          summary.service_name = Some(name);
+        }
+      }
+      _ => {}
+    }
+    pos = body_end;
+  }
+  summary
 }
 
 #[cfg(test)]
 pub(crate) fn build_descriptor(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(2 + body.len());
-    v.push(tag);
-    v.push(body.len() as u8);
-    v.extend_from_slice(body);
-    v
+  let mut v = Vec::with_capacity(2 + body.len());
+  v.push(tag);
+  v.push(body.len() as u8);
+  v.extend_from_slice(body);
+  v
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn walk_collects_known_tags() {
-        let mut descriptors = Vec::new();
-        descriptors.extend(build_descriptor(TAG_ISO_639_LANGUAGE, b"eng\x00"));
-        descriptors.extend(build_descriptor(TAG_AC3, &[]));
-        let s = walk(&descriptors);
-        assert_eq!(s.language_iso_639_2.as_deref(), Some("eng"));
-        assert!(s.is_ac3);
-    }
+  #[test]
+  fn walk_collects_known_tags() {
+    let mut descriptors = Vec::new();
+    descriptors.extend(build_descriptor(TAG_ISO_639_LANGUAGE, b"eng\x00"));
+    descriptors.extend(build_descriptor(TAG_AC3, &[]));
+    let s = walk(&descriptors);
+    assert_eq!(s.language_iso_639_2.as_deref(), Some("eng"));
+    assert!(s.is_ac3);
+  }
 
-    #[test]
-    fn walk_skips_unknown_tags() {
-        let descriptors = build_descriptor(0x99, &[1, 2, 3, 4]);
-        let s = walk(&descriptors);
-        assert!(s.language_iso_639_2.is_none());
-        assert!(!s.is_ac3);
-    }
+  #[test]
+  fn walk_skips_unknown_tags() {
+    let descriptors = build_descriptor(0x99, &[1, 2, 3, 4]);
+    let s = walk(&descriptors);
+    assert!(s.language_iso_639_2.is_none());
+    assert!(!s.is_ac3);
+  }
 
-    #[test]
-    fn walk_handles_empty_buffer() {
-        let s = walk(&[]);
-        assert!(s.language_iso_639_2.is_none());
-    }
+  #[test]
+  fn walk_handles_empty_buffer() {
+    let s = walk(&[]);
+    assert!(s.language_iso_639_2.is_none());
+  }
 
-    #[test]
-    fn walk_stops_on_truncated_descriptor() {
-        // tag, length=5, only 2 bytes of body
-        let descriptors = vec![TAG_ISO_639_LANGUAGE, 0x05, 0x01, 0x02];
-        let s = walk(&descriptors);
-        assert!(s.language_iso_639_2.is_none());
-    }
+  #[test]
+  fn walk_stops_on_truncated_descriptor() {
+    // tag, length=5, only 2 bytes of body
+    let descriptors = vec![TAG_ISO_639_LANGUAGE, 0x05, 0x01, 0x02];
+    let s = walk(&descriptors);
+    assert!(s.language_iso_639_2.is_none());
+  }
 }

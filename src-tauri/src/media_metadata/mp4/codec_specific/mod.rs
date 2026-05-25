@@ -35,20 +35,20 @@ pub mod pasp;
 
 /// Hex-encode a byte slice using lower-case digits.
 pub fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
+  let mut s = String::with_capacity(bytes.len() * 2);
+  for b in bytes {
+    s.push_str(&format!("{:02x}", b));
+  }
+  s
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn hex_encode_is_lower_case_and_padded() {
-        assert_eq!(hex_encode(&[0xAB, 0x01, 0xFF]), "ab01ff");
-        assert_eq!(hex_encode(&[]), "");
-    }
+  #[test]
+  fn hex_encode_is_lower_case_and_padded() {
+    assert_eq!(hex_encode(&[0xAB, 0x01, 0xFF]), "ab01ff");
+    assert_eq!(hex_encode(&[]), "");
+  }
 }

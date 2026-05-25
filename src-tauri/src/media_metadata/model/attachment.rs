@@ -24,53 +24,53 @@ use specta_typescript::Number;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
-    /// 1-based sequence number in the file (matches `mkvmerge -J` ordering).
-    pub id: u32,
-    pub file_name: String,
-    pub mime_type: Option<String>,
-    pub description: Option<String>,
-    /// Bytes of the payload.  We seek past, not read.
-    #[specta(type = Number)]
-    pub size: u64,
-    /// Hex-encoded UID when the source format provides one (Matroska FileUID).
-    pub uid_hex: Option<String>,
+  /// 1-based sequence number in the file (matches `mkvmerge -J` ordering).
+  pub id: u32,
+  pub file_name: String,
+  pub mime_type: Option<String>,
+  pub description: Option<String>,
+  /// Bytes of the payload.  We seek past, not read.
+  #[specta(type = Number)]
+  pub size: u64,
+  /// Hex-encoded UID when the source format provides one (Matroska FileUID).
+  pub uid_hex: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn round_trips_through_json() {
-        let a = Attachment {
-            id: 1,
-            file_name: "cover.jpg".to_owned(),
-            mime_type: Some("image/jpeg".to_owned()),
-            description: Some("Front cover".to_owned()),
-            size: 12_345,
-            uid_hex: Some("deadbeef".to_owned()),
-        };
-        let s = serde_json::to_string(&a).unwrap();
-        assert!(s.contains("\"fileName\":\"cover.jpg\""));
-        assert!(s.contains("\"mimeType\":\"image/jpeg\""));
-        assert!(s.contains("\"uidHex\":\"deadbeef\""));
-        let back: Attachment = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, a);
-    }
+  #[test]
+  fn round_trips_through_json() {
+    let a = Attachment {
+      id: 1,
+      file_name: "cover.jpg".to_owned(),
+      mime_type: Some("image/jpeg".to_owned()),
+      description: Some("Front cover".to_owned()),
+      size: 12_345,
+      uid_hex: Some("deadbeef".to_owned()),
+    };
+    let s = serde_json::to_string(&a).unwrap();
+    assert!(s.contains("\"fileName\":\"cover.jpg\""));
+    assert!(s.contains("\"mimeType\":\"image/jpeg\""));
+    assert!(s.contains("\"uidHex\":\"deadbeef\""));
+    let back: Attachment = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, a);
+  }
 
-    #[test]
-    fn nulls_omittable_via_option() {
-        let a = Attachment {
-            id: 2,
-            file_name: "data.bin".to_owned(),
-            mime_type: None,
-            description: None,
-            size: 0,
-            uid_hex: None,
-        };
-        let s = serde_json::to_string(&a).unwrap();
-        assert!(s.contains("\"mimeType\":null"));
-        let back: Attachment = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, a);
-    }
+  #[test]
+  fn nulls_omittable_via_option() {
+    let a = Attachment {
+      id: 2,
+      file_name: "data.bin".to_owned(),
+      mime_type: None,
+      description: None,
+      size: 0,
+      uid_hex: None,
+    };
+    let s = serde_json::to_string(&a).unwrap();
+    assert!(s.contains("\"mimeType\":null"));
+    let back: Attachment = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, a);
+  }
 }

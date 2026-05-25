@@ -36,71 +36,71 @@ use super::BitstreamMetadata;
 const SIGNATURE: &[u8; 8] = b"Speex   ";
 
 pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
-    if packet.len() < 44 || &packet[..8] != SIGNATURE {
-        return None;
-    }
-    // Rate at offset 36 (after signature + 20 version + 2x u32 = 8+20+4+4 = 36).
-    let rate = u32::from_le_bytes([packet[36], packet[37], packet[38], packet[39]]);
-    // nb_channels at offset 48 if header is long enough.
-    let channels = if packet.len() >= 52 {
-        u32::from_le_bytes([packet[48], packet[49], packet[50], packet[51]])
-    } else {
-        1
-    };
-    let mut metadata = BitstreamMetadata::audio_only("A_SPEEX", "Speex");
-    metadata.audio = Some(AudioTrackProperties {
-        channels: Some(channels.max(1)),
-        sampling_frequency: if rate > 0 { Some(rate as f64) } else { None },
-        ..AudioTrackProperties::default()
-    });
-    Some(metadata)
+  if packet.len() < 44 || &packet[..8] != SIGNATURE {
+    return None;
+  }
+  // Rate at offset 36 (after signature + 20 version + 2x u32 = 8+20+4+4 = 36).
+  let rate = u32::from_le_bytes([packet[36], packet[37], packet[38], packet[39]]);
+  // nb_channels at offset 48 if header is long enough.
+  let channels = if packet.len() >= 52 {
+    u32::from_le_bytes([packet[48], packet[49], packet[50], packet[51]])
+  } else {
+    1
+  };
+  let mut metadata = BitstreamMetadata::audio_only("A_SPEEX", "Speex");
+  metadata.audio = Some(AudioTrackProperties {
+    channels: Some(channels.max(1)),
+    sampling_frequency: if rate > 0 { Some(rate as f64) } else { None },
+    ..AudioTrackProperties::default()
+  });
+  Some(metadata)
 }
 
 #[cfg(test)]
 pub(crate) fn build_identification_packet(rate: u32, channels: u32) -> Vec<u8> {
-    let mut p = Vec::with_capacity(80);
-    p.extend_from_slice(SIGNATURE);
-    p.extend_from_slice(&[0u8; 20]); // version string
-    p.extend_from_slice(&1u32.to_le_bytes()); // version id
-    p.extend_from_slice(&80u32.to_le_bytes()); // header size
-    p.extend_from_slice(&rate.to_le_bytes());
-    p.extend_from_slice(&0u32.to_le_bytes()); // mode
-    p.extend_from_slice(&0u32.to_le_bytes()); // mode_bitstream_version
-    p.extend_from_slice(&channels.to_le_bytes());
-    // Pad to 80 bytes
-    while p.len() < 80 {
-        p.push(0);
-    }
-    p
+  let mut p = Vec::with_capacity(80);
+  p.extend_from_slice(SIGNATURE);
+  p.extend_from_slice(&[0u8; 20]); // version string
+  p.extend_from_slice(&1u32.to_le_bytes()); // version id
+  p.extend_from_slice(&80u32.to_le_bytes()); // header size
+  p.extend_from_slice(&rate.to_le_bytes());
+  p.extend_from_slice(&0u32.to_le_bytes()); // mode
+  p.extend_from_slice(&0u32.to_le_bytes()); // mode_bitstream_version
+  p.extend_from_slice(&channels.to_le_bytes());
+  // Pad to 80 bytes
+  while p.len() < 80 {
+    p.push(0);
+  }
+  p
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn sniffs_speex_narrowband() {
-        let pkt = build_identification_packet(16000, 1);
-        let m = sniff(&pkt).unwrap();
-        assert_eq!(m.codec_id, "A_SPEEX");
-        let a = m.audio.unwrap();
-        assert_eq!(a.channels, Some(1));
-        assert_eq!(a.sampling_frequency, Some(16000.0));
-    }
+  #[test]
+  fn sniffs_speex_narrowband() {
+    let pkt = build_identification_packet(16000, 1);
+    let m = sniff(&pkt).unwrap();
+    assert_eq!(m.codec_id, "A_SPEEX");
+    let a = m.audio.unwrap();
+    assert_eq!(a.channels, Some(1));
+    assert_eq!(a.sampling_frequency, Some(16000.0));
+  }
 
-    #[test]
-    fn rejects_non_speex() {
-        assert!(sniff(b"OpusHead").is_none());
-        assert!(sniff(b"\x01vorbis").is_none());
-    }
+  #[test]
+  fn rejects_non_speex() {
+    assert!(sniff(b"OpusHead").is_none());
+    assert!(sniff(b"\x01vorbis").is_none());
+  }
 
-    #[test]
-    fn signature_includes_trailing_spaces() {
-        assert_eq!(SIGNATURE, b"Speex   ");
-    }
+  #[test]
+  fn signature_includes_trailing_spaces() {
+    assert_eq!(SIGNATURE, b"Speex   ");
+  }
 
-    #[test]
-    fn rejects_short_packet() {
-        assert!(sniff(SIGNATURE).is_none());
-    }
+  #[test]
+  fn rejects_short_packet() {
+    assert!(sniff(SIGNATURE).is_none());
+  }
 }

@@ -18,15 +18,15 @@
 //! HEVC descriptor (tag 0x38) — presence-only flag for identification.
 
 pub fn decode(_body: &[u8]) -> bool {
-    true
+  true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn presence_flags_hevc() {
-        assert!(decode(&[]));
-    }
+  #[test]
+  fn presence_flags_hevc() {
+    assert!(decode(&[]));
+  }
 }

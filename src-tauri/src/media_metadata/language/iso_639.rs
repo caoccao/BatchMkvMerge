@@ -28,44 +28,44 @@
 /// Result of looking up a 3-letter code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Iso639Match<'a> {
-    /// Canonical (terminologic) alpha-3 code.
-    pub canonical: &'a str,
-    /// English name for display.
-    pub name: &'a str,
+  /// Canonical (terminologic) alpha-3 code.
+  pub canonical: &'a str,
+  /// English name for display.
+  pub name: &'a str,
 }
 
 /// Look up a 3-letter code.  Returns `Some` for any code in the official
 /// registry, including bibliographic-only entries.  Lookup is
 /// case-insensitive and ignores surrounding whitespace.
 pub fn lookup(code: &str) -> Option<Iso639Match<'static>> {
-    let normalized = code.trim().to_ascii_lowercase();
-    if normalized.len() != 3 {
-        return None;
-    }
-    // Bibliographic alias → terminologic translation first.
-    if let Some(canonical) = bib_to_term(&normalized) {
-        // The terminologic entry is the canonical one — look it up by code.
-        return TABLE
-            .binary_search_by_key(&canonical, |entry| entry.code)
-            .ok()
-            .map(|i| TABLE[i])
-            .map(|e| Iso639Match {
-                canonical: e.code,
-                name: e.name,
-            });
-    }
-    TABLE
-        .binary_search_by_key(&normalized.as_str(), |entry| entry.code)
-        .ok()
-        .map(|i| Iso639Match {
-            canonical: TABLE[i].code,
-            name: TABLE[i].name,
-        })
+  let normalized = code.trim().to_ascii_lowercase();
+  if normalized.len() != 3 {
+    return None;
+  }
+  // Bibliographic alias → terminologic translation first.
+  if let Some(canonical) = bib_to_term(&normalized) {
+    // The terminologic entry is the canonical one — look it up by code.
+    return TABLE
+      .binary_search_by_key(&canonical, |entry| entry.code)
+      .ok()
+      .map(|i| TABLE[i])
+      .map(|e| Iso639Match {
+        canonical: e.code,
+        name: e.name,
+      });
+  }
+  TABLE
+    .binary_search_by_key(&normalized.as_str(), |entry| entry.code)
+    .ok()
+    .map(|i| Iso639Match {
+      canonical: TABLE[i].code,
+      name: TABLE[i].name,
+    })
 }
 
 /// `true` if `code` is a recognised ISO 639-2 alpha-3 code.
 pub fn is_valid(code: &str) -> bool {
-    lookup(code).is_some()
+  lookup(code).is_some()
 }
 
 /// Map an ISO 639-1 alpha-2 code (`en`, `ja`, `pt`, ...) to its ISO 639-2
@@ -76,14 +76,14 @@ pub fn is_valid(code: &str) -> bool {
 /// Mirrors the `alpha_2_code → alpha_3_code` column of mkvtoolnix's
 /// `common/iso639_language_list.cpp`.
 pub fn alpha2_to_alpha3(code: &str) -> Option<&'static str> {
-    let normalized = code.trim().to_ascii_lowercase();
-    if normalized.len() != 2 {
-        return None;
-    }
-    ALPHA2_TO_ALPHA3
-        .binary_search_by_key(&normalized.as_str(), |(a2, _)| a2)
-        .ok()
-        .map(|i| ALPHA2_TO_ALPHA3[i].1)
+  let normalized = code.trim().to_ascii_lowercase();
+  if normalized.len() != 2 {
+    return None;
+  }
+  ALPHA2_TO_ALPHA3
+    .binary_search_by_key(&normalized.as_str(), |(a2, _)| a2)
+    .ok()
+    .map(|i| ALPHA2_TO_ALPHA3[i].1)
 }
 
 /// The fixed "no linguistic content" code from the registry.
@@ -94,12 +94,12 @@ pub const UND: &str = "und";
 /// Translate a bibliographic ISO 639-2/B code to its terminologic (T) twin.
 /// Returns `None` if the input is not a bibliographic alias.
 fn bib_to_term(code: &str) -> Option<&'static str> {
-    // Sorted by bibliographic code so we can do a linear scan or
-    // binary search.  There are only ~22 pairs, so linear is fine.
-    BIB_T_PAIRS
-        .iter()
-        .copied()
-        .find_map(|(b, t)| if b == code { Some(t) } else { None })
+  // Sorted by bibliographic code so we can do a linear scan or
+  // binary search.  There are only ~22 pairs, so linear is fine.
+  BIB_T_PAIRS
+    .iter()
+    .copied()
+    .find_map(|(b, t)| if b == code { Some(t) } else { None })
 }
 
 /// ISO 639-1 alpha-2 → ISO 639-2 alpha-3 mapping, sorted by alpha-2 for
@@ -157,34 +157,34 @@ const ALPHA2_TO_ALPHA3: &[(&str, &str)] = &[
 ];
 
 const BIB_T_PAIRS: &[(&str, &str)] = &[
-    ("alb", "sqi"),
-    ("arm", "hye"),
-    ("baq", "eus"),
-    ("bur", "mya"),
-    ("chi", "zho"),
-    ("cze", "ces"),
-    ("dut", "nld"),
-    ("fre", "fra"),
-    ("geo", "kat"),
-    ("ger", "deu"),
-    ("gre", "ell"),
-    ("ice", "isl"),
-    ("mac", "mkd"),
-    ("mao", "mri"),
-    ("may", "msa"),
-    ("per", "fas"),
-    ("rum", "ron"),
-    ("slo", "slk"),
-    ("tib", "bod"),
-    ("wel", "cym"),
-    ("scc", "srp"),
-    ("scr", "hrv"),
+  ("alb", "sqi"),
+  ("arm", "hye"),
+  ("baq", "eus"),
+  ("bur", "mya"),
+  ("chi", "zho"),
+  ("cze", "ces"),
+  ("dut", "nld"),
+  ("fre", "fra"),
+  ("geo", "kat"),
+  ("ger", "deu"),
+  ("gre", "ell"),
+  ("ice", "isl"),
+  ("mac", "mkd"),
+  ("mao", "mri"),
+  ("may", "msa"),
+  ("per", "fas"),
+  ("rum", "ron"),
+  ("slo", "slk"),
+  ("tib", "bod"),
+  ("wel", "cym"),
+  ("scc", "srp"),
+  ("scr", "hrv"),
 ];
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
-    code: &'static str,
-    name: &'static str,
+  code: &'static str,
+  name: &'static str,
 }
 
 /// The full ISO 639-2 alpha-3 table.
@@ -685,158 +685,158 @@ const TABLE: &[Entry] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn looks_up_common_codes() {
-        let m = lookup("eng").unwrap();
-        assert_eq!(m.canonical, "eng");
-        assert_eq!(m.name, "English");
-        let m = lookup("jpn").unwrap();
-        assert_eq!(m.canonical, "jpn");
-        assert_eq!(m.name, "Japanese");
-    }
+  #[test]
+  fn looks_up_common_codes() {
+    let m = lookup("eng").unwrap();
+    assert_eq!(m.canonical, "eng");
+    assert_eq!(m.name, "English");
+    let m = lookup("jpn").unwrap();
+    assert_eq!(m.canonical, "jpn");
+    assert_eq!(m.name, "Japanese");
+  }
 
-    #[test]
-    fn case_insensitive() {
-        assert_eq!(lookup("ENG").unwrap().canonical, "eng");
-        assert_eq!(lookup("Eng").unwrap().canonical, "eng");
-        assert_eq!(lookup("eNG").unwrap().canonical, "eng");
-    }
+  #[test]
+  fn case_insensitive() {
+    assert_eq!(lookup("ENG").unwrap().canonical, "eng");
+    assert_eq!(lookup("Eng").unwrap().canonical, "eng");
+    assert_eq!(lookup("eNG").unwrap().canonical, "eng");
+  }
 
-    #[test]
-    fn whitespace_tolerant() {
-        assert_eq!(lookup("  eng  ").unwrap().canonical, "eng");
-    }
+  #[test]
+  fn whitespace_tolerant() {
+    assert_eq!(lookup("  eng  ").unwrap().canonical, "eng");
+  }
 
-    #[test]
-    fn rejects_wrong_length() {
-        assert!(lookup("en").is_none());
-        assert!(lookup("eng2").is_none());
-        assert!(lookup("").is_none());
-    }
+  #[test]
+  fn rejects_wrong_length() {
+    assert!(lookup("en").is_none());
+    assert!(lookup("eng2").is_none());
+    assert!(lookup("").is_none());
+  }
 
-    #[test]
-    fn rejects_unknown_code() {
-        assert!(lookup("xyz").is_none());
-        assert!(lookup("zzz").is_none());
-    }
+  #[test]
+  fn rejects_unknown_code() {
+    assert!(lookup("xyz").is_none());
+    assert!(lookup("zzz").is_none());
+  }
 
-    #[test]
-    fn bib_codes_map_to_term_canonical() {
-        let m = lookup("fre").unwrap();
-        assert_eq!(m.canonical, "fra");
-        assert_eq!(m.name, "French");
-        let m = lookup("ger").unwrap();
-        assert_eq!(m.canonical, "deu");
-        assert_eq!(m.name, "German");
-        let m = lookup("chi").unwrap();
-        assert_eq!(m.canonical, "zho");
-        assert_eq!(m.name, "Chinese");
-    }
+  #[test]
+  fn bib_codes_map_to_term_canonical() {
+    let m = lookup("fre").unwrap();
+    assert_eq!(m.canonical, "fra");
+    assert_eq!(m.name, "French");
+    let m = lookup("ger").unwrap();
+    assert_eq!(m.canonical, "deu");
+    assert_eq!(m.name, "German");
+    let m = lookup("chi").unwrap();
+    assert_eq!(m.canonical, "zho");
+    assert_eq!(m.name, "Chinese");
+  }
 
-    #[test]
-    fn is_valid_matches_lookup() {
-        assert!(is_valid("eng"));
-        assert!(is_valid("fre")); // bib alias is still valid input
-        assert!(is_valid("FRE"));
-        assert!(!is_valid("zzz"));
-        assert!(!is_valid("en"));
-    }
+  #[test]
+  fn is_valid_matches_lookup() {
+    assert!(is_valid("eng"));
+    assert!(is_valid("fre")); // bib alias is still valid input
+    assert!(is_valid("FRE"));
+    assert!(!is_valid("zzz"));
+    assert!(!is_valid("en"));
+  }
 
-    #[test]
-    fn special_codes_are_present() {
-        assert!(is_valid(UND));
-        assert!(is_valid(ZXX));
-        assert_eq!(lookup(UND).unwrap().name, "Undetermined");
-        assert_eq!(lookup(ZXX).unwrap().name, "No linguistic content");
-    }
+  #[test]
+  fn special_codes_are_present() {
+    assert!(is_valid(UND));
+    assert!(is_valid(ZXX));
+    assert_eq!(lookup(UND).unwrap().name, "Undetermined");
+    assert_eq!(lookup(ZXX).unwrap().name, "No linguistic content");
+  }
 
-    #[test]
-    fn table_is_sorted_by_code() {
-        for window in TABLE.windows(2) {
-            assert!(
-                window[0].code < window[1].code,
-                "ISO 639-2 table not sorted: {} >= {}",
-                window[0].code,
-                window[1].code
-            );
-        }
+  #[test]
+  fn table_is_sorted_by_code() {
+    for window in TABLE.windows(2) {
+      assert!(
+        window[0].code < window[1].code,
+        "ISO 639-2 table not sorted: {} >= {}",
+        window[0].code,
+        window[1].code
+      );
     }
+  }
 
-    #[test]
-    fn every_bib_alias_resolves_to_a_present_term_code() {
-        for (bib, term) in BIB_T_PAIRS {
-            assert!(
-                TABLE.binary_search_by_key(term, |e| e.code).is_ok(),
-                "term code {} (alias of {}) not present in TABLE",
-                term,
-                bib
-            );
-        }
+  #[test]
+  fn every_bib_alias_resolves_to_a_present_term_code() {
+    for (bib, term) in BIB_T_PAIRS {
+      assert!(
+        TABLE.binary_search_by_key(term, |e| e.code).is_ok(),
+        "term code {} (alias of {}) not present in TABLE",
+        term,
+        bib
+      );
     }
+  }
 
-    #[test]
-    fn table_size_is_in_expected_range() {
-        // ISO 639-2 has ~487 distinct terminologic codes.  We allow some slack
-        // because the registry adds a code now and again.
-        assert!(TABLE.len() >= 480, "table shrunk: {}", TABLE.len());
-        assert!(TABLE.len() <= 520, "table is suspiciously large: {}", TABLE.len());
-    }
+  #[test]
+  fn table_size_is_in_expected_range() {
+    // ISO 639-2 has ~487 distinct terminologic codes.  We allow some slack
+    // because the registry adds a code now and again.
+    assert!(TABLE.len() >= 480, "table shrunk: {}", TABLE.len());
+    assert!(TABLE.len() <= 520, "table is suspiciously large: {}", TABLE.len());
+  }
 
-    #[test]
-    fn alpha2_table_is_sorted_for_binary_search() {
-        for window in ALPHA2_TO_ALPHA3.windows(2) {
-            assert!(
-                window[0].0 < window[1].0,
-                "alpha-2 table not sorted: {} >= {}",
-                window[0].0,
-                window[1].0
-            );
-        }
+  #[test]
+  fn alpha2_table_is_sorted_for_binary_search() {
+    for window in ALPHA2_TO_ALPHA3.windows(2) {
+      assert!(
+        window[0].0 < window[1].0,
+        "alpha-2 table not sorted: {} >= {}",
+        window[0].0,
+        window[1].0
+      );
     }
+  }
 
-    #[test]
-    fn alpha2_maps_common_languages() {
-        assert_eq!(alpha2_to_alpha3("en"), Some("eng"));
-        assert_eq!(alpha2_to_alpha3("ja"), Some("jpn"));
-        assert_eq!(alpha2_to_alpha3("EN"), Some("eng")); // case-insensitive
-        assert_eq!(alpha2_to_alpha3(" pt "), Some("por")); // whitespace-tolerant
-    }
+  #[test]
+  fn alpha2_maps_common_languages() {
+    assert_eq!(alpha2_to_alpha3("en"), Some("eng"));
+    assert_eq!(alpha2_to_alpha3("ja"), Some("jpn"));
+    assert_eq!(alpha2_to_alpha3("EN"), Some("eng")); // case-insensitive
+    assert_eq!(alpha2_to_alpha3(" pt "), Some("por")); // whitespace-tolerant
+  }
 
-    #[test]
-    fn alpha2_maps_bibliographic_targets_then_lookup_canonicalises() {
-        // "de" → "ger" (bib); lookup resolves to terminologic "deu".
-        assert_eq!(alpha2_to_alpha3("de"), Some("ger"));
-        assert_eq!(lookup("ger").unwrap().canonical, "deu");
-        assert_eq!(alpha2_to_alpha3("zh"), Some("chi"));
-        assert_eq!(lookup("chi").unwrap().canonical, "zho");
-    }
+  #[test]
+  fn alpha2_maps_bibliographic_targets_then_lookup_canonicalises() {
+    // "de" → "ger" (bib); lookup resolves to terminologic "deu".
+    assert_eq!(alpha2_to_alpha3("de"), Some("ger"));
+    assert_eq!(lookup("ger").unwrap().canonical, "deu");
+    assert_eq!(alpha2_to_alpha3("zh"), Some("chi"));
+    assert_eq!(lookup("chi").unwrap().canonical, "zho");
+  }
 
-    #[test]
-    fn alpha2_rejects_wrong_length_and_unknown() {
-        assert_eq!(alpha2_to_alpha3("eng"), None);
-        assert_eq!(alpha2_to_alpha3("e"), None);
-        assert_eq!(alpha2_to_alpha3("zz"), None);
-        assert_eq!(alpha2_to_alpha3(""), None);
-    }
+  #[test]
+  fn alpha2_rejects_wrong_length_and_unknown() {
+    assert_eq!(alpha2_to_alpha3("eng"), None);
+    assert_eq!(alpha2_to_alpha3("e"), None);
+    assert_eq!(alpha2_to_alpha3("zz"), None);
+    assert_eq!(alpha2_to_alpha3(""), None);
+  }
 
-    #[test]
-    fn every_alpha2_target_is_resolvable() {
-        // `sh → hbs` (Serbo-Croatian) is the one alpha-2 whose target is a
-        // 639-3-only macrolanguage; mkvtoolnix flags `hbs` as not part of
-        // 639-2, so our 639-2 table omits it and `from_ietf("sh")` falls back
-        // to `und`.  Every other alpha-2 target must resolve.
-        for (a2, a3) in ALPHA2_TO_ALPHA3 {
-            if *a3 == "hbs" {
-                continue;
-            }
-            assert!(
-                lookup(a3).is_some(),
-                "alpha-2 {} maps to {} which lookup() cannot resolve",
-                a2,
-                a3
-            );
-        }
+  #[test]
+  fn every_alpha2_target_is_resolvable() {
+    // `sh → hbs` (Serbo-Croatian) is the one alpha-2 whose target is a
+    // 639-3-only macrolanguage; mkvtoolnix flags `hbs` as not part of
+    // 639-2, so our 639-2 table omits it and `from_ietf("sh")` falls back
+    // to `und`.  Every other alpha-2 target must resolve.
+    for (a2, a3) in ALPHA2_TO_ALPHA3 {
+      if *a3 == "hbs" {
+        continue;
+      }
+      assert!(
+        lookup(a3).is_some(),
+        "alpha-2 {} maps to {} which lookup() cannot resolve",
+        a2,
+        a3
+      );
     }
+  }
 }

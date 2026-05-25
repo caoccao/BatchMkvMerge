@@ -27,91 +27,81 @@ use super::model::MediaMetadata;
 ///
 /// Implementors are pure types (unit structs); no instance state.
 pub trait Reader {
-    /// Stable label used in error messages and the probe registry. Lower-case
-    /// snake_case, matching the module name (e.g. `"matroska"`, `"mp4"`).
-    fn name(&self) -> &'static str;
+  /// Stable label used in error messages and the probe registry. Lower-case
+  /// snake_case, matching the module name (e.g. `"matroska"`, `"mp4"`).
+  fn name(&self) -> &'static str;
 
-    /// Cheap signature/magic probe. Reads at most a few kilobytes near the
-    /// start of the file. Must rewind the cursor before returning.
-    /// `Ok(false)` is "not me — try the next reader". `Ok(true)` is "claim".
-    /// `Err(_)` is fatal (e.g. true I/O failure).
-    fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError>;
+  /// Cheap signature/magic probe. Reads at most a few kilobytes near the
+  /// start of the file. Must rewind the cursor before returning.
+  /// `Ok(false)` is "not me — try the next reader". `Ok(true)` is "claim".
+  /// `Err(_)` is fatal (e.g. true I/O failure).
+  fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError>;
 
-    /// Parse headers and populate `out` in-place. The cursor on entry is at
-    /// offset 0; on successful return the cursor position is unspecified.
-    /// Returning `Ok(())` implies a successful parse — the caller stamps the
-    /// container's `recognized` / `supported` flags before yielding the
-    /// metadata to the public entry point.
-    fn read_headers(
-        &self,
-        src: &mut FileSource,
-        deadline: &Deadline,
-        out: &mut MediaMetadata,
-    ) -> Result<(), ParseError>;
+  /// Parse headers and populate `out` in-place. The cursor on entry is at
+  /// offset 0; on successful return the cursor position is unspecified.
+  /// Returning `Ok(())` implies a successful parse — the caller stamps the
+  /// container's `recognized` / `supported` flags before yielding the
+  /// metadata to the public entry point.
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError>;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::io::Cursor;
+  use super::*;
+  use std::io::Cursor;
 
-    /// Trivial reader used to exercise the trait shape — claims any file
-    /// whose first byte is `0xAB` and otherwise defers.
-    struct SentinelReader;
-    impl Reader for SentinelReader {
-        fn name(&self) -> &'static str {
-            "sentinel"
-        }
-        fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-            let mut byte = [0u8; 1];
-            let read = src.read_at_most(&mut byte)?;
-            src.seek_to(0)?;
-            Ok(read == 1 && byte[0] == 0xAB)
-        }
-        fn read_headers(
-            &self,
-            _src: &mut FileSource,
-            _d: &Deadline,
-            _out: &mut MediaMetadata,
-        ) -> Result<(), ParseError> {
-            Ok(())
-        }
+  /// Trivial reader used to exercise the trait shape — claims any file
+  /// whose first byte is `0xAB` and otherwise defers.
+  struct SentinelReader;
+  impl Reader for SentinelReader {
+    fn name(&self) -> &'static str {
+      "sentinel"
     }
+    fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
+      let mut byte = [0u8; 1];
+      let read = src.read_at_most(&mut byte)?;
+      src.seek_to(0)?;
+      Ok(read == 1 && byte[0] == 0xAB)
+    }
+    fn read_headers(&self, _src: &mut FileSource, _d: &Deadline, _out: &mut MediaMetadata) -> Result<(), ParseError> {
+      Ok(())
+    }
+  }
 
-    #[test]
-    fn trait_can_be_implemented_and_called_dyn() {
-        let r: &dyn Reader = &SentinelReader;
-        assert_eq!(r.name(), "sentinel");
-    }
+  #[test]
+  fn trait_can_be_implemented_and_called_dyn() {
+    let r: &dyn Reader = &SentinelReader;
+    assert_eq!(r.name(), "sentinel");
+  }
 
-    #[test]
-    fn probe_returns_true_on_matching_signature() {
-        let bytes = vec![0xAB, 0x00, 0x00];
-        let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
-        assert!(SentinelReader.probe(&mut src).unwrap());
-        // probe must rewind
-        assert_eq!(src.position(), 0);
-    }
+  #[test]
+  fn probe_returns_true_on_matching_signature() {
+    let bytes = vec![0xAB, 0x00, 0x00];
+    let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(SentinelReader.probe(&mut src).unwrap());
+    // probe must rewind
+    assert_eq!(src.position(), 0);
+  }
 
-    #[test]
-    fn probe_returns_false_on_other_byte() {
-        let bytes = vec![0x00, 0xAB];
-        let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
-        assert!(!SentinelReader.probe(&mut src).unwrap());
-    }
+  #[test]
+  fn probe_returns_false_on_other_byte() {
+    let bytes = vec![0x00, 0xAB];
+    let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!SentinelReader.probe(&mut src).unwrap());
+  }
 
-    #[test]
-    fn probe_returns_false_on_empty_input() {
-        let mut src = FileSource::from_reader_for_test(Cursor::new(Vec::<u8>::new()));
-        assert!(!SentinelReader.probe(&mut src).unwrap());
-    }
+  #[test]
+  fn probe_returns_false_on_empty_input() {
+    let mut src = FileSource::from_reader_for_test(Cursor::new(Vec::<u8>::new()));
+    assert!(!SentinelReader.probe(&mut src).unwrap());
+  }
 
-    #[test]
-    fn read_headers_can_consult_deadline() {
-        let bytes = vec![0xAB];
-        let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
-        let d = Deadline::new(60_000);
-        let mut out = MediaMetadata::new("synthetic", 1);
-        SentinelReader.read_headers(&mut src, &d, &mut out).unwrap();
-    }
+  #[test]
+  fn read_headers_can_consult_deadline() {
+    let bytes = vec![0xAB];
+    let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let d = Deadline::new(60_000);
+    let mut out = MediaMetadata::new("synthetic", 1);
+    SentinelReader.read_headers(&mut src, &d, &mut out).unwrap();
+  }
 }

@@ -37,8 +37,8 @@
 pub mod attachments;
 pub mod chapters;
 pub mod ebml;
-pub mod ids;
 pub mod identify;
+pub mod ids;
 pub mod info;
 pub mod reader;
 pub mod seek_head;

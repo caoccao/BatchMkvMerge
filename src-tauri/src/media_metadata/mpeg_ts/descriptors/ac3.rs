@@ -20,16 +20,16 @@
 //! enough to flag the stream as AC-3.  The body is allowed to be empty.
 
 pub fn decode(_body: &[u8]) -> bool {
-    true
+  true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn presence_alone_is_sufficient_to_flag_ac3() {
-        assert!(decode(&[]));
-        assert!(decode(&[0xAA, 0xBB]));
-    }
+  #[test]
+  fn presence_alone_is_sufficient_to_flag_ac3() {
+    assert!(decode(&[]));
+    assert!(decode(&[0xAA, 0xBB]));
+  }
 }

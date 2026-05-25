@@ -32,132 +32,128 @@ use crate::media_metadata::mp4::atom::BoxHeader;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MovieHeader {
-    pub version: u8,
-    pub timescale: u32,
-    pub duration: u64,
-    pub next_track_id: u32,
+  pub version: u8,
+  pub timescale: u32,
+  pub duration: u64,
+  pub next_track_id: u32,
 }
 
 pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MovieHeader, ParseError> {
-    let payload = header.payload_size().unwrap_or(0);
-    if payload < 100 {
-        return Err(ParseError::Malformed {
-            format: "mp4",
-            offset: header.start,
-            reason: format!("mvhd payload {payload} bytes is too small"),
-        });
-    }
-    let version = src.read_u8()?;
-    let _flags = [src.read_u8()?, src.read_u8()?, src.read_u8()?];
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 100 {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.start,
+      reason: format!("mvhd payload {payload} bytes is too small"),
+    });
+  }
+  let version = src.read_u8()?;
+  let _flags = [src.read_u8()?, src.read_u8()?, src.read_u8()?];
 
-    let (timescale, duration) = match version {
-        0 => {
-            // 4B creation + 4B modification = 8 bytes
-            src.skip(8)?;
-            let ts = src.read_u32_be()?;
-            let dur = src.read_u32_be()? as u64;
-            (ts, dur)
-        }
-        _ => {
-            // 8B creation + 8B modification = 16 bytes
-            src.skip(16)?;
-            let ts = src.read_u32_be()?;
-            let dur = src.read_u64_be()?;
-            (ts, dur)
-        }
-    };
-    // Skip rate (4) + volume (2) + reserved (10) + matrix (36) + pre_defined (24) = 76 bytes
-    src.skip(4 + 2 + 10 + 36 + 24)?;
-    let next_track_id = src.read_u32_be()?;
-    Ok(MovieHeader {
-        version,
-        timescale,
-        duration,
-        next_track_id,
-    })
+  let (timescale, duration) = match version {
+    0 => {
+      // 4B creation + 4B modification = 8 bytes
+      src.skip(8)?;
+      let ts = src.read_u32_be()?;
+      let dur = src.read_u32_be()? as u64;
+      (ts, dur)
+    }
+    _ => {
+      // 8B creation + 8B modification = 16 bytes
+      src.skip(16)?;
+      let ts = src.read_u32_be()?;
+      let dur = src.read_u64_be()?;
+      (ts, dur)
+    }
+  };
+  // Skip rate (4) + volume (2) + reserved (10) + matrix (36) + pre_defined (24) = 76 bytes
+  src.skip(4 + 2 + 10 + 36 + 24)?;
+  let next_track_id = src.read_u32_be()?;
+  Ok(MovieHeader {
+    version,
+    timescale,
+    duration,
+    next_track_id,
+  })
 }
 
 #[cfg(test)]
 pub(crate) fn build_mvhd_payload_v0(timescale: u32, duration: u32, next_track_id: u32) -> Vec<u8> {
-    let mut p = Vec::with_capacity(100);
-    p.push(0); // version
-    p.extend_from_slice(&[0u8; 3]); // flags
-    p.extend_from_slice(&0u32.to_be_bytes()); // creation
-    p.extend_from_slice(&0u32.to_be_bytes()); // modification
-    p.extend_from_slice(&timescale.to_be_bytes());
-    p.extend_from_slice(&duration.to_be_bytes());
-    p.extend_from_slice(&0u32.to_be_bytes()); // rate
-    p.extend_from_slice(&[0u8; 2]); // volume
-    p.extend_from_slice(&[0u8; 10]); // reserved
-    p.extend_from_slice(&[0u8; 36]); // matrix
-    p.extend_from_slice(&[0u8; 24]); // pre_defined
-    p.extend_from_slice(&next_track_id.to_be_bytes());
-    p
+  let mut p = Vec::with_capacity(100);
+  p.push(0); // version
+  p.extend_from_slice(&[0u8; 3]); // flags
+  p.extend_from_slice(&0u32.to_be_bytes()); // creation
+  p.extend_from_slice(&0u32.to_be_bytes()); // modification
+  p.extend_from_slice(&timescale.to_be_bytes());
+  p.extend_from_slice(&duration.to_be_bytes());
+  p.extend_from_slice(&0u32.to_be_bytes()); // rate
+  p.extend_from_slice(&[0u8; 2]); // volume
+  p.extend_from_slice(&[0u8; 10]); // reserved
+  p.extend_from_slice(&[0u8; 36]); // matrix
+  p.extend_from_slice(&[0u8; 24]); // pre_defined
+  p.extend_from_slice(&next_track_id.to_be_bytes());
+  p
 }
 
 #[cfg(test)]
-pub(crate) fn build_mvhd_payload_v1(
-    timescale: u32,
-    duration: u64,
-    next_track_id: u32,
-) -> Vec<u8> {
-    let mut p = Vec::with_capacity(112);
-    p.push(1); // version
-    p.extend_from_slice(&[0u8; 3]); // flags
-    p.extend_from_slice(&0u64.to_be_bytes()); // creation
-    p.extend_from_slice(&0u64.to_be_bytes()); // modification
-    p.extend_from_slice(&timescale.to_be_bytes());
-    p.extend_from_slice(&duration.to_be_bytes());
-    p.extend_from_slice(&0u32.to_be_bytes()); // rate
-    p.extend_from_slice(&[0u8; 2]); // volume
-    p.extend_from_slice(&[0u8; 10]); // reserved
-    p.extend_from_slice(&[0u8; 36]); // matrix
-    p.extend_from_slice(&[0u8; 24]); // pre_defined
-    p.extend_from_slice(&next_track_id.to_be_bytes());
-    p
+pub(crate) fn build_mvhd_payload_v1(timescale: u32, duration: u64, next_track_id: u32) -> Vec<u8> {
+  let mut p = Vec::with_capacity(112);
+  p.push(1); // version
+  p.extend_from_slice(&[0u8; 3]); // flags
+  p.extend_from_slice(&0u64.to_be_bytes()); // creation
+  p.extend_from_slice(&0u64.to_be_bytes()); // modification
+  p.extend_from_slice(&timescale.to_be_bytes());
+  p.extend_from_slice(&duration.to_be_bytes());
+  p.extend_from_slice(&0u32.to_be_bytes()); // rate
+  p.extend_from_slice(&[0u8; 2]); // volume
+  p.extend_from_slice(&[0u8; 10]); // reserved
+  p.extend_from_slice(&[0u8; 36]); // matrix
+  p.extend_from_slice(&[0u8; 24]); // pre_defined
+  p.extend_from_slice(&next_track_id.to_be_bytes());
+  p
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::media_metadata::mp4::atom::{self, encode_box};
-    use std::io::Cursor;
+  use super::*;
+  use crate::media_metadata::mp4::atom::{self, encode_box};
+  use std::io::Cursor;
 
-    fn read(bytes: Vec<u8>) -> (BoxHeader, FileSource) {
-        let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
-        let h = atom::read_box_header(&mut s).unwrap();
-        (h, s)
-    }
+  fn read(bytes: Vec<u8>) -> (BoxHeader, FileSource) {
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let h = atom::read_box_header(&mut s).unwrap();
+    (h, s)
+  }
 
-    #[test]
-    fn parses_v0_payload() {
-        let payload = build_mvhd_payload_v0(1000, 60_000, 5);
-        let bytes = encode_box(b"mvhd", &payload);
-        let (h, mut s) = read(bytes);
-        let m = parse(&mut s, &h).unwrap();
-        assert_eq!(m.version, 0);
-        assert_eq!(m.timescale, 1000);
-        assert_eq!(m.duration, 60_000);
-        assert_eq!(m.next_track_id, 5);
-    }
+  #[test]
+  fn parses_v0_payload() {
+    let payload = build_mvhd_payload_v0(1000, 60_000, 5);
+    let bytes = encode_box(b"mvhd", &payload);
+    let (h, mut s) = read(bytes);
+    let m = parse(&mut s, &h).unwrap();
+    assert_eq!(m.version, 0);
+    assert_eq!(m.timescale, 1000);
+    assert_eq!(m.duration, 60_000);
+    assert_eq!(m.next_track_id, 5);
+  }
 
-    #[test]
-    fn parses_v1_payload_with_64_bit_duration() {
-        let payload = build_mvhd_payload_v1(48000, 1u64 << 40, 9);
-        let bytes = encode_box(b"mvhd", &payload);
-        let (h, mut s) = read(bytes);
-        let m = parse(&mut s, &h).unwrap();
-        assert_eq!(m.version, 1);
-        assert_eq!(m.timescale, 48000);
-        assert_eq!(m.duration, 1u64 << 40);
-        assert_eq!(m.next_track_id, 9);
-    }
+  #[test]
+  fn parses_v1_payload_with_64_bit_duration() {
+    let payload = build_mvhd_payload_v1(48000, 1u64 << 40, 9);
+    let bytes = encode_box(b"mvhd", &payload);
+    let (h, mut s) = read(bytes);
+    let m = parse(&mut s, &h).unwrap();
+    assert_eq!(m.version, 1);
+    assert_eq!(m.timescale, 48000);
+    assert_eq!(m.duration, 1u64 << 40);
+    assert_eq!(m.next_track_id, 9);
+  }
 
-    #[test]
-    fn rejects_truncated_payload() {
-        let bytes = encode_box(b"mvhd", &[0u8; 16]);
-        let (h, mut s) = read(bytes);
-        let err = parse(&mut s, &h).unwrap_err();
-        assert!(matches!(err, ParseError::Malformed { .. }));
-    }
+  #[test]
+  fn rejects_truncated_payload() {
+    let bytes = encode_box(b"mvhd", &[0u8; 16]);
+    let (h, mut s) = read(bytes);
+    let err = parse(&mut s, &h).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
 }

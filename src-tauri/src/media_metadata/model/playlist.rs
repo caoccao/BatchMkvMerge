@@ -28,43 +28,43 @@ use super::duration::DurationValue;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistInfo {
-    /// Total duration across all segment files in the playlist.
-    pub duration: Option<DurationValue>,
-    /// Number of chapter entries declared by the playlist.
-    pub chapters: u32,
-    /// Sum of segment-file sizes (bytes).
-    #[specta(type = Number)]
-    pub total_size: u64,
-    /// File-system paths of the segment files in playback order.
-    pub files: Vec<String>,
+  /// Total duration across all segment files in the playlist.
+  pub duration: Option<DurationValue>,
+  /// Number of chapter entries declared by the playlist.
+  pub chapters: u32,
+  /// Sum of segment-file sizes (bytes).
+  #[specta(type = Number)]
+  pub total_size: u64,
+  /// File-system paths of the segment files in playback order.
+  pub files: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn default_is_empty_playlist() {
-        let p = PlaylistInfo::default();
-        assert!(p.duration.is_none());
-        assert_eq!(p.chapters, 0);
-        assert_eq!(p.total_size, 0);
-        assert!(p.files.is_empty());
-    }
+  #[test]
+  fn default_is_empty_playlist() {
+    let p = PlaylistInfo::default();
+    assert!(p.duration.is_none());
+    assert_eq!(p.chapters, 0);
+    assert_eq!(p.total_size, 0);
+    assert!(p.files.is_empty());
+  }
 
-    #[test]
-    fn round_trips_through_json() {
-        let p = PlaylistInfo {
-            duration: Some(DurationValue::from_ns(7_200_000_000_000)),
-            chapters: 12,
-            total_size: 24_000_000_000,
-            files: vec!["00001.m2ts".to_owned(), "00002.m2ts".to_owned()],
-        };
-        let s = serde_json::to_string(&p).unwrap();
-        assert!(s.contains("\"chapters\":12"));
-        assert!(s.contains("\"totalSize\":24000000000"));
-        assert!(s.contains("\"files\":[\"00001.m2ts\",\"00002.m2ts\"]"));
-        let back: PlaylistInfo = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, p);
-    }
+  #[test]
+  fn round_trips_through_json() {
+    let p = PlaylistInfo {
+      duration: Some(DurationValue::from_ns(7_200_000_000_000)),
+      chapters: 12,
+      total_size: 24_000_000_000,
+      files: vec!["00001.m2ts".to_owned(), "00002.m2ts".to_owned()],
+    };
+    let s = serde_json::to_string(&p).unwrap();
+    assert!(s.contains("\"chapters\":12"));
+    assert!(s.contains("\"totalSize\":24000000000"));
+    assert!(s.contains("\"files\":[\"00001.m2ts\",\"00002.m2ts\"]"));
+    let back: PlaylistInfo = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, p);
+  }
 }

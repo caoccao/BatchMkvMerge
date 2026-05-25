@@ -31,27 +31,27 @@ use crate::media_metadata::codec::TrackKind;
 /// `stream_coding_type` byte from the descriptor body (offset 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistrationDescriptor {
-    pub format_identifier: String,
-    pub hdmv_stream_coding_type: Option<u8>,
+  pub format_identifier: String,
+  pub hdmv_stream_coding_type: Option<u8>,
 }
 
 pub fn decode(body: &[u8]) -> Option<RegistrationDescriptor> {
-    if body.len() < 4 {
-        return None;
-    }
-    let format_identifier = String::from_utf8_lossy(&body[..4]).into_owned();
-    // The Blu-ray HDMV registration is structured: 4-byte FourCC ("HDMV") +
-    // 1 stuffing byte (must be 0xFF) + 1 stream_coding_type byte + flags.
-    // See `determine_codec_for_hdmv_registration_descriptor` for the layout.
-    let hdmv_stream_coding_type = if format_identifier == "HDMV" && body.len() >= 6 && body[4] == 0xFF {
-        Some(body[5])
-    } else {
-        None
-    };
-    Some(RegistrationDescriptor {
-        format_identifier,
-        hdmv_stream_coding_type,
-    })
+  if body.len() < 4 {
+    return None;
+  }
+  let format_identifier = String::from_utf8_lossy(&body[..4]).into_owned();
+  // The Blu-ray HDMV registration is structured: 4-byte FourCC ("HDMV") +
+  // 1 stuffing byte (must be 0xFF) + 1 stream_coding_type byte + flags.
+  // See `determine_codec_for_hdmv_registration_descriptor` for the layout.
+  let hdmv_stream_coding_type = if format_identifier == "HDMV" && body.len() >= 6 && body[4] == 0xFF {
+    Some(body[5])
+  } else {
+    None
+  };
+  Some(RegistrationDescriptor {
+    format_identifier,
+    hdmv_stream_coding_type,
+  })
 }
 
 /// Translate a Blu-ray HDMV `stream_coding_type` byte into the canonical
@@ -59,86 +59,86 @@ pub fn decode(body: &[u8]) -> Option<RegistrationDescriptor> {
 /// `codec_c::look_up_bluray_stream_coding_type` in
 /// `mkvtoolnix/src/common/codec.cpp`.
 pub fn hdmv_codec(stream_coding_type: u8) -> Option<(&'static str, &'static str, TrackKind)> {
-    Some(match stream_coding_type {
-        0x01 => ("V_MPEG1", "MPEG-1 Video", TrackKind::Video),
-        0x02 => ("V_MPEG2", "MPEG-2 Video", TrackKind::Video),
-        0x1B => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
-        0x20 => ("V_MPEG4/ISO/AVC", "AVC/H.264 (MVC dependent)", TrackKind::Video),
-        0x24 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
-        0xEA => ("V_VC1", "VC-1", TrackKind::Video),
-        0x80 => ("A_PCM", "LPCM", TrackKind::Audio),
-        0x81 => ("A_AC3", "AC-3", TrackKind::Audio),
-        0x82 | 0x85 | 0x86 => ("A_DTS", "DTS", TrackKind::Audio),
-        0x83 => ("A_TRUEHD", "TrueHD", TrackKind::Audio),
-        0x84 | 0x87 => ("A_EAC3", "E-AC-3", TrackKind::Audio),
-        0x90 => ("S_HDMV/PGS", "HDMV PGS", TrackKind::Subtitle),
-        0x91 => ("S_HDMV/IGS", "HDMV Interactive Graphics", TrackKind::Button),
-        0x92 => ("S_HDMV/TEXTST", "HDMV Text Subtitles", TrackKind::Subtitle),
-        _ => return None,
-    })
+  Some(match stream_coding_type {
+    0x01 => ("V_MPEG1", "MPEG-1 Video", TrackKind::Video),
+    0x02 => ("V_MPEG2", "MPEG-2 Video", TrackKind::Video),
+    0x1B => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
+    0x20 => ("V_MPEG4/ISO/AVC", "AVC/H.264 (MVC dependent)", TrackKind::Video),
+    0x24 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
+    0xEA => ("V_VC1", "VC-1", TrackKind::Video),
+    0x80 => ("A_PCM", "LPCM", TrackKind::Audio),
+    0x81 => ("A_AC3", "AC-3", TrackKind::Audio),
+    0x82 | 0x85 | 0x86 => ("A_DTS", "DTS", TrackKind::Audio),
+    0x83 => ("A_TRUEHD", "TrueHD", TrackKind::Audio),
+    0x84 | 0x87 => ("A_EAC3", "E-AC-3", TrackKind::Audio),
+    0x90 => ("S_HDMV/PGS", "HDMV PGS", TrackKind::Subtitle),
+    0x91 => ("S_HDMV/IGS", "HDMV Interactive Graphics", TrackKind::Button),
+    0x92 => ("S_HDMV/TEXTST", "HDMV Text Subtitles", TrackKind::Subtitle),
+    _ => return None,
+  })
 }
 
 /// Map a generic registration FourCC to a Matroska codec id when mkvtoolnix
 /// would (the FourCC equals one of the codec FourCCs `codec_c::look_up`
 /// recognises).  Returns `None` for unknown FourCCs.
 pub fn codec_for_fourcc(fourcc: &str) -> Option<(&'static str, &'static str, TrackKind)> {
-    Some(match fourcc {
-        "AC-3" | "BSSD" => ("A_AC3", "AC-3", TrackKind::Audio),
-        "EAC3" => ("A_EAC3", "E-AC-3", TrackKind::Audio),
-        "DTS1" | "DTS2" | "DTS3" => ("A_DTS", "DTS", TrackKind::Audio),
-        "drac" => ("V_DIRAC", "Dirac", TrackKind::Video),
-        "VC-1" => ("V_VC1", "VC-1", TrackKind::Video),
-        "HEVC" => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
-        "AVC1" => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
-        _ => return None,
-    })
+  Some(match fourcc {
+    "AC-3" | "BSSD" => ("A_AC3", "AC-3", TrackKind::Audio),
+    "EAC3" => ("A_EAC3", "E-AC-3", TrackKind::Audio),
+    "DTS1" | "DTS2" | "DTS3" => ("A_DTS", "DTS", TrackKind::Audio),
+    "drac" => ("V_DIRAC", "Dirac", TrackKind::Video),
+    "VC-1" => ("V_VC1", "VC-1", TrackKind::Video),
+    "HEVC" => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
+    "AVC1" => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
+    _ => return None,
+  })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn hdmv_registration_extracts_stream_coding_type() {
-        let body = [b'H', b'D', b'M', b'V', 0xFF, 0x81, 0x00, 0x00];
-        let r = decode(&body).unwrap();
-        assert_eq!(r.format_identifier, "HDMV");
-        assert_eq!(r.hdmv_stream_coding_type, Some(0x81));
-    }
+  #[test]
+  fn hdmv_registration_extracts_stream_coding_type() {
+    let body = [b'H', b'D', b'M', b'V', 0xFF, 0x81, 0x00, 0x00];
+    let r = decode(&body).unwrap();
+    assert_eq!(r.format_identifier, "HDMV");
+    assert_eq!(r.hdmv_stream_coding_type, Some(0x81));
+  }
 
-    #[test]
-    fn hdmv_without_stuffing_byte_drops_coding_type() {
-        let body = [b'H', b'D', b'M', b'V', 0x00, 0x81];
-        let r = decode(&body).unwrap();
-        assert_eq!(r.format_identifier, "HDMV");
-        assert!(r.hdmv_stream_coding_type.is_none());
-    }
+  #[test]
+  fn hdmv_without_stuffing_byte_drops_coding_type() {
+    let body = [b'H', b'D', b'M', b'V', 0x00, 0x81];
+    let r = decode(&body).unwrap();
+    assert_eq!(r.format_identifier, "HDMV");
+    assert!(r.hdmv_stream_coding_type.is_none());
+  }
 
-    #[test]
-    fn other_fourcc_decoded_without_hdmv_fields() {
-        let body = [b'V', b'C', b'-', b'1'];
-        let r = decode(&body).unwrap();
-        assert_eq!(r.format_identifier, "VC-1");
-        assert!(r.hdmv_stream_coding_type.is_none());
-    }
+  #[test]
+  fn other_fourcc_decoded_without_hdmv_fields() {
+    let body = [b'V', b'C', b'-', b'1'];
+    let r = decode(&body).unwrap();
+    assert_eq!(r.format_identifier, "VC-1");
+    assert!(r.hdmv_stream_coding_type.is_none());
+  }
 
-    #[test]
-    fn truncated_body_rejected() {
-        assert!(decode(&[b'H', b'D']).is_none());
-    }
+  #[test]
+  fn truncated_body_rejected() {
+    assert!(decode(&[b'H', b'D']).is_none());
+  }
 
-    #[test]
-    fn hdmv_codec_lookup_recognises_blu_ray_types() {
-        assert_eq!(hdmv_codec(0x81).unwrap().0, "A_AC3");
-        assert_eq!(hdmv_codec(0x83).unwrap().0, "A_TRUEHD");
-        assert_eq!(hdmv_codec(0x90).unwrap().0, "S_HDMV/PGS");
-        assert!(hdmv_codec(0x00).is_none());
-    }
+  #[test]
+  fn hdmv_codec_lookup_recognises_blu_ray_types() {
+    assert_eq!(hdmv_codec(0x81).unwrap().0, "A_AC3");
+    assert_eq!(hdmv_codec(0x83).unwrap().0, "A_TRUEHD");
+    assert_eq!(hdmv_codec(0x90).unwrap().0, "S_HDMV/PGS");
+    assert!(hdmv_codec(0x00).is_none());
+  }
 
-    #[test]
-    fn codec_for_fourcc_maps_known_identifiers() {
-        assert_eq!(codec_for_fourcc("AC-3").unwrap().0, "A_AC3");
-        assert_eq!(codec_for_fourcc("VC-1").unwrap().0, "V_VC1");
-        assert!(codec_for_fourcc("XYZW").is_none());
-    }
+  #[test]
+  fn codec_for_fourcc_maps_known_identifiers() {
+    assert_eq!(codec_for_fourcc("AC-3").unwrap().0, "A_AC3");
+    assert_eq!(codec_for_fourcc("VC-1").unwrap().0, "V_VC1");
+    assert!(codec_for_fourcc("XYZW").is_none());
+  }
 }

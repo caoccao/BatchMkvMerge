@@ -30,40 +30,40 @@ pub const PREVIOUS_TAG_SIZE_LEN: usize = 4;
 /// the start of the previous-tag-size word.
 #[derive(Debug, Clone, Copy)]
 pub struct FlvTagHeader {
-    pub tag_type: u8,
-    pub data_size: u32,
-    pub timestamp_ms: u32,
+  pub tag_type: u8,
+  pub data_size: u32,
+  pub timestamp_ms: u32,
 }
 
 impl FlvTagHeader {
-    pub const TOTAL_LEN: usize = PREVIOUS_TAG_SIZE_LEN + TAG_HEADER_LEN;
+  pub const TOTAL_LEN: usize = PREVIOUS_TAG_SIZE_LEN + TAG_HEADER_LEN;
 
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < Self::TOTAL_LEN {
-            return None;
-        }
-        let off = PREVIOUS_TAG_SIZE_LEN;
-        let flags = bytes[off];
-        let data_size = u32::from_be_bytes([0, bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        let ts = u32::from_be_bytes([0, bytes[off + 4], bytes[off + 5], bytes[off + 6]]);
-        let ts_ext = bytes[off + 7] as u32;
-        // 3-byte stream id at off+8..off+11 — ignored.
-        Some(Self {
-            tag_type: flags & 0x1F,
-            data_size,
-            timestamp_ms: (ts_ext << 24) | ts,
-        })
+  pub fn parse(bytes: &[u8]) -> Option<Self> {
+    if bytes.len() < Self::TOTAL_LEN {
+      return None;
     }
+    let off = PREVIOUS_TAG_SIZE_LEN;
+    let flags = bytes[off];
+    let data_size = u32::from_be_bytes([0, bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+    let ts = u32::from_be_bytes([0, bytes[off + 4], bytes[off + 5], bytes[off + 6]]);
+    let ts_ext = bytes[off + 7] as u32;
+    // 3-byte stream id at off+8..off+11 — ignored.
+    Some(Self {
+      tag_type: flags & 0x1F,
+      data_size,
+      timestamp_ms: (ts_ext << 24) | ts,
+    })
+  }
 
-    pub fn is_audio(&self) -> bool {
-        self.tag_type == TAG_AUDIO
-    }
-    pub fn is_video(&self) -> bool {
-        self.tag_type == TAG_VIDEO
-    }
-    pub fn is_script(&self) -> bool {
-        self.tag_type == TAG_SCRIPT
-    }
+  pub fn is_audio(&self) -> bool {
+    self.tag_type == TAG_AUDIO
+  }
+  pub fn is_video(&self) -> bool {
+    self.tag_type == TAG_VIDEO
+  }
+  pub fn is_script(&self) -> bool {
+    self.tag_type == TAG_SCRIPT
+  }
 }
 
 /// Decoded first byte of an audio tag payload.
@@ -74,303 +74,303 @@ impl FlvTagHeader {
 /// `audiotag_header & 0x01     ` — channel type (0 = mono, 1 = stereo).
 #[derive(Debug, Clone, Copy)]
 pub struct AudioTagFlags {
-    pub format: u8,
-    pub rate_index: u8,
-    pub size_index: u8,
-    pub type_index: u8,
+  pub format: u8,
+  pub rate_index: u8,
+  pub size_index: u8,
+  pub type_index: u8,
 }
 
 impl AudioTagFlags {
-    pub fn parse(byte: u8) -> Self {
-        Self {
-            format: (byte & 0xF0) >> 4,
-            rate_index: (byte & 0x0C) >> 2,
-            size_index: (byte & 0x02) >> 1,
-            type_index: byte & 0x01,
-        }
+  pub fn parse(byte: u8) -> Self {
+    Self {
+      format: (byte & 0xF0) >> 4,
+      rate_index: (byte & 0x0C) >> 2,
+      size_index: (byte & 0x02) >> 1,
+      type_index: byte & 0x01,
     }
+  }
 
-    pub fn channels(&self) -> u32 {
-        if self.type_index == 0 { 1 } else { 2 }
-    }
+  pub fn channels(&self) -> u32 {
+    if self.type_index == 0 { 1 } else { 2 }
+  }
 
-    pub fn sample_rate(&self) -> Option<u32> {
-        match self.rate_index {
-            0 => Some(5_512),
-            1 => Some(11_025),
-            2 => Some(22_050),
-            3 => Some(44_100),
-            _ => None,
-        }
+  pub fn sample_rate(&self) -> Option<u32> {
+    match self.rate_index {
+      0 => Some(5_512),
+      1 => Some(11_025),
+      2 => Some(22_050),
+      3 => Some(44_100),
+      _ => None,
     }
+  }
 
-    pub fn bits_per_sample(&self) -> u8 {
-        if self.size_index == 0 { 8 } else { 16 }
-    }
+  pub fn bits_per_sample(&self) -> u8 {
+    if self.size_index == 0 { 8 } else { 16 }
+  }
 
-    /// FOURCC + display name for the format byte's codec.
-    pub fn codec(&self) -> Option<(&'static str, &'static str)> {
-        match self.format {
-            0 => Some(("PCMP", "Linear PCM (platform endian)")),
-            1 => Some(("ADPC", "ADPCM")),
-            2 | 14 => Some(("MP3 ", "MP3")),
-            3 => Some(("LPCM", "Linear PCM (little-endian)")),
-            4 => Some(("NEL1", "Nellymoser 16 kHz mono")),
-            5 => Some(("NEL5", "Nellymoser 8 kHz mono")),
-            6 => Some(("NELL", "Nellymoser")),
-            7 => Some(("ALAW", "G.711 A-law")),
-            8 => Some(("ULAW", "G.711 µ-law")),
-            10 => Some(("AAC ", "AAC")),
-            11 => Some(("SPEX", "Speex")),
-            13 => Some(("DEV ", "Device-specific")),
-            _ => None,
-        }
+  /// FOURCC + display name for the format byte's codec.
+  pub fn codec(&self) -> Option<(&'static str, &'static str)> {
+    match self.format {
+      0 => Some(("PCMP", "Linear PCM (platform endian)")),
+      1 => Some(("ADPC", "ADPCM")),
+      2 | 14 => Some(("MP3 ", "MP3")),
+      3 => Some(("LPCM", "Linear PCM (little-endian)")),
+      4 => Some(("NEL1", "Nellymoser 16 kHz mono")),
+      5 => Some(("NEL5", "Nellymoser 8 kHz mono")),
+      6 => Some(("NELL", "Nellymoser")),
+      7 => Some(("ALAW", "G.711 A-law")),
+      8 => Some(("ULAW", "G.711 µ-law")),
+      10 => Some(("AAC ", "AAC")),
+      11 => Some(("SPEX", "Speex")),
+      13 => Some(("DEV ", "Device-specific")),
+      _ => None,
     }
+  }
 }
 
 /// Video codec id (lower 4 bits of the first byte of a video tag payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodecId {
-    SorensonH263,   // 2
-    ScreenVideo,    // 3
-    Vp6,            // 4
-    Vp6Alpha,       // 5
-    ScreenVideoV2,  // 6
-    H264,           // 7
-    H265,           // 12 (Adobe-extended)
+  SorensonH263,  // 2
+  ScreenVideo,   // 3
+  Vp6,           // 4
+  Vp6Alpha,      // 5
+  ScreenVideoV2, // 6
+  H264,          // 7
+  H265,          // 12 (Adobe-extended)
 }
 
 impl VideoCodecId {
-    pub fn from_byte(b: u8) -> Option<Self> {
-        match b {
-            2 => Some(Self::SorensonH263),
-            3 => Some(Self::ScreenVideo),
-            4 => Some(Self::Vp6),
-            5 => Some(Self::Vp6Alpha),
-            6 => Some(Self::ScreenVideoV2),
-            7 => Some(Self::H264),
-            12 => Some(Self::H265),
-            _ => None,
-        }
+  pub fn from_byte(b: u8) -> Option<Self> {
+    match b {
+      2 => Some(Self::SorensonH263),
+      3 => Some(Self::ScreenVideo),
+      4 => Some(Self::Vp6),
+      5 => Some(Self::Vp6Alpha),
+      6 => Some(Self::ScreenVideoV2),
+      7 => Some(Self::H264),
+      12 => Some(Self::H265),
+      _ => None,
     }
+  }
 
-    pub fn fourcc(self) -> &'static str {
-        match self {
-            Self::SorensonH263 => "FLV1",
-            Self::ScreenVideo | Self::ScreenVideoV2 => "FSV1",
-            Self::Vp6 => "VP6F",
-            Self::Vp6Alpha => "VP6A",
-            Self::H264 => "AVC1",
-            Self::H265 => "HVC1",
-        }
+  pub fn fourcc(self) -> &'static str {
+    match self {
+      Self::SorensonH263 => "FLV1",
+      Self::ScreenVideo | Self::ScreenVideoV2 => "FSV1",
+      Self::Vp6 => "VP6F",
+      Self::Vp6Alpha => "VP6A",
+      Self::H264 => "AVC1",
+      Self::H265 => "HVC1",
     }
+  }
 
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::SorensonH263 => "Sorenson H.263 (Flash version)",
-            Self::ScreenVideo => "Screen Video",
-            Self::Vp6 => "On2 VP6 (Flash version)",
-            Self::Vp6Alpha => "On2 VP6 (Flash version with alpha channel)",
-            Self::ScreenVideoV2 => "Screen Video v2",
-            Self::H264 => "AVC/H.264",
-            Self::H265 => "HEVC/H.265/MPEG-H",
-        }
+  pub fn display_name(self) -> &'static str {
+    match self {
+      Self::SorensonH263 => "Sorenson H.263 (Flash version)",
+      Self::ScreenVideo => "Screen Video",
+      Self::Vp6 => "On2 VP6 (Flash version)",
+      Self::Vp6Alpha => "On2 VP6 (Flash version with alpha channel)",
+      Self::ScreenVideoV2 => "Screen Video v2",
+      Self::H264 => "AVC/H.264",
+      Self::H265 => "HEVC/H.265/MPEG-H",
     }
+  }
 
-    pub fn codec_id(self) -> &'static str {
-        match self {
-            Self::H264 => "V_MPEG4/ISO/AVC",
-            Self::H265 => "V_MPEGH/ISO/HEVC",
-            Self::Vp6 => "V_VP6F",
-            Self::Vp6Alpha => "V_VP6A",
-            Self::SorensonH263 => "V_FLV1",
-            Self::ScreenVideo => "V_FSV1",
-            Self::ScreenVideoV2 => "V_FSV2",
-        }
+  pub fn codec_id(self) -> &'static str {
+    match self {
+      Self::H264 => "V_MPEG4/ISO/AVC",
+      Self::H265 => "V_MPEGH/ISO/HEVC",
+      Self::Vp6 => "V_VP6F",
+      Self::Vp6Alpha => "V_VP6A",
+      Self::SorensonH263 => "V_FLV1",
+      Self::ScreenVideo => "V_FSV1",
+      Self::ScreenVideoV2 => "V_FSV2",
     }
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    fn build_tag_header(tag_type: u8, data_size: u32, timestamp: u32) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(FlvTagHeader::TOTAL_LEN);
-        buf.extend_from_slice(&0u32.to_be_bytes()); // previous_tag_size
-        buf.push(tag_type);
-        // data_size: 3 bytes BE
-        buf.push(((data_size >> 16) & 0xFF) as u8);
-        buf.push(((data_size >> 8) & 0xFF) as u8);
-        buf.push((data_size & 0xFF) as u8);
-        // timestamp: 3 bytes BE
-        buf.push(((timestamp >> 16) & 0xFF) as u8);
-        buf.push(((timestamp >> 8) & 0xFF) as u8);
-        buf.push((timestamp & 0xFF) as u8);
-        // timestamp_ext
-        buf.push((timestamp >> 24) as u8);
-        // stream id (3 bytes, always 0)
-        buf.extend_from_slice(&[0u8; 3]);
-        buf
-    }
+  fn build_tag_header(tag_type: u8, data_size: u32, timestamp: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(FlvTagHeader::TOTAL_LEN);
+    buf.extend_from_slice(&0u32.to_be_bytes()); // previous_tag_size
+    buf.push(tag_type);
+    // data_size: 3 bytes BE
+    buf.push(((data_size >> 16) & 0xFF) as u8);
+    buf.push(((data_size >> 8) & 0xFF) as u8);
+    buf.push((data_size & 0xFF) as u8);
+    // timestamp: 3 bytes BE
+    buf.push(((timestamp >> 16) & 0xFF) as u8);
+    buf.push(((timestamp >> 8) & 0xFF) as u8);
+    buf.push((timestamp & 0xFF) as u8);
+    // timestamp_ext
+    buf.push((timestamp >> 24) as u8);
+    // stream id (3 bytes, always 0)
+    buf.extend_from_slice(&[0u8; 3]);
+    buf
+  }
 
-    #[test]
-    fn flv_tag_header_decodes_audio_tag() {
-        let bytes = build_tag_header(TAG_AUDIO, 128, 1234);
-        let h = FlvTagHeader::parse(&bytes).unwrap();
-        assert!(h.is_audio());
-        assert_eq!(h.data_size, 128);
-        assert_eq!(h.timestamp_ms, 1234);
-    }
+  #[test]
+  fn flv_tag_header_decodes_audio_tag() {
+    let bytes = build_tag_header(TAG_AUDIO, 128, 1234);
+    let h = FlvTagHeader::parse(&bytes).unwrap();
+    assert!(h.is_audio());
+    assert_eq!(h.data_size, 128);
+    assert_eq!(h.timestamp_ms, 1234);
+  }
 
-    #[test]
-    fn flv_tag_header_decodes_video_tag() {
-        let bytes = build_tag_header(TAG_VIDEO, 4096, 50);
-        let h = FlvTagHeader::parse(&bytes).unwrap();
-        assert!(h.is_video());
-        assert_eq!(h.data_size, 4096);
-    }
+  #[test]
+  fn flv_tag_header_decodes_video_tag() {
+    let bytes = build_tag_header(TAG_VIDEO, 4096, 50);
+    let h = FlvTagHeader::parse(&bytes).unwrap();
+    assert!(h.is_video());
+    assert_eq!(h.data_size, 4096);
+  }
 
-    #[test]
-    fn flv_tag_header_decodes_script_tag() {
-        let bytes = build_tag_header(TAG_SCRIPT, 200, 0);
-        let h = FlvTagHeader::parse(&bytes).unwrap();
-        assert!(h.is_script());
-    }
+  #[test]
+  fn flv_tag_header_decodes_script_tag() {
+    let bytes = build_tag_header(TAG_SCRIPT, 200, 0);
+    let h = FlvTagHeader::parse(&bytes).unwrap();
+    assert!(h.is_script());
+  }
 
-    #[test]
-    fn flv_tag_header_rejects_short_input() {
-        assert!(FlvTagHeader::parse(&[0u8; 8]).is_none());
-    }
+  #[test]
+  fn flv_tag_header_rejects_short_input() {
+    assert!(FlvTagHeader::parse(&[0u8; 8]).is_none());
+  }
 
-    #[test]
-    fn flv_tag_header_decodes_extended_timestamp() {
-        // 32-bit timestamp split across the 24-bit ts + 8-bit ts_ext fields.
-        let bytes = build_tag_header(TAG_AUDIO, 0, 0x01_23_45_67);
-        let h = FlvTagHeader::parse(&bytes).unwrap();
-        assert_eq!(h.timestamp_ms, 0x01_23_45_67);
-    }
+  #[test]
+  fn flv_tag_header_decodes_extended_timestamp() {
+    // 32-bit timestamp split across the 24-bit ts + 8-bit ts_ext fields.
+    let bytes = build_tag_header(TAG_AUDIO, 0, 0x01_23_45_67);
+    let h = FlvTagHeader::parse(&bytes).unwrap();
+    assert_eq!(h.timestamp_ms, 0x01_23_45_67);
+  }
 
-    #[test]
-    fn audio_tag_flags_decode_aac_44k_stereo_16bit() {
-        // format=10 (AAC), rate=3 (44.1k), size=1 (16-bit), type=1 (stereo)
-        let byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
-        let f = AudioTagFlags::parse(byte);
-        assert_eq!(f.format, 10);
-        assert_eq!(f.sample_rate(), Some(44_100));
-        assert_eq!(f.channels(), 2);
-        assert_eq!(f.bits_per_sample(), 16);
-        let (fourcc, _) = f.codec().unwrap();
-        assert_eq!(fourcc, "AAC ");
-    }
+  #[test]
+  fn audio_tag_flags_decode_aac_44k_stereo_16bit() {
+    // format=10 (AAC), rate=3 (44.1k), size=1 (16-bit), type=1 (stereo)
+    let byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    let f = AudioTagFlags::parse(byte);
+    assert_eq!(f.format, 10);
+    assert_eq!(f.sample_rate(), Some(44_100));
+    assert_eq!(f.channels(), 2);
+    assert_eq!(f.bits_per_sample(), 16);
+    let (fourcc, _) = f.codec().unwrap();
+    assert_eq!(fourcc, "AAC ");
+  }
 
-    #[test]
-    fn audio_tag_flags_decode_mp3_22k_mono_8bit() {
-        // format=2 (MP3), rate=2 (22.05k), size=0 (8-bit), type=0 (mono)
-        let byte = (2 << 4) | (2 << 2);
-        let f = AudioTagFlags::parse(byte);
-        assert_eq!(f.format, 2);
-        assert_eq!(f.sample_rate(), Some(22_050));
-        assert_eq!(f.channels(), 1);
-        assert_eq!(f.bits_per_sample(), 8);
-        let (fourcc, _) = f.codec().unwrap();
-        assert_eq!(fourcc, "MP3 ");
-    }
+  #[test]
+  fn audio_tag_flags_decode_mp3_22k_mono_8bit() {
+    // format=2 (MP3), rate=2 (22.05k), size=0 (8-bit), type=0 (mono)
+    let byte = (2 << 4) | (2 << 2);
+    let f = AudioTagFlags::parse(byte);
+    assert_eq!(f.format, 2);
+    assert_eq!(f.sample_rate(), Some(22_050));
+    assert_eq!(f.channels(), 1);
+    assert_eq!(f.bits_per_sample(), 8);
+    let (fourcc, _) = f.codec().unwrap();
+    assert_eq!(fourcc, "MP3 ");
+  }
 
-    #[test]
-    fn audio_tag_flags_codec_returns_none_for_unknown_format() {
-        let byte = (12 << 4); // format 12 — reserved
-        let f = AudioTagFlags::parse(byte);
-        assert!(f.codec().is_none());
-    }
+  #[test]
+  fn audio_tag_flags_codec_returns_none_for_unknown_format() {
+    let byte = 12 << 4; // format 12 — reserved
+    let f = AudioTagFlags::parse(byte);
+    assert!(f.codec().is_none());
+  }
 
-    #[test]
-    fn audio_tag_flags_rate_table_covers_all_indices() {
-        assert_eq!(AudioTagFlags::parse(0).sample_rate(), Some(5_512));
-        assert_eq!(AudioTagFlags::parse(1 << 2).sample_rate(), Some(11_025));
-        assert_eq!(AudioTagFlags::parse(2 << 2).sample_rate(), Some(22_050));
-        assert_eq!(AudioTagFlags::parse(3 << 2).sample_rate(), Some(44_100));
-    }
+  #[test]
+  fn audio_tag_flags_rate_table_covers_all_indices() {
+    assert_eq!(AudioTagFlags::parse(0).sample_rate(), Some(5_512));
+    assert_eq!(AudioTagFlags::parse(1 << 2).sample_rate(), Some(11_025));
+    assert_eq!(AudioTagFlags::parse(2 << 2).sample_rate(), Some(22_050));
+    assert_eq!(AudioTagFlags::parse(3 << 2).sample_rate(), Some(44_100));
+  }
 
-    #[test]
-    fn video_codec_id_from_byte_recognises_documented_codecs() {
-        assert_eq!(VideoCodecId::from_byte(2), Some(VideoCodecId::SorensonH263));
-        assert_eq!(VideoCodecId::from_byte(4), Some(VideoCodecId::Vp6));
-        assert_eq!(VideoCodecId::from_byte(7), Some(VideoCodecId::H264));
-        assert_eq!(VideoCodecId::from_byte(12), Some(VideoCodecId::H265));
-        assert_eq!(VideoCodecId::from_byte(0), None);
-    }
+  #[test]
+  fn video_codec_id_from_byte_recognises_documented_codecs() {
+    assert_eq!(VideoCodecId::from_byte(2), Some(VideoCodecId::SorensonH263));
+    assert_eq!(VideoCodecId::from_byte(4), Some(VideoCodecId::Vp6));
+    assert_eq!(VideoCodecId::from_byte(7), Some(VideoCodecId::H264));
+    assert_eq!(VideoCodecId::from_byte(12), Some(VideoCodecId::H265));
+    assert_eq!(VideoCodecId::from_byte(0), None);
+  }
 
-    #[test]
-    fn video_codec_id_codec_ids_match_matroska_convention() {
-        assert_eq!(VideoCodecId::H264.codec_id(), "V_MPEG4/ISO/AVC");
-        assert_eq!(VideoCodecId::H265.codec_id(), "V_MPEGH/ISO/HEVC");
-        assert_eq!(VideoCodecId::Vp6.codec_id(), "V_VP6F");
-    }
+  #[test]
+  fn video_codec_id_codec_ids_match_matroska_convention() {
+    assert_eq!(VideoCodecId::H264.codec_id(), "V_MPEG4/ISO/AVC");
+    assert_eq!(VideoCodecId::H265.codec_id(), "V_MPEGH/ISO/HEVC");
+    assert_eq!(VideoCodecId::Vp6.codec_id(), "V_VP6F");
+  }
 
-    #[test]
-    fn video_codec_id_fourcc_for_screen_video_v2_collapses_to_fsv1() {
-        // Mirrors mkvtoolnix's treatment — both Screen Video variants are
-        // surfaced via the Flash Screen Video FOURCC family.
-        assert_eq!(VideoCodecId::ScreenVideo.fourcc(), "FSV1");
-        assert_eq!(VideoCodecId::ScreenVideoV2.fourcc(), "FSV1");
-    }
+  #[test]
+  fn video_codec_id_fourcc_for_screen_video_v2_collapses_to_fsv1() {
+    // Mirrors mkvtoolnix's treatment — both Screen Video variants are
+    // surfaced via the Flash Screen Video FOURCC family.
+    assert_eq!(VideoCodecId::ScreenVideo.fourcc(), "FSV1");
+    assert_eq!(VideoCodecId::ScreenVideoV2.fourcc(), "FSV1");
+  }
 
-    #[test]
-    fn video_codec_id_recognises_screen_and_vp6_alpha_codecs() {
-        assert_eq!(VideoCodecId::from_byte(3), Some(VideoCodecId::ScreenVideo));
-        assert_eq!(VideoCodecId::from_byte(5), Some(VideoCodecId::Vp6Alpha));
-        assert_eq!(VideoCodecId::from_byte(6), Some(VideoCodecId::ScreenVideoV2));
-    }
+  #[test]
+  fn video_codec_id_recognises_screen_and_vp6_alpha_codecs() {
+    assert_eq!(VideoCodecId::from_byte(3), Some(VideoCodecId::ScreenVideo));
+    assert_eq!(VideoCodecId::from_byte(5), Some(VideoCodecId::Vp6Alpha));
+    assert_eq!(VideoCodecId::from_byte(6), Some(VideoCodecId::ScreenVideoV2));
+  }
 
-    #[test]
-    fn video_codec_id_display_names_cover_every_variant() {
-        for v in [
-            VideoCodecId::SorensonH263,
-            VideoCodecId::ScreenVideo,
-            VideoCodecId::Vp6,
-            VideoCodecId::Vp6Alpha,
-            VideoCodecId::ScreenVideoV2,
-            VideoCodecId::H264,
-            VideoCodecId::H265,
-        ] {
-            assert!(!v.display_name().is_empty());
-            assert!(!v.fourcc().is_empty());
-            assert!(!v.codec_id().is_empty());
-        }
+  #[test]
+  fn video_codec_id_display_names_cover_every_variant() {
+    for v in [
+      VideoCodecId::SorensonH263,
+      VideoCodecId::ScreenVideo,
+      VideoCodecId::Vp6,
+      VideoCodecId::Vp6Alpha,
+      VideoCodecId::ScreenVideoV2,
+      VideoCodecId::H264,
+      VideoCodecId::H265,
+    ] {
+      assert!(!v.display_name().is_empty());
+      assert!(!v.fourcc().is_empty());
+      assert!(!v.codec_id().is_empty());
     }
+  }
 
-    #[test]
-    fn audio_tag_flags_codec_table_covers_documented_formats() {
-        // Exercise the remaining branches of `AudioTagFlags::codec` so the
-        // table doesn't bit-rot when a new entry is added.
-        for format in 0u8..=14 {
-            let byte = format << 4;
-            let f = AudioTagFlags::parse(byte);
-            if matches!(format, 9 | 12) {
-                // Reserved / device-specific without a public name in
-                // mkvtoolnix's table.
-                continue;
-            }
-            // Every documented index produces a codec record.
-            assert!(f.codec().is_some(), "format {format}");
-        }
+  #[test]
+  fn audio_tag_flags_codec_table_covers_documented_formats() {
+    // Exercise the remaining branches of `AudioTagFlags::codec` so the
+    // table doesn't bit-rot when a new entry is added.
+    for format in 0u8..=14 {
+      let byte = format << 4;
+      let f = AudioTagFlags::parse(byte);
+      if matches!(format, 9 | 12) {
+        // Reserved / device-specific without a public name in
+        // mkvtoolnix's table.
+        continue;
+      }
+      // Every documented index produces a codec record.
+      assert!(f.codec().is_some(), "format {format}");
     }
+  }
 
-    #[test]
-    fn audio_tag_flags_size_index_drives_bits_per_sample() {
-        let f = AudioTagFlags::parse(0);
-        assert_eq!(f.bits_per_sample(), 8);
-        let f = AudioTagFlags::parse(0b10);
-        assert_eq!(f.bits_per_sample(), 16);
-    }
+  #[test]
+  fn audio_tag_flags_size_index_drives_bits_per_sample() {
+    let f = AudioTagFlags::parse(0);
+    assert_eq!(f.bits_per_sample(), 8);
+    let f = AudioTagFlags::parse(0b10);
+    assert_eq!(f.bits_per_sample(), 16);
+  }
 
-    #[test]
-    fn flv_tag_header_decodes_audio_with_high_bits_set_in_type_byte() {
-        // Tag type lives in the lower 5 bits; extra bits in the upper 3 must
-        // be ignored (the encrypted / filter flags occupy them).
-        let mut bytes = build_tag_header(TAG_AUDIO, 16, 0);
-        bytes[4] |= 0xE0; // encryption + reserved bits
-        let h = FlvTagHeader::parse(&bytes).unwrap();
-        assert!(h.is_audio());
-    }
+  #[test]
+  fn flv_tag_header_decodes_audio_with_high_bits_set_in_type_byte() {
+    // Tag type lives in the lower 5 bits; extra bits in the upper 3 must
+    // be ignored (the encrypted / filter flags occupy them).
+    let mut bytes = build_tag_header(TAG_AUDIO, 16, 0);
+    bytes[4] |= 0xE0; // encryption + reserved bits
+    let h = FlvTagHeader::parse(&bytes).unwrap();
+    assert!(h.is_audio());
+  }
 }

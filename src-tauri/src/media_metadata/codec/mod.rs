@@ -30,35 +30,35 @@ use crate::media_metadata::model::TrackType;
 /// catalogues don't depend on serde / specta and can stay zero-cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackKind {
-    Video,
-    Audio,
-    Subtitle,
-    Button,
-    Unknown,
+  Video,
+  Audio,
+  Subtitle,
+  Button,
+  Unknown,
 }
 
 impl TrackKind {
-    pub fn to_track_type(self) -> TrackType {
-        match self {
-            TrackKind::Video => TrackType::Video,
-            TrackKind::Audio => TrackType::Audio,
-            TrackKind::Subtitle => TrackType::Subtitles,
-            TrackKind::Button => TrackType::Buttons,
-            TrackKind::Unknown => TrackType::Unknown,
-        }
+  pub fn to_track_type(self) -> TrackType {
+    match self {
+      TrackKind::Video => TrackType::Video,
+      TrackKind::Audio => TrackType::Audio,
+      TrackKind::Subtitle => TrackType::Subtitles,
+      TrackKind::Button => TrackType::Buttons,
+      TrackKind::Unknown => TrackType::Unknown,
     }
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn track_kind_maps_to_track_type() {
-        assert_eq!(TrackKind::Video.to_track_type(), TrackType::Video);
-        assert_eq!(TrackKind::Audio.to_track_type(), TrackType::Audio);
-        assert_eq!(TrackKind::Subtitle.to_track_type(), TrackType::Subtitles);
-        assert_eq!(TrackKind::Button.to_track_type(), TrackType::Buttons);
-        assert_eq!(TrackKind::Unknown.to_track_type(), TrackType::Unknown);
-    }
+  #[test]
+  fn track_kind_maps_to_track_type() {
+    assert_eq!(TrackKind::Video.to_track_type(), TrackType::Video);
+    assert_eq!(TrackKind::Audio.to_track_type(), TrackType::Audio);
+    assert_eq!(TrackKind::Subtitle.to_track_type(), TrackType::Subtitles);
+    assert_eq!(TrackKind::Button.to_track_type(), TrackType::Buttons);
+    assert_eq!(TrackKind::Unknown.to_track_type(), TrackType::Unknown);
+  }
 }

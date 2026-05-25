@@ -40,62 +40,62 @@ use super::BitstreamMetadata;
 const SIGNATURE: [u8; 8] = [0x80, b'k', b'a', b't', b'e', 0x00, 0x00, 0x00];
 
 pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
-    if packet.len() < 32 || packet[..8] != SIGNATURE {
-        return None;
+  if packet.len() < 32 || packet[..8] != SIGNATURE {
+    return None;
+  }
+  let mut metadata = BitstreamMetadata::subtitle("S_KATE", "Kate");
+  if packet.len() >= 60 {
+    let lang_bytes = &packet[32..48];
+    if let Some(end) = lang_bytes.iter().position(|b| *b == 0) {
+      let trimmed = &lang_bytes[..end];
+      if !trimmed.is_empty() {
+        metadata.language = Some(String::from_utf8_lossy(trimmed).into_owned());
+      }
     }
-    let mut metadata = BitstreamMetadata::subtitle("S_KATE", "Kate");
-    if packet.len() >= 60 {
-        let lang_bytes = &packet[32..48];
-        if let Some(end) = lang_bytes.iter().position(|b| *b == 0) {
-            let trimmed = &lang_bytes[..end];
-            if !trimmed.is_empty() {
-                metadata.language = Some(String::from_utf8_lossy(trimmed).into_owned());
-            }
-        }
-    }
-    Some(metadata)
+  }
+  Some(metadata)
 }
 
 #[cfg(test)]
 pub(crate) fn build_identification_packet(language: &str) -> Vec<u8> {
-    let mut p = Vec::with_capacity(64);
-    p.extend_from_slice(&SIGNATURE);
-    p.extend_from_slice(&[0u8; 24]); // reserved + version + counts + rates
-    let mut lang_bytes = [0u8; 16];
-    let n = language.len().min(15);
-    lang_bytes[..n].copy_from_slice(&language.as_bytes()[..n]);
-    p.extend_from_slice(&lang_bytes);
-    p.extend_from_slice(&[0u8; 16]); // category
-    p
+  let mut p = Vec::with_capacity(64);
+  p.extend_from_slice(&SIGNATURE);
+  p.extend_from_slice(&[0u8; 24]); // reserved + version + counts + rates
+  let mut lang_bytes = [0u8; 16];
+  let n = language.len().min(15);
+  lang_bytes[..n].copy_from_slice(&language.as_bytes()[..n]);
+  p.extend_from_slice(&lang_bytes);
+  p.extend_from_slice(&[0u8; 16]); // category
+  p
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn sniffs_kate_with_language() {
-        let pkt = build_identification_packet("fr-FR");
-        let m = sniff(&pkt).unwrap();
-        assert_eq!(m.codec_id, "S_KATE");
-        assert_eq!(m.language.as_deref(), Some("fr-FR"));
-    }
+  #[test]
+  fn sniffs_kate_with_language() {
+    let pkt = build_identification_packet("fr-FR");
+    let m = sniff(&pkt).unwrap();
+    assert_eq!(m.codec_id, "S_KATE");
+    assert_eq!(m.language.as_deref(), Some("fr-FR"));
+  }
 
-    #[test]
-    fn sniffs_kate_without_language() {
-        let pkt = build_identification_packet("");
-        let m = sniff(&pkt).unwrap();
-        assert_eq!(m.codec_id, "S_KATE");
-        assert!(m.language.is_none());
-    }
+  #[test]
+  fn sniffs_kate_without_language() {
+    let pkt = build_identification_packet("");
+    let m = sniff(&pkt).unwrap();
+    assert_eq!(m.codec_id, "S_KATE");
+    assert!(m.language.is_none());
+  }
 
-    #[test]
-    fn rejects_non_kate_signature() {
-        assert!(sniff(b"\x80theora").is_none());
-    }
+  #[test]
+  fn rejects_non_kate_signature() {
+    assert!(sniff(b"\x80theora").is_none());
+  }
 
-    #[test]
-    fn rejects_short_packet() {
-        assert!(sniff(&SIGNATURE).is_none());
-    }
+  #[test]
+  fn rejects_short_packet() {
+    assert!(sniff(&SIGNATURE).is_none());
+  }
 }

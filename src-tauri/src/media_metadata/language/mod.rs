@@ -33,225 +33,221 @@ use specta::Type;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Language {
-    /// Canonical ISO 639-2 alpha-3 code (terminologic when a B/T pair exists).
-    /// Renamed on the wire because serde's `camelCase` rule mangles fields
-    /// containing digits (`iso639_2` → `iso6392`); we keep the underscore.
-    #[serde(rename = "iso639_2")]
-    pub iso639_2: String,
-    /// BCP-47 IETF tag when the source provided one and it validated.
-    pub ietf: Option<String>,
-    /// English name lookup for display.  Always derived from `iso639_2`.
-    pub name: Option<String>,
+  /// Canonical ISO 639-2 alpha-3 code (terminologic when a B/T pair exists).
+  /// Renamed on the wire because serde's `camelCase` rule mangles fields
+  /// containing digits (`iso639_2` → `iso6392`); we keep the underscore.
+  #[serde(rename = "iso639_2")]
+  pub iso639_2: String,
+  /// BCP-47 IETF tag when the source provided one and it validated.
+  pub ietf: Option<String>,
+  /// English name lookup for display.  Always derived from `iso639_2`.
+  pub name: Option<String>,
 }
 
 impl Language {
-    /// Construct from an ISO 639-2 code.  Unknown codes fall back to `"und"`
-    /// with a `name` of `None`, so callers never silently lose data.
-    pub fn from_iso_639_2(code: &str) -> Self {
-        match iso_639::lookup(code) {
-            Some(m) => Self {
-                iso639_2: m.canonical.to_owned(),
-                ietf: None,
-                name: Some(m.name.to_owned()),
-            },
-            None => Self::undetermined(),
-        }
+  /// Construct from an ISO 639-2 code.  Unknown codes fall back to `"und"`
+  /// with a `name` of `None`, so callers never silently lose data.
+  pub fn from_iso_639_2(code: &str) -> Self {
+    match iso_639::lookup(code) {
+      Some(m) => Self {
+        iso639_2: m.canonical.to_owned(),
+        ietf: None,
+        name: Some(m.name.to_owned()),
+      },
+      None => Self::undetermined(),
     }
+  }
 
-    /// Construct from a BCP-47 IETF tag.  When validation succeeds we record
-    /// the canonical form in `ietf` and resolve the primary subtag back to
-    /// ISO 639-2 if possible (best-effort).  An unparseable tag returns
-    /// `None` so callers can fall back to ISO 639-2.
-    pub fn from_ietf(tag: &str) -> Option<Self> {
-        let canonical_ietf = bcp47::validate(tag)?;
-        let primary = bcp47::primary_subtag(tag).unwrap_or_default();
-        // Most IETF primary subtags are ISO 639-1 (2 letters).  Map those
-        // back to their ISO 639-2 alpha-3 code first; 3-letter primaries hit
-        // the alpha-3 table directly.  mkvtoolnix resolves the effective
-        // language the same way (`mtx::bcp47::language_c` over the 639
-        // registry).  Unknown primaries fall back to "und".
-        let iso = match primary.len() {
-            2 => iso_639::alpha2_to_alpha3(&primary)
-                .and_then(iso_639::lookup)
-                .map(|m| (m.canonical, m.name)),
-            3 => iso_639::lookup(&primary).map(|m| (m.canonical, m.name)),
-            _ => None,
-        };
-        let (iso639_2, name) = match iso {
-            Some((c, n)) => (c.to_owned(), Some(n.to_owned())),
-            None => (iso_639::UND.to_owned(), None),
-        };
-        Some(Self {
-            iso639_2,
-            ietf: Some(canonical_ietf),
-            name,
-        })
-    }
+  /// Construct from a BCP-47 IETF tag.  When validation succeeds we record
+  /// the canonical form in `ietf` and resolve the primary subtag back to
+  /// ISO 639-2 if possible (best-effort).  An unparseable tag returns
+  /// `None` so callers can fall back to ISO 639-2.
+  pub fn from_ietf(tag: &str) -> Option<Self> {
+    let canonical_ietf = bcp47::validate(tag)?;
+    let primary = bcp47::primary_subtag(tag).unwrap_or_default();
+    // Most IETF primary subtags are ISO 639-1 (2 letters).  Map those
+    // back to their ISO 639-2 alpha-3 code first; 3-letter primaries hit
+    // the alpha-3 table directly.  mkvtoolnix resolves the effective
+    // language the same way (`mtx::bcp47::language_c` over the 639
+    // registry).  Unknown primaries fall back to "und".
+    let iso = match primary.len() {
+      2 => iso_639::alpha2_to_alpha3(&primary)
+        .and_then(iso_639::lookup)
+        .map(|m| (m.canonical, m.name)),
+      3 => iso_639::lookup(&primary).map(|m| (m.canonical, m.name)),
+      _ => None,
+    };
+    let (iso639_2, name) = match iso {
+      Some((c, n)) => (c.to_owned(), Some(n.to_owned())),
+      None => (iso_639::UND.to_owned(), None),
+    };
+    Some(Self {
+      iso639_2,
+      ietf: Some(canonical_ietf),
+      name,
+    })
+  }
 
-    /// The `"und"` sentinel — used when both fields are absent or invalid.
-    pub fn undetermined() -> Self {
-        Self {
-            iso639_2: iso_639::UND.to_owned(),
-            ietf: None,
-            name: Some("Undetermined".to_owned()),
-        }
+  /// The `"und"` sentinel — used when both fields are absent or invalid.
+  pub fn undetermined() -> Self {
+    Self {
+      iso639_2: iso_639::UND.to_owned(),
+      ietf: None,
+      name: Some("Undetermined".to_owned()),
     }
+  }
 
-    /// Default-when-absent (Matroska defaults Language to `"eng"`).
-    pub fn english_default() -> Self {
-        Self::from_iso_639_2("eng")
-    }
+  /// Default-when-absent (Matroska defaults Language to `"eng"`).
+  pub fn english_default() -> Self {
+    Self::from_iso_639_2("eng")
+  }
 
-    /// Resolution pipeline (prefer IETF when valid, else ISO-639-2, else
-    /// `eng` or `und` depending on `default_eng`).
-    ///
-    /// * If `ietf_hint` is non-empty and validates → use that (record the
-    ///   canonical form, derive iso639_2 from the primary subtag).
-    /// * Else if `iso_hint` is non-empty and validates → use that.
-    /// * Else if defaults are required → use `eng`.
-    /// * Else → `und`.
-    pub fn resolve(
-        ietf_hint: Option<&str>,
-        iso_hint: Option<&str>,
-        default_eng: bool,
-    ) -> Self {
-        if let Some(tag) = ietf_hint {
-            if !tag.is_empty() {
-                if let Some(lang) = Self::from_ietf(tag) {
-                    return lang;
-                }
-            }
+  /// Resolution pipeline (prefer IETF when valid, else ISO-639-2, else
+  /// `eng` or `und` depending on `default_eng`).
+  ///
+  /// * If `ietf_hint` is non-empty and validates → use that (record the
+  ///   canonical form, derive iso639_2 from the primary subtag).
+  /// * Else if `iso_hint` is non-empty and validates → use that.
+  /// * Else if defaults are required → use `eng`.
+  /// * Else → `und`.
+  pub fn resolve(ietf_hint: Option<&str>, iso_hint: Option<&str>, default_eng: bool) -> Self {
+    if let Some(tag) = ietf_hint {
+      if !tag.is_empty() {
+        if let Some(lang) = Self::from_ietf(tag) {
+          return lang;
         }
-        if let Some(code) = iso_hint {
-            if !code.is_empty() {
-                if iso_639::is_valid(code) {
-                    return Self::from_iso_639_2(code);
-                }
-            }
-        }
-        if default_eng {
-            Self::english_default()
-        } else {
-            Self::undetermined()
-        }
+      }
     }
+    if let Some(code) = iso_hint {
+      if !code.is_empty() {
+        if iso_639::is_valid(code) {
+          return Self::from_iso_639_2(code);
+        }
+      }
+    }
+    if default_eng {
+      Self::english_default()
+    } else {
+      Self::undetermined()
+    }
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn from_iso_639_2_resolves_canonical() {
-        let l = Language::from_iso_639_2("eng");
-        assert_eq!(l.iso639_2, "eng");
-        assert_eq!(l.name.as_deref(), Some("English"));
-        assert!(l.ietf.is_none());
-    }
+  #[test]
+  fn from_iso_639_2_resolves_canonical() {
+    let l = Language::from_iso_639_2("eng");
+    assert_eq!(l.iso639_2, "eng");
+    assert_eq!(l.name.as_deref(), Some("English"));
+    assert!(l.ietf.is_none());
+  }
 
-    #[test]
-    fn from_iso_639_2_translates_bib_to_term() {
-        let l = Language::from_iso_639_2("fre");
-        assert_eq!(l.iso639_2, "fra");
-        assert_eq!(l.name.as_deref(), Some("French"));
-    }
+  #[test]
+  fn from_iso_639_2_translates_bib_to_term() {
+    let l = Language::from_iso_639_2("fre");
+    assert_eq!(l.iso639_2, "fra");
+    assert_eq!(l.name.as_deref(), Some("French"));
+  }
 
-    #[test]
-    fn from_iso_639_2_unknown_becomes_und() {
-        let l = Language::from_iso_639_2("zzz");
-        assert_eq!(l.iso639_2, "und");
-        assert_eq!(l.name.as_deref(), Some("Undetermined"));
-    }
+  #[test]
+  fn from_iso_639_2_unknown_becomes_und() {
+    let l = Language::from_iso_639_2("zzz");
+    assert_eq!(l.iso639_2, "und");
+    assert_eq!(l.name.as_deref(), Some("Undetermined"));
+  }
 
-    #[test]
-    fn from_ietf_simple_two_letter_resolves_iso() {
-        let l = Language::from_ietf("en-US").unwrap();
-        assert_eq!(l.ietf.as_deref(), Some("en-US"));
-        // Primary subtag "en" maps through the alpha-2 → alpha-3 table to eng.
-        assert_eq!(l.iso639_2, "eng");
-        assert_eq!(l.name.as_deref(), Some("English"));
-    }
+  #[test]
+  fn from_ietf_simple_two_letter_resolves_iso() {
+    let l = Language::from_ietf("en-US").unwrap();
+    assert_eq!(l.ietf.as_deref(), Some("en-US"));
+    // Primary subtag "en" maps through the alpha-2 → alpha-3 table to eng.
+    assert_eq!(l.iso639_2, "eng");
+    assert_eq!(l.name.as_deref(), Some("English"));
+  }
 
-    #[test]
-    fn from_ietf_two_letter_bibliographic_resolves_to_terminologic() {
-        // "de" → "ger" (bibliographic) → "deu" (terminologic canonical).
-        let l = Language::from_ietf("de").unwrap();
-        assert_eq!(l.iso639_2, "deu");
-        let l = Language::from_ietf("pt-BR").unwrap();
-        assert_eq!(l.iso639_2, "por");
-        let l = Language::from_ietf("ja").unwrap();
-        assert_eq!(l.iso639_2, "jpn");
-    }
+  #[test]
+  fn from_ietf_two_letter_bibliographic_resolves_to_terminologic() {
+    // "de" → "ger" (bibliographic) → "deu" (terminologic canonical).
+    let l = Language::from_ietf("de").unwrap();
+    assert_eq!(l.iso639_2, "deu");
+    let l = Language::from_ietf("pt-BR").unwrap();
+    assert_eq!(l.iso639_2, "por");
+    let l = Language::from_ietf("ja").unwrap();
+    assert_eq!(l.iso639_2, "jpn");
+  }
 
-    #[test]
-    fn from_ietf_three_letter_primary_resolves_iso() {
-        let l = Language::from_ietf("yue-Hant-HK").unwrap();
-        assert_eq!(l.ietf.as_deref(), Some("yue-Hant-HK"));
-        // "yue" is a known ISO 639-2/3-letter code? Actually it's 639-3 only.
-        // For the language-tags crate the parse will succeed but our table
-        // may not contain yue — accept either outcome.
-        assert!(l.iso639_2 == "und" || l.iso639_2 == "yue");
-    }
+  #[test]
+  fn from_ietf_three_letter_primary_resolves_iso() {
+    let l = Language::from_ietf("yue-Hant-HK").unwrap();
+    assert_eq!(l.ietf.as_deref(), Some("yue-Hant-HK"));
+    // "yue" is a known ISO 639-2/3-letter code? Actually it's 639-3 only.
+    // For the language-tags crate the parse will succeed but our table
+    // may not contain yue — accept either outcome.
+    assert!(l.iso639_2 == "und" || l.iso639_2 == "yue");
+  }
 
-    #[test]
-    fn from_ietf_garbage_is_none() {
-        assert!(Language::from_ietf("not a tag").is_none());
-        assert!(Language::from_ietf("").is_none());
-    }
+  #[test]
+  fn from_ietf_garbage_is_none() {
+    assert!(Language::from_ietf("not a tag").is_none());
+    assert!(Language::from_ietf("").is_none());
+  }
 
-    #[test]
-    fn english_default_is_eng() {
-        let l = Language::english_default();
-        assert_eq!(l.iso639_2, "eng");
-        assert_eq!(l.name.as_deref(), Some("English"));
-    }
+  #[test]
+  fn english_default_is_eng() {
+    let l = Language::english_default();
+    assert_eq!(l.iso639_2, "eng");
+    assert_eq!(l.name.as_deref(), Some("English"));
+  }
 
-    #[test]
-    fn resolve_prefers_ietf_when_valid() {
-        let l = Language::resolve(Some("ja"), Some("eng"), true);
-        assert_eq!(l.ietf.as_deref(), Some("ja"));
-        // primary "ja" maps through the alpha-2 table to jpn
-        assert_eq!(l.iso639_2, "jpn");
-    }
+  #[test]
+  fn resolve_prefers_ietf_when_valid() {
+    let l = Language::resolve(Some("ja"), Some("eng"), true);
+    assert_eq!(l.ietf.as_deref(), Some("ja"));
+    // primary "ja" maps through the alpha-2 table to jpn
+    assert_eq!(l.iso639_2, "jpn");
+  }
 
-    #[test]
-    fn resolve_falls_through_to_iso_when_ietf_garbage() {
-        let l = Language::resolve(Some("bogus tag"), Some("jpn"), true);
-        assert_eq!(l.iso639_2, "jpn");
-        assert!(l.ietf.is_none());
-    }
+  #[test]
+  fn resolve_falls_through_to_iso_when_ietf_garbage() {
+    let l = Language::resolve(Some("bogus tag"), Some("jpn"), true);
+    assert_eq!(l.iso639_2, "jpn");
+    assert!(l.ietf.is_none());
+  }
 
-    #[test]
-    fn resolve_falls_through_to_iso_when_ietf_empty() {
-        let l = Language::resolve(Some(""), Some("jpn"), true);
-        assert_eq!(l.iso639_2, "jpn");
-    }
+  #[test]
+  fn resolve_falls_through_to_iso_when_ietf_empty() {
+    let l = Language::resolve(Some(""), Some("jpn"), true);
+    assert_eq!(l.iso639_2, "jpn");
+  }
 
-    #[test]
-    fn resolve_falls_through_to_eng_default() {
-        let l = Language::resolve(None, None, true);
-        assert_eq!(l.iso639_2, "eng");
-    }
+  #[test]
+  fn resolve_falls_through_to_eng_default() {
+    let l = Language::resolve(None, None, true);
+    assert_eq!(l.iso639_2, "eng");
+  }
 
-    #[test]
-    fn resolve_falls_through_to_und_when_no_default() {
-        let l = Language::resolve(None, None, false);
-        assert_eq!(l.iso639_2, "und");
-    }
+  #[test]
+  fn resolve_falls_through_to_und_when_no_default() {
+    let l = Language::resolve(None, None, false);
+    assert_eq!(l.iso639_2, "und");
+  }
 
-    #[test]
-    fn resolve_drops_invalid_iso_hint() {
-        let l = Language::resolve(None, Some("zzz"), true);
-        assert_eq!(l.iso639_2, "eng");
-    }
+  #[test]
+  fn resolve_drops_invalid_iso_hint() {
+    let l = Language::resolve(None, Some("zzz"), true);
+    assert_eq!(l.iso639_2, "eng");
+  }
 
-    #[test]
-    fn round_trip_through_json() {
-        let l = Language::from_iso_639_2("jpn");
-        let s = serde_json::to_string(&l).unwrap();
-        assert!(s.contains("\"iso639_2\":\"jpn\""));
-        assert!(s.contains("\"name\":\"Japanese\""));
-        let back: Language = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, l);
-    }
+  #[test]
+  fn round_trip_through_json() {
+    let l = Language::from_iso_639_2("jpn");
+    let s = serde_json::to_string(&l).unwrap();
+    assert!(s.contains("\"iso639_2\":\"jpn\""));
+    assert!(s.contains("\"name\":\"Japanese\""));
+    let back: Language = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, l);
+  }
 }

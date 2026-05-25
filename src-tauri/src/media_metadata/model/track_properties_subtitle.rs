@@ -23,72 +23,72 @@ use specta::Type;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleTrackProperties {
-    /// `true` for text-based codecs (SRT, ASS, WebVTT, USF, MicroDVD).
-    /// `false` for image / graphical codecs (PGS, VobSub, HDMV TextST).
-    pub text_subtitles: bool,
-    /// Detected source-file encoding for text subtitles (UTF-8, Windows-1252,
-    /// ...).  Always `None` for graphical formats.
-    pub encoding: Option<String>,
-    /// Container-specific format variant when meaningful (e.g. ASS vs SSA,
-    /// VobSub idx flavour).
-    pub variant: Option<String>,
-    /// DVB teletext page number for teletext-based subtitle PIDs.  Always
-    /// `None` for non-DVB-TS files.
-    pub teletext_page: Option<u32>,
+  /// `true` for text-based codecs (SRT, ASS, WebVTT, USF, MicroDVD).
+  /// `false` for image / graphical codecs (PGS, VobSub, HDMV TextST).
+  pub text_subtitles: bool,
+  /// Detected source-file encoding for text subtitles (UTF-8, Windows-1252,
+  /// ...).  Always `None` for graphical formats.
+  pub encoding: Option<String>,
+  /// Container-specific format variant when meaningful (e.g. ASS vs SSA,
+  /// VobSub idx flavour).
+  pub variant: Option<String>,
+  /// DVB teletext page number for teletext-based subtitle PIDs.  Always
+  /// `None` for non-DVB-TS files.
+  pub teletext_page: Option<u32>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn default_is_image_subtitle_with_no_encoding() {
-        let s = SubtitleTrackProperties::default();
-        assert!(!s.text_subtitles);
-        assert!(s.encoding.is_none());
-        assert!(s.variant.is_none());
-    }
+  #[test]
+  fn default_is_image_subtitle_with_no_encoding() {
+    let s = SubtitleTrackProperties::default();
+    assert!(!s.text_subtitles);
+    assert!(s.encoding.is_none());
+    assert!(s.variant.is_none());
+  }
 
-    #[test]
-    fn round_trip_text_subtitle() {
-        let st = SubtitleTrackProperties {
-            text_subtitles: true,
-            encoding: Some("UTF-8".to_owned()),
-            variant: Some("ASS".to_owned()),
-            teletext_page: None,
-        };
-        let s = serde_json::to_string(&st).unwrap();
-        assert!(s.contains("\"textSubtitles\":true"));
-        assert!(s.contains("\"encoding\":\"UTF-8\""));
-        let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, st);
-    }
+  #[test]
+  fn round_trip_text_subtitle() {
+    let st = SubtitleTrackProperties {
+      text_subtitles: true,
+      encoding: Some("UTF-8".to_owned()),
+      variant: Some("ASS".to_owned()),
+      teletext_page: None,
+    };
+    let s = serde_json::to_string(&st).unwrap();
+    assert!(s.contains("\"textSubtitles\":true"));
+    assert!(s.contains("\"encoding\":\"UTF-8\""));
+    let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, st);
+  }
 
-    #[test]
-    fn round_trip_image_subtitle() {
-        let st = SubtitleTrackProperties {
-            text_subtitles: false,
-            encoding: None,
-            variant: Some("PGS".to_owned()),
-            teletext_page: None,
-        };
-        let s = serde_json::to_string(&st).unwrap();
-        assert!(s.contains("\"textSubtitles\":false"));
-        let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, st);
-    }
+  #[test]
+  fn round_trip_image_subtitle() {
+    let st = SubtitleTrackProperties {
+      text_subtitles: false,
+      encoding: None,
+      variant: Some("PGS".to_owned()),
+      teletext_page: None,
+    };
+    let s = serde_json::to_string(&st).unwrap();
+    assert!(s.contains("\"textSubtitles\":false"));
+    let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, st);
+  }
 
-    #[test]
-    fn round_trip_teletext_subtitle() {
-        let st = SubtitleTrackProperties {
-            text_subtitles: true,
-            encoding: Some("UTF-8".to_owned()),
-            variant: Some("DVB Teletext".to_owned()),
-            teletext_page: Some(888),
-        };
-        let s = serde_json::to_string(&st).unwrap();
-        assert!(s.contains("\"teletextPage\":888"));
-        let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, st);
-    }
+  #[test]
+  fn round_trip_teletext_subtitle() {
+    let st = SubtitleTrackProperties {
+      text_subtitles: true,
+      encoding: Some("UTF-8".to_owned()),
+      variant: Some("DVB Teletext".to_owned()),
+      teletext_page: Some(888),
+    };
+    let s = serde_json::to_string(&st).unwrap();
+    assert!(s.contains("\"teletextPage\":888"));
+    let back: SubtitleTrackProperties = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, st);
+  }
 }

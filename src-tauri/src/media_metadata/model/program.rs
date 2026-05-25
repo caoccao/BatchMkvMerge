@@ -25,34 +25,34 @@ use specta_typescript::Number;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Program {
-    pub program_number: u32,
-    pub pmt_pid: Option<u32>,
-    pub service_name: Option<String>,
-    pub service_provider: Option<String>,
-    /// Track IDs (matching [`super::track::Track::id`]) carried by this
-    /// program.
-    #[specta(type = Vec<Number>)]
-    pub track_ids: Vec<i64>,
+  pub program_number: u32,
+  pub pmt_pid: Option<u32>,
+  pub service_name: Option<String>,
+  pub service_provider: Option<String>,
+  /// Track IDs (matching [`super::track::Track::id`]) carried by this
+  /// program.
+  #[specta(type = Vec<Number>)]
+  pub track_ids: Vec<i64>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn round_trip_through_json() {
-        let p = Program {
-            program_number: 1,
-            pmt_pid: Some(0x100),
-            service_name: Some("BBC One HD".to_owned()),
-            service_provider: Some("BBC".to_owned()),
-            track_ids: vec![0, 1, 2],
-        };
-        let s = serde_json::to_string(&p).unwrap();
-        assert!(s.contains("\"programNumber\":1"));
-        assert!(s.contains("\"pmtPid\":256"));
-        assert!(s.contains("\"trackIds\":[0,1,2]"));
-        let back: Program = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, p);
-    }
+  #[test]
+  fn round_trip_through_json() {
+    let p = Program {
+      program_number: 1,
+      pmt_pid: Some(0x100),
+      service_name: Some("BBC One HD".to_owned()),
+      service_provider: Some("BBC".to_owned()),
+      track_ids: vec![0, 1, 2],
+    };
+    let s = serde_json::to_string(&p).unwrap();
+    assert!(s.contains("\"programNumber\":1"));
+    assert!(s.contains("\"pmtPid\":256"));
+    assert!(s.contains("\"trackIds\":[0,1,2]"));
+    let back: Program = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, p);
+  }
 }

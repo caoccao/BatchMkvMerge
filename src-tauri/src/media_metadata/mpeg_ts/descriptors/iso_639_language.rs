@@ -22,44 +22,41 @@
 //! also drops the rest).
 
 pub fn decode(body: &[u8]) -> Option<String> {
-    if body.len() < 3 {
-        return None;
-    }
-    let lang_bytes = &body[..3];
-    if !lang_bytes
-        .iter()
-        .all(|b| (b'a'..=b'z').contains(b) || (b'A'..=b'Z').contains(b))
-    {
-        return None;
-    }
-    let code: String = lang_bytes
-        .iter()
-        .map(|b| b.to_ascii_lowercase() as char)
-        .collect();
-    Some(code)
+  if body.len() < 3 {
+    return None;
+  }
+  let lang_bytes = &body[..3];
+  if !lang_bytes
+    .iter()
+    .all(|b| (b'a'..=b'z').contains(b) || (b'A'..=b'Z').contains(b))
+  {
+    return None;
+  }
+  let code: String = lang_bytes.iter().map(|b| b.to_ascii_lowercase() as char).collect();
+  Some(code)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn decodes_eng() {
-        assert_eq!(decode(b"eng\x00").as_deref(), Some("eng"));
-    }
+  #[test]
+  fn decodes_eng() {
+    assert_eq!(decode(b"eng\x00").as_deref(), Some("eng"));
+  }
 
-    #[test]
-    fn upper_case_normalised_to_lower() {
-        assert_eq!(decode(b"ENG\x00").as_deref(), Some("eng"));
-    }
+  #[test]
+  fn upper_case_normalised_to_lower() {
+    assert_eq!(decode(b"ENG\x00").as_deref(), Some("eng"));
+  }
 
-    #[test]
-    fn rejects_non_letter_payload() {
-        assert!(decode(b"12\xAA\x00").is_none());
-    }
+  #[test]
+  fn rejects_non_letter_payload() {
+    assert!(decode(b"12\xAA\x00").is_none());
+  }
 
-    #[test]
-    fn rejects_too_short() {
-        assert!(decode(b"en").is_none());
-    }
+  #[test]
+  fn rejects_too_short() {
+    assert!(decode(b"en").is_none());
+  }
 }

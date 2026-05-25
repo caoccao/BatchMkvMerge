@@ -45,14 +45,13 @@ pub use program::Program;
 pub use tag::{TagEntry, TagsBundle};
 pub use track::{CodecInfo, CodecPrivate, Track, TrackProperties, TrackType};
 pub use track_properties_audio::{
-    AudioCodecConfig, AudioEmphasis, AudioTrackProperties, ChannelLayout, ChannelLayoutKind,
+  AudioCodecConfig, AudioEmphasis, AudioTrackProperties, ChannelLayout, ChannelLayoutKind,
 };
 pub use track_properties_common::{CommonTrackProperties, TrackFlag};
 pub use track_properties_subtitle::SubtitleTrackProperties;
 pub use track_properties_video::{
-    AlphaMode, ChromaFormat, ChromaSiting, ChromaSubsampling, Chromaticity, ColorMetadata,
-    ColorRange, CropRect, Dimensions2D, DisplayUnit, FieldOrder, HevcTier, InterlaceFlag,
-    MasterMetadata, ProjectionMetadata, ProjectionPose, ProjectionType, SampleAspectRatio,
-    StereoMode, VideoCodecConfig, VideoTrackProperties,
+  AlphaMode, ChromaFormat, ChromaSiting, ChromaSubsampling, Chromaticity, ColorMetadata, ColorRange, CropRect,
+  Dimensions2D, DisplayUnit, FieldOrder, HevcTier, InterlaceFlag, MasterMetadata, ProjectionMetadata, ProjectionPose,
+  ProjectionType, SampleAspectRatio, StereoMode, VideoCodecConfig, VideoTrackProperties,
 };
 pub use warning::{Warning, WarningCategory};
