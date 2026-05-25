@@ -41,3 +41,9 @@ Key structures are `BoxHeader`, `FileType`, `MoovBuilder`, `TrackBuilder`, `Trex
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, chapter-track and `tref` behavior, and a wider QuickTime metadata surface. Rust implements enough sample-table handling for first-sample verification but not packet output. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely.
+
+## Open Issues
+
+### PARSER-212: QuickTime chapter tracks referenced by `tref/chap` are not extracted
+
+Native only counts Nero-style `udta/chpl` chapter lists (`src-tauri/src/media_metadata/mp4/meta/udta.rs:49-114`). The `trak` walker ignores `tref`, and no path marks a text track as the movie's chapter source or reads its sample-table entries as chapter names. Upstream records `tref/chap` track IDs (`../mkvtoolnix/src/input/r_qtmp4.cpp:1666-1679`), calls `read_chapter_track()` after header parsing (`r_qtmp4.cpp:323`), reads the chapter track sample payloads (`r_qtmp4.cpp:1171-1207`), and reports the resulting chapter count during identify (`r_qtmp4.cpp:2260-2261`). MOV/MP4 files that store chapters as QuickTime text tracks therefore report no chapters natively even though mkvmerge identifies them.

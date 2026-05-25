@@ -27,3 +27,9 @@ The reader uses helper functions rather than custom persistent structs.
 ## Gaps and Handling
 
 The Rust probe is stricter than upstream and currently omits a valid upstream interactive-composition segment type. This can create false negatives for edge files, but accepted files have complete header-level metadata for this app.
+
+## Open Issues
+
+### PARSER-219: Valid PGS segment chains can be rejected by stricter type checks
+
+Native `count_segments()` requires every early segment type to be one of `0x14`, `0x15`, `0x16`, `0x17`, or `0x80` (`src-tauri/src/media_metadata/subtitles/pgs.rs:44-67`) before accepting the file (`pgs.rs:78-95`). Upstream probe only verifies that the first segment starts with `PG`, skips by the declared segment length, and checks that the next segment also starts with `PG` (`../mkvtoolnix/src/input/r_hdmv_pgs.cpp:26-37`). Upstream also defines interactive-composition segment type `0x18` (`../mkvtoolnix/src/common/hdmv_pgs.h:22-27`). SUP files containing interactive-composition or future segment types near the beginning can be false negatives natively.

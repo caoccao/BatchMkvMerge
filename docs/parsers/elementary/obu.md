@@ -30,3 +30,9 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 ## Gaps and Handling
 
 Rust scans a smaller prefix than upstream and accepts some no-size OBU forms that upstream rejects. It does not expose timing/default duration, operating-point filtering, AV1C generation, metadata OBU retention, or Dolby Vision RPU/block-addition mapping. The parser handles this by reporting base AV1 metadata only; IVF has separate first-frame Dolby Vision extraction for wrapped AV1.
+
+## Open Issues
+
+### PARSER-220: Raw OBUs without size fields are accepted even though mkvmerge rejects them
+
+Native `walk_obus()` treats an OBU without `obu_has_size_field` as extending to the end of the probe buffer (`src-tauri/src/media_metadata/elementary/obu.rs:371-377`), so a no-size sequence header plus frame-like OBU can pass `probe()`/`read_headers()` (`obu.rs:412-455`). Upstream's AV1 parser returns no size for such OBUs (`../mkvtoolnix/src/common/av1.cpp:131-158`) and `parse_obu()` throws `obu_without_size_unsupported_x` when no size is present (`av1.cpp:414-421`), causing `r_obu.cpp` probing to fail. This can make native identify raw AV1-like data that mkvmerge rejects.

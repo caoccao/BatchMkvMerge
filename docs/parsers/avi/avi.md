@@ -33,3 +33,9 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 ## Gaps and Handling
 
 Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes or extract MPEG-4 pixel aspect ratio from frames, and embedded SSA attachment extraction is not complete. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope.
+
+## Open Issues
+
+### PARSER-213: GAB2 SSA/ASS subtitle attachments are not reported
+
+Native GAB2 parsing keeps only the subtitle kind and detected encoding in `AviSubtitleDemuxer` (`src-tauri/src/media_metadata/avi/subtitles.rs:59-66`) and `finalise()` only creates subtitle tracks (`src-tauri/src/media_metadata/avi/identify.rs:42-88`, `201-224`). It never re-runs the SSA parser over the embedded payload to harvest `[Fonts]` or `[Graphics]` attachments. Upstream parses the same GAB2 subtitle block (`../mkvtoolnix/src/input/r_avi.cpp:118-170`), then `identify_attachments()` constructs an `ssa_parser_c`, parses the subtitle payload, and emits every attachment (`r_avi.cpp:942-959`). AVI files with embedded ASS fonts or graphics therefore lose attachment metadata.

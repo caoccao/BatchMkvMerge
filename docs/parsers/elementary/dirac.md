@@ -29,3 +29,9 @@ The internal `SequenceHeader` contains width, height, interlace/progressive stat
 ## Gaps and Handling
 
 Upstream validates parse-unit chaining from the start of the stream and exposes more standard-format details such as frame rate, aspect ratio, clean area, top-field-first, and default duration. Rust accepts sequence headers found within the prefix window and emits the stable dimensions it can decode. This improves tolerance but can differ from mkvmerge's stricter probe behavior.
+
+## Open Issues
+
+### PARSER-222: Dirac probe accepts a sequence header anywhere in the prefix
+
+Native `probe()` returns true when `parse_sequence_header()` finds a `BBCD` sequence-header parse unit anywhere in the first MiB (`src-tauri/src/media_metadata/elementary/dirac.rs:34-59`, `111-115`). Upstream requires the stream to start with the Dirac sync word before feeding the data to the Dirac parser (`../mkvtoolnix/src/input/r_dirac.cpp:27-42`). Files with unrelated leading data before a later `BBCD` sequence-header-looking blob can therefore be native false positives.

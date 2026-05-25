@@ -32,3 +32,9 @@ Key structures are `FlvHeader`, `FlvTagHeader`, `AudioTagFlags`, `VideoCodecId`,
 ## Gaps and Handling
 
 Rust extracts selected AMF fields and does not perform timestamp/min-offset work or packet muxing. It may lack upstream's default 25 fps fallback when video headers do not carry timing. Unsupported Screen video codecs are dropped like upstream, and encrypted payloads are skipped rather than parsed.
+
+## Open Issues
+
+### PARSER-218: AVC/HEVC frame-rate fallback and SPS timing are not mirrored
+
+Native `build_video_track()` only sets `default_duration_ns` when AMF/script metadata has already populated `video.frame_rate` (`src-tauri/src/media_metadata/flv/reader.rs:237-247`). The AVC/HEVC sequence-header paths decode dimensions/configuration but do not fill timing or the mkvmerge fallback. Upstream parses AVC SPS timing and defaults to 25 fps when no timing is found (`../mkvtoolnix/src/input/r_flv.cpp:427-445`), and applies the same logic for HEVC (`r_flv.cpp:455-472`). FLV AVC/HEVC files without an AMF `framerate` value can therefore lose mkvmerge's default-duration metadata.
