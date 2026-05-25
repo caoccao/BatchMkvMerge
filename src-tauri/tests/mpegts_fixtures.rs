@@ -115,8 +115,8 @@ fn mpeg2_sequence_header() -> Vec<u8> {
   bytes
 }
 
-/// A valid 8-byte ADTS AAC frame (profile 1, sr_index 3 = 48 kHz, 2 channels).
-fn adts_frame() -> Vec<u8> {
+/// One 8-byte ADTS AAC frame (profile 1, sr_index 3 = 48 kHz, 2 channels).
+fn adts_single_frame() -> Vec<u8> {
   let (profile, sr_index, channel_config, frame_length): (u8, u8, u8, u16) = (1, 3, 2, 8);
   let mut bytes = vec![0u8; frame_length as usize];
   bytes[0] = 0xFF;
@@ -126,6 +126,17 @@ fn adts_frame() -> Vec<u8> {
   bytes[4] = ((frame_length >> 3) & 0xFF) as u8;
   bytes[5] = (((frame_length & 0x07) << 5) | 0x1F) as u8;
   bytes[6] = 0xFC;
+  bytes
+}
+
+/// Six consecutive ADTS frames. PARSER-206: MPEG-TS AAC enrichment now requires
+/// five consecutive frames (matching `find_consecutive_frames(..., 5)`), so a
+/// real AAC stream must carry several frames.
+fn adts_frame() -> Vec<u8> {
+  let mut bytes = Vec::new();
+  for _ in 0..6 {
+    bytes.extend(adts_single_frame());
+  }
   bytes
 }
 

@@ -744,10 +744,14 @@ fn collect_frames(buffer: &[u8], max_frames: usize) -> Option<Vec<AacHeader>> {
   Some(frames)
 }
 
-/// First valid header at-or-after the consecutive-frame base offset. Returns
-/// the `(offset, header)` pair.
-fn find_first_valid_header(bytes: &[u8]) -> Option<(usize, AacHeader)> {
-  let base = find_consecutive_frames(bytes, MIN_CONFIRM_FRAMES)?;
+/// First valid header at-or-after a base offset where `num_required_frames`
+/// consecutive ADTS *or* LOAS/LATM frames decode. Mirrors mkvtoolnix's
+/// `find_consecutive_frames` + `parser_c::get_frame()` (it then reads the first
+/// frame's header). Recognises both multiplex types, so LOAS/LATM-framed AAC —
+/// the form MPEG-TS stream type `0x11` commonly carries — is covered as well as
+/// ADTS, and a lone accidental ADTS-looking header is rejected.
+pub fn find_first_header_with_frames(bytes: &[u8], num_required_frames: usize) -> Option<(usize, AacHeader)> {
+  let base = find_consecutive_frames(bytes, num_required_frames)?;
   let remaining = &bytes[base..];
   if let Some(h) = decode_adts(remaining) {
     return Some((base, h));
@@ -756,6 +760,12 @@ fn find_first_valid_header(bytes: &[u8]) -> Option<(usize, AacHeader)> {
     return Some((base, h));
   }
   None
+}
+
+/// First valid header at-or-after the consecutive-frame base offset. Returns
+/// the `(offset, header)` pair.
+fn find_first_valid_header(bytes: &[u8]) -> Option<(usize, AacHeader)> {
+  find_first_header_with_frames(bytes, MIN_CONFIRM_FRAMES)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -880,6 +890,71 @@ pub(crate) fn build_adts_stream(frames: usize, profile: u8, sr_index: u8, ch: u8
   let mut bytes = Vec::new();
   for _ in 0..frames {
     bytes.extend(build_adts_frame(profile, sr_index, ch));
+  }
+  bytes
+}
+
+/// Build a single LOAS/LATM frame carrying an AAC-LC AudioSpecificConfig with
+/// the given sample-rate index and channel configuration. Crate-visible so the
+/// MPEG-TS reader tests can synthesise LOAS/LATM streams (stream type 0x11).
+#[cfg(test)]
+pub(crate) fn build_loas_latm_frame(sr_index: u8, channel_config: u8, payload_data_len: usize) -> Vec<u8> {
+  let mut w = TestBitWriter::new();
+  w.put_bits(1, 0); // use_same_stream_mux = 0 -> parse stream mux config
+  // --- StreamMuxConfig ---
+  w.put_bits(1, 0); // audio_mux_version = 0
+  w.put_bits(1, 0); // all_stream_same_time_framing
+  w.put_bits(6, 0); // num_sub_frames
+  w.put_bits(4, 0); // num_program
+  w.put_bits(3, 0); // num_layer
+  // --- AudioSpecificConfig (object_type LC) ---
+  w.put_bits(5, AOT_AAC_LC as u64); // object_type
+  w.put_bits(4, sr_index as u64); // sampling_frequency_index
+  w.put_bits(4, channel_config as u64); // channel_configuration
+  // GASpecificConfig
+  w.put_bits(1, 0); // frame_length_flag
+  w.put_bits(1, 0); // depends_on_core_coder
+  w.put_bits(1, 0); // extension_flag
+  // back in StreamMuxConfig:
+  w.put_bits(3, 0); // frame_length_type = 0
+  w.put_bits(8, payload_data_len as u64); // buffer_fullness
+  w.put_bits(1, 0); // other_data_present = 0
+  w.put_bits(1, 0); // crc_present = 0
+  // --- PayloadLengthInfo (type 0): bytes summing to len ---
+  let mut remaining = payload_data_len;
+  loop {
+    let chunk = remaining.min(255);
+    w.put_bits(8, chunk as u64);
+    remaining -= chunk;
+    if chunk != 255 {
+      break;
+    }
+  }
+  // --- PayloadMux: the AAC payload bytes ---
+  w.byte_align();
+  let mut payload = w.into_bytes();
+  payload.extend(vec![0u8; payload_data_len]);
+
+  let loas_frame_size = payload.len();
+  assert!(loas_frame_size <= LOAS_FRAME_SIZE_MASK as usize);
+
+  // 3-byte LOAS header: 11-bit sync (0x2B7) + 13-bit frame size.
+  let value: u32 = LOAS_SYNC_WORD | (loas_frame_size as u32 & LOAS_FRAME_SIZE_MASK);
+  let mut frame = vec![
+    ((value >> 16) & 0xFF) as u8,
+    ((value >> 8) & 0xFF) as u8,
+    (value & 0xFF) as u8,
+  ];
+  frame.extend(payload);
+  frame
+}
+
+/// Concatenate `frames` LOAS/LATM frames into one stream.
+#[cfg(test)]
+pub(crate) fn build_loas_latm_stream(frames: usize, sr_index: u8, channel_config: u8) -> Vec<u8> {
+  let mut bytes = Vec::new();
+  for _ in 0..frames {
+    bytes.extend(build_loas_latm_frame(sr_index, channel_config, 16));
   }
   bytes
 }

@@ -77,8 +77,13 @@ pub fn parse(
   if entry_count == 0 {
     return Ok(());
   }
-  // mkvmerge identification reads only the first entry.  Walk the rest in
-  // case future phases need them but only populate the builder on entry 0.
+  // PARSER-198: mkvtoolnix (`handle_stsd_atom`, r_qtmp4.cpp:1370-1394) iterates
+  // over EVERY sample-description entry, re-allocating `dmx.stsd` and re-running
+  // the per-entry parse each time.  Because each iteration overwrites the
+  // demuxer's `stsd` / `priv` / audio-video fields, the LAST entry's values win.
+  // We mirror that: parse every entry into the builder so codec private data,
+  // dimensions, audio properties and validation behaviour from later entries
+  // are not silently dropped.
   let mut entry_idx = 0u32;
   let stop_at = parent.end();
   while entry_idx < entry_count {
@@ -90,9 +95,7 @@ pub fn parse(
     }
     deadline.check("mp4::stsd")?;
     let entry = atom::read_box_header(src)?;
-    if entry_idx == 0 {
-      parse_first_entry(src, &entry, builder, deadline)?;
-    }
+    parse_entry(src, &entry, builder, deadline)?;
     // Advance to next sibling regardless.
     atom::skip_payload(src, &entry)?;
     entry_idx += 1;
@@ -100,7 +103,24 @@ pub fn parse(
   Ok(())
 }
 
-fn parse_first_entry(
+/// Reset the per-sample-entry builder fields before parsing one `stsd` entry so
+/// that, matching mkvtoolnix's per-entry overwrite of `dmx.stsd` / `priv`, the
+/// last entry's values win without state leaking across entries.
+fn reset_sample_entry_state(builder: &mut TrackBuilder) {
+  builder.sample_entry_kind = None;
+  builder.codec_name = None;
+  builder.codec_id_str = None;
+  builder.video = None;
+  builder.audio = None;
+  builder.codec_private_hex = None;
+  builder.video_codec_config = None;
+  builder.audio_codec_config = None;
+  builder.esds_object_type = None;
+  builder.esds_decoder_specific_len = None;
+  builder.block_additions.clear();
+}
+
+fn parse_entry(
   src: &mut FileSource,
   entry: &BoxHeader,
   builder: &mut TrackBuilder,
@@ -114,6 +134,9 @@ fn parse_first_entry(
       reason: format!("sample entry payload {payload} too small"),
     });
   }
+  // PARSER-198: clear any state from a previous sample-description entry so the
+  // last entry's values win (mkvtoolnix re-allocates `dmx.stsd` per entry).
+  reset_sample_entry_state(builder);
   builder.sample_entry_kind = Some(entry.kind.0);
   let codec_str: String = entry.kind.0.iter().map(|b| *b as char).collect();
   builder.codec_id_str = Some(codec_str.clone());
@@ -405,9 +428,17 @@ fn walk_sample_entry_children(
   Ok(())
 }
 
-/// Parse a `dOps` (Opus) box. Layout: Version(1) OutputChannelCount(1)
-/// PreSkip(2) InputSampleRate(4) OutputGain(2) ChannelMappingFamily(1) …
+/// Parse a `dOps` (Opus) box. The box payload is the `OpusSpecificBox` body:
+/// Version(1) OutputChannelCount(1) PreSkip(2) InputSampleRate(4)
+/// OutputGain(2) ChannelMappingFamily(1) … all stored big-endian in MP4.
 /// Opus always decodes at 48 kHz regardless of InputSampleRate.
+///
+/// PARSER-199: mkvtoolnix (`parse_dops_audio_header_priv_atom`,
+/// r_qtmp4.cpp:3217-3243) does not store the raw `dOps` payload as codec
+/// private data.  It builds the Matroska/Ogg Opus ID header by prepending the
+/// 8-byte `"OpusHead"` magic and converting the pre-skip, input sample rate and
+/// output gain fields from MP4 big-endian to the little-endian layout that
+/// Opus-in-Ogg / Opus-in-Matroska expects.  It also clears `a_bitdepth`.
 fn parse_dops(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
   let payload = atom::read_payload(src, header, 4096)?;
   if payload.len() < 11 {
@@ -419,20 +450,45 @@ fn parse_dops(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
     audio.channels = Some(channels);
   }
   audio.sampling_frequency = Some(48_000.0);
-  builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
+  // mkvtoolnix clears the bit depth for Opus.
+  audio.bit_depth = None;
+
+  // Build the OpusHead ID header: "OpusHead" + the dOps payload, then byte-swap
+  // the multi-byte fields from MP4 big-endian to little-endian.  Offsets here
+  // mirror r_qtmp4.cpp's offsets into the `"OpusHead" + payload` buffer: 10/12/16
+  // there equal 2/4/8 within the payload.
+  let mut opus_head = Vec::with_capacity(8 + payload.len());
+  opus_head.extend_from_slice(b"OpusHead");
+  opus_head.extend_from_slice(&payload);
+  // pre-skip (u16) at payload offset 2 ⇒ buffer offset 10.
+  let pre_skip = u16::from_be_bytes([opus_head[10], opus_head[11]]);
+  opus_head[10..12].copy_from_slice(&pre_skip.to_le_bytes());
+  // input sample rate (u32) at payload offset 4 ⇒ buffer offset 12.
+  let input_rate = u32::from_be_bytes([opus_head[12], opus_head[13], opus_head[14], opus_head[15]]);
+  opus_head[12..16].copy_from_slice(&input_rate.to_le_bytes());
+  // output gain (u16) at payload offset 8 ⇒ buffer offset 16.
+  let output_gain = u16::from_be_bytes([opus_head[16], opus_head[17]]);
+  opus_head[16..18].copy_from_slice(&output_gain.to_le_bytes());
+
+  builder.codec_private_hex = Some(codec_specific::hex_encode(&opus_head));
   Ok(())
 }
 
 /// Parse a `dfLa` (FLAC) box: 4-byte FullBox header + FLAC metadata block
 /// chain. The first block is STREAMINFO (sample rate / channels / bit depth).
+///
+/// PARSER-200: mkvtoolnix (`parse_dfla_audio_header_priv_atom`,
+/// r_qtmp4.cpp:3246-3266) skips the four-byte FullBox version/flags header and
+/// stores only the FLAC metadata block chain as codec private data — it does
+/// not keep the FullBox header.
 fn parse_dfla(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
   let payload = atom::read_payload(src, header, 64 * 1024)?;
-  if payload.len() < 4 {
+  if payload.len() <= 4 {
     return Ok(());
   }
-  builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
   // After the 4-byte FullBox header: metadata block header (4) + STREAMINFO.
   let body = &payload[4..];
+  builder.codec_private_hex = Some(codec_specific::hex_encode(body));
   if body.len() < 4 + 34 {
     return Ok(());
   }
@@ -459,14 +515,25 @@ fn parse_dfla(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
 /// numChannels(1) maxRun(2) maxFrameBytes(4) avgBitRate(4) sampleRate(4)`.
 /// mkvtoolnix reads channel count, bit depth and sample rate from this cookie
 /// (r_qtmp4.cpp:3705-3716) and carries the cookie as codec private data.
+///
+/// PARSER-201: mkvtoolnix passes only the ALAC magic cookie / config bytes to
+/// the ALAC packetizer — `create_audio_packetizer_alac` (r_qtmp4.cpp:1833-1839)
+/// clones the buffer starting at `stsd_non_priv_struct_size + 12`, i.e. after
+/// the `alac` box header (8) and its FullBox version/flags header (4).  We must
+/// store only the ALACSpecificConfig (the FullBox payload), not the whole `alac`
+/// atom payload including the four-byte FullBox header.
 fn parse_alac(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
   let payload = atom::read_payload(src, header, 4096)?;
-  builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
   // FullBox header (4) + ALACSpecificConfig (24) = 28 bytes minimum.
   if payload.len() < 28 {
+    // Too short to carry a config; preserve whatever follows the FullBox header.
+    if payload.len() > 4 {
+      builder.codec_private_hex = Some(codec_specific::hex_encode(&payload[4..]));
+    }
     return Ok(());
   }
   let cfg = &payload[4..];
+  builder.codec_private_hex = Some(codec_specific::hex_encode(cfg));
   let bit_depth = cfg[5] as u32;
   let num_channels = cfg[9] as u32;
   let sample_rate = u32::from_be_bytes([cfg[20], cfg[21], cfg[22], cfg[23]]);
@@ -603,6 +670,13 @@ mod tests {
 
   fn dl() -> Deadline {
     Deadline::new(60_000)
+  }
+
+  fn hex_to_bytes(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+      .step_by(2)
+      .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+      .collect()
   }
 
   fn run(payload: Vec<u8>, handler: [u8; 4]) -> TrackBuilder {
@@ -772,6 +846,35 @@ mod tests {
     assert_eq!(a.sampling_frequency, Some(48_000.0));
   }
 
+  // PARSER-199: the dOps codec private data is rewritten as an OpusHead ID
+  // header — "OpusHead" magic prepended, and the pre-skip / input-sample-rate /
+  // output-gain fields byte-swapped from MP4 big-endian to little-endian.
+  #[test]
+  fn dops_box_builds_opushead_with_le_fields() {
+    let mut dops_payload = vec![0u8, 2]; // version 0, 2 channels
+    dops_payload.extend_from_slice(&312u16.to_be_bytes()); // pre-skip (BE)
+    dops_payload.extend_from_slice(&48_000u32.to_be_bytes()); // input sample rate (BE)
+    dops_payload.extend_from_slice(&7u16.to_be_bytes()); // output gain (BE)
+    dops_payload.push(0); // mapping family
+    let dops = encode_box(b"dOps", &dops_payload);
+    let entry = build_audio_sample_entry_v0(b"Opus", 0, 16, 0, &dops);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"soun");
+
+    let hex = b.codec_private_hex.clone().unwrap();
+    let bytes = hex_to_bytes(&hex);
+    // Magic + version + channel count.
+    assert_eq!(&bytes[0..8], b"OpusHead");
+    assert_eq!(bytes[8], 0); // version
+    assert_eq!(bytes[9], 2); // channels
+    // Pre-skip / input rate / output gain stored little-endian.
+    assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 312);
+    assert_eq!(u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]), 48_000);
+    assert_eq!(u16::from_le_bytes([bytes[16], bytes[17]]), 7);
+    // mkvtoolnix clears the bit depth for Opus.
+    assert!(b.audio.unwrap().bit_depth.is_none());
+  }
+
   #[test]
   fn dfla_box_decodes_flac_streaminfo() {
     // dfLa: 4-byte FullBox header + metadata block header(4) + STREAMINFO(34).
@@ -789,6 +892,12 @@ mod tests {
     assert_eq!(a.sampling_frequency, Some(44_100.0));
     assert_eq!(a.channels, Some(2));
     assert_eq!(a.bit_depth, Some(16));
+    // PARSER-200: codec private excludes the 4-byte FullBox header — it is the
+    // FLAC metadata block chain (block header + STREAMINFO).
+    let hex = b.codec_private_hex.unwrap();
+    let bytes = hex_to_bytes(&hex);
+    assert_eq!(bytes.len(), 4 + 34); // block header + STREAMINFO, no FullBox
+    assert_eq!(&bytes[0..4], &[0x80, 0x00, 0x00, 34]); // STREAMINFO block header
   }
 
   #[test]
@@ -802,16 +911,44 @@ mod tests {
     assert_eq!(cfg.aac_object_type, Some(2));
   }
 
+  // PARSER-198: every stsd entry is parsed; the LAST entry's values win, mirroring
+  // mkvtoolnix re-allocating `dmx.stsd` and re-running the per-entry parse for
+  // each sample description (r_qtmp4.cpp:1370-1394).
   #[test]
-  fn second_entry_is_walked_but_only_first_populates_builder() {
+  fn last_stsd_entry_wins_over_earlier_ones() {
     let entry_a = build_video_sample_entry(b"avc1", 1920, 1080, 24, &[]);
     let entry_b = build_video_sample_entry(b"hev1", 3840, 2160, 24, &[]);
     let payload = build_stsd_payload(&[entry_a, entry_b]);
     let b = run(payload, *b"vide");
-    // First entry wins.
-    assert_eq!(b.codec_id_str.as_deref(), Some("avc1"));
+    // Last entry wins.
+    assert_eq!(b.codec_id_str.as_deref(), Some("hev1"));
     let v = b.video.unwrap();
-    assert_eq!(v.pixel_dimensions.unwrap().width, 1920);
+    assert_eq!(v.pixel_dimensions.unwrap().width, 3840);
+    assert_eq!(v.pixel_dimensions.unwrap().height, 2160);
+  }
+
+  // A later entry that carries codec-specific child boxes (avcC) must not lose
+  // its codec config to an earlier entry that lacked one — PARSER-198 ensures
+  // every entry is parsed and the last one's private data survives.
+  #[test]
+  fn later_entry_codec_private_not_dropped() {
+    let avcc_payload = crate::media_metadata::mp4::codec_specific::avcc::build_avcc_payload(
+      100,
+      40,
+      3,
+      &[&[0u8; 4]],
+      &[&[0u8; 2]],
+      Some((1, 2, 2)),
+    );
+    let avcc = encode_box(b"avcC", &avcc_payload);
+    let entry_a = build_video_sample_entry(b"avc1", 640, 480, 24, &[]);
+    let entry_b = build_video_sample_entry(b"avc1", 1280, 720, 24, &avcc);
+    let payload = build_stsd_payload(&[entry_a, entry_b]);
+    let b = run(payload, *b"vide");
+    // The second entry's avcC config is present, not dropped.
+    let cfg = b.video_codec_config.unwrap();
+    assert_eq!(cfg.profile_idc, Some(100));
+    assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().width, 1280);
   }
 
   #[test]
@@ -866,7 +1003,14 @@ mod tests {
     assert_eq!(a.channels, Some(6));
     assert_eq!(a.bit_depth, Some(24));
     assert_eq!(a.sampling_frequency, Some(96_000.0));
-    assert!(b.codec_private_hex.is_some());
+    // PARSER-201: codec private is the ALAC magic cookie / ALACSpecificConfig
+    // ONLY — the 4-byte FullBox version/flags header is stripped.
+    let hex = b.codec_private_hex.unwrap();
+    let bytes = hex_to_bytes(&hex);
+    assert_eq!(bytes.len(), 24); // 24-byte ALACSpecificConfig, no FullBox header
+    assert_eq!(bytes[5], 24); // bitDepth
+    assert_eq!(bytes[9], 6); // numChannels
+    assert_eq!(u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]), 96_000);
   }
 
   // ---- PARSER-178: unknown video / subtitle private data preserved -----

@@ -1,6 +1,6 @@
 # VobSub IDX Parser
 
-Implementation progress: 58%
+Implementation progress: 90%
 
 ## Purpose
 
@@ -11,29 +11,35 @@ The VobSub parser recognises `.idx` manifests, records the sibling `.sub` file w
 - Primary implementation: `src-tauri/src/media_metadata/subtitles/vobsub.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_vobsub.cpp`, `../mkvtoolnix/src/input/r_vobsub.h`, `../mkvtoolnix/src/common/vobsub.cpp`, `../mkvtoolnix/src/common/vobsub.h`
 
-The parser checks the VobSub index-file banner, parses `id: <language>, index: <n>` entries, resolves the sibling `.sub` path, records it under `container.properties.other_files`, and emits `S_VOBSUB` tracks.
+The parser is resolved by *path* before the content cascade: both `.idx` and `.sub` inputs map to the canonical `.idx` (mirroring mkvtoolnix's `idx_and_sub_file_names`), so dragging a `.sub` produces the same listing as its `.idx`. It checks the VobSub index-file banner, parses the manifest into per-`id:` track entry lists, resolves the sibling `.sub` data file, records it under `container.properties.other_files`, and emits one `S_VOBSUB` track per non-empty entry list. The `.sub` MPEG-PS payload is never demuxed — only located and recorded.
 
 ## Data Structures
 
 ```mermaid
 flowchart TD
-  A["IDX text"] --> B["looks_like_vobsub_idx"]
-  A --> C["parse_idx_entries"]
-  C --> D["IdxEntry"]
+  P["input path (.idx / .sub)"] --> R["resolve_idx_path → .idx"]
+  R --> B["looks_like_vobsub_idx (banner)"]
+  R --> C["parse_idx"]
+  C --> D["VobSubTrack + entries"]
+  C --> CP["filtered codec_private"]
   D --> E["Subtitle tracks"]
-  B --> F["sibling_sub_path"]
+  CP --> E
+  R --> F["sibling_sub_path"]
   F --> G["otherFiles"]
   E --> H["MediaMetadata"]
   G --> H
 ```
 
-`IdxEntry` stores language, index, and title/name information parsed from the manifest.
+`parse_idx` returns a list of `VobSubTrack` (language + `VobSubEntry` list of `{position, timestamp}`) plus the shared `codec_private` text. `parse_idx` is a direct port of `vobsub_reader_c::parse_headers` (`r_vobsub.cpp:193-352`): it accumulates `delay:` per track, parses `timestamp: HH:MM:SS:mmm, filepos: 0xNN` entries (the third colon is the millisecond separator, matching `parse_timestamp` in `parsing.cpp:154-155`), applies negative-delay clamp-forward correction, skips entries that stay negative, flags out-of-order tracks for a stable sort by timestamp, and drops tracks that end up with zero entries.
+
+## Path resolution and dispatch
+
+VobSub is intercepted by path in `media_metadata::parse_with_extension_fallback` *before* the content cascade. `is_vobsub_candidate_path` matches `.idx` and `.sub` extensions; `subtitles::vobsub::try_open_by_path` then resolves the `.idx` (`resolve_idx_path`), and only claims the file when that `.idx` exists and carries the banner. A `.sub` with no banner-bearing sibling `.idx` (e.g. a MicroDVD `.sub`) declines and the normal cascade runs, so no other reader's inputs are stolen. `VobSubReader` remains in the registry for content-based `.idx` probing as a fallback. The `.sub` data file is located and recorded under `container.properties.other_files` but never demuxed.
+
+## Codec private
+
+Codec private is built from the filtered `idx_data`: the per-track control lines `id:`, `timestamp:`, `delay:`, `alt:` and `langidx:` are removed, and `#` comment / blank lines are skipped, leaving the global settings lines (`size:`, `palette:`, ...) shared across every track — matching mkvtoolnix's `idx_data`.
 
 ## Gaps and Handling
 
-Rust does not open a `.sub` file and then discover the sibling `.idx`, does not require opening the `.sub` data file, and reads only a bounded manifest prefix. It parses fewer valid `id` forms and does not validate timestamp/file-position/delay sorting like upstream. Codec private currently uses the captured IDX slice rather than mkvmerge's filtered `idx_data`. This gives usable track listing but is not full VobSub muxing parity.
-
-## Open Issues
-
-- **PARSER-210: Normal VobSub dispatch does not resolve `.sub` inputs to the sibling `.idx`.** Native dispatch registers `VobSubReader`, whose `probe` reads the current file and checks for the IDX banner. The helper `parse_idx_at_path` can map `.sub` to `.idx`, but it is not wired into normal dispatch. mkvtoolnix probes both `.idx` and `.sub` extensions, always resolves the `.idx` path, and opens the sibling `.sub` data file during header reading.
-- **PARSER-211: VobSub index parsing and codec private data differ from mkvtoolnix.** Native counts `timestamp:` lines under the current `id:` entry and stores the entire captured IDX text as codec private data. mkvtoolnix parses delay, timestamp, file position, negative timestamp handling, and out-of-order sorting, skips tracks without entries, and builds codec private data from filtered `idx_data` that omits `id`, `timestamp`, `delay`, `alt`, and `langidx` control lines.
+Header-only: the `.sub` MPEG-PS payload is never demuxed, so per-entry SPU durations and `spu_size`/`overhead` accounting from `extract_one_spu_packet` are not computed. The `.idx` manifest is decoded up to a bounded 64 KiB prefix (these manifests are tiny in practice). These are intentional header-only departures and do not affect the track listing, languages, entry counts, or codec-private parity.

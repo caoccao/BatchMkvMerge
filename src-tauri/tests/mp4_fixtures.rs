@@ -250,6 +250,30 @@ fn alac_box(config: &[u8]) -> Vec<u8> {
   encode_box(b"alac", &p)
 }
 
+/// A `dOps` (OpusSpecificBox) carrying the given channels / pre-skip / input
+/// sample rate / output gain.  All multi-byte fields are stored big-endian in
+/// MP4 — the parser rewrites them little-endian when building OpusHead.
+fn dops_box(channels: u8, pre_skip: u16, input_rate: u32, output_gain: u16) -> Vec<u8> {
+  let mut p = vec![0u8, channels]; // version 0 + output channel count
+  p.extend_from_slice(&pre_skip.to_be_bytes());
+  p.extend_from_slice(&input_rate.to_be_bytes());
+  p.extend_from_slice(&output_gain.to_be_bytes());
+  p.push(0); // channel mapping family
+  encode_box(b"dOps", &p)
+}
+
+/// A `dfLa` (FLAC) box: 4-byte FullBox header + a STREAMINFO metadata block
+/// chain (block header + 34-byte STREAMINFO).
+fn dfla_box(sample_rate: u32, channels: u8, bits: u8) -> Vec<u8> {
+  let mut info = vec![0u8; 34];
+  let packed = ((sample_rate as u64) << 44) | (((channels as u64) - 1) << 41) | (((bits as u64) - 1) << 36);
+  info[10..18].copy_from_slice(&packed.to_be_bytes());
+  let mut p = vec![0u8; 4]; // FullBox version + flags
+  p.extend_from_slice(&[0x80, 0x00, 0x00, 34]); // last STREAMINFO block header
+  p.extend_from_slice(&info);
+  encode_box(b"dfLa", &p)
+}
+
 /// A 24-byte ALACSpecificConfig carrying the given channels / bit depth / rate.
 fn alac_config(channels: u8, bit_depth: u8, sample_rate: u32) -> Vec<u8> {
   let mut c = Vec::new();
@@ -491,6 +515,101 @@ fn alac_with_truncated_config_dropped() {
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);
   assert!(m.tracks.is_empty());
+}
+
+// PARSER-201: the ALAC codec private is only the ALACSpecificConfig — the
+// 4-byte FullBox header is stripped (24 bytes, not 28).
+#[test]
+fn alac_codec_private_is_config_only_without_fullbox_header() {
+  let cookie = alac_box(&alac_config(2, 16, 44_100));
+  let trak = audio_trak_with_table(1, b"alac", "eng", 44_100, 2, &cookie, &[64], 0);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "m4a");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  let priv_blob = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  assert_eq!(priv_blob.length, 24);
+  // sampleRate is the last 4 bytes of the 24-byte config.
+  let bytes = hex_to_bytes(&priv_blob.hex);
+  assert_eq!(u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]), 44_100);
+}
+
+// PARSER-199: Opus codec private is rewritten as an OpusHead ID header — magic
+// prepended, pre-skip / input-rate / output-gain converted to little-endian.
+#[test]
+fn opus_codec_private_is_opushead_with_le_fields() {
+  let dops = dops_box(2, 312, 48_000, 0);
+  let trak = audio_trak_with_table(1, b"Opus", "eng", 48_000, 2, &dops, &[64], 0);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "mp4");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  let priv_blob = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  let head = hex_to_bytes(&priv_blob.hex);
+  assert_eq!(&head[0..8], b"OpusHead");
+  assert_eq!(head[9], 2); // channel count
+  assert_eq!(u16::from_le_bytes([head[10], head[11]]), 312); // pre-skip (LE)
+  assert_eq!(u32::from_le_bytes([head[12], head[13], head[14], head[15]]), 48_000); // input rate (LE)
+}
+
+// PARSER-200: FLAC codec private is the metadata block chain — the 4-byte
+// dfLa FullBox header is stripped.
+#[test]
+fn flac_codec_private_excludes_dfla_fullbox_header() {
+  let dfla = dfla_box(44_100, 2, 16);
+  let trak = audio_trak_with_table(1, b"fLaC", "eng", 44_100, 2, &dfla, &[64], 0);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "mp4");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  let priv_blob = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  // block header (4) + STREAMINFO (34) = 38 bytes, no FullBox header.
+  assert_eq!(priv_blob.length, 38);
+  let blob = hex_to_bytes(&priv_blob.hex);
+  assert_eq!(&blob[0..4], &[0x80, 0x00, 0x00, 34]); // STREAMINFO block header first
+}
+
+// PARSER-198: a track with two sample-description entries — the LAST entry's
+// dimensions win, mirroring mkvtoolnix re-running the per-entry parse and
+// overwriting `dmx.stsd` for each entry.  Both entries are avc1 (so each
+// carries an avcC and survives the verification pass); the second entry's
+// larger dimensions must be the ones surfaced.
+#[test]
+fn multiple_stsd_entries_last_one_wins() {
+  let entry_a = video_sample_entry(b"avc1", 640, 480);
+  let entry_b = video_sample_entry(b"avc1", 1920, 1080);
+  let stbl_payload = {
+    let mut p = stsd(vec![entry_a, entry_b]);
+    p.extend(stts(60, 1000));
+    p
+  };
+  let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl_payload));
+  let mut mdia = mdhd(1000, 60_000, "eng");
+  mdia.extend(hdlr(b"vide", "VideoHandler"));
+  mdia.extend(minf);
+  let mdia = encode_box(b"mdia", &mdia);
+  let mut trak = tkhd(1, 1920, 1080);
+  trak.extend(mdia);
+  let trak = encode_box(b"trak", &trak);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "mp4");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  assert_eq!(m.tracks[0].codec.id, "avc1");
+  // Last entry's dimensions win (1920x1080, not the first entry's 640x480).
+  let v = m.tracks[0].properties.video.as_ref().unwrap();
+  assert_eq!(v.pixel_dimensions.as_ref().unwrap().width, 1920);
+  assert_eq!(v.pixel_dimensions.as_ref().unwrap().height, 1080);
+}
+
+fn hex_to_bytes(hex: &str) -> Vec<u8> {
+  (0..hex.len())
+    .step_by(2)
+    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+    .collect()
 }
 
 /// A minimal MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo frame (header + zero

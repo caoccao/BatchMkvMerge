@@ -471,7 +471,8 @@ mod tests {
     for (stream_type, pid, _descs) in streams {
       match stream_type {
         0x02 => bytes.extend(pes_packet(*pid, &mpeg_video::build_sequence_header(1280, 720, 4))),
-        0x0F => bytes.extend(pes_packet(*pid, &aac::build_adts_frame(1, 3, 2))),
+        // PARSER-206: AAC enrichment now needs five consecutive frames.
+        0x0F => bytes.extend(pes_packet(*pid, &aac::build_adts_stream(6, 1, 3, 2))),
         _ => {}
       }
     }

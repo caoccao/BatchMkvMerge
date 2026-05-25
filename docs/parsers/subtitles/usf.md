@@ -1,37 +1,46 @@
 # USF Parser
 
-Implementation progress: 45%
+Implementation progress: 90%
 
 ## Purpose
 
-The USF parser recognises Universal Subtitle Format XML files and reports one or more text subtitle tracks with basic language and name metadata.
+The USF parser recognises Universal Subtitle Format XML files and reports one text subtitle track per `<subtitles>` element, carrying the per-track and default-language metadata and the shared codec-private document.
 
 ## Implementation
 
 - Primary implementation: `src-tauri/src/media_metadata/subtitles/usf.rs`
 - Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
+- XML engine: `quick-xml` (`=0.39.2`), the event-based stand-in for upstream's pugixml
 - Upstream basis: `../mkvtoolnix/src/input/r_usf.cpp`, `../mkvtoolnix/src/input/r_usf.h`
 
-The reader performs lightweight text probing for a `<USFSubtitles` root, scans `<subtitles>` elements, extracts simple inline attributes, and emits one `S_TEXT/USF` track per discovered subtitle element.
+Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): the leading window must contain an `<?xml` or `<!--` marker, then the document is parsed with a real XML engine and the document (root) element name is validated to be `USFSubtitles`. The document read is bounded at **10 MiB**, matching upstream's `mtx::xml::load_file(..., 10 * 1024 * 1024)` cap (r_usf.cpp line 45).
+
+`read_headers` performs the same three-step walk as upstream:
+
+- `parse_metadata` (r_usf.cpp lines 79-90) — the default language is read from `<metadata><language code="">` directly under the root.
+- `parse_subtitles` (r_usf.cpp lines 93-137) — one `S_TEXT/USF` track per direct-child `<subtitles>` element of the root; each track's language comes from a child `<language code="">`.
+- `create_codec_private` (r_usf.cpp lines 140-148) — every `<subtitles>` subtree is removed from the document, and the remainder is re-serialized as the single shared codec-private blob handed to every track.
+
+The default-language fallback for tracks lacking a valid language mirrors the loop in `usf_reader_c::read_headers` (r_usf.cpp lines 64-65). Language codes are resolved through `Language::resolve`; invalid codes fall back to `und`.
 
 ## Data Structures
 
 ```mermaid
 flowchart TD
-  A["USF XML text"] --> B["root probe"]
-  A --> C["parse_usf_tracks"]
-  C --> D["UsfTrackInfo"]
-  D --> E["Subtitle tracks"]
-  E --> F["MediaMetadata"]
+  A["USF XML text (≤ 10 MiB, BOM-stripped)"] --> B["quick-xml event walk"]
+  B --> C["root == USFSubtitles?"]
+  B --> D["UsfDocument"]
+  D --> E["default_language (metadata/language code)"]
+  D --> F["tracks: per-subtitles language code"]
+  D --> G["codec_private (document minus all subtitles subtrees)"]
+  F --> H["Subtitle tracks"]
+  G --> H
+  E --> H
+  H --> I["MediaMetadata"]
 ```
 
-`UsfTrackInfo` holds the local track name and language found during the lightweight scan.
+`UsfDocument` is produced by a single event pass: it validates the root, collects the default language and per-track language codes, and re-serializes the document with every `<subtitles>` subtree dropped for the shared codec private.
 
 ## Gaps and Handling
 
-Unlike upstream, Rust does not use a full XML parser or validate the full document. It misses default language metadata from `<metadata>`, child language elements, and the upstream codec-private shape, which should be the full XML minus subtitle payloads. This parser is therefore a skeleton that identifies USF files and track count but does not yet match mkvmerge's richer USF metadata behavior.
-
-## Open Issues
-
-- **PARSER-208: USF probing and header reading are string-prefix based and bounded to 64 KiB.** Native accepts a bare `<USFSubtitles` root after optional whitespace/XML declaration/comments and reads only the first 64 KiB. mkvtoolnix requires `<?xml` or `<!--` in the probe window, loads the XML document, validates the root element with an XML parser, and reads the document for headers.
-- **PARSER-209: USF language extraction and codec private data use the wrong XML shape.** Native reads `lang`, `xml:lang`, or `language` attributes from `<subtitles>` or the root and stores only the opening tag as per-track codec private data. mkvtoolnix reads the default language from `<metadata><language code="">`, per-track language from a child `<language code="">` under `<subtitles>`, and creates one shared codec private XML document with all `<subtitles>` nodes removed.
+The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. quick-xml's namespace-aware local names are compared, so namespaced documents are tolerated.

@@ -36,4 +36,5 @@ specta-typescript = "0.0.12"
 language-tags = "0.3"
 encoding_rs = "0.8"
 flate2 = "1"
+quick-xml = "=0.39.2"
 

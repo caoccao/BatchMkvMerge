@@ -118,6 +118,17 @@ fn parse_with_extension_fallback(
     return Ok(());
   }
 
+  // PARSER-210: VobSub is resolved by *path* before the content cascade so a
+  // `.sub` input maps to the sibling `.idx` and opens the `.sub` data file,
+  // mirroring mkvtoolnix's `vobsub_reader_c::probe_file` accepting both
+  // `.idx`/`.sub` extensions and always resolving the `.idx`
+  // (r_vobsub.cpp:82-100).  `try_open_by_path` only claims when the resolved
+  // `.idx` exists and carries the VobSub banner, so non-VobSub `.sub` files
+  // (e.g. MicroDVD text) fall through to the normal cascade unchanged.
+  if is_vobsub_candidate_path(path) && subtitles::vobsub::try_open_by_path(path, metadata)? {
+    return Ok(());
+  }
+
   match probe::dispatch::dispatch_with_hints(src, deadline, metadata, &hints) {
     Ok(_) => Ok(()),
     Err(ParseError::Unrecognised) => {
@@ -134,6 +145,17 @@ fn parse_with_extension_fallback(
     }
     Err(other) => Err(other),
   }
+}
+
+/// True for paths whose extension makes them a VobSub candidate: `.idx`
+/// (the canonical manifest extension) or `.sub` (the data file, which mkvmerge
+/// also accepts as a VobSub input and resolves to the sibling `.idx`).
+fn is_vobsub_candidate_path(path: &Path) -> bool {
+  path
+    .extension()
+    .and_then(|e| e.to_str())
+    .map(|e| e.eq_ignore_ascii_case("idx") || e.eq_ignore_ascii_case("sub"))
+    .unwrap_or(false)
 }
 
 fn accept_empty_text_subtitle_by_extension(metadata: &mut MediaMetadata, path: &Path) -> Result<bool, ParseError> {

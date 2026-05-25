@@ -20,9 +20,21 @@
 //! The `.idx` file is a UTF-8 text manifest produced by VobSub-style
 //! demuxers; the sibling `.sub` blob contains the actual MPEG-PS payload.
 //!
-//! mkvtoolnix's `r_vobsub.cpp` recognises `.idx` files by the literal
-//! `"# VobSub index file"` magic on the first line, then parses
-//! `id: XX, index: N` entries to enumerate the per-language tracks.
+//! mkvtoolnix's `r_vobsub.cpp` recognises VobSub by the literal
+//! `"# VobSub index file, v"` banner on the first line of the `.idx`.  The
+//! probe accepts both `.idx` and `.sub` extensions and always resolves the
+//! sibling `.idx` (`idx_and_sub_file_names`), then opens the `.sub` data file
+//! during header reading.  We mirror that resolution here so dragging a `.sub`
+//! file produces the same track listing as its `.idx` (PARSER-210).
+//!
+//! `parse_headers()` is ported faithfully (PARSER-211): per-`id:` track entry
+//! lists with `delay:` accumulation, `timestamp: HH:MM:SS:mmm, filepos: 0xNN`
+//! parsing, negative-timestamp delay correction, out-of-order sorting, and the
+//! "skip tracks with zero entries" rule.  Codec-private is built from the
+//! filtered global settings lines (the `id:`, `timestamp:`, `delay:`, `alt:`
+//! and `langidx:` control lines are stripped), matching mkvtoolnix's
+//! `idx_data`.  The `.sub` MPEG-PS payload is never demuxed — only located and
+//! recorded under `container.properties.otherFiles`.
 
 use std::path::{Path, PathBuf};
 
@@ -37,59 +49,310 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
+/// Upper bound on how much of the `.idx` manifest we decode.  These are tiny
+/// text files in practice; the cap guards against a pathological input while
+/// staying well above any real-world manifest.
 const PROBE_BYTES: usize = 64 * 1024;
 const MAGIC: &str = "# VobSub index file, v";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdxEntry {
-  pub language: String,
-  pub index: u32,
-  pub num_entries: u32,
+/// A single subtitle entry under an `id:` track (mirrors `vobsub_entry_c`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VobSubEntry {
+  /// Byte offset of the SPU packet inside the `.sub` data file.
+  pub position: u64,
+  /// Presentation timestamp in nanoseconds, after `delay` correction.
+  pub timestamp: i64,
 }
 
-/// Parse `id: xx, index: N` lines.  Language is the two-letter code that
-/// precedes the comma; lines that don't match are skipped.
-pub fn parse_idx_entries(text: &str) -> Vec<IdxEntry> {
-  let mut out: Vec<IdxEntry> = Vec::new();
-  let mut current: Option<usize> = None;
+/// One parsed VobSub track (mirrors `vobsub_track_c`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VobSubTrack {
+  /// Two-/three-letter language code from the `id:` line.
+  pub language: String,
+  pub entries: Vec<VobSubEntry>,
+}
+
+/// Result of parsing an `.idx` manifest: the per-language tracks plus the
+/// filtered codec-private text shared across every track.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedIdx {
+  pub tracks: Vec<VobSubTrack>,
+  /// `idx_data` — the global settings lines (size, palette, ...) with the
+  /// `id:`, `timestamp:`, `delay:`, `alt:` and `langidx:` control lines
+  /// removed.  Shared as the codec-private blob for every track.
+  pub codec_private: String,
+}
+
+/// Parse a VobSub `HH:MM:SS:mmm` timestamp into nanoseconds.
+///
+/// VobSub uses a colon (not a decimal point) before the millisecond field.
+/// mkvtoolnix's `parse_timestamp` treats the third colon as the fractional
+/// separator (`parsing.cpp:154-155`), so `00:00:01:000` is one second.  We
+/// accept `HH:MM:SS:mmm` and the more lenient `HH:MM:SS.mmm` / `MM:SS.mmm`
+/// forms the generic parser also handles.
+fn parse_idx_timestamp(src: &str) -> Option<i64> {
+  let src = src.trim();
+  if src.is_empty() {
+    return None;
+  }
+  // Split the integer time fields (h/m/s) from the fractional part.  Either a
+  // `.` or the *third* `:` introduces the fraction.
+  let mut int_part = String::new();
+  let mut frac_part = String::new();
+  let mut colons = 0u32;
+  let mut in_frac = false;
+  for ch in src.chars() {
+    if ch == '.' {
+      if in_frac {
+        return None;
+      }
+      in_frac = true;
+      continue;
+    }
+    if ch == ':' {
+      if in_frac {
+        // A colon inside the fractional part is invalid.
+        return None;
+      }
+      if colons == 2 {
+        // Third colon → start of the millisecond fraction.
+        in_frac = true;
+        continue;
+      }
+      colons += 1;
+      int_part.push(':');
+      continue;
+    }
+    if !ch.is_ascii_digit() {
+      return None;
+    }
+    if in_frac {
+      frac_part.push(ch);
+    } else {
+      int_part.push(ch);
+    }
+  }
+
+  let fields: Vec<&str> = int_part.split(':').collect();
+  let (h, m, s) = match fields.as_slice() {
+    [h, m, s] => (parse_u64(h)?, parse_u64(m)?, parse_u64(s)?),
+    [m, s] => (0u64, parse_u64(m)?, parse_u64(s)?),
+    _ => return None,
+  };
+  if m > 59 || s > 59 {
+    return None;
+  }
+  // Pad / truncate the fractional digits to nanosecond precision (9 digits).
+  let mut nanos: u64 = 0;
+  for digit in frac_part.chars().take(9) {
+    nanos = nanos * 10 + (digit as u64 - '0' as u64);
+  }
+  for _ in frac_part.len().min(9)..9 {
+    nanos *= 10;
+  }
+  let total = ((h * 3600 + m * 60 + s) * 1_000_000_000 + nanos) as i64;
+  Some(total)
+}
+
+fn parse_u64(s: &str) -> Option<u64> {
+  if s.is_empty() {
+    return None;
+  }
+  s.parse::<u64>().ok()
+}
+
+/// Decode a hex `filepos` string (no `0x` prefix) into a byte offset.
+fn parse_filepos(src: &str) -> Option<u64> {
+  let src = src.trim();
+  if src.is_empty() {
+    return None;
+  }
+  let mut value: u64 = 0;
+  for ch in src.chars() {
+    let digit = ch.to_digit(16)?;
+    value = (value << 4) | u64::from(digit);
+  }
+  Some(value)
+}
+
+/// Parse the VobSub `.idx` text into per-language tracks plus the shared
+/// codec-private blob.  Direct port of `vobsub_reader_c::parse_headers`
+/// (`r_vobsub.cpp:193-352`).
+pub fn parse_idx(text: &str) -> ParsedIdx {
+  let mut tracks: Vec<VobSubTrack> = Vec::new();
+  let mut current: Option<VobSubTrack> = None;
+  let mut idx_data = String::new();
+
+  let mut delay: i64 = 0;
+  let mut last_timestamp: i64 = 0;
+  let mut sort_required = false;
+
+  // Flush helper mirroring the C++ "push if non-empty, else drop" logic.
+  let flush = |tracks: &mut Vec<VobSubTrack>, track: Option<VobSubTrack>, sort_required: bool| {
+    if let Some(mut track) = track {
+      if track.entries.is_empty() {
+        // r_vobsub.cpp:219 / :331 — tracks without entries are dropped.
+      } else {
+        if sort_required {
+          // stable_sort by timestamp (r_vobsub.cpp:225 / :337).
+          track.entries.sort_by_key(|entry| entry.timestamp);
+        }
+        tracks.push(track);
+      }
+    }
+  };
+
   for line in text.lines() {
-    let trimmed = line.trim();
-    if trimmed.starts_with("timestamp:") {
-      if let Some(idx) = current {
-        out[idx].num_entries += 1;
+    // r_vobsub.cpp:209 — blank lines and comments are skipped.  The banner
+    // line (first `#` comment) is therefore never captured into idx_data.
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+
+    // `id: <lang>, index: N` opens a new track (r_vobsub.cpp:212-234).
+    if let Some(lang) = parse_id_line(line) {
+      flush(&mut tracks, current.take(), sort_required);
+      current = Some(VobSubTrack {
+        language: lang,
+        entries: Vec::new(),
+      });
+      delay = 0;
+      last_timestamp = 0;
+      sort_required = false;
+      continue;
+    }
+
+    let lower = line.to_ascii_lowercase();
+
+    // `alt:` / `langidx:` are control lines that never reach idx_data
+    // (r_vobsub.cpp:236-237).
+    if lower.starts_with("alt:") || lower.starts_with("langidx:") {
+      continue;
+    }
+
+    // `delay:` accumulates into the running track delay (r_vobsub.cpp:239-253).
+    if lower.starts_with("delay:") {
+      let mut value = line[6..].trim();
+      let mut factor: i64 = 1;
+      if let Some(rest) = value.strip_prefix('-') {
+        factor = -1;
+        value = rest;
+      }
+      if let Some(ts) = parse_idx_timestamp(value) {
+        delay += ts * factor;
       }
       continue;
     }
-    let rest = match trimmed.strip_prefix("id:") {
-      Some(r) => r.trim_start(),
-      None => continue,
-    };
-    let (lang, rest) = match rest.split_once(',') {
-      Some((l, r)) => (l.trim(), r.trim_start()),
-      None => continue,
-    };
-    if lang.is_empty() {
+
+    // `timestamp: HH:MM:SS:mmm, filepos: 0xNN` is a subtitle entry
+    // (r_vobsub.cpp:255-324).  Only meaningful inside an `id:` track.
+    if lower.starts_with("timestamp:") {
+      if current.is_none() {
+        // r_vobsub.cpp:256-257 — entries before any `id:` are a hard error
+        // upstream; header-only, we skip them.
+        continue;
+      }
+      if let Some((timestamp, position)) =
+        parse_timestamp_line(line, &mut delay, &mut last_timestamp, &mut sort_required)
+      {
+        if let Some(track) = current.as_mut() {
+          track.entries.push(VobSubEntry { position, timestamp });
+        }
+      }
       continue;
     }
-    let idx_str = match rest.strip_prefix("index:") {
-      Some(s) => s.trim(),
-      None => continue,
-    };
-    if let Ok(index) = idx_str.parse::<u32>() {
-      out.push(IdxEntry {
-        language: lang.to_string(),
-        index,
-        num_entries: 0,
-      });
-      current = Some(out.len() - 1);
-    }
+
+    // Everything else is a global settings line that forms idx_data.
+    idx_data.push_str(line);
+    idx_data.push('\n');
   }
-  out.into_iter().filter(|entry| entry.num_entries > 0).collect()
+
+  flush(&mut tracks, current.take(), sort_required);
+
+  ParsedIdx {
+    tracks,
+    codec_private: idx_data,
+  }
+}
+
+/// Parse an `id: <lang>, index: N` line, returning the language code.
+fn parse_id_line(line: &str) -> Option<String> {
+  // Case-insensitive `id:` prefix (r_vobsub.cpp:212 regex with
+  // CaseInsensitiveOption).
+  let rest = if line.len() >= 3 && line[..3].eq_ignore_ascii_case("id:") {
+    line[3..].trim_start()
+  } else {
+    return None;
+  };
+  // Language is everything up to the first comma (or newline).
+  let lang = match rest.split_once(',') {
+    Some((l, _)) => l.trim(),
+    None => rest.trim(),
+  };
+  if lang.is_empty() {
+    return None;
+  }
+  Some(lang.to_ascii_lowercase())
+}
+
+/// Parse a `timestamp: ..., filepos: ...` line, applying delay correction and
+/// out-of-order detection.  Returns the corrected `(timestamp, position)` or
+/// `None` if the entry should be skipped.  `last_timestamp` and
+/// `sort_required` are updated in place (mirrors r_vobsub.cpp:255-324).
+fn parse_timestamp_line(
+  line: &str,
+  delay: &mut i64,
+  last_timestamp: &mut i64,
+  sort_required: &mut bool,
+) -> Option<(i64, u64)> {
+  // mkvtoolnix splits on whitespace into exactly four parts:
+  //   ["timestamp:", "HH:MM:SS:mmm,", "filepos:", "0xNN"]
+  let parts: Vec<&str> = line.split_whitespace().collect();
+  if parts.len() != 4 || !parts[2].eq_ignore_ascii_case("filepos:") {
+    return None;
+  }
+  // The timestamp part carries a trailing comma (r_vobsub.cpp:277).
+  let ts_field = parts[1].strip_suffix(',').unwrap_or(parts[1]);
+  if ts_field.len() < 12 {
+    // r_vobsub.cpp:263 requires `parts[1].length() >= 13` (incl. the comma).
+    return None;
+  }
+  let mut ts_str = ts_field;
+  let mut factor: i64 = 1;
+  if let Some(rest) = ts_str.strip_prefix('-') {
+    factor = -1;
+    ts_str = rest;
+  }
+  let timestamp = parse_idx_timestamp(ts_str)?;
+  let position = parse_filepos(parts[3])?;
+
+  let mut corrected = timestamp * factor + *delay;
+
+  // r_vobsub.cpp:295-300 — when the track delay is negative and this entry
+  // would land before the previous one, advance the running delay so the
+  // entry is clamped forward to the previous timestamp.
+  if *delay < 0 && *last_timestamp != 0 && corrected < *last_timestamp {
+    *delay += *last_timestamp - corrected;
+    corrected = *last_timestamp;
+  }
+
+  // r_vobsub.cpp:302-307 — entries still negative after delay are unsupported
+  // in Matroska and skipped.
+  if corrected < 0 {
+    return None;
+  }
+
+  // r_vobsub.cpp:311-320 — out-of-order entry → flag the track for sorting.
+  if corrected < *last_timestamp {
+    *sort_required = true;
+  }
+  *last_timestamp = corrected;
+
+  Some((corrected, position))
 }
 
 /// Resolve the sibling `.sub` (any case) next to an `.idx` path.
 pub fn sibling_sub_path(idx_path: &Path) -> Option<PathBuf> {
-  // Try `.sub`, `.SUB` and `.Sub` in that order.
   for ext in ["sub", "SUB", "Sub"] {
     let candidate = idx_path.with_extension(ext);
     if candidate.exists() {
@@ -97,6 +360,21 @@ pub fn sibling_sub_path(idx_path: &Path) -> Option<PathBuf> {
     }
   }
   None
+}
+
+/// Resolve the `.idx` path for a VobSub input.  When handed a `.sub` file the
+/// sibling `.idx` is returned; an `.idx` path is returned unchanged.  Mirrors
+/// `idx_and_sub_file_names` (r_vobsub.cpp:60-69) which always resolves `.idx`.
+pub fn resolve_idx_path(path: &Path) -> PathBuf {
+  if path
+    .extension()
+    .and_then(|e| e.to_str())
+    .map_or(false, |e| e.eq_ignore_ascii_case("sub"))
+  {
+    path.with_extension("idx")
+  } else {
+    path.to_path_buf()
+  }
 }
 
 pub fn looks_like_vobsub_idx(text: &str) -> bool {
@@ -118,6 +396,47 @@ pub fn idx_version(text: &str) -> Option<u32> {
   digits.parse().ok()
 }
 
+/// Populate `out` from the decoded `.idx` text.  Pushes one `S_VOBSUB` track
+/// per non-empty `id:` entry, sharing the filtered codec-private blob.
+fn populate_from_idx(text: &str, out: &mut MediaMetadata) {
+  out.container.format = ContainerFormat::VobSub;
+  out.container.recognized = true;
+  out.container.supported = true;
+
+  let parsed = parse_idx(text);
+  let codec_private = CodecPrivate::from_bytes(parsed.codec_private.as_bytes());
+
+  for (track_idx, track) in parsed.tracks.iter().enumerate() {
+    let mut common = CommonTrackProperties::default();
+    common.number = Some(track_idx as u64 + 1);
+    common.num_index_entries = Some(track.entries.len() as u64);
+    common.language = Some(Language::resolve(
+      Some(track.language.as_str()),
+      Some(track.language.as_str()),
+      false,
+    ));
+    out.tracks.push(Track {
+      id: track_idx as i64,
+      track_type: TrackType::Subtitles,
+      codec: CodecInfo {
+        id: "S_VOBSUB".to_string(),
+        name: Some("VobSub".to_string()),
+        codec_private: Some(codec_private.clone()),
+      },
+      properties: TrackProperties {
+        common,
+        subtitle: Some(SubtitleTrackProperties {
+          text_subtitles: false,
+          encoding: None,
+          variant: Some("VobSub".to_string()),
+          teletext_page: None,
+        }),
+        ..TrackProperties::default()
+      },
+    });
+  }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct VobSubReader;
 
@@ -137,12 +456,8 @@ impl Reader for VobSubReader {
     Ok(looks_like_vobsub_idx(&text))
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    _deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
+    deadline.check("vobsub")?;
     let mut buf = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut buf)?;
@@ -150,75 +465,85 @@ impl Reader for VobSubReader {
     if !looks_like_vobsub_idx(&text) {
       return Err(ParseError::Unrecognised);
     }
-
-    out.container.format = ContainerFormat::VobSub;
-    out.container.recognized = true;
-    out.container.supported = true;
-
-    for (track_idx, entry) in parse_idx_entries(&text).iter().enumerate() {
-      let mut common = CommonTrackProperties::default();
-      common.number = Some(entry.index as u64 + 1);
-      common.num_index_entries = Some(entry.num_entries as u64);
-      common.language = Some(Language::resolve(
-        Some(entry.language.as_str()),
-        Some(entry.language.as_str()),
-        false,
-      ));
-      out.tracks.push(Track {
-        id: track_idx as i64,
-        track_type: TrackType::Subtitles,
-        codec: CodecInfo {
-          id: "S_VOBSUB".to_string(),
-          name: Some("VobSub".to_string()),
-          codec_private: Some(CodecPrivate::from_bytes(text.as_bytes())),
-        },
-        properties: TrackProperties {
-          common,
-          subtitle: Some(SubtitleTrackProperties {
-            text_subtitles: false,
-            encoding: None,
-            variant: Some("VobSub".to_string()),
-            teletext_page: None,
-          }),
-          ..TrackProperties::default()
-        },
-      });
-    }
+    populate_from_idx(&text, out);
     Ok(())
   }
 }
 
-/// Parse a VobSub `.idx` from a filesystem path.  Records the sibling `.sub`
-/// path under `container.properties.otherFiles` when present.
+/// Parse a VobSub `.idx` from a filesystem path, resolving `.sub` inputs to the
+/// sibling `.idx`.  Records the sibling `.sub` data file under
+/// `container.properties.otherFiles` when present.  This is the path-aware
+/// entry point used by the public `parse` dispatcher so dragging a `.sub`
+/// produces the same listing as its `.idx` (PARSER-210).
 pub fn parse_idx_at_path(path: &Path) -> Result<MediaMetadata, ParseError> {
-  let idx_path = if path
-    .extension()
-    .and_then(|e| e.to_str())
-    .map_or(false, |e| e.eq_ignore_ascii_case("sub"))
-  {
-    path.with_extension("idx")
-  } else {
-    path.to_path_buf()
-  };
+  let idx_path = resolve_idx_path(path);
   let mut src = FileSource::open(&idx_path)?;
   let file_name = idx_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
   let file_size = src.length().unwrap_or(0);
   let mut metadata = MediaMetadata::new(file_name, file_size);
   VobSubReader.read_headers(&mut src, &Deadline::new(60_000), &mut metadata)?;
-  if let Some(sub) = sibling_sub_path(&idx_path) {
+  record_sibling_sub(&idx_path, &mut metadata);
+  Ok(metadata)
+}
+
+/// Attempt the path-aware VobSub parse for a file whose extension hints VobSub
+/// (`.idx`) or that is a `.sub` with a banner-bearing sibling `.idx`.  Returns
+/// `Ok(true)` and populates `metadata` when the file is VobSub; `Ok(false)`
+/// when it is not (so the caller can fall through to the normal cascade).
+///
+/// Mirrors mkvtoolnix's probe accepting both `.idx`/`.sub` extensions and
+/// always resolving the `.idx` (r_vobsub.cpp:82-100).
+pub fn try_open_by_path(path: &Path, metadata: &mut MediaMetadata) -> Result<bool, ParseError> {
+  let idx_path = resolve_idx_path(path);
+  // Only claim when the resolved `.idx` exists and carries the banner.  This
+  // keeps `.sub` files that are *not* VobSub (e.g. MicroDVD text) flowing to
+  // the normal cascade.
+  let mut src = match FileSource::open(&idx_path) {
+    Ok(src) => src,
+    Err(_) => return Ok(false),
+  };
+  let mut buf = vec![0u8; PROBE_BYTES];
+  let read = src.read_at_most(&mut buf)?;
+  src.seek_to(0)?;
+  if read == 0 {
+    return Ok(false);
+  }
+  let text = String::from_utf8_lossy(&buf[..read]);
+  if !looks_like_vobsub_idx(&text) {
+    return Ok(false);
+  }
+  populate_from_idx(&text, metadata);
+  record_sibling_sub(&idx_path, metadata);
+  Ok(true)
+}
+
+fn record_sibling_sub(idx_path: &Path, metadata: &mut MediaMetadata) {
+  if let Some(sub) = sibling_sub_path(idx_path) {
     metadata
       .container
       .properties
       .other_files
       .push(sub.to_string_lossy().into_owned());
   }
-  Ok(metadata)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use std::io::Cursor;
+  use std::io::Write;
+
+  fn temp_stem(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap()
+      .as_nanos();
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!("bmm-vobsub-{label}-{pid}-{nanos}-{seq}"))
+  }
 
   #[test]
   fn looks_like_vobsub_idx_accepts_canonical_magic() {
@@ -248,68 +573,119 @@ mod tests {
   }
 
   #[test]
-  fn parse_idx_entries_extracts_language_and_index() {
+  fn parse_idx_timestamp_handles_colon_milliseconds() {
+    // VobSub form `HH:MM:SS:mmm`.
+    assert_eq!(parse_idx_timestamp("00:00:01:000"), Some(1_000_000_000));
+    assert_eq!(parse_idx_timestamp("00:00:01:500"), Some(1_500_000_000));
+    assert_eq!(parse_idx_timestamp("01:02:03:004"), Some(3_723_004_000_000));
+  }
+
+  #[test]
+  fn parse_idx_timestamp_handles_decimal_and_short_forms() {
+    assert_eq!(parse_idx_timestamp("00:00:02.250"), Some(2_250_000_000));
+    assert_eq!(parse_idx_timestamp("01:02.000"), Some(62_000_000_000));
+  }
+
+  #[test]
+  fn parse_idx_timestamp_rejects_garbage() {
+    assert_eq!(parse_idx_timestamp("not-a-time"), None);
+    assert_eq!(parse_idx_timestamp(""), None);
+    assert_eq!(parse_idx_timestamp("00:99:00:000"), None);
+  }
+
+  #[test]
+  fn parse_filepos_decodes_hex() {
+    assert_eq!(parse_filepos("000000000"), Some(0));
+    assert_eq!(parse_filepos("0x100"), None); // a real idx never has a 0x prefix
+    assert_eq!(parse_filepos("1a2b"), Some(0x1a2b));
+  }
+
+  #[test]
+  fn parse_idx_emits_one_track_per_id_with_entries() {
     let txt = "\
+size: 720x576
+palette: 000000, ffffff
 id: en, index: 0
 timestamp: 00:00:01:000, filepos: 000000000
+timestamp: 00:00:05:000, filepos: 000001000
 id: fr, index: 1
-timestamp: 00:00:02:000, filepos: 000000100
-id: ja, index: 2
-timestamp: 00:00:03:000, filepos: 000000200
+timestamp: 00:00:02:000, filepos: 000002000
 ";
-    let entries = parse_idx_entries(txt);
-    assert_eq!(
-      entries,
-      vec![
-        IdxEntry {
-          language: "en".into(),
-          index: 0,
-          num_entries: 1
-        },
-        IdxEntry {
-          language: "fr".into(),
-          index: 1,
-          num_entries: 1
-        },
-        IdxEntry {
-          language: "ja".into(),
-          index: 2,
-          num_entries: 1
-        },
-      ]
-    );
+    let parsed = parse_idx(txt);
+    assert_eq!(parsed.tracks.len(), 2);
+    assert_eq!(parsed.tracks[0].language, "en");
+    assert_eq!(parsed.tracks[0].entries.len(), 2);
+    assert_eq!(parsed.tracks[1].language, "fr");
+    assert_eq!(parsed.tracks[1].entries.len(), 1);
   }
 
   #[test]
-  fn parse_idx_entries_skips_unrelated_lines() {
-    let txt = "size: 1920x1080\nid: de, index: 5\ntimestamp: 00:00:01:000, filepos: 0\nrandom: line\n";
-    let entries = parse_idx_entries(txt);
-    assert_eq!(
-      entries,
-      vec![IdxEntry {
-        language: "de".into(),
-        index: 5,
-        num_entries: 1
-      }]
-    );
+  fn parse_idx_skips_track_without_entries() {
+    let txt = "\
+size: 720x576
+id: en, index: 0
+id: fr, index: 1
+timestamp: 00:00:02:000, filepos: 000002000
+";
+    let parsed = parse_idx(txt);
+    // `en` has no timestamp entry and is dropped.
+    assert_eq!(parsed.tracks.len(), 1);
+    assert_eq!(parsed.tracks[0].language, "fr");
   }
 
   #[test]
-  fn parse_idx_entries_skips_malformed_index() {
-    let txt = "id: en, index: notanumber\n";
-    assert!(parse_idx_entries(txt).is_empty());
+  fn parse_idx_sorts_out_of_order_entries() {
+    let txt = "\
+id: en, index: 0
+timestamp: 00:00:05:000, filepos: 000000000
+timestamp: 00:00:01:000, filepos: 000001000
+timestamp: 00:00:03:000, filepos: 000002000
+";
+    let parsed = parse_idx(txt);
+    assert_eq!(parsed.tracks.len(), 1);
+    let ts: Vec<i64> = parsed.tracks[0].entries.iter().map(|e| e.timestamp).collect();
+    assert_eq!(ts, vec![1_000_000_000, 3_000_000_000, 5_000_000_000]);
   }
 
   #[test]
-  fn parse_idx_entries_skips_missing_comma() {
-    let txt = "id: en index: 0\n";
-    assert!(parse_idx_entries(txt).is_empty());
+  fn parse_idx_skips_negative_timestamp_entries() {
+    // A negative delay pushes the first entry below zero → skipped.
+    let txt = "\
+id: en, index: 0
+delay: -00:00:10:000
+timestamp: 00:00:01:000, filepos: 000000000
+timestamp: 00:00:30:000, filepos: 000001000
+";
+    let parsed = parse_idx(txt);
+    assert_eq!(parsed.tracks.len(), 1);
+    // First entry (1s - 10s = -9s) is dropped; second (30s - 10s = 20s) kept.
+    assert_eq!(parsed.tracks[0].entries.len(), 1);
+    assert_eq!(parsed.tracks[0].entries[0].timestamp, 20_000_000_000);
   }
 
   #[test]
-  fn parse_idx_entries_skips_empty_language() {
-    let txt = "id: , index: 0\n";
-    assert!(parse_idx_entries(txt).is_empty());
+  fn parse_idx_codec_private_excludes_control_lines() {
+    let txt = "\
+# VobSub index file, v7
+size: 720x576
+palette: 000000, ffffff
+langidx: 0
+id: en, index: 0
+alt: english
+delay: 00:00:00:000
+timestamp: 00:00:01:000, filepos: 000000000
+";
+    let parsed = parse_idx(txt);
+    let cp = parsed.codec_private;
+    assert!(cp.contains("size: 720x576"));
+    assert!(cp.contains("palette: 000000, ffffff"));
+    assert!(!cp.contains("id:"));
+    assert!(!cp.contains("timestamp:"));
+    assert!(!cp.contains("delay:"));
+    assert!(!cp.contains("alt:"));
+    assert!(!cp.contains("langidx:"));
+    // The banner comment is also excluded (skipped as a `#` line).
+    assert!(!cp.contains("# VobSub"));
   }
 
   #[test]
@@ -366,19 +742,20 @@ timestamp: 00:00:03:000, filepos: 000000200
   }
 
   #[test]
+  fn resolve_idx_path_maps_sub_to_idx() {
+    let sub = Path::new("/tmp/clip.sub");
+    assert_eq!(resolve_idx_path(sub), PathBuf::from("/tmp/clip.idx"));
+    let sub_upper = Path::new("/tmp/clip.SUB");
+    assert_eq!(resolve_idx_path(sub_upper), PathBuf::from("/tmp/clip.idx"));
+    let idx = Path::new("/tmp/clip.idx");
+    assert_eq!(resolve_idx_path(idx), PathBuf::from("/tmp/clip.idx"));
+  }
+
+  #[test]
   fn parse_idx_at_path_records_sibling_sub_file() {
-    use std::io::Write;
-    let dir = std::env::temp_dir();
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .unwrap()
-      .as_nanos();
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let stem = format!("bmm-vobsub-{pid}-{nanos}-{seq}");
-    let idx_path = dir.join(format!("{stem}.idx"));
-    let sub_path = dir.join(format!("{stem}.sub"));
+    let stem = temp_stem("path");
+    let idx_path = stem.with_extension("idx");
+    let sub_path = stem.with_extension("sub");
     std::fs::File::create(&idx_path)
       .unwrap()
       .write_all(b"# VobSub index file, v7\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 0\n")
@@ -391,17 +768,50 @@ timestamp: 00:00:03:000, filepos: 000000200
   }
 
   #[test]
-  fn sibling_sub_path_returns_none_when_absent() {
-    let dir = std::env::temp_dir();
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
+  fn try_open_by_path_resolves_sub_to_sibling_idx() {
+    let stem = temp_stem("resolve");
+    let idx_path = stem.with_extension("idx");
+    let sub_path = stem.with_extension("sub");
+    std::fs::File::create(&idx_path)
       .unwrap()
-      .as_nanos();
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let stem = format!("bmm-vobsub-orphan-{pid}-{nanos}-{seq}");
-    let idx_path = dir.join(format!("{stem}.idx"));
+      .write_all(
+        b"# VobSub index file, v7\nsize: 720x576\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 000000000\n",
+      )
+      .unwrap();
+    std::fs::File::create(&sub_path).unwrap().write_all(&[0u8; 16]).unwrap();
+
+    let mut m = MediaMetadata::new("clip.sub", 16);
+    // Hand the *.sub* path — it must resolve to the sibling .idx.
+    let claimed = try_open_by_path(&sub_path, &mut m).unwrap();
+    assert!(claimed);
+    assert_eq!(m.container.format, ContainerFormat::VobSub);
+    assert_eq!(m.tracks.len(), 1);
+    assert!(m.container.properties.other_files.iter().any(|f| f.ends_with(".sub")));
+
+    let _ = std::fs::remove_file(&idx_path);
+    let _ = std::fs::remove_file(&sub_path);
+  }
+
+  #[test]
+  fn try_open_by_path_declines_sub_without_idx() {
+    // A `.sub` file with no sibling `.idx` is not VobSub — caller falls
+    // through to the normal cascade (e.g. MicroDVD).
+    let stem = temp_stem("orphan");
+    let sub_path = stem.with_extension("sub");
+    std::fs::File::create(&sub_path)
+      .unwrap()
+      .write_all(b"{1}{125}Hello\n")
+      .unwrap();
+    let mut m = MediaMetadata::new("clip.sub", 14);
+    let claimed = try_open_by_path(&sub_path, &mut m).unwrap();
+    assert!(!claimed);
+    let _ = std::fs::remove_file(&sub_path);
+  }
+
+  #[test]
+  fn sibling_sub_path_returns_none_when_absent() {
+    let stem = temp_stem("absent");
+    let idx_path = stem.with_extension("idx");
     assert!(sibling_sub_path(&idx_path).is_none());
   }
 }

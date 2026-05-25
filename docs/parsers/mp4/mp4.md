@@ -1,6 +1,6 @@
 # MP4 / QuickTime Parser
 
-Implementation progress: 85%
+Implementation progress: 88%
 
 ## Purpose
 
@@ -13,6 +13,14 @@ The MP4 parser recognises ISO BMFF, MP4, M4V, MOV, and QuickTime-style files. It
 - Upstream basis: `../mkvtoolnix/src/input/r_qtmp4.cpp`, `../mkvtoolnix/src/input/r_qtmp4.h`, upstream helpers under `../mkvtoolnix/src/common`
 
 The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxes, parses `ftyp`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `hdlr`, `stbl`, `stsd`, `stts`, `stsc`, `edts/elst`, `mvex/trex`, `moof/traf/tfhd/trun`, and `udta/meta/ilst`. Codec-specific parsers cover AVC, HEVC, AV1, AAC, ALAC, Opus, FLAC, color, pixel aspect ratio, and Dolby Vision block-addition records.
+
+Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the **last** entry's FOURCC / dimensions / audio properties / codec private data win; per-entry builder state is reset between entries so earlier values do not leak forward.
+
+Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers:
+
+- **Opus (`dOps`)** — the box body is wrapped into a Matroska/Ogg Opus ID header: the 8-byte `"OpusHead"` magic is prepended and the pre-skip, input-sample-rate and output-gain fields are converted from MP4 big-endian to little-endian (`parse_dops_audio_header_priv_atom`, `r_qtmp4.cpp:3217-3243`). The bit depth is cleared for Opus.
+- **FLAC (`dfLa`)** — the four-byte FullBox version/flags header is stripped; only the FLAC metadata block chain is stored as codec private (`parse_dfla_audio_header_priv_atom`, `r_qtmp4.cpp:3246-3266`). STREAMINFO is still decoded for sample rate / channels / bit depth.
+- **ALAC (`alac`)** — only the ALACSpecificConfig (the FullBox payload, FullBox version/flags header stripped) is stored, matching the magic cookie `create_audio_packetizer_alac` clones from `stsd_non_priv_struct_size + 12` (`r_qtmp4.cpp:1833-1839`). The verification gate (`verify.rs`) therefore requires ≥ 24 codec-private bytes (`sizeof(codec_config_t)`).
 
 ## Data Structures
 
@@ -33,10 +41,3 @@ Key structures are `BoxHeader`, `FileType`, `MoovBuilder`, `TrackBuilder`, `Trex
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, chapter-track and `tref` behavior, and a wider QuickTime metadata surface. Rust implements enough sample-table handling for first-sample verification but not packet output. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely.
-
-## Open Issues
-
-- **PARSER-198: `stsd` sample descriptions after entry 0 are skipped.** Native parsing only calls `parse_first_entry` for the first sample-description entry and skips the rest. mkvtoolnix iterates through every `stsd` entry and lets the demuxer parse each one. Tracks with multiple sample descriptions can lose later codec private data, dimensions, audio properties, or validation behavior.
-- **PARSER-199: MP4 Opus `dOps` private data uses the wrong layout.** Native stores the raw `dOps` payload as codec private data. mkvtoolnix builds the Matroska/Ogg Opus ID header by prepending `OpusHead` and converting pre-skip, input sample rate, and output gain fields from MP4 big-endian to little-endian.
-- **PARSER-200: MP4 FLAC `dfLa` codec private data includes the FullBox header.** Native stores the whole `dfLa` payload, including the four-byte version/flags header. mkvtoolnix skips those four bytes and stores only the FLAC metadata block chain.
-- **PARSER-201: MP4 ALAC codec private data includes the FullBox header.** Native stores the entire `alac` atom payload as codec private data. mkvtoolnix passes only the ALAC magic cookie/config bytes after the `alac` atom header and FullBox header to the ALAC packetizer.

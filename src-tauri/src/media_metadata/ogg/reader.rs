@@ -160,6 +160,7 @@ fn handle_page(
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     // The BOS packet must be wholly contained in this page (per RFC
     // 3533) — reassembly isn't needed for identification packets.
@@ -232,13 +233,52 @@ fn handle_page(
   }
 }
 
+/// Upper bound on header packets collected for variable-length-header codecs
+/// (FLAC / Kate).  mkvtoolnix has no fixed cap because it follows the FLAC
+/// metadata "last" flag / Kate high-bit run; this keeps the bounded,
+/// header-only contract for pathological streams.
+const MAX_HEADER_PACKETS: usize = 64;
+
 fn remember_header_packet(idx: usize, packet: &[u8], states: &mut [BitstreamState]) {
   let state = &mut states[idx];
   let Some(metadata) = state.metadata.as_ref() else {
     return;
   };
-  if state.header_packets.len() < identify::header_packet_target(&metadata.codec_id) {
-    state.header_packets.push(packet.to_vec());
+  if state.headers_complete {
+    return;
+  }
+  match metadata.codec_id.as_str() {
+    // PARSER-205: Kate keeps reading header packets while the high bit of the
+    // first byte is set (`r_ogm.cpp:1707-1710`).  A high-bit-clear packet ends
+    // the header run.
+    "S_KATE" => {
+      let is_header = packet.first().map(|b| b & 0x80 != 0).unwrap_or(false);
+      if is_header && state.header_packets.len() < MAX_HEADER_PACKETS {
+        state.header_packets.push(packet.to_vec());
+      } else {
+        state.headers_complete = true;
+      }
+    }
+    // PARSER-204: FLAC keeps reading header packets until the metadata block
+    // with the "last" flag is seen (`r_ogm_flac.cpp:238-244`).
+    "A_FLAC" => {
+      let is_first = state.header_packets.is_empty();
+      let post_1_1_1 = metadata.flac_post_1_1_1.unwrap_or(false);
+      if state.header_packets.len() < MAX_HEADER_PACKETS {
+        let last = codecs::flac::is_last_metadata_block(packet, is_first, post_1_1_1).unwrap_or(true);
+        state.header_packets.push(packet.to_vec());
+        if last {
+          state.headers_complete = true;
+        }
+      } else {
+        state.headers_complete = true;
+      }
+    }
+    codec_id => {
+      if state.header_packets.len() < identify::header_packet_target(codec_id) {
+        state.header_packets.push(packet.to_vec());
+      }
+    }
   }
 }
 
@@ -376,8 +416,8 @@ fn comment_block_offset(packet: &[u8]) -> Option<usize> {
 fn all_streams_have_headers(states: &[BitstreamState]) -> bool {
   !states.is_empty()
     && states.iter().filter(|s| s.metadata.is_some()).all(|s| {
-      let codec_id = s.metadata.as_ref().map(|m| m.codec_id.as_str()).unwrap_or_default();
-      s.header_packets.len() >= identify::header_packet_target(codec_id)
+      let metadata = s.metadata.as_ref().expect("filtered to Some");
+      identify::headers_satisfied(&s.header_packets, s.headers_complete, metadata)
     })
 }
 
@@ -387,7 +427,7 @@ mod tests {
   use crate::media_metadata::deadline::Deadline;
   use crate::media_metadata::model::container::ContainerFormat;
   use crate::media_metadata::model::track::TrackType;
-  use crate::media_metadata::ogg::codecs::{flac, ogm, opus, speex, theora, vorbis};
+  use crate::media_metadata::ogg::codecs::{flac, kate, ogm, opus, speex, theora, vorbis, vp8};
   use crate::media_metadata::ogg::comments::build_block;
   use crate::media_metadata::ogg::page::{HEADER_FLAG_BEGINNING_OF_STREAM, build_page};
   use std::io::Cursor;
@@ -690,6 +730,111 @@ mod tests {
     // Reader still claims the container as recognised since we got past
     // probe; identify::finalise stamps recognized=true.
     assert_eq!(out.container.format, ContainerFormat::Ogg);
+  }
+
+  #[test]
+  fn read_headers_recognizes_ogg_vp8_with_dimensions_and_duration() {
+    // PARSER-202: VP8-in-Ogg is recognised, reports V_VP8, pixel + display
+    // dimensions, and a default duration derived from the frame rate.  The
+    // optional comment packet (`0x03vorbis`) sits on the second page; VP8's
+    // header target is 1 so the BOS alone keeps the track.
+    let bos = vp8::build_identification_packet(1280, 720, 0, 0, 30000, 1001);
+    let mut comment_pkt = vec![0x03];
+    comment_pkt.extend_from_slice(b"vorbis");
+    comment_pkt.extend(build_block("libVP8 OGM", &[("TITLE", "Clip"), ("LANGUAGE", "eng")]));
+    comment_pkt.push(0x01);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.track_type, TrackType::Video);
+    assert_eq!(t.codec.id, "V_VP8");
+    let v = t.properties.video.as_ref().unwrap();
+    assert_eq!(
+      v.pixel_dimensions,
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 1280, height: 720 })
+    );
+    assert_eq!(
+      v.display_dimensions,
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 1280, height: 720 })
+    );
+    // 1001/30000 s ≈ 33_366_666 ns.
+    assert_eq!(v.default_duration_ns, Some(33_366_666));
+    // PARSER-202: the `0x03vorbis` comment packet decodes generically.
+    assert_eq!(t.properties.common.language.as_ref().unwrap().iso639_2, "eng");
+  }
+
+  #[test]
+  fn read_headers_accepts_pre_1_1_1_bare_flac() {
+    // PARSER-203: a stream whose first packet starts directly with `fLaC`
+    // (pre-1.1.1 mapping) is recognised as A_FLAC.
+    let bos = flac::build_identification_packet_ex(44100, 2, 16, 1000, false, 0, true);
+    let bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_FLAC");
+    assert_eq!(t.properties.audio.as_ref().unwrap().sampling_frequency, Some(44100.0));
+  }
+
+  #[test]
+  fn read_headers_assembles_multi_packet_flac_codec_private() {
+    // PARSER-204: a post-1.1.1 FLAC stream that advertises 2 "other" header
+    // packets is read until the last metadata block; the codec private strips
+    // the 9-byte wrapper from the first packet and concatenates all blocks.
+    let bos = flac::build_identification_packet_ex(48000, 2, 24, 0, true, 2, false);
+    // Two more metadata blocks; the last carries the last-block flag.
+    let vc_block = flac::build_metadata_block_packet(4, false, b"VORBIS-COMMENT-BODY");
+    let pad_block = flac::build_metadata_block_packet(1, true, &[0u8; 8]);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[&vc_block, &pad_block]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_FLAC");
+    let private = t.codec.codec_private.as_ref().unwrap();
+    // Expected = (bos[9..]) ++ vc_block ++ pad_block.
+    let mut expected = bos[9..].to_vec();
+    expected.extend_from_slice(&vc_block);
+    expected.extend_from_slice(&pad_block);
+    assert_eq!(private.length, expected.len() as u64);
+    assert!(private.hex.starts_with("664c6143")); // "fLaC"
+  }
+
+  #[test]
+  fn read_headers_xiph_laces_multi_packet_kate_codec_private() {
+    // PARSER-205: Kate keeps reading header packets while the high bit is set
+    // and Xiph-laces all of them into codec private.  A high-bit-clear packet
+    // ends the header run.
+    let ident = kate::build_identification_packet("en");
+    let mut comment = vec![0x81]; // second Kate header (high bit set)
+    comment.extend_from_slice(b"kate\0\0\0");
+    comment.extend_from_slice(&[0xAA; 20]);
+    let mut regions = vec![0x82]; // third Kate header (high bit set)
+    regions.extend_from_slice(b"kate\0\0\0");
+    regions.extend_from_slice(&[0xBB; 12]);
+    let data_pkt = vec![0x00, 0x01, 0x02]; // high bit clear → ends header run
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&ident]);
+    bytes.extend(build_page(0, 0, 1, 1, &[&comment, &regions, &data_pkt]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "S_KATE");
+    let private = t.codec.codec_private.as_ref().unwrap();
+    // Xiph lacing of three header packets: count-1 (=2), lace sizes for the
+    // first two, then all three payloads.  The data packet is excluded.
+    let total_payload = ident.len() + comment.len() + regions.len();
+    assert!(private.length as usize > total_payload); // includes lace header
+    assert!(private.hex.starts_with("02")); // 3 packets → count-1 = 2
   }
 
   #[test]

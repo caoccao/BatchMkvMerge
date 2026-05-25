@@ -178,12 +178,13 @@ fn recover_audio_params(builder: &mut TrackBuilder, channels: u32, sample_rate: 
 /// ALAC magic cookie whose embedded `codec_config_t` (24 bytes) is present.
 /// mkvtoolnix checks `stsd->get_size() >= stsd_non_priv_struct_size + 12 +
 /// sizeof(codec_config_t)`; the `+12` is the `alac` box header (size+type+
-/// version/flags) inside the sample entry, so the codec_private blob we stored
-/// (the full `alac` box payload = 4-byte FullBox header + ALACSpecificConfig)
-/// must be at least `4 + 24 = 28` bytes — exactly the threshold `parse_alac`
-/// already uses before refining the audio parameters.
+/// version/flags) inside the sample entry, and `create_audio_packetizer_alac`
+/// (r_qtmp4.cpp:1833-1839) passes only the bytes after that `+12` as the magic
+/// cookie.  Since PARSER-201 we store exactly that cookie (the
+/// ALACSpecificConfig, FullBox header already stripped), so the codec_private
+/// blob must be at least `sizeof(codec_config_t)` = 24 bytes.
 fn alac_config_present(builder: &TrackBuilder) -> bool {
-  const MIN_ALAC_PRIVATE_BYTES: usize = ALAC_FULLBOX_HEADER + ALAC_CODEC_CONFIG_SIZE;
+  const MIN_ALAC_PRIVATE_BYTES: usize = ALAC_CODEC_CONFIG_SIZE;
   builder
     .codec_private_hex
     .as_ref()
@@ -191,8 +192,6 @@ fn alac_config_present(builder: &TrackBuilder) -> bool {
     .unwrap_or(false)
 }
 
-/// FullBox version+flags header inside the `alac` box.
-const ALAC_FULLBOX_HEADER: usize = 4;
 /// `sizeof(mtx::alac::codec_config_t)` — the ALACSpecificConfig payload.
 const ALAC_CODEC_CONFIG_SIZE: usize = 24;
 
@@ -747,19 +746,20 @@ mod tests {
   // ---- PARSER-185: ALAC config payload verification ------------------------
 
   // r_qtmp4.cpp:3705-3716: a valid ALAC track carries the magic cookie
-  // (≥ 28 bytes of codec private) and is kept.
+  // (≥ 24-byte ALACSpecificConfig of codec private, FullBox header already
+  // stripped per PARSER-201) and is kept.
   #[test]
   fn alac_with_valid_config_kept() {
     let mut b = audio_builder("alac", 2, 44_100.0);
-    // 4-byte FullBox header + 24-byte ALACSpecificConfig = 28 bytes.
-    b.codec_private_hex = Some(hex_encode(&vec![0u8; 28]));
+    // 24-byte ALACSpecificConfig (magic cookie), FullBox header stripped.
+    b.codec_private_hex = Some(hex_encode(&vec![0u8; 24]));
     let mut src = source(vec![]);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
   }
 
-  // A truncated ALAC cookie (< 28 bytes) is dropped even though the sample
-  // entry's channels/rate look fine.
+  // A truncated ALAC cookie (< 24-byte ALACSpecificConfig) is dropped even
+  // though the sample entry's channels/rate look fine.
   #[test]
   fn alac_with_truncated_config_dropped() {
     let mut b = audio_builder("alac", 2, 44_100.0);

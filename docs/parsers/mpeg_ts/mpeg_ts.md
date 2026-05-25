@@ -1,6 +1,6 @@
 # MPEG Transport Stream Parser
 
-Implementation progress: 84%
+Implementation progress: 85%
 
 ## Purpose
 
@@ -13,6 +13,8 @@ The MPEG-TS parser recognises transport streams, detects packet size, builds pro
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ts.cpp`, `../mkvtoolnix/src/input/r_mpeg_ts.h`
 
 The parser supports 188-byte TS, 192-byte M2TS, and 204-byte FEC packet sizes. It reassembles PAT, PMT, and SDT sections, builds stream rows from stream types and descriptors, extracts language/service data, accumulates bounded PES payloads, and enriches AVC, HEVC, MPEG video, VC-1, AC-3, E-AC-3, AAC, MP3, DTS, TrueHD, LPCM, PGS, DVB subtitles, teletext, TextST, and Dolby Vision pairings.
+
+AAC enrichment (stream types `0x0f` and `0x11`) requires five consecutive valid AAC frames in the bounded PES payload before trusting the header, mirroring `new_stream_a_aac`'s `aac::parser_c::find_consecutive_frames(buffer, size, 5)` (r_mpeg_ts.cpp:367). The shared AAC parser recognises both multiplex types — ADTS and LOAS/LATM — so the LOAS/LATM framing that stream type `0x11` commonly carries is decoded as `A_AAC`, and a lone accidental ADTS-looking sync is rejected.
 
 ## Data Structures
 
@@ -32,7 +34,3 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks.
-
-## Open Issues
-
-- **PARSER-206: MPEG-TS AAC probing is ADTS-only and requires only one frame.** Native maps stream types `0x0f` and `0x11` to `A_AAC`, but enrichment searches only for one ADTS sync/header. mkvtoolnix uses the AAC parser to find five consecutive frames and records the AAC multiplex type, which covers LOAS/LATM style AAC carried by stream type `0x11` and avoids accepting a lone accidental ADTS-looking header.

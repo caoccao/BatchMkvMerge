@@ -70,6 +70,76 @@ fn parses_ssa_clip() {
   assert_eq!(m.tracks[0].codec.id, "S_TEXT/SSA");
 }
 
+/// SSA UUencode-like scheme (mirror of `ssa.rs::decode_uu`): 3 bytes → 4 chars,
+/// each 6-bit group offset by +33.
+fn ssa_uu_encode(data: &[u8]) -> String {
+  let mut out = String::new();
+  let mut i = 0;
+  while i < data.len() {
+    let chunk = &data[i..(i + 3).min(data.len())];
+    let mut value: u32 = 0;
+    for (idx, b) in chunk.iter().enumerate() {
+      value |= u32::from(*b) << ((2 - idx) * 8);
+    }
+    let chars_out = if chunk.len() == 3 {
+      4
+    } else if chunk.len() == 2 {
+      3
+    } else {
+      2
+    };
+    for idx in 0..chars_out {
+      out.push(((((value >> (6 * (3 - idx))) & 0x3f) as u8) + 33) as char);
+    }
+    i += 3;
+  }
+  out
+}
+
+#[test]
+fn parses_ass_with_embedded_font_and_graphics() {
+  // PARSER-207: `[Fonts]` / `[Graphics]` sections must be excluded from the
+  // codec-private global header, UU-decoded into attachments with the decoded
+  // byte size, and MIME-typed from the decoded bytes.
+  let ttf = [0x00u8, 0x01, 0x00, 0x00, 0xDE, 0xAD, 0xBE];
+  let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x11];
+  let blob = format!(
+    "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name\n\n[Fonts]\nfontname: Embedded.ttf\n{}\n\n[Graphics]\nfontname: pic.png\n{}\n\n[Events]\nFormat: Layer, Start, End\n",
+    ssa_uu_encode(&ttf),
+    ssa_uu_encode(&png)
+  );
+  let path = write_tempfile(blob.as_bytes(), "ass");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+
+  assert_eq!(m.container.format, ContainerFormat::SsaAss);
+  assert_eq!(m.attachments.len(), 2);
+
+  assert_eq!(m.attachments[0].file_name, "Embedded.ttf");
+  assert_eq!(m.attachments[0].size, ttf.len() as u64);
+  assert_eq!(m.attachments[0].mime_type.as_deref(), Some("font/sfnt"));
+
+  assert_eq!(m.attachments[1].file_name, "pic.png");
+  assert_eq!(m.attachments[1].size, png.len() as u64);
+  assert_eq!(m.attachments[1].mime_type.as_deref(), Some("image/png"));
+
+  // Codec private (global header) excludes the embedded-media sections.
+  let private = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  let bytes = hex_to_bytes(&private.hex);
+  let header = String::from_utf8_lossy(&bytes);
+  assert!(header.contains("[Script Info]"));
+  assert!(!header.contains("[Fonts]"));
+  assert!(!header.contains("[Graphics]"));
+  assert!(!header.contains("fontname:"));
+}
+
+fn hex_to_bytes(hex: &str) -> Vec<u8> {
+  (0..hex.len())
+    .step_by(2)
+    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+    .collect()
+}
+
 #[test]
 fn parses_webvtt_clip() {
   let blob = b"WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n";
@@ -119,6 +189,62 @@ fn parses_usf_clip() {
 }
 
 #[test]
+fn parses_usf_with_metadata_and_per_track_language() {
+  // PARSER-208 / PARSER-209: a real XML parse extracts the default language
+  // from `<metadata><language code>`, one track per `<subtitles>` element with
+  // its own `<language code>`, and applies the default to tracks lacking one.
+  let blob = b"<?xml version=\"1.0\"?>\n<USFSubtitles version=\"1.1\">\
+    <metadata><title>Demo</title><language code=\"ger\"/></metadata>\
+    <subtitles><language code=\"eng\"/><subtitle start=\"0\" stop=\"1\">hi</subtitle></subtitles>\
+    <subtitles><subtitle start=\"1\" stop=\"2\">da</subtitle></subtitles>\
+    </USFSubtitles>\n";
+  let path = write_tempfile(blob, "usf");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+
+  assert_eq!(m.container.format, ContainerFormat::Usf);
+  assert_eq!(m.tracks.len(), 2);
+  assert_eq!(m.tracks[0].codec.id, "S_TEXT/USF");
+  // Track 0 carries its own language.
+  assert_eq!(
+    m.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
+    "eng"
+  );
+  // Track 1 has no language → inherits the metadata default (deu).
+  assert_eq!(
+    m.tracks[1].properties.common.language.as_ref().unwrap().iso639_2,
+    "deu"
+  );
+
+  // Shared codec private is the whole document with both `<subtitles>` subtrees
+  // removed (mkvtoolnix `create_codec_private`).
+  let private = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  let header = String::from_utf8_lossy(&hex_to_bytes(&private.hex)).into_owned();
+  assert!(header.contains("USFSubtitles"));
+  assert!(header.contains("<metadata>"));
+  assert!(header.contains("<title>Demo</title>"));
+  assert!(!header.contains("<subtitles"));
+  assert!(!header.contains("<subtitle "));
+  // Both tracks share the same codec private document.
+  assert_eq!(
+    m.tracks[0].codec.codec_private.as_ref().unwrap().hex,
+    m.tracks[1].codec.codec_private.as_ref().unwrap().hex
+  );
+}
+
+#[test]
+fn rejects_usf_without_xml_marker() {
+  // PARSER-208: mkvtoolnix's probe requires an `<?xml` or `<!--` marker before
+  // it loads the document; a bare root element is not claimed as USF.
+  let blob = b"<USFSubtitles><subtitles/></USFSubtitles>";
+  let path = write_tempfile(blob, "usf");
+  let result = parse(&path, ParseOptions::default());
+  let _ = std::fs::remove_file(&path);
+  // Not recognised as USF (the .usf extension only biases probe order).
+  assert!(result.is_err() || result.unwrap().container.format != ContainerFormat::Usf);
+}
+
+#[test]
 fn parses_microdvd_clip() {
   let blob = b"{1}{125}Hello world\n{126}{250}Second line\n";
   let path = write_tempfile(blob, "sub");
@@ -140,6 +266,81 @@ timestamp: 00:00:02:000, filepos: 000000100
   let _ = std::fs::remove_file(&path);
   assert_eq!(m.container.format, ContainerFormat::VobSub);
   assert_eq!(m.tracks.len(), 2);
+}
+
+/// PARSER-210: dispatching a `.sub` input resolves to the sibling `.idx` and
+/// produces VobSub tracks; the sibling `.sub` is recorded under otherFiles.
+#[test]
+fn parses_vobsub_sub_input_via_sibling_idx() {
+  let dir = std::env::temp_dir();
+  let pid = std::process::id();
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_nanos();
+  let stem = dir.join(format!("bmm-vobsub-pair-{pid}-{nanos}"));
+  let idx_path = stem.with_extension("idx");
+  let sub_path = stem.with_extension("sub");
+  std::fs::write(
+    &idx_path,
+    b"# VobSub index file, v7\nsize: 720x576\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 000000000\nid: fr, index: 1\ntimestamp: 00:00:02:000, filepos: 000001000\n",
+  )
+  .unwrap();
+  std::fs::write(&sub_path, &[0u8; 32]).unwrap();
+
+  // Hand the *.sub* file to the public parser; it must resolve the .idx.
+  let m = parse(&sub_path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&idx_path);
+  let _ = std::fs::remove_file(&sub_path);
+
+  assert_eq!(m.container.format, ContainerFormat::VobSub);
+  assert_eq!(m.tracks.len(), 2);
+  assert!(m.container.properties.other_files.iter().any(|f| f.ends_with(".sub")));
+}
+
+/// PARSER-210: a `.sub` file that is *not* VobSub (no sibling `.idx`) still
+/// falls through to the normal cascade — here MicroDVD claims it.
+#[test]
+fn vobsub_sub_resolution_does_not_steal_microdvd() {
+  let blob = b"{1}{125}Hello world\n{126}{250}Second line\n";
+  let path = write_tempfile(blob, "sub");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.container.format, ContainerFormat::MicroDvd);
+}
+
+/// PARSER-211: codec private is the filtered global-settings text, not the raw
+/// manifest — the `id:`/`timestamp:`/`delay:`/`alt:`/`langidx:` control lines
+/// are stripped while `size:` / `palette:` survive.
+#[test]
+fn vobsub_codec_private_is_filtered_idx_data() {
+  let blob = b"# VobSub index file, v7
+size: 720x576
+palette: 000000, ffffff
+langidx: 0
+id: en, index: 0
+alt: english
+delay: 00:00:00:000
+timestamp: 00:00:01:000, filepos: 000000000
+";
+  let path = write_tempfile(blob, "idx");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.container.format, ContainerFormat::VobSub);
+  assert_eq!(m.tracks.len(), 1);
+  let private = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  let bytes: Vec<u8> = (0..private.hex.len())
+    .step_by(2)
+    .map(|i| u8::from_str_radix(&private.hex[i..i + 2], 16).unwrap())
+    .collect();
+  let header = String::from_utf8_lossy(&bytes);
+  assert!(header.contains("size: 720x576"));
+  assert!(header.contains("palette: 000000, ffffff"));
+  assert!(!header.contains("id:"));
+  assert!(!header.contains("timestamp:"));
+  assert!(!header.contains("delay:"));
+  assert!(!header.contains("alt:"));
+  assert!(!header.contains("langidx:"));
 }
 
 fn build_pgs_segment(seg_type: u8, payload_len: u16) -> Vec<u8> {

@@ -26,6 +26,7 @@ pub mod opus;
 pub mod speex;
 pub mod theora;
 pub mod vorbis;
+pub mod vp8;
 
 use crate::media_metadata::model::track::TrackType;
 use crate::media_metadata::model::track_properties_audio::AudioTrackProperties;
@@ -52,6 +53,19 @@ pub struct BitstreamMetadata {
   /// comment to the container title rather than the track name
   /// (`r_ogm.cpp:677-681, 692-693, 804-806`).  PARSER-165.
   pub ms_compat: bool,
+  /// Explicit number of header packets the codec requires before
+  /// `headers_read` is satisfied, overriding the codec-id table in
+  /// `identify::header_packet_target`.  FLAC sets this from the Ogg-FLAC
+  /// mapping header's `number_of_other_header_packets` field (PARSER-204);
+  /// `None` falls back to the codec-id table.
+  pub header_packet_count: Option<usize>,
+  /// FLAC-in-Ogg wrapper mode (PARSER-203 / PARSER-204).  `Some(true)` for the
+  /// post-1.1.1 `[0x7f]FLAC` mapping (first packet carries a 9-byte wrapper to
+  /// strip), `Some(false)` for the pre-1.1.1 bare-`fLaC` mapping (the first
+  /// header packet is skipped entirely when assembling codec private), `None`
+  /// for non-FLAC codecs.  Mirrors `ogm_a_flac_demuxer_c`'s `ofm_post_1_1_1` /
+  /// `ofm_pre_1_1_1` (`r_ogm_flac.cpp:264-290`).
+  pub flac_post_1_1_1: Option<bool>,
 }
 
 impl BitstreamMetadata {
@@ -65,6 +79,8 @@ impl BitstreamMetadata {
       language: None,
       frame_duration_ns: None,
       ms_compat: false,
+      header_packet_count: None,
+      flac_post_1_1_1: None,
     }
   }
 
@@ -78,6 +94,8 @@ impl BitstreamMetadata {
       language: None,
       frame_duration_ns: None,
       ms_compat: false,
+      header_packet_count: None,
+      flac_post_1_1_1: None,
     }
   }
 
@@ -91,6 +109,8 @@ impl BitstreamMetadata {
       language: None,
       frame_duration_ns: None,
       ms_compat: false,
+      header_packet_count: None,
+      flac_post_1_1_1: None,
     }
   }
 }
@@ -106,6 +126,9 @@ pub fn sniff_first_packet(packet: &[u8]) -> Option<BitstreamMetadata> {
     return Some(m);
   }
   if let Some(m) = theora::sniff(packet) {
+    return Some(m);
+  }
+  if let Some(m) = vp8::sniff(packet) {
     return Some(m);
   }
   if let Some(m) = flac::sniff(packet) {

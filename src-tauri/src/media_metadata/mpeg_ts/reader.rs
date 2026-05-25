@@ -447,10 +447,15 @@ fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnri
       })
     }
     "A_AAC" => {
-      let header = first_adts_header(es)?;
+      // PARSER-206: require five consecutive AAC frames (ADTS *or* LOAS/LATM)
+      // before trusting the header, mirroring `new_stream_a_aac`'s
+      // `find_consecutive_frames(buffer, size, 5)` (r_mpeg_ts.cpp:367-378). This
+      // recognises the LOAS/LATM multiplex that stream type 0x11 commonly
+      // carries and rejects a lone accidental ADTS-looking sync.
+      let header = first_aac_header(es)?;
       Some(EsEnrichment {
-        channels: Some(header.channels),
-        sampling_frequency: Some(header.sample_rate as f64),
+        channels: opt_pos(header.channels),
+        sampling_frequency: opt_rate(header.sample_rate),
         ..EsEnrichment::default()
       })
     }
@@ -528,20 +533,19 @@ fn decode_textst_codec_private(es: &[u8]) -> Option<EsEnrichment> {
   })
 }
 
-/// Decode the first ADTS frame found at a `0xFFF` sync in `es` — the PMT stream
-/// type already identified AAC, so one frame is enough (no multi-frame
-/// confirmation required).
-fn first_adts_header(es: &[u8]) -> Option<aac::AacHeader> {
-  let mut i = 0;
-  while i + 7 <= es.len() {
-    if es[i] == 0xFF && (es[i + 1] & 0xF0) == 0xF0 {
-      if let Some(header) = aac::decode_adts(&es[i..]) {
-        return Some(header);
-      }
-    }
-    i += 1;
-  }
-  None
+/// Number of consecutive AAC frames mkvtoolnix's `new_stream_a_aac` requires
+/// before it trusts the stream (`find_consecutive_frames(..., 5)`,
+/// r_mpeg_ts.cpp:367).
+const AAC_REQUIRED_FRAMES: usize = 5;
+
+/// PARSER-206: decode the first AAC header in `es`, requiring five consecutive
+/// frames so a lone accidental ADTS-looking sync is rejected and so LOAS/LATM
+/// multiplexed AAC (stream type 0x11) is recognised, not only ADTS. Port of
+/// `new_stream_a_aac` (r_mpeg_ts.cpp:364-385) which calls
+/// `aac::parser_c::find_consecutive_frames(buffer, size, 5)` and then reads the
+/// first decoded frame's header (`parser.get_frame()`).
+fn first_aac_header(es: &[u8]) -> Option<aac::AacHeader> {
+  aac::find_first_header_with_frames(es, AAC_REQUIRED_FRAMES).map(|(_offset, header)| header)
 }
 
 /// Decode the first AC-3 frame found at a `0x0B77` sync word in `es`.  Unlike
@@ -687,7 +691,9 @@ mod tests {
     );
     let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
     let video_es = mpeg_video::build_sequence_header(1280, 720, 4);
-    let audio_es = aac::build_adts_frame(1, 3, 2); // sr_index 3 = 48 kHz, ch 2
+    // PARSER-206: AAC enrichment now requires five consecutive frames, so the
+    // PES payload carries a multi-frame ADTS stream (sr_index 3 = 48 kHz, ch 2).
+    let audio_es = aac::build_adts_stream(6, 1, 3, 2);
     let mut bytes = pat_pkt;
     bytes.extend(pmt_pkt);
     bytes.extend(pes_packet(0x110, &video_es));
@@ -824,7 +830,7 @@ mod tests {
     // AVC/MPEG-2/AC-3/MP3 — never AAC — so an A_AAC track on 0x201 can only
     // appear if the PMT (split across two packets) was correctly reassembled
     // and classified that PID as AAC.
-    bytes.extend(pes_packet(0x201, &aac::build_adts_frame(1, 3, 2)));
+    bytes.extend(pes_packet(0x201, &aac::build_adts_stream(6, 1, 3, 2)));
     for _ in 0..6 {
       bytes.extend(padding());
     }
@@ -964,8 +970,9 @@ mod tests {
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(44100.0));
 
-    // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2).
-    let es = aac::build_adts_frame(1, 3, 2);
+    // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2) — five consecutive
+    // frames are required (PARSER-206).
+    let es = aac::build_adts_stream(6, 1, 3, 2);
     let m = enrich_for_codec("A_AAC", 0x0F, &es).unwrap();
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(48000.0));
@@ -979,6 +986,62 @@ mod tests {
     // Unknown / unprobeable codec yields nothing.
     assert!(enrich_for_codec("S_HDMV/PGS", 0x90, &es).is_none());
     assert!(enrich_for_codec("A_AC3", 0x81, &[0u8; 4]).is_none());
+  }
+
+  // ---- PARSER-206: AAC requires five consecutive frames + LOAS/LATM ------
+
+  #[test]
+  fn enrich_aac_rejects_single_isolated_adts_header() {
+    // A lone ADTS-looking header followed by garbage must NOT enrich — the
+    // five-consecutive-frame requirement (find_consecutive_frames(.., 5))
+    // rejects an accidental sync.
+    let mut es = aac::build_adts_frame(1, 3, 2);
+    es.extend(vec![0u8; 64]);
+    assert!(enrich_for_codec("A_AAC", 0x0F, &es).is_none());
+  }
+
+  #[test]
+  fn enrich_aac_rejects_two_frames_when_five_required() {
+    let es = aac::build_adts_stream(2, 1, 3, 2);
+    assert!(enrich_for_codec("A_AAC", 0x0F, &es).is_none());
+  }
+
+  #[test]
+  fn enrich_aac_accepts_loas_latm_on_stream_type_0x11() {
+    // PARSER-206: stream type 0x11 commonly carries LOAS/LATM-framed AAC. Five
+    // consecutive LOAS frames (44.1 kHz, mono) must be recognised as A_AAC and
+    // surface channels + sampling frequency, not just ADTS.
+    let es = aac::build_loas_latm_stream(6, 4, 1); // sr_index 4 = 44.1 kHz, ch 1
+    let m = enrich_for_codec("A_AAC", 0x11, &es).unwrap();
+    assert_eq!(m.channels, Some(1));
+    assert_eq!(m.sampling_frequency, Some(44100.0));
+  }
+
+  #[test]
+  fn read_headers_extracts_loas_latm_aac_track() {
+    // End-to-end: a PMT advertising stream type 0x11 whose PES payload carries
+    // LOAS/LATM AAC must survive the probed_ok filter and be classified A_AAC.
+    let pmt_pid = 0x100u16;
+    let aac_pid = 0x111u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x11, aac_pid, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    let audio_es = aac::build_loas_latm_stream(6, 3, 2); // 48 kHz, stereo
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(aac_pid, &audio_es));
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    let a = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(48000.0));
   }
 
   // ---- PARSER-170: DTS / Blu-ray LPCM / TrueHD / TextST enrichment ------

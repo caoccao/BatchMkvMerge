@@ -15,7 +15,10 @@
  *   limitations under the License.
  */
 
-//! FLAC-in-Ogg identification packet (FLAC v0.9 mapping):
+//! FLAC-in-Ogg identification packet.  Two mappings are recognised, mirroring
+//! `r_ogm.cpp:457-472`:
+//!
+//! * **post-1.1.1** (`ofm_post_1_1_1`) — the standard Ogg-FLAC mapping:
 //!
 //! ```text
 //! u8  0x7F
@@ -26,6 +29,10 @@
 //! 4   "fLaC"   (native FLAC stream marker)
 //! ...metadata blocks (STREAMINFO must be first)
 //! ```
+//!
+//! * **pre-1.1.1** (`ofm_pre_1_1_1`) — older libFLAC that wrote the bare native
+//!   FLAC stream into Ogg, so the first packet starts directly with `fLaC`
+//!   followed by the STREAMINFO metadata block.  PARSER-203.
 //!
 //! STREAMINFO layout (FLAC spec §4.2):
 //!
@@ -44,20 +51,35 @@ use crate::media_metadata::model::track_properties_audio::{AudioCodecConfig, Aud
 
 use super::BitstreamMetadata;
 
+/// Post-1.1.1 Ogg-FLAC mapping marker: `0x7f` + "FLAC".
 const SIGNATURE: [u8; 5] = [0x7F, b'F', b'L', b'A', b'C'];
+/// Native FLAC stream marker.
+const NATIVE_MARKER: &[u8; 4] = b"fLaC";
 
 pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
-  if packet.len() < 13 || packet[..5] != SIGNATURE {
+  // r_ogm.cpp:457-459 accepts either the bare native marker (pre-1.1.1) or the
+  // 0x7f-FLAC wrapper (post-1.1.1).
+  let (post_1_1_1, info_offset, other_header_packets) = if packet.len() >= 13 && packet[..5] == SIGNATURE && &packet[9..13] == NATIVE_MARKER {
+    // packet[5..7] = major/minor, packet[7..9] = number_of_other_header_packets.
+    let other = u16::from_be_bytes([packet[7], packet[8]]) as usize;
+    // STREAMINFO follows the native marker (block header + body) at offset 13.
+    (true, 13 + 4, Some(other))
+  } else if packet.len() >= 4 && &packet[..4] == NATIVE_MARKER {
+    // PARSER-203: pre-1.1.1 bare-`fLaC` mapping; STREAMINFO follows the marker.
+    (false, 4 + 4, None)
+  } else {
     return None;
-  }
-  // packet[5..9] = major/minor + 16-bit packet count
-  if &packet[9..13] != b"fLaC" {
-    return None;
-  }
+  };
+
   let mut metadata = BitstreamMetadata::audio_only("A_FLAC", "FLAC");
-  // STREAMINFO follows at offset 13 if present (block header + body).
-  if packet.len() >= 13 + 4 + 34 {
-    let info_offset = 13 + 4;
+  metadata.flac_post_1_1_1 = Some(post_1_1_1);
+  // PARSER-204: total header packet count = STREAMINFO packet + the mapping's
+  // advertised "other" header packets.  Only the post-1.1.1 mapping carries the
+  // count in the BOS; the pre-1.1.1 path leaves it `None` so the reader
+  // discovers it by following the metadata-block "last" flag.
+  metadata.header_packet_count = other_header_packets.map(|other| other + 1);
+  // STREAMINFO follows at `info_offset` if present (block header + body).
+  if packet.len() >= info_offset + 34 {
     let info = &packet[info_offset..info_offset + 34];
     let min_block_size = u16::from_be_bytes([info[0], info[1]]) as u32;
     let max_block_size = u16::from_be_bytes([info[2], info[3]]) as u32;
@@ -94,6 +116,27 @@ pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
   Some(metadata)
 }
 
+/// PARSER-204: return `true` when the FLAC metadata block carried by `packet`
+/// has its "last-metadata-block" flag set (bit 7 of the block header byte).
+///
+/// The FLAC metadata block header (FLAC spec §4) starts with a byte whose top
+/// bit is the last-block flag and whose low 7 bits are the block type.  In the
+/// Ogg-FLAC mapping the first packet prefixes that block header with either the
+/// 9-byte post-1.1.1 wrapper + native `fLaC` marker (offset 13) or just the
+/// native `fLaC` marker (offset 4); every subsequent header packet carries a
+/// raw metadata block whose header is at offset 0.  Returns `None` when the
+/// block header byte is out of range.
+pub fn is_last_metadata_block(packet: &[u8], is_first_packet: bool, post_1_1_1: bool) -> Option<bool> {
+  let offset = if !is_first_packet {
+    0
+  } else if post_1_1_1 {
+    13
+  } else {
+    4
+  };
+  packet.get(offset).map(|b| b & 0x80 != 0)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
   let mut s = String::with_capacity(bytes.len() * 2);
   for b in bytes {
@@ -109,14 +152,37 @@ pub(crate) fn build_identification_packet(
   bit_depth: u32,
   total_samples: u64,
 ) -> Vec<u8> {
+  build_identification_packet_ex(sample_rate, channels, bit_depth, total_samples, true, 0, true)
+}
+
+/// Build a FLAC-in-Ogg identification packet for tests.
+///
+/// * `post_1_1_1` — emit the `0x7f`-FLAC wrapper (`true`) or the bare-`fLaC`
+///   pre-1.1.1 mapping (`false`).
+/// * `other_header_packets` — value written into the post-1.1.1 mapping's
+///   `number_of_other_header_packets` field (ignored when `post_1_1_1` is
+///   `false`).
+/// * `last_block` — set the STREAMINFO block's last-metadata-block flag.
+#[cfg(test)]
+pub(crate) fn build_identification_packet_ex(
+  sample_rate: u32,
+  channels: u32,
+  bit_depth: u32,
+  total_samples: u64,
+  post_1_1_1: bool,
+  other_header_packets: u16,
+  last_block: bool,
+) -> Vec<u8> {
   let mut p = Vec::new();
-  p.extend_from_slice(&SIGNATURE);
-  p.push(1); // major
-  p.push(0); // minor
-  p.extend_from_slice(&1u16.to_be_bytes()); // packet count
-  p.extend_from_slice(b"fLaC");
-  // STREAMINFO block: 1B type | 3B length = 34
-  p.push(0x00);
+  if post_1_1_1 {
+    p.extend_from_slice(&SIGNATURE);
+    p.push(1); // major
+    p.push(0); // minor
+    p.extend_from_slice(&other_header_packets.to_be_bytes());
+  }
+  p.extend_from_slice(NATIVE_MARKER);
+  // STREAMINFO block: 1B type (0 = STREAMINFO, bit7 = last) | 3B length = 34.
+  p.push(if last_block { 0x80 } else { 0x00 });
   p.push(0);
   p.push(0);
   p.push(34);
@@ -133,6 +199,22 @@ pub(crate) fn build_identification_packet(
     | (total_samples & 0x0F_FFFF_FFFF);
   p.extend_from_slice(&packed.to_be_bytes());
   p.extend_from_slice(&[0u8; 16]); // MD5
+  p
+}
+
+/// Build a standalone FLAC metadata block packet (one per Ogg header packet
+/// after STREAMINFO) for tests.  `block_type` is the low-7-bit type; `last`
+/// sets the last-metadata-block flag.
+#[cfg(test)]
+pub(crate) fn build_metadata_block_packet(block_type: u8, last: bool, body: &[u8]) -> Vec<u8> {
+  let mut p = Vec::new();
+  let header = (if last { 0x80 } else { 0x00 }) | (block_type & 0x7f);
+  p.push(header);
+  let len = body.len() as u32;
+  p.push((len >> 16) as u8);
+  p.push((len >> 8) as u8);
+  p.push(len as u8);
+  p.extend_from_slice(body);
   p
 }
 
@@ -153,10 +235,47 @@ mod tests {
   }
 
   #[test]
-  fn rejects_native_flac_without_ogg_wrapper() {
-    let mut pkt = b"fLaC".to_vec();
-    pkt.extend_from_slice(&[0u8; 100]);
-    assert!(sniff(&pkt).is_none());
+  fn post_1_1_1_reports_header_packet_count_from_mapping() {
+    // PARSER-204: total header packets = STREAMINFO + advertised "other" count.
+    let pkt = build_identification_packet_ex(48000, 2, 24, 1, true, 3, false);
+    let m = sniff(&pkt).unwrap();
+    assert_eq!(m.flac_post_1_1_1, Some(true));
+    assert_eq!(m.header_packet_count, Some(4));
+  }
+
+  #[test]
+  fn accepts_pre_1_1_1_bare_flac_marker() {
+    // PARSER-203: a packet that starts directly with `fLaC` (pre-1.1.1) is
+    // recognised and STREAMINFO is parsed from offset 4.
+    let pkt = build_identification_packet_ex(44100, 2, 16, 500, false, 0, true);
+    let m = sniff(&pkt).unwrap();
+    assert_eq!(m.codec_id, "A_FLAC");
+    assert_eq!(m.flac_post_1_1_1, Some(false));
+    // Pre-1.1.1 carries no explicit count in the BOS.
+    assert!(m.header_packet_count.is_none());
+    let a = m.audio.unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(44100.0));
+    assert_eq!(a.bit_depth, Some(16));
+  }
+
+  #[test]
+  fn is_last_metadata_block_reads_correct_offset() {
+    // PARSER-204: first packet, post-1.1.1 → block header at offset 13.
+    let last = build_identification_packet_ex(48000, 2, 24, 1, true, 0, true);
+    assert_eq!(is_last_metadata_block(&last, true, true), Some(true));
+    let not_last = build_identification_packet_ex(48000, 2, 24, 1, true, 1, false);
+    assert_eq!(is_last_metadata_block(&not_last, true, true), Some(false));
+    // First packet, pre-1.1.1 → offset 4.
+    let pre = build_identification_packet_ex(48000, 2, 24, 1, false, 0, true);
+    assert_eq!(is_last_metadata_block(&pre, true, false), Some(true));
+    // Subsequent packets → offset 0.
+    let block = build_metadata_block_packet(4, true, b"x");
+    assert_eq!(is_last_metadata_block(&block, false, true), Some(true));
+    let non_last_block = build_metadata_block_packet(4, false, b"x");
+    assert_eq!(is_last_metadata_block(&non_last_block, false, true), Some(false));
+    // Out-of-range offset yields None.
+    assert_eq!(is_last_metadata_block(&[0x7f], true, true), None);
   }
 
   #[test]

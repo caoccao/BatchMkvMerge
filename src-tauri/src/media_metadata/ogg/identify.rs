@@ -35,6 +35,12 @@ pub struct BitstreamState {
   pub vorbis_tags: Vec<TagEntry>,
   pub comment_language: Option<String>,
   pub vendor: Option<String>,
+  /// PARSER-204 / PARSER-205: set once the codec signals its header run is over
+  /// even though the fixed `header_packet_target` is not a useful gate.  FLAC
+  /// sets this when the last metadata block is seen; Kate sets it when a
+  /// non-header (high-bit-clear) packet arrives.  Codecs with a fixed header
+  /// count leave it `false` and rely on the count gate.
+  pub headers_complete: bool,
 }
 
 pub fn finalise(states: Vec<BitstreamState>, out: &mut MediaMetadata) {
@@ -73,7 +79,7 @@ pub fn finalise(states: Vec<BitstreamState>, out: &mut MediaMetadata) {
     // comment/setup packets) is dropped here and — like the metadata == None
     // case above — must not consume a track id, keeping the compact id
     // assignment intact.
-    if state.header_packets.len() < header_packet_target(&metadata.codec_id) {
+    if !headers_satisfied(&state.header_packets, state.headers_complete, &metadata) {
       continue;
     }
     let track = make_track(
@@ -165,7 +171,7 @@ fn make_track(
     video.default_duration_ns.get_or_insert(ns);
   }
 
-  let codec_private = codec_private_for(&metadata.codec_id, &header_packets);
+  let codec_private = codec_private_for(&metadata, &header_packets);
   Track {
     id,
     track_type: metadata.track_type,
@@ -186,20 +192,87 @@ pub fn header_packet_target(codec_id: &str) -> usize {
   }
 }
 
-fn codec_private_for(codec_id: &str, packets: &[Vec<u8>]) -> Option<CodecPrivate> {
-  let bytes = match codec_id {
+/// PARSER-204: the per-stream header-packet target, preferring an explicit
+/// count carried on the metadata (FLAC's `number_of_other_header_packets + 1`)
+/// over the codec-id table.
+pub fn header_packet_target_for(metadata: &BitstreamMetadata) -> usize {
+  metadata
+    .header_packet_count
+    .unwrap_or_else(|| header_packet_target(&metadata.codec_id))
+}
+
+/// PARSER-204 / PARSER-205: a stream's headers are read once either the
+/// explicit/codec-id header-packet count is reached OR the codec has flagged
+/// its variable-length header run as finished (`headers_complete`).  Mirrors
+/// mkvtoolnix's `headers_read` (`r_ogm.cpp:619-633`, `r_ogm_flac.cpp:243-244`,
+/// Kate's high-bit `is_header_packet` loop at `r_ogm.cpp:1707-1710`).
+pub fn headers_satisfied(header_packets: &[Vec<u8>], headers_complete: bool, metadata: &BitstreamMetadata) -> bool {
+  if headers_complete && !header_packets.is_empty() {
+    return true;
+  }
+  header_packets.len() >= header_packet_target_for(metadata)
+}
+
+fn codec_private_for(metadata: &BitstreamMetadata, packets: &[Vec<u8>]) -> Option<CodecPrivate> {
+  let bytes = match metadata.codec_id.as_str() {
     // Matroska stores Vorbis/Theora header packets as Xiph lacing:
     // packet-count-minus-one, lace sizes for all but the final packet,
     // then the packet payloads.
     "A_VORBIS" | "V_THEORA" if packets.len() >= 3 => xiph_laced_headers(&packets[..3])?,
-    "A_OPUS" | "A_SPEEX" | "A_FLAC" | "V_OGM" | "A_OGM" | "S_OGM_TEXT" | "S_KATE" => packets.first()?.clone(),
+    // PARSER-205: Kate stores every header packet Xiph-laced
+    // (`r_ogm.cpp:1678` → `lace_memory_xiph(packet_data)`), not just the first.
+    "S_KATE" => xiph_laced_headers(packets)?,
+    // PARSER-204: FLAC concatenates the header metadata blocks for the FLAC
+    // packetizer (`r_ogm_flac.cpp:268-290`).  post-1.1.1 strips the 9-byte
+    // mapping wrapper off the first packet and keeps every packet; pre-1.1.1
+    // skips the first (bare `fLaC` + STREAMINFO) packet entirely.
+    "A_FLAC" => flac_codec_private(metadata.flac_post_1_1_1, packets)?,
+    "A_OPUS" | "A_SPEEX" | "V_OGM" | "A_OGM" | "S_OGM_TEXT" => packets.first()?.clone(),
     _ => return None,
   };
   Some(CodecPrivate::from_bytes(&bytes))
 }
 
+/// PARSER-204: assemble the FLAC codec-private blob from the collected Ogg
+/// header packets, mirroring `ogm_a_flac_demuxer_c::create_packetizer`
+/// (`r_ogm_flac.cpp:268-290`) together with the post-1.1.1 wrapper strip in
+/// `initialize` (`r_ogm_flac.cpp:264-265`).
+fn flac_codec_private(post_1_1_1: Option<bool>, packets: &[Vec<u8>]) -> Option<Vec<u8>> {
+  if packets.is_empty() {
+    return None;
+  }
+  match post_1_1_1 {
+    Some(true) => {
+      // `packet_data.front()->set_offset(9)` when `13 < size`, then concat all
+      // packets starting at index 0.
+      let mut out = Vec::new();
+      for (i, packet) in packets.iter().enumerate() {
+        if i == 0 && packet.len() > 13 {
+          out.extend_from_slice(&packet[9..]);
+        } else {
+          out.extend_from_slice(packet);
+        }
+      }
+      Some(out)
+    }
+    // pre-1.1.1 (`start_at_header = 1`) — skip the first packet.  Fall back to
+    // the first packet when no further header packets were captured so we still
+    // surface *some* codec private rather than nothing.
+    Some(false) | None => {
+      if packets.len() >= 2 {
+        Some(packets[1..].concat())
+      } else {
+        Some(packets[0].clone())
+      }
+    }
+  }
+}
+
+/// Xiph-lace a set of header packets into a Matroska codec-private blob:
+/// packet-count-minus-one, lace sizes for all but the final packet, then the
+/// packet payloads (`common/xiph.cpp` → `lace_memory_xiph`).
 fn xiph_laced_headers(packets: &[Vec<u8>]) -> Option<Vec<u8>> {
-  if packets.len() < 2 || packets.len() > u8::MAX as usize + 1 {
+  if packets.is_empty() || packets.len() > u8::MAX as usize + 1 {
     return None;
   }
   let mut out = vec![(packets.len() - 1) as u8];
@@ -248,6 +321,7 @@ mod tests {
       }],
       comment_language: Some("eng".to_string()),
       vendor: Some("libvorbis 1.3.7".to_string()),
+      headers_complete: false,
     }
   }
 
@@ -283,6 +357,7 @@ mod tests {
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut m = MediaMetadata::new("clip.ogg", 0);
     finalise(vec![state], &mut m);
@@ -306,6 +381,7 @@ mod tests {
       }],
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut m = MediaMetadata::new("clip.ogm", 0);
     finalise(vec![state], &mut m);
@@ -335,6 +411,7 @@ mod tests {
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut m = MediaMetadata::new("clip.ogg", 0);
     finalise(vec![skipped, state_with_vorbis()], &mut m);
@@ -356,6 +433,7 @@ mod tests {
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut complete = state_with_vorbis();
     complete.header_packets = vec![b"ident".to_vec(), b"comments".to_vec(), b"setup".to_vec()];
@@ -377,6 +455,7 @@ mod tests {
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut m = MediaMetadata::new("clip.ogg", 0);
     finalise(vec![state], &mut m);
@@ -403,6 +482,7 @@ mod tests {
       vorbis_tags: Vec::new(),
       comment_language: None,
       vendor: None,
+      headers_complete: false,
     };
     let mut m = MediaMetadata::new("clip.ogg", 0);
     finalise(vec![state], &mut m);
