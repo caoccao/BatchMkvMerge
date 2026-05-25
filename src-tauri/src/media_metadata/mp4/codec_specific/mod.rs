@@ -25,6 +25,7 @@
 //! - [`pasp`] — pixel aspect ratio.
 //! - [`dvcc`] — Dolby Vision configuration (dvcC / dvvC).
 
+pub mod av1c;
 pub mod avcc;
 pub mod colr;
 pub mod dvcc;

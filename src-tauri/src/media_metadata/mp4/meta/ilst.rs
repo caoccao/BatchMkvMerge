@@ -35,6 +35,7 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
+use crate::media_metadata::model::attachment::Attachment;
 use crate::media_metadata::model::container::ContainerProperties;
 use crate::media_metadata::model::tag::TagEntry;
 use crate::media_metadata::model::MediaMetadata;
@@ -46,6 +47,7 @@ const TYPE_UTF16: u32 = 2;
 const TYPE_JPEG: u32 = 13;
 const TYPE_PNG: u32 = 14;
 const TYPE_SIGNED_INT: u32 = 21;
+const TYPE_BMP: u32 = 27;
 
 pub fn parse(
     src: &mut FileSource,
@@ -55,22 +57,122 @@ pub fn parse(
 ) -> Result<(), ParseError> {
     atom::walk_children(src, parent, "mp4::ilst", deadline, |src, child| {
         let key = child.kind.0;
+        // PARSER-073: `----` carries reverse-DNS named iTunes metadata.
+        // Decode the embedded `mean`/`name`/`data` sub-boxes and surface
+        // the value as a global tag named `"<mean>:<name>"`.
+        if &key == b"----" {
+            handle_freeform(src, child, deadline, &mut out.tags.global)?;
+            return Ok(ChildAction::Consumed);
+        }
         let value = match read_data_value(src, child, deadline) {
             Ok(v) => v,
             Err(_) => return Ok(ChildAction::Skip),
         };
         if let Some(value) = value {
+            // PARSER-072: `covr` artwork becomes an `Attachment` with the
+            // appropriate MIME type and declared length.  Mirrors mkvtoolnix's
+            // `r_qtmp4.cpp:1087-1115` cover-attachment creation.
+            if matches!(&key, b"covr") {
+                if let DataValue::Image { mime_type, length } = value {
+                    let id = (out.attachments.len() as u32) + 1;
+                    let extension = primary_extension_for_mime(mime_type);
+                    let file_name = format!("cover.{extension}");
+                    out.attachments.push(Attachment {
+                        id,
+                        file_name,
+                        mime_type: Some(mime_type.to_string()),
+                        description: None,
+                        size: length as u64,
+                        uid_hex: None,
+                    });
+                    return Ok(ChildAction::Consumed);
+                }
+            }
             route(&key, value, &mut out.container.properties, &mut out.tags.global);
         }
         Ok(ChildAction::Consumed)
     })
 }
 
+fn primary_extension_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/bmp" => "bmp",
+        _ => "bin",
+    }
+}
+
+fn handle_freeform(
+    src: &mut FileSource,
+    parent: &BoxHeader,
+    deadline: &Deadline,
+    global_tags: &mut Vec<TagEntry>,
+) -> Result<(), ParseError> {
+    let mut mean: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut value: Option<String> = None;
+    atom::walk_children(src, parent, "mp4::ilst::----", deadline, |src, child| {
+        match &child.kind.0 {
+            b"mean" => {
+                let payload = atom::read_payload(src, child, 4096)?;
+                if payload.len() > 4 {
+                    mean = Some(String::from_utf8_lossy(&payload[4..]).into_owned());
+                }
+            }
+            b"name" => {
+                let payload = atom::read_payload(src, child, 4096)?;
+                if payload.len() > 4 {
+                    name = Some(String::from_utf8_lossy(&payload[4..]).into_owned());
+                }
+            }
+            b"data" => {
+                let payload = atom::read_payload(src, child, 16 * 1024)?;
+                if payload.len() >= 8 {
+                    let type_code = u32::from_be_bytes([
+                        payload[0],
+                        payload[1],
+                        payload[2],
+                        payload[3],
+                    ]) & 0x00FF_FFFF;
+                    let body = &payload[8..];
+                    value = match type_code {
+                        TYPE_UTF8 => Some(String::from_utf8_lossy(body).into_owned()),
+                        TYPE_UTF16 => Some(decode_utf16_be(body)),
+                        TYPE_SIGNED_INT => Some(decode_signed_int(body).to_string()),
+                        _ => Some(String::from_utf8_lossy(body).trim().to_string()),
+                    };
+                }
+            }
+            _ => {}
+        }
+        Ok(ChildAction::Consumed)
+    })?;
+    if let (Some(name), Some(value)) = (name, value) {
+        let tag_name = match mean {
+            Some(m) if !m.is_empty() => format!("{m}:{name}"),
+            _ => name,
+        };
+        global_tags.push(TagEntry {
+            name: tag_name,
+            value,
+            language: None,
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 enum DataValue {
     Text(String),
     Int(i64),
-    Image, // we don't decode image payloads
+    /// PARSER-072: cover-art image payload.  We don't materialise the body;
+    /// the declared length plus the detected MIME type are enough to expose
+    /// it as an `Attachment`.
+    Image {
+        mime_type: &'static str,
+        length: usize,
+    },
 }
 
 fn read_data_value(
@@ -97,7 +199,18 @@ fn read_data_value(
             )),
             TYPE_UTF16 => Some(DataValue::Text(decode_utf16_be(body))),
             TYPE_SIGNED_INT => Some(DataValue::Int(decode_signed_int(body))),
-            TYPE_JPEG | TYPE_PNG => Some(DataValue::Image),
+            TYPE_JPEG => Some(DataValue::Image {
+                mime_type: "image/jpeg",
+                length: body.len(),
+            }),
+            TYPE_PNG => Some(DataValue::Image {
+                mime_type: "image/png",
+                length: body.len(),
+            }),
+            TYPE_BMP => Some(DataValue::Image {
+                mime_type: "image/bmp",
+                length: body.len(),
+            }),
             _ => None,
         };
         Ok(ChildAction::Consumed)
@@ -139,7 +252,9 @@ fn route(
     let text = match value {
         DataValue::Text(t) => t,
         DataValue::Int(i) => i.to_string(),
-        DataValue::Image => return, // identification doesn't expose artwork bytes
+        // Cover-art payloads bypass the textual tag route; they're surfaced
+        // as `Attachment` entries by the caller (PARSER-072).
+        DataValue::Image { .. } => return,
     };
     match key {
         b"\xA9nam" => container.title = Some(text),
@@ -263,14 +378,57 @@ mod tests {
         assert_eq!(m.tags.global[0].value, "-1");
     }
 
+    // ---- PARSER-072: covr → attachment --------------------------------
+
     #[test]
-    fn image_payload_dropped_silently() {
+    fn covr_jpeg_becomes_attachment() {
         let payload = build_ilst_tag(
             b"covr",
             build_data_box(TYPE_JPEG, &[0u8; 256]),
         );
         let m = run(payload);
         assert!(m.tags.global.is_empty());
+        assert_eq!(m.attachments.len(), 1);
+        let att = &m.attachments[0];
+        assert_eq!(att.file_name, "cover.jpg");
+        assert_eq!(att.mime_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(att.size, 256);
+    }
+
+    #[test]
+    fn covr_png_becomes_attachment() {
+        let payload = build_ilst_tag(
+            b"covr",
+            build_data_box(TYPE_PNG, &[0u8; 64]),
+        );
+        let m = run(payload);
+        assert_eq!(m.attachments.len(), 1);
+        assert_eq!(m.attachments[0].file_name, "cover.png");
+    }
+
+    // ---- PARSER-073: ---- iTunSMPB extracted as global tag ------------
+
+    #[test]
+    fn freeform_atom_extracted_as_global_tag() {
+        let mean = encode_box(b"mean", &{
+            let mut p = vec![0u8; 4]; // version + flags
+            p.extend_from_slice(b"com.apple.iTunes");
+            p
+        });
+        let name = encode_box(b"name", &{
+            let mut p = vec![0u8; 4];
+            p.extend_from_slice(b"iTunSMPB");
+            p
+        });
+        let data = build_data_box(TYPE_UTF8, b" 00000000 00000840 00000000 00000000");
+        let mut freeform = mean;
+        freeform.extend(name);
+        freeform.extend(data);
+        let payload = encode_box(b"----", &freeform);
+        let m = run(payload);
+        assert_eq!(m.tags.global.len(), 1);
+        assert_eq!(m.tags.global[0].name, "com.apple.iTunes:iTunSMPB");
+        assert!(m.tags.global[0].value.contains("00000840"));
     }
 
     #[test]

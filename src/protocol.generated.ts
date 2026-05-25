@@ -559,6 +559,17 @@ export type VideoTrackProperties = {
 	 */
 	defaultDurationNs: number | null,
 	codecConfig: VideoCodecConfig | null,
+	/**
+	 *  Display rotation, in degrees (0/90/180/270).  Derived from the MP4
+	 *  tkhd display matrix when present; mirrors mkvtoolnix's
+	 *  `mtx::qtmp4::compute_rotation_from_matrix`.  PARSER-069.
+	 */
+	rotationDegrees: number | null,
+	/**
+	 *  `true` when the source container signals a horizontal flip.  Derived
+	 *  from a negative-determinant tkhd matrix.
+	 */
+	flipped: boolean | null,
 };
 
 /**

@@ -45,6 +45,13 @@ pub struct VideoTrackProperties {
     #[specta(type = Option<Number>)]
     pub default_duration_ns: Option<u64>,
     pub codec_config: Option<VideoCodecConfig>,
+    /// Display rotation, in degrees (0/90/180/270).  Derived from the MP4
+    /// tkhd display matrix when present; mirrors mkvtoolnix's
+    /// `mtx::qtmp4::compute_rotation_from_matrix`.  PARSER-069.
+    pub rotation_degrees: Option<u32>,
+    /// `true` when the source container signals a horizontal flip.  Derived
+    /// from a negative-determinant tkhd matrix.
+    pub flipped: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]

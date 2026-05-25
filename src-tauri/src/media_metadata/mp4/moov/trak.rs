@@ -40,6 +40,10 @@ pub struct TrackBuilder {
     pub enabled: Option<bool>,
     pub display_width_fixed: Option<u32>,
     pub display_height_fixed: Option<u32>,
+    /// Display rotation derived from the tkhd matrix (PARSER-069).
+    pub rotation_degrees: Option<u32>,
+    /// `true` when the tkhd matrix signals a horizontal flip.
+    pub flipped: bool,
 
     pub media_timescale: Option<u32>,
     pub media_duration_units: Option<u64>,
@@ -107,6 +111,15 @@ impl TrackBuilder {
             let audio = self.audio.get_or_insert_with(AudioTrackProperties::default);
             audio.codec_config = Some(cfg);
         }
+        if self.rotation_degrees.is_some() || self.flipped {
+            let video = self.video.get_or_insert_with(VideoTrackProperties::default);
+            if video.rotation_degrees.is_none() {
+                video.rotation_degrees = self.rotation_degrees;
+            }
+            if video.flipped.is_none() && self.flipped {
+                video.flipped = Some(true);
+            }
+        }
     }
 }
 
@@ -123,6 +136,8 @@ pub fn parse(
             builder.display_width_fixed = Some(t.width_fixed);
             builder.display_height_fixed = Some(t.height_fixed);
             builder.enabled = Some(t.enabled);
+            builder.rotation_degrees = t.rotation_degrees;
+            builder.flipped = t.flipped;
             Ok(ChildAction::Consumed)
         }
         b"mdia" => {

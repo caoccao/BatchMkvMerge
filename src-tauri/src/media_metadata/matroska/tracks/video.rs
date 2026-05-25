@@ -124,6 +124,8 @@ impl VideoBuilder {
             interlace: self.interlace,
             default_duration_ns,
             codec_config: None,
+            rotation_degrees: None,
+            flipped: None,
         }
     }
 }

@@ -84,6 +84,16 @@ impl Reader for Mp4Reader {
             let header = match atom::read_box_header(src) {
                 Ok(h) => h,
                 Err(ParseError::UnexpectedEof { .. }) => break,
+                // PARSER-076: mkvtoolnix's `resync_to_top_level_atom` scans
+                // forward for the next known FOURCC when the current header is
+                // malformed.  Mirror that here for `Malformed` outcomes — the
+                // alternative would be aborting parse on first bad atom.
+                Err(ParseError::Malformed { .. }) => {
+                    if !resync_to_top_level_atom(src, stream_end)? {
+                        break;
+                    }
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
 
@@ -125,7 +135,23 @@ impl Reader for Mp4Reader {
                     atom::skip_payload(src, &header)?;
                 }
                 _ => {
-                    // Unknown / unsupported top-level box; skip past it.
+                    // PARSER-076: unknown box.  If the FOURCC isn't
+                    // human-readable, treat it as junk and try to resync to
+                    // the next known top-level atom instead of skipping past
+                    // a potentially-bogus declared size.  Mirrors mkvtoolnix's
+                    // `r_qtmp4.cpp:220-265` behaviour.
+                    let printable = header
+                        .kind
+                        .0
+                        .iter()
+                        .all(|b| (0x20..=0x7E).contains(b));
+                    if !printable {
+                        src.seek_to(box_start)?;
+                        if !resync_to_top_level_atom(src, stream_end)? {
+                            break;
+                        }
+                        continue;
+                    }
                     atom::skip_payload(src, &header)?;
                 }
             }
@@ -164,6 +190,57 @@ impl Reader for Mp4Reader {
         super::identify::finalise(moov_builder, is_fragmented, fragment_counts, out);
         Ok(())
     }
+}
+
+/// PARSER-076: port of `r_qtmp4.cpp::resync_to_top_level_atom`.  Scan forward
+/// from the current cursor for the next byte sequence that looks like a
+/// recognised top-level atom signature (`ftyp`, `moov`, `mdat`, `moof`,
+/// `meta`, `free`, `skip`, `wide`, `pnot`, `sidx`, `styp`, `uuid`).  We test
+/// `(size, fourcc)` pairs: the size must be 8..=64 MiB or the size-0 (to-EOF)
+/// sentinel.  On a match we leave the cursor positioned at the start of the
+/// recovered atom so the outer loop's next `read_box_header` succeeds.
+/// Returns `Ok(true)` when a known atom was located.
+fn resync_to_top_level_atom(
+    src: &mut FileSource,
+    stream_end: Option<u64>,
+) -> Result<bool, ParseError> {
+    const KNOWN: &[&[u8; 4]] = &[
+        b"ftyp", b"moov", b"mdat", b"moof", b"meta", b"free", b"skip", b"wide",
+        b"pnot", b"sidx", b"styp", b"uuid",
+    ];
+    const MAX_RESYNC_BYTES: u64 = 64 * 1024;
+    let start = src.position();
+    let limit_from_size = stream_end
+        .map(|end| end.saturating_sub(start))
+        .unwrap_or(MAX_RESYNC_BYTES);
+    let limit = limit_from_size.min(MAX_RESYNC_BYTES);
+    if limit < 8 {
+        return Ok(false);
+    }
+    let mut buf = vec![0u8; limit as usize];
+    let read = src.read_at_most(&mut buf)?;
+    let bytes = &buf[..read];
+    for offset in 0..bytes.len().saturating_sub(8) {
+        let kind: [u8; 4] = [
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ];
+        if KNOWN.iter().any(|k| **k == kind) {
+            let size = u32::from_be_bytes([
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+            ]);
+            if size == 0 || size == 1 || (size >= 8 && size <= 64 * 1024 * 1024) {
+                src.seek_to(start + offset as u64)?;
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -476,6 +553,24 @@ mod tests {
         // timescale=1000 + duration=60_000 → 60 s = 60_000_000_000 ns
         assert_eq!(out.container.properties.duration.unwrap().ns, 60_000_000_000);
         assert_eq!(out.container.properties.movie_timescale, Some(1000));
+    }
+
+    // ---- PARSER-076: resync to top-level atom -----------------------------
+
+    #[test]
+    fn malformed_top_level_box_resyncs_to_next_known_atom() {
+        let trak = build_video_trak(1, b"avc1", "eng", 320, 240);
+        let bytes = build_minimal_mp4(b"mp42", vec![trak]);
+        // Prepend 4 bytes of junk so the first `read_box_header` reports the
+        // size as `JUNK` / 0x4A554E4B  (≈ 1.2 GiB) — out of range.  The
+        // resync helper should scan past the junk and land on `ftyp`.
+        let mut prefixed = b"JUNK".to_vec();
+        prefixed.extend(bytes);
+        let mut s = FileSource::from_reader_for_test(Cursor::new(prefixed));
+        let mut out = MediaMetadata::new("clip.mp4", 0);
+        Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+        assert_eq!(out.container.format, ContainerFormat::Mp4);
+        assert_eq!(out.tracks.len(), 1);
     }
 
     #[test]

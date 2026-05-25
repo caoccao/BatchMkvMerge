@@ -251,7 +251,11 @@ fn parse_audio_sample_entry(
         let _compression_id = src.read_u16_be()?;
         let _packet_size = src.read_u16_be()?;
         let sample_rate_fixed = src.read_u32_be()?; // 16.16 fixed-point in v0/v1
-        sample_rate_hz = (sample_rate_fixed >> 16) as f64;
+        // PARSER-075: mkvtoolnix decodes the 16.16 value as a float and
+        // surfaces it as-is.  We preserve the fractional bits and let the
+        // f64 carry the precise Hz value instead of discarding the low 16
+        // bits with a logical shift.
+        sample_rate_hz = sample_rate_fixed as f64 / 65536.0;
 
         let mut b = AUDIO_PREAMBLE_BYTES + AUDIO_FIXED_BYTES;
         // v1: 16 more bytes (samplesPerPacket, bytesPerPacket, ...).
@@ -308,6 +312,8 @@ fn walk_sample_entry_children(
         match &child.kind.0 {
             b"avcC" => codec_specific::avcc::parse(src, &child, builder)?,
             b"hvcC" => codec_specific::hvcc::parse(src, &child, builder)?,
+            // PARSER-077: AV1 codec configuration box.
+            b"av1C" => codec_specific::av1c::parse(src, &child, builder)?,
             b"esds" => codec_specific::esds::parse(src, &child, builder)?,
             b"colr" => codec_specific::colr::parse(src, &child, builder)?,
             b"pasp" => codec_specific::pasp::parse(src, &child, builder)?,
