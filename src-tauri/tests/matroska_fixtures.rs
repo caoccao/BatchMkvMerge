@@ -325,6 +325,7 @@ fn timeout_surfaces_as_parse_error() {
         ParseOptions {
             timeout_ms: 1, // ridiculously low — should fire fast
             max_element_size: 16 * 1024 * 1024,
+            subtitle_charset: String::new(),
         },
     );
     let _ = std::fs::remove_file(&path);

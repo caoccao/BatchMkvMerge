@@ -18,10 +18,37 @@
 //! Shared text-encoding detection for the subtitle readers.
 //!
 //! We use [`encoding_rs::Encoding::for_bom`] for BOM-anchored detection
-//! (UTF-8 / UTF-16 LE / UTF-16 BE).  For BOM-less files we default to
-//! UTF-8 and call into the lossy decoder so non-ASCII bytes never panic.
+//! (UTF-8 / UTF-16 LE / UTF-16 BE).  For BOM-less files we consult the
+//! per-parse subtitle-charset hint pushed by `parse()` (PARSER-089) before
+//! falling back to UTF-8.
+
+use std::cell::RefCell;
 
 use encoding_rs::Encoding;
+
+thread_local! {
+    /// Per-thread subtitle charset hint, set by `parse()` for the duration
+    /// of a single call.  Empty string means "auto".
+    static SUBTITLE_CHARSET_HINT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Set the subtitle charset hint for the current thread.  Returns the previous
+/// value so callers can restore it on exit (`parse()` does this around its
+/// dispatch call).
+pub fn set_subtitle_charset_hint(label: String) -> String {
+    SUBTITLE_CHARSET_HINT.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), label))
+}
+
+fn lookup_hint() -> Option<&'static Encoding> {
+    SUBTITLE_CHARSET_HINT.with(|cell| {
+        let s = cell.borrow();
+        if s.is_empty() {
+            None
+        } else {
+            Encoding::for_label(s.as_bytes())
+        }
+    })
+}
 
 /// Detected text encoding + byte offset where the decoded payload begins
 /// (the BOM is stripped from the returned start).
@@ -31,11 +58,11 @@ pub struct DetectedEncoding {
     pub bom_length: usize,
 }
 
-/// Sniff the BOM at the start of `bytes`.  Falls back to UTF-8 when no BOM
-/// is present.
+/// Sniff the BOM at the start of `bytes`.  Falls back to the per-thread
+/// charset hint if one was set, otherwise to UTF-8 (PARSER-089).
 pub fn detect(bytes: &[u8]) -> DetectedEncoding {
     if let Some((enc, bom_len)) = Encoding::for_bom(bytes) {
-        let label = match enc.name() {
+        let label: &'static str = match enc.name() {
             "UTF-8" => "UTF-8",
             "UTF-16LE" => "UTF-16 LE",
             "UTF-16BE" => "UTF-16 BE",
@@ -44,6 +71,12 @@ pub fn detect(bytes: &[u8]) -> DetectedEncoding {
         return DetectedEncoding {
             label,
             bom_length: bom_len,
+        };
+    }
+    if let Some(enc) = lookup_hint() {
+        return DetectedEncoding {
+            label: enc.name(),
+            bom_length: 0,
         };
     }
     DetectedEncoding {
@@ -55,14 +88,12 @@ pub fn detect(bytes: &[u8]) -> DetectedEncoding {
 /// Decode a probe slice into a `Cow<str>` for line-prefix sniffing.  We
 /// always run the decoder so callers don't have to special-case UTF-16.
 pub fn decode_lossy(bytes: &[u8]) -> String {
-    let detected = detect(bytes);
-    let body = &bytes[detected.bom_length..];
-    let encoding = match detected.label {
-        "UTF-16 LE" => encoding_rs::UTF_16LE,
-        "UTF-16 BE" => encoding_rs::UTF_16BE,
-        _ => encoding_rs::UTF_8,
-    };
-    let (decoded, _, _) = encoding.decode(body);
+    if let Some((enc, bom_len)) = Encoding::for_bom(bytes) {
+        let (decoded, _, _) = enc.decode(&bytes[bom_len..]);
+        return decoded.into_owned();
+    }
+    let encoding = lookup_hint().unwrap_or(encoding_rs::UTF_8);
+    let (decoded, _, _) = encoding.decode(bytes);
     decoded.into_owned()
 }
 
@@ -127,5 +158,37 @@ mod tests {
         let decoded = decode_lossy(&bytes);
         assert!(decoded.starts_with('a'));
         assert!(decoded.ends_with('b'));
+    }
+
+    // ---- PARSER-089: configurable subtitle charset --------------------
+
+    #[test]
+    fn hint_overrides_default_for_bom_less_text() {
+        // Pre-test cleanup in case a parallel test set the hint.
+        let prev = set_subtitle_charset_hint("windows-1252".to_string());
+        // "café" in Windows-1252 — 0xE9 is `é`.
+        let bytes = [b'c', b'a', b'f', 0xE9];
+        let d = detect(&bytes);
+        assert_eq!(d.label, "windows-1252");
+        let decoded = decode_lossy(&bytes);
+        assert_eq!(decoded, "café");
+        set_subtitle_charset_hint(prev);
+    }
+
+    #[test]
+    fn hint_ignored_when_bom_is_present() {
+        let prev = set_subtitle_charset_hint("windows-1252".to_string());
+        let bytes = [0xEFu8, 0xBB, 0xBF, b'a'];
+        let d = detect(&bytes);
+        assert_eq!(d.label, "UTF-8");
+        set_subtitle_charset_hint(prev);
+    }
+
+    #[test]
+    fn empty_hint_keeps_utf8_default() {
+        let prev = set_subtitle_charset_hint(String::new());
+        let d = detect(b"plain");
+        assert_eq!(d.label, "UTF-8");
+        set_subtitle_charset_hint(prev);
     }
 }

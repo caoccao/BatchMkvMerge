@@ -81,6 +81,12 @@ pub struct ConfigParser {
     /// supported range when read.
     #[serde(rename = "timeoutMs", default = "ConfigParser::default_timeout_ms")]
     pub timeout_ms: u64,
+    /// Fallback charset used to decode BOM-less SRT / SSA / USF / MicroDVD
+    /// subtitle files.  Empty string means "auto" (the parser keeps using
+    /// UTF-8 lossy decode).  Mirrors mkvtoolnix's `--sub-charset` knob.
+    /// PARSER-089.
+    #[serde(rename = "subtitleCharset", default)]
+    pub subtitle_charset: String,
 }
 
 impl ConfigParser {
@@ -109,6 +115,7 @@ impl Default for ConfigParser {
     fn default() -> Self {
         Self {
             timeout_ms: Self::DEFAULT_TIMEOUT_MS,
+            subtitle_charset: String::new(),
         }
     }
 }
@@ -540,9 +547,9 @@ mod tests {
 
     #[test]
     fn parser_clamps_too_small() {
-        let p = ConfigParser { timeout_ms: 0 };
+        let p = ConfigParser { timeout_ms: 0, subtitle_charset: String::new() };
         assert_eq!(p.effective_timeout_ms(), ConfigParser::MIN_TIMEOUT_MS);
-        let p = ConfigParser { timeout_ms: 50 };
+        let p = ConfigParser { timeout_ms: 50, subtitle_charset: String::new() };
         assert_eq!(p.effective_timeout_ms(), ConfigParser::MIN_TIMEOUT_MS);
     }
 
@@ -550,6 +557,7 @@ mod tests {
     fn parser_clamps_too_large() {
         let p = ConfigParser {
             timeout_ms: 999_999,
+            subtitle_charset: String::new(),
         };
         assert_eq!(p.effective_timeout_ms(), ConfigParser::MAX_TIMEOUT_MS);
     }
@@ -557,7 +565,7 @@ mod tests {
     #[test]
     fn parser_passes_through_in_range_values() {
         for ms in [100u64, 500, 1000, 2000, 30_000, 60_000] {
-            let p = ConfigParser { timeout_ms: ms };
+            let p = ConfigParser { timeout_ms: ms, subtitle_charset: String::new() };
             assert_eq!(p.effective_timeout_ms(), ms);
         }
     }

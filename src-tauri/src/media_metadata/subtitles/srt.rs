@@ -117,6 +117,38 @@ fn is_timestamp(s: &str) -> bool {
         && (!ms_separator_seen || (1..=4).contains(&milliseconds_digits))
 }
 
+/// Populate `out` with an empty SRT track.  Used by the dispatch
+/// extension-fallback path (PARSER-088) when an empty `.srt` file would be
+/// rejected by the normal byte-signature probe — mkvtoolnix accepts these
+/// based on extension alone.
+pub fn populate_empty_srt(out: &mut MediaMetadata) {
+    out.container.format = ContainerFormat::Srt;
+    out.container.recognized = true;
+    out.container.supported = true;
+
+    let mut common = CommonTrackProperties::default();
+    common.number = Some(1);
+    out.tracks.push(Track {
+        id: 0,
+        track_type: TrackType::Subtitles,
+        codec: CodecInfo {
+            id: "S_TEXT/UTF8".to_string(),
+            name: Some("SubRip Text".to_string()),
+            codec_private: None,
+        },
+        properties: TrackProperties {
+            common,
+            subtitle: Some(SubtitleTrackProperties {
+                text_subtitles: true,
+                encoding: Some("UTF-8".to_string()),
+                variant: Some("SRT".to_string()),
+                teletext_page: None,
+            }),
+            ..TrackProperties::default()
+        },
+    });
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SrtReader;
 

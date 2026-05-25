@@ -144,6 +144,7 @@ pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
     };
     ParseOptions {
         timeout_ms,
+        subtitle_charset: cfg.parser.subtitle_charset.clone(),
         ..ParseOptions::default()
     }
 }
