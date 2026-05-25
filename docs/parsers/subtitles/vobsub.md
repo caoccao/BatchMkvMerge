@@ -32,3 +32,8 @@ flowchart TD
 ## Gaps and Handling
 
 Rust does not open a `.sub` file and then discover the sibling `.idx`, does not require opening the `.sub` data file, and reads only a bounded manifest prefix. It parses fewer valid `id` forms and does not validate timestamp/file-position/delay sorting like upstream. Codec private currently uses the captured IDX slice rather than mkvmerge's filtered `idx_data`. This gives usable track listing but is not full VobSub muxing parity.
+
+## Open Issues
+
+- **PARSER-210: Normal VobSub dispatch does not resolve `.sub` inputs to the sibling `.idx`.** Native dispatch registers `VobSubReader`, whose `probe` reads the current file and checks for the IDX banner. The helper `parse_idx_at_path` can map `.sub` to `.idx`, but it is not wired into normal dispatch. mkvtoolnix probes both `.idx` and `.sub` extensions, always resolves the `.idx` path, and opens the sibling `.sub` data file during header reading.
+- **PARSER-211: VobSub index parsing and codec private data differ from mkvtoolnix.** Native counts `timestamp:` lines under the current `id:` entry and stores the entire captured IDX text as codec private data. mkvtoolnix parses delay, timestamp, file position, negative timestamp handling, and out-of-order sorting, skips tracks without entries, and builds codec private data from filtered `idx_data` that omits `id`, `timestamp`, `delay`, `alt`, and `langidx` control lines.

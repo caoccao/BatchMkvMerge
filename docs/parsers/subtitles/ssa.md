@@ -34,3 +34,7 @@ The main local enum is `SsaVariant`; attachments use the shared `Attachment` mod
 ## Gaps and Handling
 
 The probe grammar and classification order differ from upstream. A `[Script Info]`-only file can classify differently, global header formatting is not CRLF/exclusion-equivalent, and embedded fonts are not UU-decoded or MIME-guessed with mkvmerge-level fidelity. The parser still exposes the track and attachment intent so the UI can list the available items.
+
+## Open Issues
+
+- **PARSER-207: SSA/ASS embedded attachments and global codec private data are not mkvmerge-equivalent.** Native `global_header` slices everything before `[Events]`, so `[Fonts]` or `[Graphics]` sections before events can leak into codec private data. Native attachment handling only scans `[Fonts]`, reports encoded text length, and assigns a fixed TrueType MIME type. mkvtoolnix excludes `[Fonts]` and `[Graphics]` from the global header, handles both embedded fonts and graphics, UU-decodes the attachment data, derives decoded size, and guesses MIME type from the bytes.

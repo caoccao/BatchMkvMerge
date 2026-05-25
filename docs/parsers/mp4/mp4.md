@@ -33,3 +33,10 @@ Key structures are `BoxHeader`, `FileType`, `MoovBuilder`, `TrackBuilder`, `Trex
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, chapter-track and `tref` behavior, and a wider QuickTime metadata surface. Rust implements enough sample-table handling for first-sample verification but not packet output. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely.
+
+## Open Issues
+
+- **PARSER-198: `stsd` sample descriptions after entry 0 are skipped.** Native parsing only calls `parse_first_entry` for the first sample-description entry and skips the rest. mkvtoolnix iterates through every `stsd` entry and lets the demuxer parse each one. Tracks with multiple sample descriptions can lose later codec private data, dimensions, audio properties, or validation behavior.
+- **PARSER-199: MP4 Opus `dOps` private data uses the wrong layout.** Native stores the raw `dOps` payload as codec private data. mkvtoolnix builds the Matroska/Ogg Opus ID header by prepending `OpusHead` and converting pre-skip, input sample rate, and output gain fields from MP4 big-endian to little-endian.
+- **PARSER-200: MP4 FLAC `dfLa` codec private data includes the FullBox header.** Native stores the whole `dfLa` payload, including the four-byte version/flags header. mkvtoolnix skips those four bytes and stores only the FLAC metadata block chain.
+- **PARSER-201: MP4 ALAC codec private data includes the FullBox header.** Native stores the entire `alac` atom payload as codec private data. mkvtoolnix passes only the ALAC magic cookie/config bytes after the `alac` atom header and FullBox header to the ALAC packetizer.

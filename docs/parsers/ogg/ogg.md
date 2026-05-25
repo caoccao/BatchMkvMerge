@@ -32,3 +32,10 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment/chapter edge case. Kate support is intentionally lightweight, VP8-in-Ogg appears absent, and chapter parsing is simpler. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+- **PARSER-202: Ogg VP8 streams are not recognized.** Native sniffing covers Vorbis, Opus, Theora, FLAC, Speex, Kate, and OGM headers, but has no VP8-in-Ogg sniffer. mkvtoolnix recognizes the Ogg VP8 header, reports `V_VP8`, and extracts pixel dimensions, display dimensions, and default duration.
+- **PARSER-203: Pre-1.1.1 native Ogg FLAC streams are rejected.** Native FLAC sniffing only accepts the post-1.1.1 `[0x7f]FLAC` wrapper with `fLaC` at offset 9. mkvtoolnix also accepts packets that start directly with `fLaC`.
+- **PARSER-204: Ogg FLAC header count and codec private assembly are incomplete.** Native declares one FLAC header packet and stores the first packet as codec private data. mkvtoolnix reads the FLAC header packet count, waits for all FLAC header packets, strips the post-1.1.1 wrapper offset where needed, and concatenates the correct header range for the FLAC packetizer.
+- **PARSER-205: Ogg Kate codec private data is truncated to the first header packet.** Native treats Kate as a one-packet header codec and stores the first packet only. mkvtoolnix keeps reading Kate header packets while the high bit is set and Xiph-laces all Kate headers into codec private data.

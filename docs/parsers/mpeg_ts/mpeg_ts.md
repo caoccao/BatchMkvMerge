@@ -32,3 +32,7 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks.
+
+## Open Issues
+
+- **PARSER-206: MPEG-TS AAC probing is ADTS-only and requires only one frame.** Native maps stream types `0x0f` and `0x11` to `A_AAC`, but enrichment searches only for one ADTS sync/header. mkvtoolnix uses the AAC parser to find five consecutive frames and records the AAC multiplex type, which covers LOAS/LATM style AAC carried by stream type `0x11` and avoids accepting a lone accidental ADTS-looking header.
