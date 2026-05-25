@@ -24,10 +24,19 @@
 //! perform a bounded first-sample verification read (mirroring
 //! `r_qtmp4.cpp:2881-2906 read_first_bytes`): we capture `first_sample_size`
 //! (the `stsz` first entry, or the fixed sample size when non-zero) and
-//! `first_sample_file_offset` (= `stco`/`co64` chunk_offset[0]).  We do NOT
-//! build a full index — only sample 0 is located.  The remaining sub-boxes
-//! (`stsc`, `stss`, `ctts`) stay skipped.
+//! `first_sample_file_offset` (= `stco`/`co64` chunk_offset[0]).
+//!
+//! PARSER-183 extends that to a bounded MULTI-sample index: mkvtoolnix's
+//! `read_first_bytes(num_bytes)` (`r_qtmp4.cpp:2881-2906`) iterates over its
+//! full `m_index` until `num_bytes` is collected, reading from EACH sample's
+//! file offset.  We reconstruct the prefix of that index from `stsc`
+//! (sample-to-chunk map) + `stco` / `co64` (chunk offsets) + `stsz` / `stz2`
+//! (sample sizes), capped at [`MAX_INDEX_SAMPLES`] samples / [`MAX_INDEX_BYTES`]
+//! aggregate bytes so a tiny-sample stream never makes us build an unbounded
+//! table.  We still never enter `mdat` payloads — only header tables.  `stss`
+//! / `ctts` stay skipped (keyframe / composition data isn't needed here).
 
+pub mod stsc;
 pub mod stsd;
 pub mod stts;
 
@@ -39,12 +48,34 @@ use crate::media_metadata::mp4::atom::{self, BoxHeader, ChildAction};
 
 use super::trak::TrackBuilder;
 
+/// Hard cap on how many samples the bounded index reconstructs.  16 384 one-byte
+/// samples is the worst case for collecting the 16 KiB first-bytes window.
+pub const MAX_INDEX_SAMPLES: usize = 16_384;
+/// Hard cap on the aggregate bytes the index promises to cover — matches the
+/// largest first-bytes window the verification path ever requests.
+pub const MAX_INDEX_BYTES: u64 = 16_384;
+
+/// Raw sample-table inputs collected during the `stbl` walk.  The index is
+/// built once all of them are known (sub-box order is not guaranteed).
+#[derive(Default)]
+struct SampleTables {
+  /// `stsc` chunk-map entries (1-based `first_chunk`).
+  chunk_map: Vec<stsc::StscEntry>,
+  /// Chunk file offsets from `stco` / `co64`, in order.
+  chunk_offsets: Vec<u64>,
+  /// Fixed sample size from `stsz`; `0` means per-sample sizes were used.
+  fixed_sample_size: u64,
+  /// Leading per-sample sizes from `stsz` / `stz2` (bounded).
+  sample_sizes: Vec<u64>,
+}
+
 pub fn parse(
   src: &mut FileSource,
   parent: &BoxHeader,
   deadline: &Deadline,
   builder: &mut TrackBuilder,
 ) -> Result<(), ParseError> {
+  let mut tables = SampleTables::default();
   atom::walk_children(src, parent, "mp4::stbl", deadline, |src, child| match &child.kind.0 {
     b"stsd" => {
       stsd::parse(src, child, deadline, builder)?;
@@ -56,103 +87,255 @@ pub fn parse(
       builder.stts_first_sample_delta = Some(s.first_sample_delta);
       Ok(ChildAction::Consumed)
     }
+    // PARSER-183: sample-to-chunk map — how many samples each chunk holds.
+    b"stsc" => {
+      tables.chunk_map = stsc::parse(src, child, MAX_INDEX_SAMPLES)?;
+      Ok(ChildAction::Consumed)
+    }
     // PARSER-145: `stsz` / `stz2` carry the sample count, which is the number
     // of index entries mkvtoolnix reports for a non-fragmented track. Both
     // layouts place a 32-bit sample_count at payload offset 8 (after the
     // FullBox header + 4 bytes of sample_size / field_size).
     // PARSER-177: `stsz` also yields the FIRST sample's size.
+    // PARSER-183: `stsz` additionally yields the leading per-sample sizes.
     b"stsz" => {
-      let (count, first_size) = read_stsz(src, child)?;
+      let (count, fixed, sizes) = read_stsz(src, child)?;
       builder.sample_count = count;
-      if first_size.is_some() {
-        builder.first_sample_size = first_size;
+      tables.fixed_sample_size = fixed;
+      tables.sample_sizes = sizes;
+      if let Some(first) = first_sample_size(fixed, &tables.sample_sizes) {
+        builder.first_sample_size = Some(first);
       }
       Ok(ChildAction::Consumed)
     }
     b"stz2" => {
-      builder.sample_count = read_stz2_sample_count(src, child)?;
+      let (count, sizes) = read_stz2(src, child)?;
+      builder.sample_count = count;
+      tables.sample_sizes = sizes;
+      if let Some(first) = first_sample_size(0, &tables.sample_sizes) {
+        builder.first_sample_size = Some(first);
+      }
       Ok(ChildAction::Consumed)
     }
-    // PARSER-177: chunk-offset tables — capture chunk_offset[0] as the first
-    // sample's file offset.  Sample 0 always lives at the start of chunk 0
-    // (stsc's first run), so the chunk offset is the byte offset of sample 0.
+    // PARSER-177/183: chunk-offset tables.  chunk_offset[0] is sample 0's file
+    // offset; the full (bounded) list feeds the multi-sample index.
     b"stco" => {
-      if let Some(off) = read_first_chunk_offset_32(src, child)? {
+      tables.chunk_offsets = read_chunk_offsets_32(src, child)?;
+      if let Some(&off) = tables.chunk_offsets.first() {
         builder.first_sample_file_offset = Some(off);
       }
       Ok(ChildAction::Consumed)
     }
     b"co64" => {
-      if let Some(off) = read_first_chunk_offset_64(src, child)? {
+      tables.chunk_offsets = read_chunk_offsets_64(src, child)?;
+      if let Some(&off) = tables.chunk_offsets.first() {
         builder.first_sample_file_offset = Some(off);
       }
       Ok(ChildAction::Consumed)
     }
     _ => Ok(ChildAction::Skip),
-  })
+  })?;
+
+  builder.first_samples = build_first_samples(&tables);
+  Ok(())
 }
 
-/// Read the `stsz` sample count and the first sample's size.  Layout:
-/// FullBox(4) + sample_size(4) + sample_count(4) + [if sample_size==0:
-/// sample_count × u32].  When `sample_size != 0` it is the fixed size for
-/// every sample (so it is the first sample's size too); otherwise the first
-/// per-sample u32 is the first sample's size.  Returns `(None, None)` for a
-/// truncated payload rather than failing the parse.
-fn read_stsz(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, Option<u64>), ParseError> {
-  if header.payload_size().unwrap_or(0) < 12 {
-    return Ok((None, None));
+/// First sample's size given the fixed size (0 = per-sample) and the leading
+/// per-sample list.
+fn first_sample_size(fixed: u64, sizes: &[u64]) -> Option<u64> {
+  if fixed != 0 {
+    Some(fixed)
+  } else {
+    sizes.first().copied()
+  }
+}
+
+/// PARSER-183: reconstruct the bounded prefix of mkvtoolnix's `m_index` —
+/// `(file_offset, size)` for the first samples in decode order.  Mirrors
+/// `update_tables` (`r_qtmp4.cpp:2544-2631`) + `build_index_chunk_mode`
+/// (`:2829-2839`): each chunk's sample count comes from the `stsc` run that
+/// covers it, and samples within a chunk sit back-to-back from the chunk's file
+/// offset.  Bounded by [`MAX_INDEX_SAMPLES`] / [`MAX_INDEX_BYTES`].
+fn build_first_samples(tables: &SampleTables) -> Vec<(u64, u64)> {
+  if tables.chunk_offsets.is_empty() {
+    return Vec::new();
+  }
+  let mut out: Vec<(u64, u64)> = Vec::new();
+  let mut collected_bytes: u64 = 0;
+  let mut sample_idx: usize = 0; // 0-based index into per-sample sizes
+  // Walk chunks in order, mapping each to its samples-per-chunk run.
+  for (chunk_idx, &chunk_pos) in tables.chunk_offsets.iter().enumerate() {
+    let samples_in_chunk = samples_per_chunk(&tables.chunk_map, chunk_idx);
+    if samples_in_chunk == 0 {
+      continue;
+    }
+    let mut pos = chunk_pos;
+    for _ in 0..samples_in_chunk {
+      let size = sample_size_at(tables, sample_idx);
+      out.push((pos, size));
+      pos = pos.saturating_add(size);
+      sample_idx += 1;
+      collected_bytes = collected_bytes.saturating_add(size);
+      if out.len() >= MAX_INDEX_SAMPLES || collected_bytes >= MAX_INDEX_BYTES {
+        return out;
+      }
+    }
+  }
+  out
+}
+
+/// Samples in chunk `chunk_idx` (0-based) per the `stsc` map.  The covering run
+/// is the last entry whose 1-based `first_chunk` is `<= chunk_idx + 1`.  An
+/// empty / absent map defaults to one sample per chunk (mirrors mkvtoolnix's
+/// `chunk.size == 0` chunks contributing nothing only when no run covers them;
+/// real files always carry a chunk-map, and a one-sample default keeps the
+/// bounded read non-empty for malformed inputs).
+fn samples_per_chunk(chunk_map: &[stsc::StscEntry], chunk_idx: usize) -> u64 {
+  let chunk_number = (chunk_idx as u64) + 1; // 1-based
+  let mut samples = 0u64;
+  let mut covered = false;
+  for entry in chunk_map {
+    if (entry.first_chunk as u64) <= chunk_number {
+      samples = entry.samples_per_chunk as u64;
+      covered = true;
+    } else {
+      break;
+    }
+  }
+  if !covered {
+    // No chunk-map run covers this chunk → fall back to one sample/chunk so a
+    // missing or malformed `stsc` still yields a usable first-bytes read.
+    return 1;
+  }
+  samples
+}
+
+/// Size of sample `sample_idx` (0-based): the fixed `stsz` size when non-zero,
+/// else the per-sample table entry (clamped to its length; a short table means
+/// later samples report size 0 and are skipped by the read).
+fn sample_size_at(tables: &SampleTables, sample_idx: usize) -> u64 {
+  if tables.fixed_sample_size != 0 {
+    return tables.fixed_sample_size;
+  }
+  tables.sample_sizes.get(sample_idx).copied().unwrap_or(0)
+}
+
+/// Read the `stsz` sample count, the fixed sample size (0 = per-sample), and a
+/// bounded list of leading per-sample sizes.  Layout: FullBox(4) +
+/// sample_size(4) + sample_count(4) + [if sample_size==0: sample_count × u32].
+/// When `sample_size != 0` it is the fixed size for every sample, so no
+/// per-sample list is read.  Returns `(None, 0, [])` for a truncated payload
+/// rather than failing the parse.
+fn read_stsz(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, u64, Vec<u64>), ParseError> {
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 12 {
+    return Ok((None, 0, Vec::new()));
   }
   src.skip(4)?; // FullBox header
   let sample_size = src.read_u32_be()?;
   let sample_count = src.read_u32_be()?;
-  let first_size = if sample_size != 0 {
-    Some(sample_size as u64)
-  } else if header.payload_size().unwrap_or(0) >= 16 && sample_count > 0 {
-    Some(src.read_u32_be()? as u64)
-  } else {
-    None
+  if sample_size != 0 {
+    return Ok((Some(sample_count), sample_size as u64, Vec::new()));
+  }
+  // Per-sample table: read up to MAX_INDEX_SAMPLES entries, also bounded by the
+  // declared payload so a corrupt count never over-reads.
+  let available = payload.saturating_sub(12) / 4;
+  let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  let mut sizes = Vec::with_capacity(to_read as usize);
+  for _ in 0..to_read {
+    sizes.push(src.read_u32_be()? as u64);
+  }
+  Ok((Some(sample_count), 0, sizes))
+}
+
+/// Read the `stz2` sample count and a bounded list of leading per-sample sizes.
+/// Layout: FullBox(4) + reserved(3) + field_size(1) + sample_count(4) +
+/// packed per-sample sizes whose width is `field_size` bits (4 / 8 / 16).
+/// Returns `(None, [])` for a truncated payload / unsupported field size.
+fn read_stz2(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, Vec<u64>), ParseError> {
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 12 {
+    return Ok((None, Vec::new()));
+  }
+  src.skip(4)?; // FullBox header
+  src.skip(3)?; // reserved
+  let field_size = src.read_u8()? as u32;
+  let sample_count = src.read_u32_be()?;
+  let body = payload.saturating_sub(12);
+  let sizes = match field_size {
+    16 => {
+      let available = body / 2;
+      let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+      let mut v = Vec::with_capacity(to_read as usize);
+      for _ in 0..to_read {
+        v.push(src.read_u16_be()? as u64);
+      }
+      v
+    }
+    8 => {
+      let available = body;
+      let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+      let mut v = Vec::with_capacity(to_read as usize);
+      for _ in 0..to_read {
+        v.push(src.read_u8()? as u64);
+      }
+      v
+    }
+    4 => {
+      // Two 4-bit samples packed per byte (high nibble first).
+      let available_samples = body.saturating_mul(2);
+      let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available_samples);
+      let mut v = Vec::with_capacity(to_read as usize);
+      let bytes_needed = to_read.div_ceil(2);
+      for _ in 0..bytes_needed {
+        let byte = src.read_u8()?;
+        v.push((byte >> 4) as u64);
+        if (v.len() as u64) < to_read {
+          v.push((byte & 0x0F) as u64);
+        }
+      }
+      v
+    }
+    _ => Vec::new(),
   };
-  Ok((Some(sample_count), first_size))
+  Ok((Some(sample_count), sizes))
 }
 
-/// Read the 32-bit sample count from an `stz2` box.  The packed per-sample
-/// field widths make extracting the first sample's size awkward, so we only
-/// surface the count (the read budget is capped regardless).  Returns `None`
-/// for a truncated payload.
-fn read_stz2_sample_count(src: &mut FileSource, header: &BoxHeader) -> Result<Option<u32>, ParseError> {
-  if header.payload_size().unwrap_or(0) < 12 {
-    return Ok(None);
-  }
-  src.skip(8)?; // FullBox header (4) + reserved(3) + field_size(1)
-  Ok(Some(src.read_u32_be()?))
-}
-
-/// Read `chunk_offset[0]` from an `stco` box: FullBox(4) + entry_count(4) +
-/// entry_count × u32.  Returns `None` when empty / truncated.
-fn read_first_chunk_offset_32(src: &mut FileSource, header: &BoxHeader) -> Result<Option<u64>, ParseError> {
-  if header.payload_size().unwrap_or(0) < 12 {
-    return Ok(None);
+/// Read the chunk offsets from an `stco` box: FullBox(4) + entry_count(4) +
+/// entry_count × u32.  Bounded by [`MAX_INDEX_SAMPLES`] (every chunk holds at
+/// least one sample, so more chunks than that can't extend a 16 KiB read).
+fn read_chunk_offsets_32(src: &mut FileSource, header: &BoxHeader) -> Result<Vec<u64>, ParseError> {
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 8 {
+    return Ok(Vec::new());
   }
   src.skip(4)?; // FullBox header
   let entry_count = src.read_u32_be()?;
-  if entry_count == 0 {
-    return Ok(None);
+  let available = payload.saturating_sub(8) / 4;
+  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  let mut offsets = Vec::with_capacity(to_read as usize);
+  for _ in 0..to_read {
+    offsets.push(src.read_u32_be()? as u64);
   }
-  Ok(Some(src.read_u32_be()? as u64))
+  Ok(offsets)
 }
 
-/// Read `chunk_offset[0]` from a `co64` box: FullBox(4) + entry_count(4) +
-/// entry_count × u64.  Returns `None` when empty / truncated.
-fn read_first_chunk_offset_64(src: &mut FileSource, header: &BoxHeader) -> Result<Option<u64>, ParseError> {
-  if header.payload_size().unwrap_or(0) < 16 {
-    return Ok(None);
+/// Read the chunk offsets from a `co64` box: FullBox(4) + entry_count(4) +
+/// entry_count × u64.  Bounded by [`MAX_INDEX_SAMPLES`].
+fn read_chunk_offsets_64(src: &mut FileSource, header: &BoxHeader) -> Result<Vec<u64>, ParseError> {
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 8 {
+    return Ok(Vec::new());
   }
   src.skip(4)?; // FullBox header
   let entry_count = src.read_u32_be()?;
-  if entry_count == 0 {
-    return Ok(None);
+  let available = payload.saturating_sub(8) / 8;
+  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  let mut offsets = Vec::with_capacity(to_read as usize);
+  for _ in 0..to_read {
+    offsets.push(src.read_u64_be()?);
   }
-  Ok(Some(src.read_u64_be()?))
+  Ok(offsets)
 }
 
 #[cfg(test)]
@@ -324,8 +507,139 @@ mod tests {
     p.extend_from_slice(&0u64.to_be_bytes());
     let b = run_stbl(encode_box(b"co64", &p));
     assert!(b.first_sample_file_offset.is_none());
-    // Truncated payload (< 16 bytes).
+    // Truncated payload (< 16 bytes).  entry_count reads as 0 here.
     let b2 = run_stbl(encode_box(b"co64", &[0u8; 8]));
     assert!(b2.first_sample_file_offset.is_none());
+  }
+
+  // ---- PARSER-183: bounded multi-sample index (stsc + stco + stsz) ---------
+
+  /// Build a per-sample `stsz` with explicit sizes.
+  fn stsz_per_sample(sizes: &[u32]) -> Vec<u8> {
+    let mut p = vec![0u8; 4]; // version+flags
+    p.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0
+    p.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
+    for s in sizes {
+      p.extend_from_slice(&s.to_be_bytes());
+    }
+    encode_box(b"stsz", &p)
+  }
+
+  fn stco(offsets: &[u32]) -> Vec<u8> {
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&(offsets.len() as u32).to_be_bytes());
+    for o in offsets {
+      p.extend_from_slice(&o.to_be_bytes());
+    }
+    encode_box(b"stco", &p)
+  }
+
+  fn stsc_box(entries: &[(u32, u32, u32)]) -> Vec<u8> {
+    encode_box(b"stsc", &stsc::build_stsc_payload(entries))
+  }
+
+  #[test]
+  fn first_samples_spans_multiple_chunks() {
+    // 2 chunks, 2 samples/chunk, 4 samples total of sizes 10/20/30/40.
+    let mut children = stsz_per_sample(&[10, 20, 30, 40]);
+    children.extend(stco(&[1000, 5000]));
+    children.extend(stsc_box(&[(1, 2, 1)])); // every chunk: 2 samples
+    let b = run_stbl(children);
+    // Chunk 0 at 1000: sample0 @1000 size10, sample1 @1010 size20.
+    // Chunk 1 at 5000: sample2 @5000 size30, sample3 @5030 size40.
+    assert_eq!(
+      b.first_samples,
+      vec![(1000, 10), (1010, 20), (5000, 30), (5030, 40)]
+    );
+    // Backward-compat single-sample fields still set.
+    assert_eq!(b.first_sample_file_offset, Some(1000));
+    assert_eq!(b.first_sample_size, Some(10));
+  }
+
+  #[test]
+  fn first_samples_default_one_per_chunk_without_stsc() {
+    // No stsc → fall back to one sample per chunk.
+    let mut children = stsz_per_sample(&[100, 200]);
+    children.extend(stco(&[2000, 8000]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples, vec![(2000, 100), (8000, 200)]);
+  }
+
+  #[test]
+  fn first_samples_fixed_sample_size() {
+    // Fixed sample size of 64, 3 samples in one chunk.
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&64u32.to_be_bytes()); // fixed sample_size
+    p.extend_from_slice(&3u32.to_be_bytes()); // sample_count
+    let mut children = encode_box(b"stsz", &p);
+    children.extend(stco(&[400]));
+    children.extend(stsc_box(&[(1, 3, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples, vec![(400, 64), (464, 64), (528, 64)]);
+  }
+
+  #[test]
+  fn first_samples_stops_at_byte_budget() {
+    // One chunk, many samples each 8192 bytes — index stops once it covers the
+    // 16 KiB window (2 samples).
+    let sizes = vec![8192u32; 8];
+    let mut children = stsz_per_sample(&sizes);
+    children.extend(stco(&[0]));
+    children.extend(stsc_box(&[(1, 8, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples.len(), 2);
+    assert_eq!(b.first_samples, vec![(0, 8192), (8192, 8192)]);
+  }
+
+  #[test]
+  fn first_samples_empty_without_chunk_offsets() {
+    let b = run_stbl(stsz_per_sample(&[10, 20]));
+    assert!(b.first_samples.is_empty());
+  }
+
+  #[test]
+  fn first_samples_second_stsc_run_changes_count() {
+    // 3 chunks. Run 1 (chunks 1..2): 1 sample/chunk. Run 2 (chunk 3+): 2/chunk.
+    let mut children = stsz_per_sample(&[5, 6, 7, 8]);
+    children.extend(stco(&[100, 200, 300]));
+    children.extend(stsc_box(&[(1, 1, 1), (3, 2, 1)]));
+    let b = run_stbl(children);
+    // chunk0 @100: sample0 size5. chunk1 @200: sample1 size6.
+    // chunk2 @300: sample2 size7 @300, sample3 size8 @307.
+    assert_eq!(
+      b.first_samples,
+      vec![(100, 5), (200, 6), (300, 7), (307, 8)]
+    );
+  }
+
+  #[test]
+  fn stz2_per_sample_sizes_feed_index_16bit() {
+    // stz2 with 16-bit field size, 2 samples of 50/60.
+    let mut p = vec![0u8; 4]; // version+flags
+    p.extend_from_slice(&[0, 0, 0, 16]); // reserved(3) + field_size=16
+    p.extend_from_slice(&2u32.to_be_bytes()); // sample_count
+    p.extend_from_slice(&50u16.to_be_bytes());
+    p.extend_from_slice(&60u16.to_be_bytes());
+    let mut children = encode_box(b"stz2", &p);
+    children.extend(stco(&[700]));
+    children.extend(stsc_box(&[(1, 2, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.sample_count, Some(2));
+    assert_eq!(b.first_samples, vec![(700, 50), (750, 60)]);
+  }
+
+  #[test]
+  fn stz2_4bit_packed_sizes() {
+    // stz2 with 4-bit field size, 3 samples: high/low nibbles 0x3,0x4 then 0x5.
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&[0, 0, 0, 4]); // field_size = 4
+    p.extend_from_slice(&3u32.to_be_bytes()); // sample_count
+    p.push(0x34); // samples 3 and 4
+    p.push(0x50); // sample 5 (high nibble)
+    let mut children = encode_box(b"stz2", &p);
+    children.extend(stco(&[0]));
+    children.extend(stsc_box(&[(1, 3, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples, vec![(0, 3), (3, 4), (7, 5)]);
   }
 }

@@ -316,6 +316,23 @@ fn decode_frame_at(bytes: &[u8], offset: usize) -> Option<Ac3Frame> {
   decode_frame(&bytes[offset..])
 }
 
+/// PARSER-184: locate the first decodable AC-3 / E-AC-3 frame in `bytes` and
+/// return `(channels, sample_rate)`.  Mirrors `frame_c::find_in`
+/// (`common/ac3.cpp:316-327`): scan byte-by-byte for the first frame whose
+/// header decodes, used by mkvtoolnix's
+/// `qtmp4_demuxer_c::derive_track_params_from_ac3_audio_bitstream`
+/// (`r_qtmp4.cpp:3526-3536`).  Returns `None` when no frame decodes.
+pub fn first_frame_params(bytes: &[u8]) -> Option<(u32, u32)> {
+  let mut offset = 0usize;
+  while offset < bytes.len() {
+    if let Some(frame) = decode_frame(&bytes[offset..]) {
+      return Some((frame.channels, frame.sample_rate));
+    }
+    offset += 1;
+  }
+  None
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Ac3Reader;
 

@@ -28,7 +28,8 @@ use super::avih::{self, MainAviHeader};
 use super::identify;
 use super::odml::{self, OdmlInfo};
 use super::riff::{self, ChildAction, ChunkHeader};
-use super::strl::{self, StreamBuilder};
+use super::strl::{self, AviStreamKind, StreamBuilder};
+use super::subtitles;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AviReader;
@@ -76,6 +77,7 @@ impl Reader for AviReader {
     let mut streams: Vec<StreamBuilder> = Vec::new();
     let mut odml_info = OdmlInfo::default();
     let mut found_hdrl = false;
+    let mut movi: Option<ChunkHeader> = None;
 
     // Walk children of the outer RIFF list.  We don't use walk_list_children
     // here because we've already consumed the form_type FOURCC.
@@ -118,6 +120,11 @@ impl Reader for AviReader {
           b"odml" => {
             odml_info = odml::parse_odml_list(src, &child, deadline)?;
           }
+          b"movi" => {
+            // Remember where the movie data lives so we can read the
+            // first text chunks for subtitle detection (PARSER-192).
+            movi = Some(child);
+          }
           _ => {}
         }
         riff::skip_payload_with_pad(src, &child)?;
@@ -134,7 +141,22 @@ impl Reader for AviReader {
       });
     }
 
-    identify::finalise(avih, streams, odml_info, out);
+    // PARSER-192: subtitle tracks come from the first GAB2 text chunks in the
+    // `movi` list, not from the text stream's strf.  Determine the overall
+    // stream index of every text stream (its position inside `hdrl`) so we can
+    // match the `NNtx` chunk tags, then read only those first chunks.
+    let text_streams: Vec<usize> = streams
+      .iter()
+      .enumerate()
+      .filter(|(_, s)| s.header.as_ref().map(|h| h.kind) == Some(AviStreamKind::Text))
+      .map(|(idx, _)| idx)
+      .collect();
+    let subtitles = match (&movi, text_streams.is_empty()) {
+      (Some(movi), false) => subtitles::parse_subtitle_chunks(src, movi, &text_streams, deadline)?,
+      _ => Vec::new(),
+    };
+
+    identify::finalise(avih, streams, odml_info, subtitles, out);
     Ok(())
   }
 }
@@ -199,6 +221,48 @@ mod tests {
     let mut payload = strh;
     payload.extend(strf);
     encode_list(b"LIST", b"strl", &[payload])
+  }
+
+  fn build_text_strl() -> Vec<u8> {
+    // A text stream carries just a strh — the GAB2 subtitle lives in movi.
+    let strh = encode_chunk(b"strh", &build_strh_payload(b"txts", b"DXSA", 1, 1000, 0, 0));
+    encode_list(b"LIST", b"strl", &[strh])
+  }
+
+  fn gab2_chunk(content: &[u8]) -> Vec<u8> {
+    let mut g = b"GAB2\0".to_vec();
+    // filename block (id 2)
+    g.extend_from_slice(&2u16.to_le_bytes());
+    g.extend_from_slice(&4u32.to_le_bytes());
+    g.extend_from_slice(b"a.sr");
+    // subtitle block (id 4)
+    g.extend_from_slice(&4u16.to_le_bytes());
+    g.extend_from_slice(&(content.len() as u32).to_le_bytes());
+    g.extend_from_slice(content);
+    g
+  }
+
+  /// Build an AVI whose `movi` list contains the given chunks (each a fully
+  /// encoded `NNxx` chunk).  `streams_payload` are the strl LISTs in hdrl
+  /// order.
+  fn build_avi_with_movi(streams_payload: Vec<Vec<u8>>, movi_chunks: Vec<Vec<u8>>) -> Vec<u8> {
+    let avih = encode_chunk(
+      b"avih",
+      &build_avih_payload(41_708, 5_000_000, 0x10, 240, streams_payload.len() as u32, 1920, 1080),
+    );
+    let mut hdrl_children = vec![avih];
+    hdrl_children.extend(streams_payload);
+    let hdrl = encode_list(b"LIST", b"hdrl", &hdrl_children);
+
+    let mut riff_payload = b"AVI ".to_vec();
+    riff_payload.extend(hdrl);
+    riff_payload.extend(encode_list(b"LIST", b"movi", &movi_chunks));
+
+    let total_size = riff_payload.len() as u32;
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&total_size.to_le_bytes());
+    bytes.extend(riff_payload);
+    bytes
   }
 
   fn build_avi(streams_payload: Vec<Vec<u8>>, with_odml: bool) -> Vec<u8> {
@@ -302,6 +366,88 @@ mod tests {
     let mut out = MediaMetadata::new("clip.avi", 0);
     let err = AviReader.read_headers(&mut s, &dl(), &mut out).unwrap_err();
     assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  // ---- PARSER-192: subtitle detection from movi GAB2 text chunks --------
+
+  #[test]
+  fn recognised_gab2_srt_in_movi_creates_subtitle_track() {
+    // Streams: video (0), audio (1), text (2).  The text chunk tag is "02tx".
+    let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello world\r\n";
+    let text_chunk = encode_chunk(b"02tx", &gab2_chunk(srt));
+    let bytes = build_avi_with_movi(
+      vec![build_video_strl(1920, 1080), build_audio_strl(), build_text_strl()],
+      vec![text_chunk],
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 3);
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+    assert_eq!(out.tracks[0].id, 0);
+    assert_eq!(out.tracks[1].track_type, TrackType::Audio);
+    assert_eq!(out.tracks[1].id, 1);
+    let sub = &out.tracks[2];
+    assert_eq!(sub.track_type, TrackType::Subtitles);
+    assert_eq!(sub.id, 2);
+    assert_eq!(sub.codec.id, "S_TEXT/UTF8");
+    assert!(sub.properties.subtitle.as_ref().unwrap().text_subtitles);
+  }
+
+  #[test]
+  fn unrecognised_text_chunk_creates_no_subtitle_track() {
+    // The text chunk is GAB2 but its payload is not SRT/SSA — mkvtoolnix
+    // would drop it, so no subtitle track is emitted.
+    let junk = b"just some plain prose, definitely not a subtitle file";
+    let text_chunk = encode_chunk(b"01tx", &gab2_chunk(junk));
+    let bytes = build_avi_with_movi(
+      vec![build_video_strl(1920, 1080), build_text_strl()],
+      vec![text_chunk],
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+    assert!(out.tracks.iter().all(|t| t.track_type != TrackType::Subtitles));
+  }
+
+  #[test]
+  fn text_stream_without_movi_chunk_creates_no_subtitle_track() {
+    // A declared text stream whose first chunk never appears in movi must
+    // not synthesise a generic subtitle track (old behaviour).
+    let bytes = build_avi_with_movi(
+      vec![build_video_strl(1920, 1080), build_text_strl()],
+      vec![],
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert!(out.tracks.iter().all(|t| t.track_type != TrackType::Subtitles));
+  }
+
+  #[test]
+  fn subtitle_id_follows_audio_tracks_in_movi_flow() {
+    // video (0), audio (1), audio (2), text (3) → subtitle id == 3.
+    let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHi\r\n";
+    let text_chunk = encode_chunk(b"03tx", &gab2_chunk(srt));
+    let bytes = build_avi_with_movi(
+      vec![
+        build_video_strl(1920, 1080),
+        build_audio_strl(),
+        build_audio_strl(),
+        build_text_strl(),
+      ],
+      vec![text_chunk],
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 4);
+    let sub = out.tracks.iter().find(|t| t.track_type == TrackType::Subtitles).unwrap();
+    assert_eq!(sub.id, 3);
+    assert_eq!(sub.properties.common.number, Some(4));
   }
 
   #[test]

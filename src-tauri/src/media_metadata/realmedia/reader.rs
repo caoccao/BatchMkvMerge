@@ -198,7 +198,15 @@ fn push_track(out: &mut MediaMetadata, id: i64, track: &MdprChunk, first_packet:
           width: v.width as u32,
           height: v.height as u32,
         };
-        let packet_dims = first_packet.and_then(real_video_dimensions_from_packet);
+        // r_real.cpp:241-242 + :588-590 — only RV40 derives its dimensions
+        // from the first packet; RV10/RV20/RV30 keep their header dimensions
+        // (mkvtoolnix sets `rv_dimensions = true` for every non-RV40 fourcc
+        // and only calls `set_dimensions` while that flag is false).
+        let packet_dims = if fourcc == "RV40" {
+          first_packet.and_then(real_video_dimensions_from_packet)
+        } else {
+          None
+        };
         let pixel_dims = packet_dims.unwrap_or(header_dims);
         let display_dims =
           if packet_dims.is_some() && header_dims.width > 0 && header_dims.height > 0 && header_dims != pixel_dims {
@@ -256,22 +264,7 @@ fn push_track(out: &mut MediaMetadata, id: i64, track: &MdprChunk, first_packet:
           apply_dnet_packet_hints(first_packet, &mut codec_id, &mut codec_name, &mut audio);
         }
         if codec_id == "A_AAC" {
-          if let Some(header) = aac::parse_audio_specific_config_bytes(&a.extra_data) {
-            if header.sample_rate > 0 {
-              audio.sampling_frequency = Some(header.sample_rate as f64);
-            }
-            if header.output_sample_rate > 0 {
-              audio.output_sampling_frequency = Some(header.output_sample_rate as f64);
-            } else if header.sample_rate > 0 {
-              audio.output_sampling_frequency = Some(header.sample_rate as f64);
-            }
-            if header.channels > 0 {
-              audio.channels = Some(header.channels);
-            }
-            let cfg: AudioCodecConfig = aac::codec_config_from_header(&header, &a.extra_data);
-            codec_name = aac::format_aac_profile(header.profile);
-            audio.codec_config = Some(cfg);
-          }
+          apply_real_aac_config(&fourcc, &a, &mut audio, &mut codec_name);
         }
         out.tracks.push(Track {
           id,
@@ -321,6 +314,67 @@ fn apply_dnet_packet_hints(
   }
   cfg.raw_hex = Some(hex_prefix(packet, 18));
   audio.codec_config = Some(cfg);
+}
+
+/// Derive AAC parameters for a RealAudio RAAC/RACP track.
+///
+/// Mirrors `real_reader_c::create_aac_audio_packetizer`
+/// (`r_real.cpp:253-292`).  The RealAudio AAC wrapper prefixes the
+/// `AudioSpecificConfig` with a 4-byte big-endian length followed by one
+/// extra byte, so the ASC begins at `extra_data[4 + 1]` and is
+/// `extra_len - 1` bytes long (`r_real.cpp:260-267`).  When no profile can
+/// be detected, mkvtoolnix applies an SBR / output-sample-rate fallback for
+/// `racp` streams or when the detected sample rate is below 44100
+/// (`r_real.cpp:281-287`).
+fn apply_real_aac_config(fourcc: &str, a: &AudioProps, audio: &mut AudioTrackProperties, codec_name: &mut String) {
+  let mut profile_detected = false;
+
+  // r_real.cpp:260 — require at least the 4-byte length prefix + 1 byte.
+  if a.extra_data.len() > 4 {
+    let extra_len = u32::from_be_bytes([a.extra_data[0], a.extra_data[1], a.extra_data[2], a.extra_data[3]]) as usize;
+    // r_real.cpp:265 — the wrapper must fit inside the extra data.
+    if extra_len >= 1 && 4 + extra_len <= a.extra_data.len() {
+      // r_real.cpp:266 — ASC at &extra_data[4 + 1], length extra_len - 1.
+      let asc = &a.extra_data[5..4 + extra_len];
+      if let Some(header) = aac::parse_audio_specific_config_bytes(asc) {
+        if header.sample_rate > 0 {
+          audio.sampling_frequency = Some(header.sample_rate as f64);
+        }
+        if header.output_sample_rate > 0 {
+          audio.output_sampling_frequency = Some(header.output_sample_rate as f64);
+        } else if header.sample_rate > 0 {
+          audio.output_sampling_frequency = Some(header.sample_rate as f64);
+        }
+        if header.channels > 0 {
+          audio.channels = Some(header.channels);
+        }
+        let cfg: AudioCodecConfig = aac::codec_config_from_header(&header, asc);
+        *codec_name = aac::format_aac_profile(header.profile);
+        audio.codec_config = Some(cfg);
+        profile_detected = true;
+      }
+    }
+  }
+
+  if !profile_detected {
+    // r_real.cpp:281-287 — fall back to the header parameters and assume
+    // SBR for racp streams or when the sample rate is below 44100.
+    let sample_rate = a.sample_rate;
+    audio.channels = Some(a.channels as u32);
+    audio.sampling_frequency = Some(sample_rate as f64);
+    if fourcc.eq_ignore_ascii_case("racp") || sample_rate < 44_100 {
+      let output_sample_rate = 2 * sample_rate;
+      audio.output_sampling_frequency = Some(output_sample_rate as f64);
+      // SBR implies AAC profile 4 ("AAC SBR" in our profile table).
+      let cfg = AudioCodecConfig {
+        profile_name: Some(aac::format_aac_profile(4)),
+        aac_sbr_present: Some(true),
+        ..AudioCodecConfig::default()
+      };
+      *codec_name = aac::format_aac_profile(4);
+      audio.codec_config = Some(cfg);
+    }
+  }
 }
 
 fn real_video_dimensions_from_packet(packet: &[u8]) -> Option<Dimensions2D> {
@@ -473,6 +527,25 @@ mod tests {
     build_chunk(ID_DATA, 0, &payload)
   }
 
+  /// AAC LC, 48 kHz, stereo AudioSpecificConfig (2 bytes).
+  /// Bits: object_type=00010 (LC), sr_index=0011 (48 kHz),
+  /// channel_config=0010 (stereo), GA flags=000 -> 0x11 0x90.
+  fn build_aac_lc_asc() -> Vec<u8> {
+    vec![0x11, 0x90]
+  }
+
+  /// Wrap an ASC the way RealAudio does: 4-byte BE length (ASC len + 1),
+  /// then 1 unused byte, then the ASC. The ASC begins at byte 5
+  /// (mkvtoolnix `r_real.cpp:266` reads `&extra_data[4 + 1]`).
+  fn build_real_aac_wrapper(asc: &[u8]) -> Vec<u8> {
+    let extra_len = (asc.len() + 1) as u32;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&extra_len.to_be_bytes());
+    buf.push(0x00); // the 1 byte skipped before the ASC
+    buf.extend_from_slice(asc);
+    buf
+  }
+
   fn build_real_video_packet_dims(width_code: u8, height_code: u8) -> Vec<u8> {
     let mut packet = vec![0u8; 9];
     let bits = ((width_code as u32) << 3) | height_code as u32;
@@ -552,10 +625,15 @@ mod tests {
 
   #[test]
   fn read_headers_extracts_audio_v5_track_and_promotes_raac_to_aac() {
+    // The RealAudio AAC wrapper prefixes the ASC with a 4-byte BE length +
+    // one byte (mkvtoolnix `r_real.cpp:260-267`); the ASC begins at byte 5.
+    let asc = build_aac_lc_asc(); // 48 kHz stereo LC, 2 bytes
+    let wrapper = build_real_aac_wrapper(&asc);
+    let mut a_props = build_audio_v5(48_000, 6, 16, b"raac");
+    a_props.extend_from_slice(&wrapper);
+
     let mut blob = build_rmf_header();
     blob.extend(build_prop_chunk(0));
-    let mut a_props = build_audio_v5(48_000, 6, 16, b"raac");
-    a_props.extend_from_slice(&[0x12, 0x10]);
     blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
     blob.extend(build_data_chunk());
 
@@ -571,12 +649,91 @@ mod tests {
       a_props.len() as u64
     );
     let audio = out.tracks[0].properties.audio.as_ref().unwrap();
-    assert_eq!(audio.sampling_frequency, Some(44_100.0));
-    assert_eq!(audio.output_sampling_frequency, Some(44_100.0));
+    assert_eq!(audio.sampling_frequency, Some(48_000.0));
+    assert_eq!(audio.output_sampling_frequency, Some(48_000.0));
     assert_eq!(audio.channels, Some(2));
     let cfg = audio.codec_config.as_ref().unwrap();
     assert_eq!(cfg.aac_object_type, Some(2));
-    assert_eq!(cfg.raw_hex.as_deref(), Some("1210"));
+    // raw_hex carries only the ASC bytes, not the 4+1-byte wrapper.
+    assert_eq!(
+      cfg.raw_hex.as_deref(),
+      Some(asc.iter().map(|b| format!("{:02x}", b)).collect::<String>().as_str())
+    );
+  }
+
+  #[test]
+  fn read_headers_aac_falls_back_to_sbr_for_racp() {
+    // No valid ASC wrapper (extra_data too short) -> profile undetected.
+    // racp fourcc forces the SBR / doubled-output-rate fallback regardless
+    // of the header sample rate (mkvtoolnix `r_real.cpp:284-286`).
+    let mut a_props = build_audio_v5(48_000, 2, 16, b"racp");
+    a_props.extend_from_slice(&[0x00, 0x01]); // < 5 bytes -> no ASC
+
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("AAC SBR"));
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(48_000.0));
+    assert_eq!(audio.output_sampling_frequency, Some(96_000.0));
+    assert_eq!(audio.channels, Some(2));
+    let cfg = audio.codec_config.as_ref().unwrap();
+    assert_eq!(cfg.aac_sbr_present, Some(true));
+  }
+
+  #[test]
+  fn read_headers_aac_falls_back_to_sbr_for_low_sample_rate() {
+    // raac with a header sample rate below 44100 and no ASC -> SBR fallback.
+    let mut a_props = build_audio_v5(22_050, 1, 16, b"raac");
+    a_props.extend_from_slice(&[0x00]); // < 5 bytes -> no ASC
+
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("AAC SBR"));
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(22_050.0));
+    assert_eq!(audio.output_sampling_frequency, Some(44_100.0));
+    assert_eq!(audio.channels, Some(1));
+  }
+
+  #[test]
+  fn read_headers_aac_no_fallback_for_raac_at_44100() {
+    // raac at exactly 44100 with no ASC -> no SBR fallback (sample rate not
+    // below 44100 and fourcc is not racp).
+    let mut a_props = build_audio_v5(44_100, 2, 16, b"raac");
+    a_props.extend_from_slice(&[0x00]); // < 5 bytes -> no ASC
+
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(44_100.0));
+    assert_eq!(audio.output_sampling_frequency, None);
+    assert!(audio.codec_config.is_none());
   }
 
   #[test]
@@ -690,6 +847,65 @@ mod tests {
       Some(Dimensions2D {
         width: 320,
         height: 240
+      })
+    );
+  }
+
+  #[test]
+  fn read_headers_keeps_header_dims_for_rv20_despite_packet() {
+    // RV20 must NOT derive dimensions from the first packet (mkvtoolnix only
+    // enables packet dimensions for RV40 — `r_real.cpp:241-242,588-590`).
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    let v_props = build_video_props(b"RV20", 320, 240, 25.0);
+    blob.extend(build_mdpr(4, "video/x-pn-realvideo", &v_props));
+    blob.extend(build_data_chunk_with_packets(&[(
+      4,
+      build_real_video_packet_dims(5, 5), // would decode to 640x480 for RV40
+    )]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let video = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(
+      video.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 320,
+        height: 240
+      })
+    );
+    // Display dims fall back to the (unchanged) header dimensions.
+    assert_eq!(
+      video.display_dimensions,
+      Some(Dimensions2D {
+        width: 320,
+        height: 240
+      })
+    );
+  }
+
+  #[test]
+  fn read_headers_keeps_header_dims_for_rv30_despite_packet() {
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    let v_props = build_video_props(b"RV30", 176, 144, 25.0);
+    blob.extend(build_mdpr(4, "video/x-pn-realvideo", &v_props));
+    blob.extend(build_data_chunk_with_packets(&[(4, build_real_video_packet_dims(5, 5))]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let video = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(
+      video.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 176,
+        height: 144
       })
     );
   }

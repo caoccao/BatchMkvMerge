@@ -30,17 +30,61 @@ use crate::media_metadata::model::track_properties_video::{Dimensions2D, VideoTr
 use super::avih::MainAviHeader;
 use super::odml::OdmlInfo;
 use super::strl::{AviStreamKind, BitmapInfoHeader, StreamBuilder, StreamFormat, VideoPropertiesHeader, WaveFormatEx};
+use super::subtitles::AviSubtitleDemuxer;
 
 /// Drive the per-stream conversion and stamp container fields.
-pub fn finalise(avih: Option<MainAviHeader>, streams: Vec<StreamBuilder>, odml: OdmlInfo, out: &mut MediaMetadata) {
+///
+/// PARSER-193: track ids mirror mkvtoolnix's stable numbering
+/// (`r_avi.cpp:868-933`): the single video track is id 0, audio tracks are
+/// numbered `1..=N` in audio-stream order, and subtitle tracks follow the
+/// audio tracks.  Skipped / unsupported stream-list entries never consume an
+/// id, so they cannot shift later track numbers.
+pub fn finalise(
+  avih: Option<MainAviHeader>,
+  streams: Vec<StreamBuilder>,
+  odml: OdmlInfo,
+  subtitles: Vec<AviSubtitleDemuxer>,
+  out: &mut MediaMetadata,
+) {
   if let Some(avih) = avih {
     set_container_props(&avih, odml, &mut out.container.properties);
   }
-  for (idx, builder) in streams.into_iter().enumerate() {
-    if let Some(track) = make_track(idx as i64, builder) {
-      out.tracks.push(track);
+
+  // mkvtoolnix emits at most one video track at id 0 (`identify_video`).
+  let mut audio_count: i64 = 0;
+  let mut emitted_video = false;
+  for builder in streams.into_iter() {
+    let kind = match builder.header.as_ref() {
+      Some(h) => h.kind,
+      None => continue,
+    };
+    match kind {
+      AviStreamKind::Video if !emitted_video => {
+        if let Some(track) = make_video_track(0, builder) {
+          out.tracks.push(track);
+          emitted_video = true;
+        }
+      }
+      AviStreamKind::Audio => {
+        // Audio id is `i + 1` where `i` is the audio-stream index
+        // (`r_avi.cpp:917`).
+        let id = audio_count + 1;
+        if let Some(track) = make_audio_track(id, builder) {
+          out.tracks.push(track);
+          audio_count += 1;
+        }
+      }
+      _ => {}
     }
   }
+
+  // Subtitle ids follow the audio tracks: `1 + audio_tracks + i`
+  // (`r_avi.cpp:933`).
+  for (i, demuxer) in subtitles.into_iter().enumerate() {
+    let id = 1 + audio_count + i as i64;
+    out.tracks.push(make_subtitle_track(id, demuxer));
+  }
+
   out.tags.per_track_count = out.tracks.iter().map(|t| t.properties.tags.len() as u32).sum();
 }
 
@@ -55,68 +99,13 @@ fn set_container_props(avih: &MainAviHeader, odml: OdmlInfo, props: &mut Contain
   props.is_fragmented = Some(false);
 }
 
-fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
-  let header = builder.header?;
-  let track_type = match header.kind {
-    AviStreamKind::Video => TrackType::Video,
-    AviStreamKind::Audio => TrackType::Audio,
-    AviStreamKind::Text => TrackType::Subtitles,
-    _ => return None,
-  };
-
-  let (codec_id, codec_name, codec_private, video, audio, subtitle) = match (track_type, builder.format) {
-    (TrackType::Video, Some(StreamFormat::Video(bmih))) => {
-      let codec_id = fourcc_to_string(&bmih.compression);
-      let codec_name = fourcc::lookup(&codec_id).map(|e| e.name.to_string());
-      let video = video_properties(&bmih, &header, builder.vprp.as_ref());
-      // PARSER-085: surface `BITMAPINFOHEADER + extradata` as the
-      // video codec_private blob.  Mirrors mkvtoolnix's
-      // `r_avi.cpp:188-206` storage of the whole bmih + extra bytes.
-      let private = Some(CodecPrivate::from_bytes(&bmih_codec_private(&bmih)));
-      (codec_id, codec_name, private, Some(video), None, None)
-    }
-    (TrackType::Audio, Some(StreamFormat::Audio(wf))) => {
-      // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real format tag in
-      // the SubFormat GUID's data1 field (PARSER-059): the 18-byte
-      // WAVEFORMATEX is followed by wValidBitsPerSample(2) +
-      // dwChannelMask(4) + GUID, so data1 sits at extra offset 6.
-      let effective_tag = if wf.format_tag == 0xFFFE && wf.extra.len() >= 10 {
-        u16::from_le_bytes([wf.extra[6], wf.extra[7]])
-      } else {
-        wf.format_tag
-      };
-      let codec_id = format!("0x{:04X}", effective_tag);
-      let codec_name = name_from_wave_tag(effective_tag);
-      let private = if wf.extra.is_empty() {
-        None
-      } else {
-        Some(CodecPrivate::from_bytes(&wf.extra))
-      };
-      let audio = audio_properties(&wf);
-      (codec_id, codec_name, private, None, Some(audio), None)
-    }
-    (TrackType::Subtitles, fmt) => {
-      // VirtualDub embeds SRT/SSA subtitles as a GAB2 block in the
-      // text stream's strf (PARSER-060).
-      let (codec_id, variant) = fmt
-        .as_ref()
-        .and_then(gab2_codec)
-        .map(|(id, name)| (id.to_string(), name.to_string()))
-        .unwrap_or_else(|| (fourcc_to_string(&header.fcc_handler), "AVI Text".to_string()));
-      let subtitle = Some(SubtitleTrackProperties {
-        text_subtitles: true,
-        encoding: None,
-        variant: Some(variant),
-        teletext_page: None,
-      });
-      (codec_id, None, None, None, None, subtitle)
-    }
-    _ => return None,
-  };
-
+/// Build the shared common-track properties from a stream's `strh`.  The
+/// model's `number` is `id + 1` per the rest of the parser (mkvtoolnix's
+/// track id maps to our `id`).
+fn common_props(id: i64, header: &super::strl::StreamHeader, name: Option<String>) -> CommonTrackProperties {
   let mut common = CommonTrackProperties::default();
   common.number = Some(id as u64 + 1);
-  common.track_name = builder.name.clone();
+  common.track_name = name;
   if header.length > 0 {
     common.num_index_entries = Some(header.length as u64);
   }
@@ -129,23 +118,111 @@ fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
       false,
     ));
   }
+  common
+}
 
+/// Build the single video track (id 0).  Returns `None` for non-video streams
+/// or streams without a BITMAPINFOHEADER `strf`.
+fn make_video_track(id: i64, builder: StreamBuilder) -> Option<Track> {
+  let header = builder.header.as_ref()?;
+  if header.kind != AviStreamKind::Video {
+    return None;
+  }
+  let StreamFormat::Video(bmih) = builder.format.as_ref()? else {
+    return None;
+  };
+  let codec_id = fourcc_to_string(&bmih.compression);
+  let codec_name = fourcc::lookup(&codec_id).map(|e| e.name.to_string());
+  let video = video_properties(bmih, header, builder.vprp.as_ref());
+  // PARSER-085: surface `BITMAPINFOHEADER + extradata` as the video
+  // codec_private blob.  Mirrors mkvtoolnix's `r_avi.cpp:188-206`.
+  let private = Some(CodecPrivate::from_bytes(&bmih_codec_private(bmih)));
+  let common = common_props(id, header, builder.name.clone());
   Some(Track {
     id,
-    track_type,
+    track_type: TrackType::Video,
     codec: CodecInfo {
       id: codec_id,
       name: codec_name,
-      codec_private,
+      codec_private: private,
     },
     properties: TrackProperties {
       common,
-      video,
-      audio,
-      subtitle,
+      video: Some(video),
       ..TrackProperties::default()
     },
   })
+}
+
+/// Build an audio track.  Returns `None` for non-audio streams or streams
+/// without a WAVEFORMATEX `strf`.
+fn make_audio_track(id: i64, builder: StreamBuilder) -> Option<Track> {
+  let header = builder.header.as_ref()?;
+  if header.kind != AviStreamKind::Audio {
+    return None;
+  }
+  let StreamFormat::Audio(wf) = builder.format.as_ref()? else {
+    return None;
+  };
+  // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real format tag in the
+  // SubFormat GUID's data1 field (PARSER-059): the 18-byte WAVEFORMATEX is
+  // followed by wValidBitsPerSample(2) + dwChannelMask(4) + GUID, so data1
+  // sits at extra offset 6.
+  let effective_tag = if wf.format_tag == 0xFFFE && wf.extra.len() >= 10 {
+    u16::from_le_bytes([wf.extra[6], wf.extra[7]])
+  } else {
+    wf.format_tag
+  };
+  let codec_id = format!("0x{:04X}", effective_tag);
+  let codec_name = name_from_wave_tag(effective_tag);
+  let private = if wf.extra.is_empty() {
+    None
+  } else {
+    Some(CodecPrivate::from_bytes(&wf.extra))
+  };
+  let audio = audio_properties(wf);
+  let common = common_props(id, header, builder.name.clone());
+  Some(Track {
+    id,
+    track_type: TrackType::Audio,
+    codec: CodecInfo {
+      id: codec_id,
+      name: codec_name,
+      codec_private: private,
+    },
+    properties: TrackProperties {
+      common,
+      audio: Some(audio),
+      ..TrackProperties::default()
+    },
+  })
+}
+
+/// Build a subtitle track from a recognised `movi` GAB2 demuxer (PARSER-192).
+/// Only SRT / SSA demuxers reach this point — mkvtoolnix drops unknown content.
+fn make_subtitle_track(id: i64, demuxer: AviSubtitleDemuxer) -> Track {
+  let mut common = CommonTrackProperties::default();
+  common.number = Some(id as u64 + 1);
+  let subtitle = SubtitleTrackProperties {
+    text_subtitles: true,
+    encoding: demuxer.encoding.clone(),
+    variant: Some(demuxer.kind.codec_name().to_string()),
+    teletext_page: None,
+  };
+  Track {
+    id,
+    track_type: TrackType::Subtitles,
+    codec: CodecInfo {
+      id: demuxer.kind.codec_id().to_string(),
+      name: Some(demuxer.kind.codec_name().to_string()),
+      codec_private: None,
+    },
+    properties: TrackProperties {
+      common,
+      subtitle: Some(subtitle),
+      ..TrackProperties::default()
+    },
+  }
 }
 
 fn video_properties(
@@ -253,42 +330,6 @@ fn fourcc_to_string(bytes: &[u8; 4]) -> String {
     .collect()
 }
 
-/// Detect a GAB2 subtitle block (VirtualDub) in a text stream's strf and
-/// classify it as SRT or SSA/ASS (PARSER-060 / PARSER-087).  The block is
-/// `"GAB2\0"` followed by `(u16 type, u32 size, data)` entries; type 4 carries
-/// the subtitle file content.  PARSER-087 routes the payload through the
-/// canonical SRT / SSA text probers instead of the previous hand-rolled string
-/// search so character-set handling and edge cases match the standalone
-/// subtitle readers.
-fn gab2_codec(fmt: &StreamFormat) -> Option<(&'static str, &'static str)> {
-  let StreamFormat::Other(bytes) = fmt else {
-    return None;
-  };
-  if bytes.len() < 5 || &bytes[0..4] != b"GAB2" {
-    return None;
-  }
-  let mut pos = 5usize; // skip "GAB2\0"
-  while pos + 6 <= bytes.len() {
-    let block_type = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
-    let size = u32::from_le_bytes([bytes[pos + 2], bytes[pos + 3], bytes[pos + 4], bytes[pos + 5]]) as usize;
-    let data_start = pos + 6;
-    let data_end = (data_start + size).min(bytes.len());
-    if block_type == 4 {
-      let data = &bytes[data_start..data_end];
-      let text = crate::media_metadata::subtitles::encoding::decode_lossy(data);
-      if crate::media_metadata::subtitles::ssa::classify(&text).is_some() {
-        return Some(("S_TEXT/ASS", "SSA/ASS (GAB2)"));
-      }
-      if crate::media_metadata::subtitles::srt::has_srt_timecode_line(&text) {
-        return Some(("S_TEXT/UTF8", "SRT (GAB2)"));
-      }
-      return Some(("S_TEXT/UTF8", "GAB2 Subtitle"));
-    }
-    pos = data_end;
-  }
-  None
-}
-
 fn name_from_wave_tag(tag: u16) -> Option<String> {
   let name = match tag {
     0x0001 => "PCM",
@@ -312,6 +353,7 @@ fn name_from_wave_tag(tag: u16) -> Option<String> {
 mod tests {
   use super::*;
   use crate::media_metadata::avi::strl::StreamHeader;
+  use crate::media_metadata::avi::subtitles::AviSubtitleKind;
 
   fn dummy_video_header() -> StreamHeader {
     StreamHeader {
@@ -358,6 +400,57 @@ mod tests {
     }
   }
 
+  fn video_builder() -> StreamBuilder {
+    StreamBuilder {
+      header: Some(dummy_video_header()),
+      format: Some(StreamFormat::Video(BitmapInfoHeader {
+        size: 40,
+        width: 1920,
+        height: 1080,
+        planes: 1,
+        bit_count: 24,
+        compression: *b"H264",
+        image_size: 0,
+        extra: Vec::new(),
+      })),
+      name: None,
+      private: None,
+      vprp: None,
+    }
+  }
+
+  fn audio_builder() -> StreamBuilder {
+    StreamBuilder {
+      header: Some(dummy_audio_header()),
+      format: Some(StreamFormat::Audio(WaveFormatEx {
+        format_tag: 0x0055,
+        channels: 2,
+        samples_per_sec: 48000,
+        avg_bytes_per_sec: 16000,
+        block_align: 4,
+        bits_per_sample: 16,
+        extra: Vec::new(),
+      })),
+      name: None,
+      private: None,
+      vprp: None,
+    }
+  }
+
+  fn text_builder() -> StreamBuilder {
+    StreamBuilder {
+      header: Some(dummy_text_header()),
+      format: None,
+      name: None,
+      private: None,
+      vprp: None,
+    }
+  }
+
+  fn no_avih() -> Option<MainAviHeader> {
+    None
+  }
+
   #[test]
   fn video_track_emitted_with_dims_and_duration() {
     let bmih = BitmapInfoHeader {
@@ -377,7 +470,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(0, builder).unwrap();
+    let track = make_video_track(0, builder).unwrap();
     assert_eq!(track.track_type, TrackType::Video);
     assert_eq!(track.codec.id, "H264");
     let v = track.properties.video.as_ref().unwrap();
@@ -418,7 +511,7 @@ mod tests {
         frame_height_in_lines: 1080,
       }),
     };
-    let track = make_track(0, builder).unwrap();
+    let track = make_video_track(0, builder).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(
       v.display_dimensions,
@@ -453,7 +546,7 @@ mod tests {
         frame_height_in_lines: 0,
       }),
     };
-    let track = make_track(0, builder).unwrap();
+    let track = make_video_track(0, builder).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(
       v.display_dimensions,
@@ -485,7 +578,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(0, builder).unwrap();
+    let track = make_video_track(0, builder).unwrap();
     let private = track.codec.codec_private.unwrap();
     assert_eq!(private.length, 44);
     // First 4 bytes are the BMIH `size` (40) in LE.
@@ -513,7 +606,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(0, builder).unwrap();
+    let track = make_video_track(0, builder).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().height, 1080);
   }
@@ -536,7 +629,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(1, builder).unwrap();
+    let track = make_audio_track(1, builder).unwrap();
     assert_eq!(track.track_type, TrackType::Audio);
     assert_eq!(track.codec.id, "0x0055");
     assert_eq!(track.codec.name.as_deref(), Some("MP3"));
@@ -564,25 +657,27 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(1, builder).unwrap();
+    let track = make_audio_track(1, builder).unwrap();
     let private = track.codec.codec_private.unwrap();
     assert_eq!(private.length, 2);
   }
 
   #[test]
-  fn text_stream_becomes_subtitle_track() {
-    let builder = StreamBuilder {
-      header: Some(dummy_text_header()),
-      format: None,
-      name: Some("English".to_string()),
-      private: None,
-      vprp: None,
-    };
-    let track = make_track(2, builder).unwrap();
+  fn recognised_subtitle_demuxer_becomes_subtitle_track() {
+    let track = make_subtitle_track(
+      3,
+      AviSubtitleDemuxer {
+        kind: AviSubtitleKind::Srt,
+        encoding: Some("UTF-8".to_string()),
+      },
+    );
     assert_eq!(track.track_type, TrackType::Subtitles);
+    assert_eq!(track.id, 3);
+    assert_eq!(track.codec.id, "S_TEXT/UTF8");
     let sub = track.properties.subtitle.unwrap();
     assert!(sub.text_subtitles);
-    assert_eq!(track.properties.common.track_name.as_deref(), Some("English"));
+    assert_eq!(sub.variant.as_deref(), Some("SRT"));
+    assert_eq!(sub.encoding.as_deref(), Some("UTF-8"));
   }
 
   // ---- PARSER-059: WAVEFORMATEXTENSIBLE resolution ---------------------
@@ -611,59 +706,115 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_track(1, builder).unwrap();
+    let track = make_audio_track(1, builder).unwrap();
     assert_eq!(track.codec.id, "0x0001");
     assert_eq!(track.codec.name.as_deref(), Some("PCM"));
   }
 
-  // ---- PARSER-060: GAB2 embedded subtitles -----------------------------
+  #[test]
+  fn make_video_track_drops_stream_without_header() {
+    assert!(make_video_track(0, StreamBuilder::default()).is_none());
+  }
 
   #[test]
-  fn gab2_srt_subtitle_classified() {
-    let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello\r\n";
-    let mut gab2 = b"GAB2\0".to_vec();
-    // filename block (type 2)
-    gab2.extend_from_slice(&2u16.to_le_bytes());
-    gab2.extend_from_slice(&4u32.to_le_bytes());
-    gab2.extend_from_slice(b"a.sr");
-    // subtitle data block (type 4)
-    gab2.extend_from_slice(&4u16.to_le_bytes());
-    gab2.extend_from_slice(&(srt.len() as u32).to_le_bytes());
-    gab2.extend_from_slice(srt);
-    let builder = StreamBuilder {
-      header: Some(dummy_text_header()),
-      format: Some(StreamFormat::Other(gab2)),
-      name: None,
-      private: None,
-      vprp: None,
-    };
-    let track = make_track(2, builder).unwrap();
-    assert_eq!(track.track_type, TrackType::Subtitles);
-    assert_eq!(track.codec.id, "S_TEXT/UTF8");
-    assert_eq!(
-      track.properties.subtitle.unwrap().variant.as_deref(),
-      Some("SRT (GAB2)")
+  fn make_video_track_rejects_audio_stream() {
+    assert!(make_video_track(0, audio_builder()).is_none());
+  }
+
+  #[test]
+  fn make_audio_track_rejects_video_stream() {
+    assert!(make_audio_track(1, video_builder()).is_none());
+  }
+
+  // ---- PARSER-193: stable video / audio / subtitle id assignment -------
+
+  #[test]
+  fn finalise_assigns_video_id0_and_audio_ids_after_it() {
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder(), audio_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![],
+      &mut m,
     );
+    assert_eq!(m.tracks.len(), 3);
+    assert_eq!(m.tracks[0].track_type, TrackType::Video);
+    assert_eq!(m.tracks[0].id, 0);
+    assert_eq!(m.tracks[1].track_type, TrackType::Audio);
+    assert_eq!(m.tracks[1].id, 1);
+    assert_eq!(m.tracks[2].track_type, TrackType::Audio);
+    assert_eq!(m.tracks[2].id, 2);
+    // number == id + 1 per the parser convention.
+    assert_eq!(m.tracks[2].properties.common.number, Some(3));
   }
 
   #[test]
-  fn missing_header_drops_track() {
-    let builder = StreamBuilder::default();
-    assert!(make_track(0, builder).is_none());
+  fn finalise_skipped_stream_entries_do_not_shift_audio_ids() {
+    // A Midi stream and a text stream with no recognised subtitle sit
+    // between the video and audio streams.  They must not consume an id, so
+    // the audio track still gets id 1.
+    let mut midi = video_builder();
+    midi.header.as_mut().unwrap().kind = AviStreamKind::Midi;
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder(), midi, text_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 2);
+    assert_eq!(m.tracks[0].track_type, TrackType::Video);
+    assert_eq!(m.tracks[0].id, 0);
+    assert_eq!(m.tracks[1].track_type, TrackType::Audio);
+    assert_eq!(m.tracks[1].id, 1);
   }
 
   #[test]
-  fn unknown_kind_returns_none() {
-    let mut header = dummy_video_header();
-    header.kind = AviStreamKind::Midi;
-    let builder = StreamBuilder {
-      header: Some(header),
-      format: None,
-      name: None,
-      private: None,
-      vprp: None,
-    };
-    assert!(make_track(0, builder).is_none());
+  fn finalise_subtitles_numbered_after_audio_tracks() {
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![
+        AviSubtitleDemuxer {
+          kind: AviSubtitleKind::Srt,
+          encoding: Some("UTF-8".to_string()),
+        },
+        AviSubtitleDemuxer {
+          kind: AviSubtitleKind::Ssa,
+          encoding: None,
+        },
+      ],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 4);
+    // video=0, audio=1, subtitles=2,3.
+    assert_eq!(m.tracks[2].track_type, TrackType::Subtitles);
+    assert_eq!(m.tracks[2].id, 2);
+    assert_eq!(m.tracks[2].codec.id, "S_TEXT/UTF8");
+    assert_eq!(m.tracks[3].id, 3);
+    assert_eq!(m.tracks[3].codec.id, "S_TEXT/ASS");
+  }
+
+  #[test]
+  fn finalise_emits_only_one_video_track() {
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder(), video_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![],
+      &mut m,
+    );
+    // Second video stream is ignored (mkvtoolnix only identifies track 0).
+    let video_count = m.tracks.iter().filter(|t| t.track_type == TrackType::Video).count();
+    assert_eq!(video_count, 1);
+    // The audio track still lands at id 1.
+    let audio = m.tracks.iter().find(|t| t.track_type == TrackType::Audio).unwrap();
+    assert_eq!(audio.id, 1);
   }
 
   #[test]
@@ -689,7 +840,7 @@ mod tests {
       height: 1080,
     };
     let mut m = MediaMetadata::new("clip.avi", 0);
-    finalise(Some(avih), vec![], OdmlInfo::default(), &mut m);
+    finalise(Some(avih), vec![], OdmlInfo::default(), vec![], &mut m);
     assert!(m.container.properties.duration.is_some());
     assert_eq!(m.container.properties.is_fragmented, Some(false));
   }
@@ -710,7 +861,7 @@ mod tests {
       total_frames: Some(1000),
     };
     let mut m = MediaMetadata::new("clip.avi", 0);
-    finalise(Some(avih), vec![], odml, &mut m);
+    finalise(Some(avih), vec![], odml, vec![], &mut m);
     assert!(m.container.properties.duration.is_some());
   }
 }

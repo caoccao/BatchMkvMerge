@@ -28,5 +28,6 @@ pub mod odml;
 pub mod reader;
 pub mod riff;
 pub mod strl;
+pub mod subtitles;
 
 pub use reader::AviReader;

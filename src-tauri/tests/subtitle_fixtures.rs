@@ -80,6 +80,36 @@ fn parses_webvtt_clip() {
 }
 
 #[test]
+fn parses_webvtt_with_header_text_after_magic() {
+  // PARSER-196: mkvtoolnix claims any file whose first line starts with
+  // `WEBVTT`, even when text immediately follows the magic with no separator.
+  let blob = b"WEBVTT-some-header\n\n00:00.000 --> 00:02.000\nHello\n";
+  let path = write_tempfile(blob, "vtt");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.container.format, ContainerFormat::Webvtt);
+}
+
+#[test]
+fn parses_webvtt_with_style_header_over_one_kib() {
+  // PARSER-197: a STYLE block exceeding the old 1 KiB cap before the first cue
+  // must be captured in full as codec-private (mkvtoolnix parses the whole file).
+  let mut blob = String::from("WEBVTT\n\nSTYLE\n");
+  blob.push_str(&"::cue(.row) { color: rgb(0, 0, 0) }\n".repeat(64));
+  blob.push_str("::cue(.sentinel) { color: rebeccapurple }\n");
+  assert!(blob.len() > 1024, "header must exceed the old 1 KiB cap");
+  blob.push_str("\n00:00.000 --> 00:02.000\nHello\n");
+  let path = write_tempfile(blob.as_bytes(), "vtt");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.container.format, ContainerFormat::Webvtt);
+  let private = m.tracks[0].codec.codec_private.as_ref().unwrap();
+  assert!(private.length as usize > 1024);
+  // "sentinel" = 73 65 6e 74 69 6e 65 6c
+  assert!(private.hex.contains("73656e74696e656c"));
+}
+
+#[test]
 fn parses_usf_clip() {
   let blob = b"<?xml version=\"1.0\"?>\n<USFSubtitles version=\"1.1\">\n</USFSubtitles>\n";
   let path = write_tempfile(blob, "usf");

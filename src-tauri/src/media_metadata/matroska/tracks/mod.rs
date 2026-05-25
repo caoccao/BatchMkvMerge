@@ -183,14 +183,17 @@ fn read_track_entry(
     ..TrackProperties::default()
   };
   // MaxBlockAdditionID stays the value read from the element — it is NOT the
-  // count of BlockAdditionMapping entries (PARSER-037). The mappings are
-  // walked for validation but not yet otherwise exposed.
-  let _ = &block_additions;
+  // count of BlockAdditionMapping entries (PARSER-037).
 
   match track_type {
     TrackType::Video => {
       let mut v = video.build();
       v.default_duration_ns = default_duration_ns;
+      // PARSER-186: carry the parsed BlockAdditionMapping entries onto the
+      // video track, mirroring `r_matroska.cpp:1465-1479` which stores them on
+      // the track via `track->block_addition_mappings`.  Block-addition
+      // mappings (Dolby Vision, HDR10+) only apply to video tracks.
+      v.block_addition_mappings = block_additions.iter().map(|m| m.to_model()).collect();
       properties.video = Some(v);
     }
     TrackType::Audio => {
@@ -470,5 +473,66 @@ mod tests {
     parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
     // 4 from the element, NOT 1 (the mapping count).
     assert_eq!(out.tracks[0].properties.common.max_block_addition_id, Some(4));
+  }
+
+  // ---- PARSER-186: BlockAdditionMapping entries reach the video track ----
+
+  #[test]
+  fn block_addition_mappings_exposed_on_video_track() {
+    // "dvvC" packed big-endian as a u64 BlockAddIDType so it renders as a
+    // FOURCC string, matching the MP4 / IVF Dolby Vision block-addition shape.
+    let dvvc_value = u64::from(u32::from_be_bytes(*b"dvvC"));
+    let mut payload = Vec::new();
+    payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+    payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+    payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_AV1"));
+    let mut mapping_payload = Vec::new();
+    mapping_payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_TYPE, 2, dvvc_value));
+    mapping_payload.extend(encode_element(ids::BLOCK_ADD_ID_EXTRA_DATA, 2, &[0x01, 0x00, 0x4a, 0xff]));
+    payload.extend(encode_element(ids::BLOCK_ADDITION_MAPPING, 2, &mapping_payload));
+    let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+    let (_b, header, mut s) = build_tracks(vec![entry]);
+    let mut out = MediaMetadata::new("clip.mkv", 0);
+    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    let video = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(video.block_addition_mappings.len(), 1);
+    assert_eq!(video.block_addition_mappings[0].id_type, "dvvC");
+    assert_eq!(video.block_addition_mappings[0].data_hex, "01004aff");
+  }
+
+  #[test]
+  fn block_addition_mapping_non_fourcc_type_renders_decimal() {
+    let mut payload = Vec::new();
+    payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+    payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+    payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_VP9"));
+    let mut mapping_payload = Vec::new();
+    // 1 packs to bytes 00 00 00 01 which are not all printable -> decimal.
+    mapping_payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_TYPE, 2, 1));
+    payload.extend(encode_element(ids::BLOCK_ADDITION_MAPPING, 2, &mapping_payload));
+    let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+    let (_b, header, mut s) = build_tracks(vec![entry]);
+    let mut out = MediaMetadata::new("clip.mkv", 0);
+    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    let video = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(video.block_addition_mappings[0].id_type, "1");
+    assert_eq!(video.block_addition_mappings[0].data_hex, "");
+  }
+
+  #[test]
+  fn block_addition_mappings_not_attached_to_audio_track() {
+    let mut payload = Vec::new();
+    payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 2));
+    payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_AUDIO));
+    payload.extend(encode_element_string(ids::CODEC_ID, 1, "A_AC3"));
+    let mut mapping_payload = Vec::new();
+    mapping_payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_TYPE, 2, 1));
+    payload.extend(encode_element(ids::BLOCK_ADDITION_MAPPING, 2, &mapping_payload));
+    let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+    let (_b, header, mut s) = build_tracks(vec![entry]);
+    let mut out = MediaMetadata::new("clip.mkv", 0);
+    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    // Audio tracks carry no video block-addition mappings.
+    assert!(out.tracks[0].properties.video.is_none());
   }
 }

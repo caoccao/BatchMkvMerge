@@ -139,6 +139,14 @@ impl Reader for CoreAudioReader {
     out.container.recognized = true;
     out.container.supported = is_alac;
 
+    // mkvtoolnix's `identify()` reports a non-ALAC CAF as a recognised but
+    // unsupported container and returns before emitting any track
+    // (`r_coreaudio.cpp:34-48`).  Mirror that: claim the container, emit no
+    // track.  PARSER-188.
+    if !is_alac {
+      return Ok(());
+    }
+
     // pakt → total frame count → duration.
     if let Some(pakt) = find_chunk(&chunks, b"pakt") {
       let body = read_chunk_body(src, pakt)?;
@@ -153,14 +161,12 @@ impl Reader for CoreAudioReader {
       }
     }
 
-    // kuki → ALAC magic cookie → codec_private.
+    // kuki → ALAC magic cookie → codec_private.  Only reached for ALAC.
     let mut codec_private = None;
-    if is_alac {
-      if let Some(kuki) = find_chunk(&chunks, b"kuki") {
-        let body = read_chunk_body(src, kuki)?;
-        if let Some(cookie) = caf::convert_alac_cookie(&body) {
-          codec_private = Some(CodecPrivate::from_bytes(&cookie));
-        }
+    if let Some(kuki) = find_chunk(&chunks, b"kuki") {
+      let body = read_chunk_body(src, kuki)?;
+      if let Some(cookie) = caf::convert_alac_cookie(&body) {
+        codec_private = Some(CodecPrivate::from_bytes(&cookie));
       }
     }
 
@@ -234,9 +240,9 @@ mod tests {
   }
 
   #[test]
-  fn read_headers_extracts_lpcm_track() {
+  fn read_headers_extracts_alac_track() {
     use crate::media_metadata::deadline::Deadline;
-    let bytes = build_caf(b"lpcm", 48_000.0, 2, 24);
+    let bytes = build_caf(b"alac", 48_000.0, 2, 24);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.caf", 0);
     CoreAudioReader
@@ -247,14 +253,17 @@ mod tests {
     assert_eq!(a.channels, Some(2));
     assert_eq!(a.bit_depth, Some(24));
     assert_eq!(a.sampling_frequency, Some(48_000.0));
-    assert_eq!(out.tracks[0].codec.id, "CAF/lpcm");
-    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("PCM"));
+    assert_eq!(out.tracks[0].codec.id, "CAF/alac");
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("ALAC (Apple Lossless)"));
   }
 
-  // ---- PARSER-031: only ALAC is supported -------------------------------
+  // ---- PARSER-031 / PARSER-188: only ALAC is supported, and a non-ALAC
+  // (unsupported) CAF is reported as a recognised container with NO track,
+  // mirroring mkvtoolnix's `identify()` which calls
+  // `id_result_container_unsupported` and returns before `id_result_track`.
 
   #[test]
-  fn lpcm_is_recognised_but_unsupported() {
+  fn lpcm_is_recognised_but_unsupported_with_no_track() {
     use crate::media_metadata::deadline::Deadline;
     let bytes = build_caf(b"lpcm", 48_000.0, 2, 24);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
@@ -262,8 +271,24 @@ mod tests {
     CoreAudioReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::CoreAudio);
     assert!(out.container.recognized);
     assert!(!out.container.supported);
+    assert!(out.tracks.is_empty(), "non-ALAC CAF must emit no track");
+  }
+
+  #[test]
+  fn aac_caf_is_recognised_but_unsupported_with_no_track() {
+    use crate::media_metadata::deadline::Deadline;
+    let bytes = build_caf(b"aac ", 44_100.0, 2, 16);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.caf", 0);
+    CoreAudioReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.container.recognized);
+    assert!(!out.container.supported);
+    assert!(out.tracks.is_empty());
   }
 
   #[test]

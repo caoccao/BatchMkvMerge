@@ -223,6 +223,21 @@ pub fn find_mp3_header(buf: &[u8]) -> Option<usize> {
   None
 }
 
+/// PARSER-184: decode the first MPEG-1/2 audio (MP2/MP3) header in `buf` and
+/// return `(channels, sampling_frequency)`.  Mirrors mkvtoolnix's
+/// `qtmp4_demuxer_c::derive_track_params_from_mp3_audio_bitstream`
+/// (`r_qtmp4.cpp:3552-3565`): `find_mp3_header` + `decode_mp3_header`, ignoring
+/// tag "frames" (which carry no audio parameters).  Returns `None` when no
+/// decodable audio frame header is found.
+pub fn first_header_params(buf: &[u8]) -> Option<(u32, u32)> {
+  let offset = find_mp3_header(buf)?;
+  let header = decode_mp3_header(&buf[offset..])?;
+  if header.is_tag || header.sampling_frequency == 0 {
+    return None;
+  }
+  Some((header.channels, header.sampling_frequency))
+}
+
 /// Port of `find_consecutive_mp3_headers`. Skips leading tags, then requires
 /// `num` consecutive frames whose version/layer/channels/sample-rate agree.
 /// Returns `(offset, first_header)`.

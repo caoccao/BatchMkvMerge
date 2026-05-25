@@ -19,10 +19,11 @@
 //! `r_matroska.cpp:1465-1479` — extracts `(id_name, id_type, id_value,
 //! id_extra_data)` tuples per BlockAdditionMapping child of a TrackEntry.
 //!
-//! For Phase 3 we only validate / collect the tuples — the values feed
-//! `CommonTrackProperties.max_block_addition_id` for cross-track reference.
-//! Codec-specific decoders (Dolby Vision RPU, HDR10+) consume the extra
-//! data in Phase 8.
+//! PARSER-186: the validated tuples are converted to the wire-format
+//! `BlockAdditionMapping { id_type, data_hex }` via [`BlockAdditionMapping::to_model`]
+//! and carried onto the video track, mirroring how `r_matroska.cpp:1465-1479`
+//! stores them on `track->block_addition_mappings`.  Dolby Vision / HDR10+
+//! configuration records ride through here verbatim.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -46,6 +47,37 @@ impl BlockAdditionMapping {
   /// At minimum one of value / type / extra_data must be present.
   pub fn is_valid(&self) -> bool {
     self.id_value.is_some() || self.id_type.is_some() || self.id_extra_data.is_some()
+  }
+
+  /// Render a numeric `BlockAddIDType` as the source FOURCC string when its
+  /// four big-endian bytes are all printable ASCII (mkvtoolnix stores the
+  /// type as `fourcc_c{"dvvC"}.value()` — a packed u32, see
+  /// `common/dovi_meta.cpp:329`), otherwise as the decimal value.  Keeps the
+  /// `id_type` field consistent with the MP4 / IVF block-addition output,
+  /// where Dolby Vision mappings are keyed by the `dvcC` / `dvvC` FOURCC.
+  fn render_id_type(value: u64) -> String {
+    if value <= u64::from(u32::MAX) {
+      let bytes = (value as u32).to_be_bytes();
+      if bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        return bytes.iter().map(|b| *b as char).collect();
+      }
+    }
+    value.to_string()
+  }
+
+  /// Convert the parsed Matroska mapping into the wire-format
+  /// [`crate::media_metadata::model::track_properties_video::BlockAdditionMapping`]
+  /// shape (`id_type` string + hex-encoded `data_hex`), matching the MP4 / IVF
+  /// representation.  Mirrors `r_matroska.cpp:1465-1479` carrying the parsed
+  /// mapping onto the track.
+  pub fn to_model(&self) -> crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
+    let id_type = self.id_type.map(Self::render_id_type).unwrap_or_default();
+    let data_hex = self
+      .id_extra_data
+      .as_deref()
+      .map(|bytes| bytes.iter().map(|b| format!("{:02x}", b)).collect())
+      .unwrap_or_default();
+    crate::media_metadata::model::track_properties_video::BlockAdditionMapping { id_type, data_hex }
   }
 }
 
@@ -151,6 +183,45 @@ mod tests {
       id_extra_data: None,
     };
     assert!(m2.is_valid());
+  }
+
+  #[test]
+  fn to_model_renders_fourcc_type_and_hex_extra_data() {
+    let m = BlockAdditionMapping {
+      id_name: Some("Dolby Vision configuration".to_owned()),
+      id_value: None,
+      id_type: Some(u64::from(u32::from_be_bytes(*b"dvvC"))),
+      id_extra_data: Some(vec![0x01, 0x00, 0x4a, 0xff]),
+    };
+    let model = m.to_model();
+    assert_eq!(model.id_type, "dvvC");
+    assert_eq!(model.data_hex, "01004aff");
+  }
+
+  #[test]
+  fn to_model_renders_non_printable_type_as_decimal() {
+    let m = BlockAdditionMapping {
+      id_name: None,
+      id_value: None,
+      id_type: Some(7),
+      id_extra_data: None,
+    };
+    let model = m.to_model();
+    assert_eq!(model.id_type, "7");
+    assert_eq!(model.data_hex, "");
+  }
+
+  #[test]
+  fn to_model_with_no_type_yields_empty_id_type() {
+    let m = BlockAdditionMapping {
+      id_name: None,
+      id_value: Some(3),
+      id_type: None,
+      id_extra_data: None,
+    };
+    let model = m.to_model();
+    assert_eq!(model.id_type, "");
+    assert_eq!(model.data_hex, "");
   }
 
   #[test]

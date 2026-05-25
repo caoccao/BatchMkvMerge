@@ -208,6 +208,63 @@ fn stts(count: u32, delta: u32) -> Vec<u8> {
   encode_box(b"stts", &p)
 }
 
+/// `stsz` with per-sample sizes (sample_size = 0).
+fn stsz(sizes: &[u32]) -> Vec<u8> {
+  let mut p = vec![0u8; 4];
+  p.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0 → per-sample
+  p.extend_from_slice(&(sizes.len() as u32).to_be_bytes());
+  for s in sizes {
+    p.extend_from_slice(&s.to_be_bytes());
+  }
+  encode_box(b"stsz", &p)
+}
+
+/// `stsc` with explicit (first_chunk, samples_per_chunk, sample_desc) runs.
+fn stsc(entries: &[(u32, u32, u32)]) -> Vec<u8> {
+  let mut p = vec![0u8; 4];
+  p.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+  for (fc, spc, sd) in entries {
+    p.extend_from_slice(&fc.to_be_bytes());
+    p.extend_from_slice(&spc.to_be_bytes());
+    p.extend_from_slice(&sd.to_be_bytes());
+  }
+  encode_box(b"stsc", &p)
+}
+
+/// `stco` with explicit 32-bit chunk offsets.
+fn stco(offsets: &[u32]) -> Vec<u8> {
+  let mut p = vec![0u8; 4];
+  p.extend_from_slice(&(offsets.len() as u32).to_be_bytes());
+  for o in offsets {
+    p.extend_from_slice(&o.to_be_bytes());
+  }
+  encode_box(b"stco", &p)
+}
+
+/// An `alac` magic-cookie box: 4-byte FullBox header + a `payload`-byte
+/// ALACSpecificConfig.  A valid config is 24 bytes; a short payload models a
+/// broken/truncated cookie that mkvtoolnix rejects (r_qtmp4.cpp:3705-3716).
+fn alac_box(config: &[u8]) -> Vec<u8> {
+  let mut p = vec![0u8; 4]; // version + flags
+  p.extend_from_slice(config);
+  encode_box(b"alac", &p)
+}
+
+/// A 24-byte ALACSpecificConfig carrying the given channels / bit depth / rate.
+fn alac_config(channels: u8, bit_depth: u8, sample_rate: u32) -> Vec<u8> {
+  let mut c = Vec::new();
+  c.extend_from_slice(&4096u32.to_be_bytes()); // frameLength
+  c.push(0); // compatibleVersion
+  c.push(bit_depth);
+  c.extend_from_slice(&[0, 0, 0]); // pb / mb / kb
+  c.push(channels);
+  c.extend_from_slice(&0u16.to_be_bytes()); // maxRun
+  c.extend_from_slice(&0u32.to_be_bytes()); // maxFrameBytes
+  c.extend_from_slice(&0u32.to_be_bytes()); // avgBitRate
+  c.extend_from_slice(&sample_rate.to_be_bytes());
+  c
+}
+
 fn video_trak(track_id: u32, codec: &[u8; 4], lang: &str, width: u16, height: u16) -> Vec<u8> {
   let stbl_payload = {
     let mut p = stsd(vec![video_sample_entry(codec, width, height)]);
@@ -237,6 +294,54 @@ fn audio_trak(track_id: u32, codec: &[u8; 4], lang: &str, sample_rate: u32, chan
   let mut trak = tkhd(track_id, 0, 0);
   trak.extend(mdia);
   encode_box(b"trak", &trak)
+}
+
+/// Build an audio trak with an explicit sample entry + a full sample table
+/// (stsz/stsc/stco) so the verification pass can run a bounded first-bytes read.
+fn audio_trak_with_table(
+  track_id: u32,
+  codec: &[u8; 4],
+  lang: &str,
+  sample_rate: u32,
+  channels: u16,
+  entry_children: &[u8],
+  sizes: &[u32],
+  chunk_offset: u32,
+) -> Vec<u8> {
+  let entry = audio_sample_entry(codec, channels, sample_rate, entry_children);
+  let mut stbl = stsd(vec![entry]);
+  stbl.extend(stts(sizes.len().max(1) as u32, 1024));
+  stbl.extend(stsz(sizes));
+  stbl.extend(stsc(&[(1, sizes.len().max(1) as u32, 1)]));
+  stbl.extend(stco(&[chunk_offset]));
+  let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl));
+  // mdhd timescale must be non-zero (a zero timescale marks the track invalid),
+  // independent of the audio sample-rate placeholder we are testing recovery of.
+  let mut mdia = mdhd(48_000, 0, lang);
+  mdia.extend(hdlr(b"soun", "SoundHandler"));
+  mdia.extend(minf);
+  let mdia = encode_box(b"mdia", &mdia);
+  let mut trak = tkhd(track_id, 0, 0);
+  trak.extend(mdia);
+  encode_box(b"trak", &trak)
+}
+
+/// Assemble `ftyp + mdat(sample_data) + moov(trak)`.  `mdat` precedes `moov`
+/// so the sample offset is deterministic (`len(ftyp) + 8`), which the caller
+/// bakes into the trak's `stco`.
+fn build_mp4_mdat_first(major: &[u8; 4], trak_builder: impl FnOnce(u32) -> Vec<u8>, sample_data: &[u8]) -> Vec<u8> {
+  let ftyp = ftyp(major, &[b"isom"]);
+  let mdat = encode_box(b"mdat", sample_data);
+  let sample_offset = (ftyp.len() + 8) as u32; // 8 = mdat box header
+  let trak = trak_builder(sample_offset);
+  let mvhd = mvhd(1000, 60_000, 2);
+  let mut moov_payload = mvhd;
+  moov_payload.extend(trak);
+  let moov = encode_box(b"moov", &moov_payload);
+  let mut bytes = ftyp;
+  bytes.extend(mdat);
+  bytes.extend(moov);
+  bytes
 }
 
 fn build_mp4(major: &[u8; 4], compats: &[&[u8; 4]], traks: Vec<Vec<u8>>) -> Vec<u8> {
@@ -360,6 +465,75 @@ fn empty_track_set_still_parses() {
   let _ = std::fs::remove_file(&path);
   assert!(m.tracks.is_empty());
   assert_eq!(m.container.properties.is_fragmented, Some(false));
+}
+
+// PARSER-185: a valid ALAC track (cookie ≥ 28 bytes private) is kept; a
+// truncated cookie is dropped even though the sample-entry channels/rate are OK.
+#[test]
+fn alac_with_valid_config_kept() {
+  let cookie = alac_box(&alac_config(2, 16, 44_100));
+  let trak = audio_trak_with_table(1, b"alac", "eng", 44_100, 2, &cookie, &[64], 0);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "m4a");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  assert_eq!(m.tracks[0].track_type, TrackType::Audio);
+}
+
+#[test]
+fn alac_with_truncated_config_dropped() {
+  // Only 16 bytes of config (< 24) → cookie too small → track dropped.
+  let cookie = alac_box(&[0u8; 16]);
+  let trak = audio_trak_with_table(1, b"alac", "eng", 44_100, 2, &cookie, &[64], 0);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![trak]);
+  let path = write_tempfile(&bytes, "m4a");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert!(m.tracks.is_empty());
+}
+
+/// A minimal MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo frame (header + zero
+/// padding to the frame size).  Mirrors the lib's `build_mp3_frame` builder,
+/// reproduced here because that helper is `#[cfg(test)]`-private to the lib.
+fn mp3_frame_mpeg1_l3_128_44100_stereo() -> Vec<u8> {
+  // AAAAAAAA AAABBCCD EEEEFFGH …  version=MPEG1(0b11), layer=III(0b01),
+  // protection=1, bitrate_index for 128 kbps (9), sr_index for 44100 (0),
+  // channel_mode=stereo(0b00).
+  let mut header: u32 = 0xffe0_0000;
+  header |= 0b11 << 19; // version
+  header |= 0b01 << 17; // layer III
+  header |= 1 << 16; // protection bit
+  header |= 9 << 12; // bitrate index (128 kbps, MPEG-1 L3)
+  header |= 0 << 10; // sample-rate index (44100)
+  // channel_mode = 0 (stereo) → bits already zero.
+  let head = header.to_be_bytes();
+  // frame size = 144000 * 128 / 44100 = 417 bytes (no padding).
+  let frame_size = 144_000 * 128 / 44_100 + 0;
+  let mut bytes = Vec::with_capacity(frame_size);
+  bytes.extend_from_slice(&head);
+  bytes.resize(frame_size, 0);
+  bytes
+}
+
+// PARSER-184 + PARSER-183: an MP3-in-MP4 track with zero channels/rate in the
+// sample entry recovers its parameters from the first frame across the sample
+// table (esds objectTypeIndication 0x6B → MP3).
+#[test]
+fn mp3_in_mp4_params_recovered_from_first_bytes() {
+  let frame = mp3_frame_mpeg1_l3_128_44100_stereo();
+  let sizes = vec![frame.len() as u32];
+  let trak = move |chunk_offset: u32| {
+    audio_trak_with_table(1, b"mp4a", "eng", 0, 0, &esds(0x6B, &[]), &sizes, chunk_offset)
+  };
+  let bytes = build_mp4_mdat_first(b"mp42", trak, &frame);
+  let path = write_tempfile(&bytes, "mp4");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  let a = m.tracks[0].properties.audio.as_ref().unwrap();
+  assert_eq!(a.channels, Some(2));
+  assert_eq!(a.sampling_frequency, Some(44_100.0));
 }
 
 #[test]

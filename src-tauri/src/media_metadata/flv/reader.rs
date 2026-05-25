@@ -45,6 +45,10 @@ const DETECT_WINDOW: u64 = 1024 * 1024;
 #[derive(Debug, Default, Clone)]
 struct VideoState {
   codec: Option<VideoCodecId>,
+  /// FourCC assigned during tag processing.  Mirrors `flv_track_c::m_fourcc`;
+  /// only set for codecs mkvtoolnix gives a FourCC (H.264 / H.265 / Sorenson
+  /// H.263 / VP6 / VP6-alpha).  Screen Video variants leave this `None`.
+  fourcc: Option<&'static str>,
   width: Option<u32>,
   height: Option<u32>,
   frame_rate: Option<f64>,
@@ -66,13 +70,12 @@ struct AudioState {
 }
 
 impl VideoState {
+  /// `flv_track_c::is_valid` (`r_flv.cpp:173-177`): a track is valid iff its
+  /// headers have been read AND it carries a FourCC.  Screen Video / Screen
+  /// Video v2 set `headers_read` but never receive a FourCC, so they are
+  /// invalid and dropped (`:282`).
   fn is_valid(&self) -> bool {
-    match self.codec {
-      Some(VideoCodecId::H264 | VideoCodecId::H265) => self.headers_read,
-      Some(VideoCodecId::SorensonH263) => self.width.is_some() && self.height.is_some(),
-      Some(_) => true,
-      None => false,
-    }
+    self.headers_read && self.fourcc.is_some()
   }
 }
 
@@ -122,6 +125,12 @@ impl Reader for FlvReader {
     let mut audio = AudioState::default();
     let mut video_seen = false;
     let mut audio_seen = false;
+    // Track creation order, mirroring mkvtoolnix's `m_tracks` vector.  A track
+    // is appended the first time its kind is encountered (audio tag `:805-807`,
+    // video tag `:810-812`, or a script tag that lazily creates the video
+    // track `:760-761`).  Identification then iterates `m_tracks` in this order
+    // (`:303-333`), so the first-discovered stream gets the lower track id.
+    let mut discovery: Vec<TrackKind> = Vec::with_capacity(2);
 
     loop {
       deadline.check("flv-tag")?;
@@ -140,13 +149,31 @@ impl Reader for FlvReader {
         None => break,
       };
       let payload_pos = src.position();
+      // `process_tag` (`:799-800`) returns early for encrypted tags, so they
+      // are never decoded as audio/video and never create a track.
+      if tag.is_encrypted() {
+        src.seek_to(payload_pos + tag.data_size as u64)?;
+        continue;
+      }
       if tag.is_audio() {
+        if !audio_seen {
+          discovery.push(TrackKind::Audio);
+        }
         audio_seen = true;
         read_audio_payload(src, tag.data_size, &mut audio)?;
       } else if tag.is_video() {
+        if !video_seen {
+          discovery.push(TrackKind::Video);
+        }
         video_seen = true;
         read_video_payload(src, tag.data_size, &mut video)?;
       } else if tag.is_script() {
+        // A script tag lazily creates the video track if one does not yet
+        // exist (`:760-761`).
+        if !video_seen {
+          discovery.push(TrackKind::Video);
+          video_seen = true;
+        }
         read_script_payload(src, tag.data_size, &mut video)?;
       }
       // Always seek to the byte just past this tag's payload.
@@ -160,84 +187,106 @@ impl Reader for FlvReader {
       }
     }
 
+    // Emit tracks in discovery order, skipping any that mkvtoolnix would
+    // erase as invalid (`:282`).  Erased tracks do not consume a track id, so
+    // ids/numbers follow the order of the *surviving* tracks.
     let mut track_id: i64 = 0;
-    if header.has_video() && video.is_valid() {
-      let codec_info = match video.codec {
-        Some(c) => CodecInfo {
-          id: c.codec_id().to_string(),
-          name: Some(c.display_name().to_string()),
-          codec_private: video.codec_private.as_deref().map(CodecPrivate::from_bytes),
-        },
-        None => CodecInfo {
-          id: "V_UNKNOWN".to_string(),
-          name: Some("Unknown".to_string()),
-          codec_private: None,
-        },
-      };
-      let mut common = CommonTrackProperties::default();
-      common.number = Some(1);
-      let dims = video
-        .width
-        .zip(video.height)
-        .map(|(w, h)| Dimensions2D { width: w, height: h });
-      let mut vp = VideoTrackProperties {
-        pixel_dimensions: dims,
-        display_dimensions: dims,
-        codec_config: video.codec_config.clone(),
-        ..VideoTrackProperties::default()
-      };
-      if let Some(fps) = video.frame_rate {
-        if fps > 0.0 {
-          vp.default_duration_ns = Some((1_000_000_000.0 / fps).round() as u64);
+    for kind in &discovery {
+      match kind {
+        TrackKind::Video if video.is_valid() => {
+          out.tracks.push(build_video_track(track_id, &video));
+          track_id += 1;
         }
+        TrackKind::Audio if audio.is_valid() => {
+          out.tracks.push(build_audio_track(track_id, &audio));
+          track_id += 1;
+        }
+        _ => {}
       }
-      out.tracks.push(Track {
-        id: track_id,
-        track_type: TrackType::Video,
-        codec: codec_info,
-        properties: TrackProperties {
-          common,
-          video: Some(vp),
-          ..TrackProperties::default()
-        },
-      });
-      track_id += 1;
-    }
-
-    if header.has_audio() && audio.is_valid() {
-      let mut common = CommonTrackProperties::default();
-      common.number = Some((track_id as u64) + 1);
-      let ap = AudioTrackProperties {
-        sampling_frequency: audio.sample_rate.map(|r| r as f64),
-        channels: audio.channels,
-        bit_depth: audio.bit_depth,
-        output_sampling_frequency: audio.codec_config.as_ref().and_then(|cfg| {
-          if cfg.aac_sbr_present == Some(true) {
-            audio.sample_rate.map(|r| (r * 2) as f64)
-          } else {
-            audio.sample_rate.map(|r| r as f64)
-          }
-        }),
-        codec_config: audio.codec_config.clone(),
-        ..AudioTrackProperties::default()
-      };
-      out.tracks.push(Track {
-        id: track_id,
-        track_type: TrackType::Audio,
-        codec: CodecInfo {
-          id: audio.codec_id.unwrap_or("A_UNKNOWN").to_string(),
-          name: audio.codec_name.map(str::to_owned),
-          codec_private: audio.codec_private.as_deref().map(CodecPrivate::from_bytes),
-        },
-        properties: TrackProperties {
-          common,
-          audio: Some(ap),
-          ..TrackProperties::default()
-        },
-      });
     }
 
     Ok(())
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrackKind {
+  Video,
+  Audio,
+}
+
+fn build_video_track(track_id: i64, video: &VideoState) -> Track {
+  let codec_info = match video.codec {
+    Some(c) => CodecInfo {
+      id: c.codec_id().to_string(),
+      name: Some(c.display_name().to_string()),
+      codec_private: video.codec_private.as_deref().map(CodecPrivate::from_bytes),
+    },
+    None => CodecInfo {
+      id: "V_UNKNOWN".to_string(),
+      name: Some("Unknown".to_string()),
+      codec_private: None,
+    },
+  };
+  let mut common = CommonTrackProperties::default();
+  common.number = Some((track_id as u64) + 1);
+  let dims = video
+    .width
+    .zip(video.height)
+    .map(|(w, h)| Dimensions2D { width: w, height: h });
+  let mut vp = VideoTrackProperties {
+    pixel_dimensions: dims,
+    display_dimensions: dims,
+    codec_config: video.codec_config.clone(),
+    ..VideoTrackProperties::default()
+  };
+  if let Some(fps) = video.frame_rate {
+    if fps > 0.0 {
+      vp.default_duration_ns = Some((1_000_000_000.0 / fps).round() as u64);
+    }
+  }
+  Track {
+    id: track_id,
+    track_type: TrackType::Video,
+    codec: codec_info,
+    properties: TrackProperties {
+      common,
+      video: Some(vp),
+      ..TrackProperties::default()
+    },
+  }
+}
+
+fn build_audio_track(track_id: i64, audio: &AudioState) -> Track {
+  let mut common = CommonTrackProperties::default();
+  common.number = Some((track_id as u64) + 1);
+  let ap = AudioTrackProperties {
+    sampling_frequency: audio.sample_rate.map(|r| r as f64),
+    channels: audio.channels,
+    bit_depth: audio.bit_depth,
+    output_sampling_frequency: audio.codec_config.as_ref().and_then(|cfg| {
+      if cfg.aac_sbr_present == Some(true) {
+        audio.sample_rate.map(|r| (r * 2) as f64)
+      } else {
+        audio.sample_rate.map(|r| r as f64)
+      }
+    }),
+    codec_config: audio.codec_config.clone(),
+    ..AudioTrackProperties::default()
+  };
+  Track {
+    id: track_id,
+    track_type: TrackType::Audio,
+    codec: CodecInfo {
+      id: audio.codec_id.unwrap_or("A_UNKNOWN").to_string(),
+      name: audio.codec_name.map(str::to_owned),
+      codec_private: audio.codec_private.as_deref().map(CodecPrivate::from_bytes),
+    },
+    properties: TrackProperties {
+      common,
+      audio: Some(ap),
+      ..TrackProperties::default()
+    },
   }
 }
 
@@ -309,6 +358,12 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
   let codec_id = VideoCodecId::from_byte(header_byte & 0x0F);
   if let Some(cid) = codec_id {
     state.codec.get_or_insert(cid);
+    // Assign the FourCC exactly as mkvtoolnix does (`process_video_tag` paths
+    // `:589-684`).  Screen Video / Screen Video v2 return `None`, so the track
+    // never becomes valid and is dropped.
+    if state.fourcc.is_none() {
+      state.fourcc = cid.fourcc();
+    }
     match cid {
       VideoCodecId::H264 => {
         if payload.get(1) == Some(&0) && payload.len() > 5 {
@@ -626,9 +681,13 @@ mod tests {
   use std::io::Cursor;
 
   fn build_tag(tag_type: u8, payload: &[u8]) -> Vec<u8> {
+    build_tag_with_flags(tag_type, payload)
+  }
+
+  fn build_tag_with_flags(flags: u8, payload: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&0u32.to_be_bytes()); // previous_tag_size
-    buf.push(tag_type);
+    buf.push(flags);
     let len = payload.len() as u32;
     buf.push(((len >> 16) & 0xFF) as u8);
     buf.push(((len >> 8) & 0xFF) as u8);
@@ -868,5 +927,119 @@ mod tests {
         height: 360
       })
     );
+  }
+
+  #[test]
+  fn read_headers_skips_encrypted_video_tag() {
+    // PARSER-189: an encrypted video tag (flag bit 0x20 set) must be skipped
+    // entirely, never decoded as a usable video header.  Mirrors
+    // `process_tag` (`r_flv.cpp:799-800`).
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    video_payload.extend(minimal_avcc());
+    blob.extend(build_tag_with_flags(TAG_VIDEO | 0x20, &video_payload));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("enc.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    // The encrypted tag yields no track even though its clear-text twin would.
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_skips_encrypted_audio_but_keeps_clear_audio() {
+    // An encrypted audio tag is skipped; a later clear audio tag is decoded.
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (2 << 4) | (3 << 2); // MP3
+    blob.extend(build_tag_with_flags(TAG_AUDIO | 0x20, &[audio_byte, 0]));
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("enc-audio.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_MPEG/L3");
+  }
+
+  #[test]
+  fn read_headers_drops_screen_video_track() {
+    // PARSER-190: Screen Video (codec id 3) sets headers_read but has no
+    // FourCC, so mkvtoolnix erases it as invalid (`r_flv.cpp:282`).  No track.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    // Video tag: byte = (key_frame<<4) | codec_id (3 = Screen Video).
+    blob.extend(build_tag(TAG_VIDEO, &[(1 << 4) | 3, 0, 0, 0, 0]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("screen.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_drops_screen_video_v2_track() {
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    // codec_id 6 = Screen Video v2.
+    blob.extend(build_tag(TAG_VIDEO, &[(1 << 4) | 6, 0, 0, 0, 0]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("screen2.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_emits_audio_first_when_audio_tag_discovered_first() {
+    // PARSER-191: when the first real tag is audio, the audio track must get
+    // the lower track id (id 0 / number 1), then video.  Mirrors mkvtoolnix's
+    // discovery-order track creation (`r_flv.cpp:805-813`, identified in order
+    // at `:303-333`).
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO | TYPE_FLAG_AUDIO);
+    // Audio tag first (AAC, 44.1k stereo, with ASC).
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0, 0x12, 0x10]));
+    // Video tag second (H.264 with avcC).
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    video_payload.extend(minimal_avcc());
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("audio-first.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 2);
+    // Discovery order: audio is track 0, video is track 1.
+    assert_eq!(out.tracks[0].track_type, TrackType::Audio);
+    assert_eq!(out.tracks[0].id, 0);
+    assert_eq!(out.tracks[0].properties.common.number, Some(1));
+    assert_eq!(out.tracks[1].track_type, TrackType::Video);
+    assert_eq!(out.tracks[1].id, 1);
+    assert_eq!(out.tracks[1].properties.common.number, Some(2));
+  }
+
+  #[test]
+  fn read_headers_emits_video_first_when_video_tag_discovered_first() {
+    // The mirror case: video tag first → video is track 0, audio track 1.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO | TYPE_FLAG_AUDIO);
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    video_payload.extend(minimal_avcc());
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0, 0x12, 0x10]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("video-first.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 2);
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+    assert_eq!(out.tracks[0].id, 0);
+    assert_eq!(out.tracks[1].track_type, TrackType::Audio);
+    assert_eq!(out.tracks[1].id, 1);
   }
 }

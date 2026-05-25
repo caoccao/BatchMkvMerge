@@ -44,7 +44,7 @@ use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
-use crate::media_metadata::model::track_properties_video::{Dimensions2D, VideoCodecConfig, VideoTrackProperties};
+use crate::media_metadata::model::track_properties_video::{BlockAdditionMapping, Dimensions2D, VideoTrackProperties};
 use crate::media_metadata::reader::Reader;
 
 pub const MAGIC: [u8; 4] = *b"DKIF";
@@ -202,13 +202,14 @@ impl Reader for IvfReader {
       ..VideoTrackProperties::default()
     };
     if let Some(dovi) = dovi_config {
-      video.codec_config = Some(VideoCodecConfig {
-        profile_name: Some(format!("Dolby Vision v1.0 profile 10 level {} BL+RPU", dovi.level)),
-        profile_idc: Some(10),
-        level_name: Some(dovi.level.to_string()),
-        level_idc: Some(dovi.level as u32),
-        raw_hex: Some(hex_encode(&dovi.raw_config)),
-        ..VideoCodecConfig::default()
+      // PARSER-187: mirror mkvtoolnix's `create_dovi_block_addition_mapping`
+      // (`common/dovi_meta.cpp:324-353`) — the AV1 Dolby Vision configuration
+      // record is carried as a block-addition mapping, not as the decoder
+      // configuration record.  Profile 10 (> 7) keys the mapping by the `dvvC`
+      // FOURCC, matching the MP4 path (`codec_specific/dvcc.rs`).
+      video.block_addition_mappings.push(BlockAdditionMapping {
+        id_type: "dvvC".to_owned(),
+        data_hex: hex_encode(&dovi.raw_config),
       });
     }
 
@@ -579,10 +580,17 @@ mod tests {
       .unwrap();
     let track = &out.tracks[0];
     assert_eq!(track.properties.common.max_block_addition_id, Some(4));
-    let cfg = track.properties.video.as_ref().unwrap().codec_config.as_ref().unwrap();
-    assert_eq!(cfg.profile_idc, Some(10));
-    assert!(cfg.profile_name.as_deref().unwrap().contains("Dolby Vision"));
-    assert_eq!(cfg.raw_hex.as_ref().unwrap().len(), 48);
+    // PARSER-187: DV record is exposed as a block-addition mapping, not as the
+    // primary codec configuration record.
+    let video = track.properties.video.as_ref().unwrap();
+    assert!(video.codec_config.is_none());
+    assert_eq!(video.block_addition_mappings.len(), 1);
+    let mapping = &video.block_addition_mappings[0];
+    assert_eq!(mapping.id_type, "dvvC");
+    // 24-byte AV1 DV config record → 48 hex chars.
+    assert_eq!(mapping.data_hex.len(), 48);
+    // The encoded config record carries DV profile 10 in its third byte.
+    assert!(mapping.data_hex.starts_with("0100"));
   }
 
   #[test]

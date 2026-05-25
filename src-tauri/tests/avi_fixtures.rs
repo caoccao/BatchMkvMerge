@@ -115,12 +115,33 @@ fn build_audio_strl(rate: u32, channels: u16) -> Vec<u8> {
   list(b"LIST", b"strl", &[strh, strf])
 }
 
+fn build_text_strl() -> Vec<u8> {
+  // A text stream carries just a strh — the subtitle content lives in movi.
+  let strh = chunk(b"strh", &build_strh(b"txts", b"DXSA", 1, 1000));
+  list(b"LIST", b"strl", &[strh])
+}
+
+fn gab2_chunk(content: &[u8]) -> Vec<u8> {
+  let mut g = b"GAB2\0".to_vec();
+  g.extend_from_slice(&2u16.to_le_bytes()); // filename block (id 2)
+  g.extend_from_slice(&4u32.to_le_bytes());
+  g.extend_from_slice(b"a.sr");
+  g.extend_from_slice(&4u16.to_le_bytes()); // subtitle block (id 4)
+  g.extend_from_slice(&(content.len() as u32).to_le_bytes());
+  g.extend_from_slice(content);
+  g
+}
+
 fn build_avi(streams: Vec<Vec<u8>>) -> Vec<u8> {
+  build_avi_with_movi(streams, &[])
+}
+
+fn build_avi_with_movi(streams: Vec<Vec<u8>>, movi_chunks: &[Vec<u8>]) -> Vec<u8> {
   let avih = chunk(b"avih", &build_avih(41_708, 240, streams.len() as u32, 1920, 1080));
   let mut hdrl_children = vec![avih];
   hdrl_children.extend(streams);
   let hdrl = list(b"LIST", b"hdrl", &hdrl_children);
-  let movi = list(b"LIST", b"movi", &[]);
+  let movi = list(b"LIST", b"movi", movi_chunks);
   let mut riff_payload = b"AVI ".to_vec();
   riff_payload.extend(hdrl);
   riff_payload.extend(movi);
@@ -163,6 +184,43 @@ fn parses_video_and_audio_avi() {
   let a = m.tracks[1].properties.audio.as_ref().unwrap();
   assert_eq!(a.channels, Some(2));
   assert_eq!(a.sampling_frequency, Some(48000.0));
+}
+
+#[test]
+fn recognised_gab2_subtitle_creates_subtitle_track_after_audio() {
+  // video(0), audio(1), text(2) → subtitle id == 2; text chunk tag "02tx".
+  let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello world\r\n";
+  let text_chunk = chunk(b"02tx", &gab2_chunk(srt));
+  let bytes = build_avi_with_movi(
+    vec![build_video_strl(1920, 1080), build_audio_strl(48000, 2), build_text_strl()],
+    &[text_chunk],
+  );
+  let path = write_tempfile(&bytes);
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 3);
+  assert_eq!(m.tracks[0].id, 0);
+  assert_eq!(m.tracks[0].track_type, TrackType::Video);
+  assert_eq!(m.tracks[1].id, 1);
+  assert_eq!(m.tracks[1].track_type, TrackType::Audio);
+  assert_eq!(m.tracks[2].id, 2);
+  assert_eq!(m.tracks[2].track_type, TrackType::Subtitles);
+  assert_eq!(m.tracks[2].codec.id, "S_TEXT/UTF8");
+}
+
+#[test]
+fn unrecognised_text_chunk_yields_no_subtitle_track() {
+  let junk = b"plain prose, definitely not a subtitle file at all";
+  let text_chunk = chunk(b"01tx", &gab2_chunk(junk));
+  let bytes = build_avi_with_movi(
+    vec![build_video_strl(1920, 1080), build_text_strl()],
+    &[text_chunk],
+  );
+  let path = write_tempfile(&bytes);
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  assert!(m.tracks.iter().all(|t| t.track_type != TrackType::Subtitles));
 }
 
 #[test]

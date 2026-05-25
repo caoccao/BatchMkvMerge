@@ -28,9 +28,14 @@ pub const PREVIOUS_TAG_SIZE_LEN: usize = 4;
 /// `flv_tag_c::read` — reads the 4-byte previous-tag-size word, then the
 /// 11-byte tag header.  We return the data-area start offset relative to
 /// the start of the previous-tag-size word.
+/// Flag bit marking a tag as encrypted (filter applied) — mirrors
+/// `flv_tag_c::is_encrypted` (`r_flv.cpp:93-97`), which tests `m_flags & 0x20`.
+pub const TAG_FLAG_ENCRYPTED: u8 = 0x20;
+
 #[derive(Debug, Clone, Copy)]
 pub struct FlvTagHeader {
   pub tag_type: u8,
+  pub encrypted: bool,
   pub data_size: u32,
   pub timestamp_ms: u32,
 }
@@ -50,11 +55,18 @@ impl FlvTagHeader {
     // 3-byte stream id at off+8..off+11 — ignored.
     Some(Self {
       tag_type: flags & 0x1F,
+      encrypted: (flags & TAG_FLAG_ENCRYPTED) == TAG_FLAG_ENCRYPTED,
       data_size,
       timestamp_ms: (ts_ext << 24) | ts,
     })
   }
 
+  /// `flv_tag_c::is_encrypted` (`r_flv.cpp:93-97`).  mkvtoolnix's
+  /// `process_tag` (`:799-800`) returns early for encrypted tags so they
+  /// are never decoded as audio/video.
+  pub fn is_encrypted(&self) -> bool {
+    self.encrypted
+  }
   pub fn is_audio(&self) -> bool {
     self.tag_type == TAG_AUDIO
   }
@@ -154,14 +166,21 @@ impl VideoCodecId {
     }
   }
 
-  pub fn fourcc(self) -> &'static str {
+  /// FourCC assigned by mkvtoolnix's `process_video_tag` paths.  Only
+  /// H.264 (`process_video_tag_avc` `:593`), H.265 (`process_video_tag_hevc`
+  /// `:630`), and the generic codecs Sorenson H.263 / VP6 / VP6-alpha
+  /// (`process_video_tag_generic` `:667-669`) receive a FourCC.  Screen
+  /// Video and Screen Video v2 fall into the `else { m_headers_read = true; }`
+  /// branch (`:740-741`) and get NO FourCC, so `flv_track_c::is_valid`
+  /// (`:173-177`) rejects them and they are erased (`:282`).
+  pub fn fourcc(self) -> Option<&'static str> {
     match self {
-      Self::SorensonH263 => "FLV1",
-      Self::ScreenVideo | Self::ScreenVideoV2 => "FSV1",
-      Self::Vp6 => "VP6F",
-      Self::Vp6Alpha => "VP6A",
-      Self::H264 => "AVC1",
-      Self::H265 => "HVC1",
+      Self::SorensonH263 => Some("FLV1"),
+      Self::Vp6 => Some("VP6F"),
+      Self::Vp6Alpha => Some("VP6A"),
+      Self::H264 => Some("AVC1"),
+      Self::H265 => Some("HVC1"),
+      Self::ScreenVideo | Self::ScreenVideoV2 => None,
     }
   }
 
@@ -308,11 +327,21 @@ mod tests {
   }
 
   #[test]
-  fn video_codec_id_fourcc_for_screen_video_v2_collapses_to_fsv1() {
-    // Mirrors mkvtoolnix's treatment — both Screen Video variants are
-    // surfaced via the Flash Screen Video FOURCC family.
-    assert_eq!(VideoCodecId::ScreenVideo.fourcc(), "FSV1");
-    assert_eq!(VideoCodecId::ScreenVideoV2.fourcc(), "FSV1");
+  fn video_codec_id_screen_video_has_no_fourcc() {
+    // mkvtoolnix only assigns a FourCC to H.264 / H.265 / Sorenson H.263 /
+    // VP6 / VP6-alpha (`r_flv.cpp:589-684`).  Screen Video variants get NO
+    // FourCC, so `flv_track_c::is_valid` (`:173-177`) rejects them.
+    assert_eq!(VideoCodecId::ScreenVideo.fourcc(), None);
+    assert_eq!(VideoCodecId::ScreenVideoV2.fourcc(), None);
+  }
+
+  #[test]
+  fn video_codec_id_fourcc_only_for_supported_codecs() {
+    assert_eq!(VideoCodecId::SorensonH263.fourcc(), Some("FLV1"));
+    assert_eq!(VideoCodecId::Vp6.fourcc(), Some("VP6F"));
+    assert_eq!(VideoCodecId::Vp6Alpha.fourcc(), Some("VP6A"));
+    assert_eq!(VideoCodecId::H264.fourcc(), Some("AVC1"));
+    assert_eq!(VideoCodecId::H265.fourcc(), Some("HVC1"));
   }
 
   #[test]
@@ -334,8 +363,13 @@ mod tests {
       VideoCodecId::H265,
     ] {
       assert!(!v.display_name().is_empty());
-      assert!(!v.fourcc().is_empty());
       assert!(!v.codec_id().is_empty());
+      // Only the FourCC-bearing codecs (everything except the Screen Video
+      // variants) yield a non-empty FourCC.
+      match v {
+        VideoCodecId::ScreenVideo | VideoCodecId::ScreenVideoV2 => assert!(v.fourcc().is_none()),
+        _ => assert!(v.fourcc().is_some_and(|f| !f.is_empty())),
+      }
     }
   }
 
@@ -372,5 +406,20 @@ mod tests {
     bytes[4] |= 0xE0; // encryption + reserved bits
     let h = FlvTagHeader::parse(&bytes).unwrap();
     assert!(h.is_audio());
+  }
+
+  #[test]
+  fn flv_tag_header_detects_encrypted_flag() {
+    // A clear tag has the encryption bit unset.
+    let clear = FlvTagHeader::parse(&build_tag_header(TAG_AUDIO, 16, 0)).unwrap();
+    assert!(!clear.is_encrypted());
+    // Setting bit 0x20 (filter/encryption) flags the tag as encrypted
+    // (`flv_tag_c::is_encrypted`, `r_flv.cpp:93-97`).
+    let mut bytes = build_tag_header(TAG_VIDEO, 16, 0);
+    bytes[4] |= TAG_FLAG_ENCRYPTED;
+    let enc = FlvTagHeader::parse(&bytes).unwrap();
+    assert!(enc.is_encrypted());
+    // The tag type is still decoded from the lower 5 bits.
+    assert!(enc.is_video());
   }
 }

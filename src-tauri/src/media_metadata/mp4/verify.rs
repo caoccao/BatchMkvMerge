@@ -82,37 +82,44 @@ fn classify(builder: &TrackBuilder) -> Option<TrackType> {
 
 // ----- audio --------------------------------------------------------------
 
-/// r_qtmp4.cpp:3687-3731.  Drop when channels / sampling frequency are
-/// missing, then specialise DTS by parsing the first frame header.
+/// Port of `qtmp4_demuxer_c::verify_audio_parameters` (r_qtmp4.cpp:3660-3702).
+/// First recovers missing channels / sample rate from the first-frame bitstream
+/// for MP2/MP3, AC-3 and DTS (the `derive_track_params_from_*` family); then the
+/// generic channels/rate==0 drop; then the ALAC and DTS verification gates that
+/// drop tracks with a broken / missing codec configuration.
 fn verify_audio(src: &mut FileSource, deadline: &Deadline, builder: &mut TrackBuilder) -> Result<(), ParseError> {
   let codec = identify::effective_codec_id(builder);
 
-  // DTS specialisation (r_qtmp4.cpp:3719-3731, 3698-3699): read the first
-  // bytes and decode a DTS header; failure → drop.
-  if is_dts(&codec) {
-    let buf = read_first_bytes(src, deadline, builder, MAX_FIRST_BYTES)?;
-    let params = buf
+  // --- first-frame parameter recovery (r_qtmp4.cpp:3662-3669) ---
+  // These mirror the `derive_track_params_from_*` helpers, which are `void` in
+  // mkvtoolnix: a missing header does NOT drop the track here — the generic
+  // gate below decides.  Only DTS has an additional explicit verify gate.
+  if is_mp2_mp3(&codec) {
+    // r_qtmp4.cpp:3552-3565: read_first_bytes(64) → find/decode MP3 header.
+    let buf = read_first_bytes(src, deadline, builder, 64)?;
+    if let Some((channels, sample_rate)) = buf
       .as_deref()
-      .and_then(crate::media_metadata::audio::dts::first_header_params);
-    match params {
-      Some((channels, sample_rate, bits)) => {
-        let audio = builder
-          .audio
-          .get_or_insert_with(crate::media_metadata::model::track_properties_audio::AudioTrackProperties::default);
-        if audio.channels.unwrap_or(0) == 0 && channels != 0 {
-          audio.channels = Some(channels);
-        }
-        if audio.sampling_frequency.unwrap_or(0.0) == 0.0 && sample_rate != 0 {
-          audio.sampling_frequency = Some(sample_rate as f64);
-        }
-        if audio.bit_depth.is_none() && bits != 0 {
-          audio.bit_depth = Some(bits);
-        }
-      }
-      None => {
-        builder.probe_failed = true;
-        return Ok(());
-      }
+      .and_then(crate::media_metadata::audio::mp3::first_header_params)
+    {
+      recover_audio_params(builder, channels, sample_rate, 0);
+    }
+  } else if is_ac3(&codec) {
+    // r_qtmp4.cpp:3526-3536: read_first_bytes(64) → find AC-3 frame header.
+    let buf = read_first_bytes(src, deadline, builder, 64)?;
+    if let Some((channels, sample_rate)) = buf
+      .as_deref()
+      .and_then(crate::media_metadata::audio::ac3::first_frame_params)
+    {
+      recover_audio_params(builder, channels, sample_rate, 0);
+    }
+  } else if is_dts(&codec) {
+    // r_qtmp4.cpp:3539-3549: read_first_bytes(16384) → DTS header.
+    let buf = read_first_bytes(src, deadline, builder, MAX_FIRST_BYTES)?;
+    if let Some((channels, sample_rate, bits)) = buf
+      .as_deref()
+      .and_then(crate::media_metadata::audio::dts::first_header_params)
+    {
+      recover_audio_params(builder, channels, sample_rate, bits);
     }
   }
 
@@ -122,9 +129,72 @@ fn verify_audio(src: &mut FileSource, deadline: &Deadline, builder: &mut TrackBu
   let rate = builder.audio.as_ref().and_then(|a| a.sampling_frequency).unwrap_or(0.0);
   if channels == 0 || rate == 0.0 {
     builder.probe_failed = true;
+    return Ok(());
   }
+
+  // ALAC (r_qtmp4.cpp:3695-3696, 3705-3716): the ALAC magic cookie must be
+  // present and large enough to carry the embedded ALACSpecificConfig.
+  if is_alac(&codec) {
+    if !alac_config_present(builder) {
+      builder.probe_failed = true;
+    }
+    return Ok(());
+  }
+
+  // DTS (r_qtmp4.cpp:3698-3699, 3719-3731): a real DTS header must be findable
+  // in the first frames, else the track is skipped.
+  if is_dts(&codec) {
+    let buf = read_first_bytes(src, deadline, builder, MAX_FIRST_BYTES)?;
+    let has_header = buf
+      .as_deref()
+      .and_then(crate::media_metadata::audio::dts::first_header_params)
+      .is_some();
+    if !has_header {
+      builder.probe_failed = true;
+    }
+  }
+
   Ok(())
 }
+
+/// Fill in any audio channel / sample-rate / bit-depth fields that are still
+/// missing or zero, mirroring the `derive_track_params_from_*` assignments.
+fn recover_audio_params(builder: &mut TrackBuilder, channels: u32, sample_rate: u32, bits: u32) {
+  let audio = builder
+    .audio
+    .get_or_insert_with(crate::media_metadata::model::track_properties_audio::AudioTrackProperties::default);
+  if audio.channels.unwrap_or(0) == 0 && channels != 0 {
+    audio.channels = Some(channels);
+  }
+  if audio.sampling_frequency.unwrap_or(0.0) == 0.0 && sample_rate != 0 {
+    audio.sampling_frequency = Some(sample_rate as f64);
+  }
+  if audio.bit_depth.is_none() && bits != 0 {
+    audio.bit_depth = Some(bits);
+  }
+}
+
+/// r_qtmp4.cpp:3705-3716 `verify_alac_audio_parameters`: the stsd must carry an
+/// ALAC magic cookie whose embedded `codec_config_t` (24 bytes) is present.
+/// mkvtoolnix checks `stsd->get_size() >= stsd_non_priv_struct_size + 12 +
+/// sizeof(codec_config_t)`; the `+12` is the `alac` box header (size+type+
+/// version/flags) inside the sample entry, so the codec_private blob we stored
+/// (the full `alac` box payload = 4-byte FullBox header + ALACSpecificConfig)
+/// must be at least `4 + 24 = 28` bytes — exactly the threshold `parse_alac`
+/// already uses before refining the audio parameters.
+fn alac_config_present(builder: &TrackBuilder) -> bool {
+  const MIN_ALAC_PRIVATE_BYTES: usize = ALAC_FULLBOX_HEADER + ALAC_CODEC_CONFIG_SIZE;
+  builder
+    .codec_private_hex
+    .as_ref()
+    .map(|hex| (hex.len() / 2) >= MIN_ALAC_PRIVATE_BYTES)
+    .unwrap_or(false)
+}
+
+/// FullBox version+flags header inside the `alac` box.
+const ALAC_FULLBOX_HEADER: usize = 4;
+/// `sizeof(mtx::alac::codec_config_t)` — the ALACSpecificConfig payload.
+const ALAC_CODEC_CONFIG_SIZE: usize = 24;
 
 // ----- video --------------------------------------------------------------
 
@@ -314,10 +384,17 @@ fn verify_subtitles(builder: &mut TrackBuilder) {
 
 // ----- bounded first-sample read ------------------------------------------
 
-/// Port of `read_first_bytes` restricted to sample 0: seek to the first
-/// sample's file offset and read `min(max, first_sample_size, available)`
-/// bytes, with `max` clamped to [`MAX_FIRST_BYTES`].  Returns `None` when the
-/// first sample cannot be located (no chunk offset) or the read comes up short.
+/// Port of `qtmp4_demuxer_c::read_first_bytes(num_bytes)`
+/// (`r_qtmp4.cpp:2881-2906`): iterate the (bounded) sample index, seeking to
+/// EACH sample's file offset and reading `min(remaining, sample.size)` bytes,
+/// until `num_bytes` is collected.  `max` is clamped to [`MAX_FIRST_BYTES`].
+/// Returns `None` when no samples can be located or a read comes up short.
+///
+/// PARSER-183: this now spans MULTIPLE samples — not just sample 0 — so AVC
+/// salvage / DTS probing / first-frame derivation can collect the full window
+/// across an index of small samples, exactly like mkvtoolnix.  When the
+/// reconstructed index is empty we fall back to the single-sample fields so
+/// older fixtures (and tracks with only `stco` + `stsz`) still resolve.
 fn read_first_bytes(
   src: &mut FileSource,
   deadline: &Deadline,
@@ -325,29 +402,54 @@ fn read_first_bytes(
   max: u64,
 ) -> Result<Option<Vec<u8>>, ParseError> {
   deadline.check("mp4::read_first_bytes")?;
-  let offset = match builder.first_sample_file_offset {
-    Some(o) => o,
-    None => return Ok(None),
+  let want_total = max.min(MAX_FIRST_BYTES);
+  if want_total == 0 {
+    return Ok(None);
+  }
+
+  // Prefer the reconstructed multi-sample index; fall back to sample 0.
+  let index: Vec<(u64, u64)> = if !builder.first_samples.is_empty() {
+    builder.first_samples.clone()
+  } else {
+    match builder.first_sample_file_offset {
+      Some(off) => vec![(off, builder.first_sample_size.unwrap_or(0))],
+      None => return Ok(None),
+    }
   };
-  let mut want = max.min(MAX_FIRST_BYTES);
-  if let Some(size) = builder.first_sample_size {
+
+  let len = src.length();
+  let mut buf: Vec<u8> = Vec::with_capacity(want_total as usize);
+  for (offset, size) in index {
+    let remaining = want_total - buf.len() as u64;
+    if remaining == 0 {
+      break;
+    }
+    deadline.check("mp4::read_first_bytes")?;
+    // mkvtoolnix reads min(remaining, sample.size); a zero size means the size
+    // table ran short — read up to `remaining` to mirror the unbounded buffer.
+    let mut want = remaining;
     if size > 0 {
       want = want.min(size);
     }
-  }
-  if let Some(len) = src.length() {
-    if offset >= len {
-      return Ok(None);
+    if let Some(file_len) = len {
+      if offset >= file_len {
+        break;
+      }
+      want = want.min(file_len - offset);
     }
-    want = want.min(len - offset);
+    if want == 0 {
+      break;
+    }
+    src.seek_to(offset)?;
+    let mut chunk = vec![0u8; want as usize];
+    let read = src.read_at_most(&mut chunk)?;
+    chunk.truncate(read);
+    if chunk.is_empty() {
+      break;
+    }
+    buf.extend_from_slice(&chunk);
   }
-  if want == 0 {
-    return Ok(None);
-  }
-  src.seek_to(offset)?;
-  let mut buf = vec![0u8; want as usize];
-  let read = src.read_at_most(&mut buf)?;
-  buf.truncate(read);
+
   if buf.is_empty() {
     return Ok(None);
   }
@@ -370,6 +472,22 @@ fn is_mp4v(codec: &str) -> bool {
 
 fn is_dts(codec: &str) -> bool {
   matches!(codec, "A_DTS" | "dtsc" | "dtsh" | "dtse" | "dts ")
+}
+
+/// MP2 / MP3 — both the Matroska ids the esds object-type maps to and the
+/// raw FOURCCs QuickTime uses (`.mp3`).
+fn is_mp2_mp3(codec: &str) -> bool {
+  matches!(codec, "A_MPEG/L3" | "A_MPEG/L2" | ".mp3" | "mp3 ")
+}
+
+/// AC-3 (and the QuickTime `ac-3` / `sac3` FOURCCs).
+fn is_ac3(codec: &str) -> bool {
+  matches!(codec, "A_AC3" | "ac-3" | "ac3 " | "sac3")
+}
+
+/// Apple Lossless — the `alac` FOURCC (and its Matroska id).
+fn is_alac(codec: &str) -> bool {
+  matches!(codec, "alac" | "A_ALAC")
 }
 
 #[cfg(test)]
@@ -555,6 +673,158 @@ mod tests {
     assert!(!b.probe_failed);
   }
 
+  // ---- PARSER-184: MP2/MP3 + AC-3 first-frame parameter recovery -----------
+
+  /// An mp4a entry whose esds objectTypeIndication is MP3 (0x6B) but whose
+  /// sample entry left channels/rate at zero — mkvtoolnix recovers them from
+  /// the first frame (r_qtmp4.cpp:3552-3565) instead of dropping the track.
+  #[test]
+  fn mp3_params_recovered_from_first_frame() {
+    let mut b = audio_builder("mp4a", 0, 0.0);
+    b.esds_object_type = Some(0x6B); // → A_MPEG/L3
+    let frame = crate::media_metadata::audio::mp3::build_mp3_frame_v1(128, 44_100, false);
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(frame.len() as u64);
+    let mut src = source(frame);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    let a = b.audio.unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
+  }
+
+  // mp4a/MP3 with junk first bytes recovers nothing; the generic gate drops it.
+  #[test]
+  fn mp3_without_frame_dropped_by_generic_gate() {
+    let mut b = audio_builder("mp4a", 0, 0.0);
+    b.esds_object_type = Some(0x6B);
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(64);
+    let mut src = source(vec![0x00u8; 64]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  // AC-3 (r_qtmp4.cpp:3526-3536): channels/rate recovered from the first frame.
+  #[test]
+  fn ac3_params_recovered_from_first_frame() {
+    let mut b = audio_builder("ac-3", 0, 0.0);
+    let frame = crate::media_metadata::audio::ac3::build_ac3_frame(0, 8); // fscod0=48k, acmod2=2ch
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(frame.len() as u64);
+    let mut src = source(frame);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    let a = b.audio.unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(48_000.0));
+  }
+
+  #[test]
+  fn ac3_without_frame_dropped_by_generic_gate() {
+    let mut b = audio_builder("ac-3", 0, 0.0);
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(64);
+    let mut src = source(vec![0x00u8; 64]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  // Recovery never clobbers values the sample entry already carried.
+  #[test]
+  fn recovery_does_not_override_existing_params() {
+    let mut b = audio_builder("ac-3", 6, 44_100.0);
+    let frame = crate::media_metadata::audio::ac3::build_ac3_frame(0, 8); // would say 2ch/48k
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(frame.len() as u64);
+    let mut src = source(frame);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    let a = b.audio.unwrap();
+    assert_eq!(a.channels, Some(6));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
+  }
+
+  // ---- PARSER-185: ALAC config payload verification ------------------------
+
+  // r_qtmp4.cpp:3705-3716: a valid ALAC track carries the magic cookie
+  // (≥ 28 bytes of codec private) and is kept.
+  #[test]
+  fn alac_with_valid_config_kept() {
+    let mut b = audio_builder("alac", 2, 44_100.0);
+    // 4-byte FullBox header + 24-byte ALACSpecificConfig = 28 bytes.
+    b.codec_private_hex = Some(hex_encode(&vec![0u8; 28]));
+    let mut src = source(vec![]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+  }
+
+  // A truncated ALAC cookie (< 28 bytes) is dropped even though the sample
+  // entry's channels/rate look fine.
+  #[test]
+  fn alac_with_truncated_config_dropped() {
+    let mut b = audio_builder("alac", 2, 44_100.0);
+    b.codec_private_hex = Some(hex_encode(&vec![0u8; 20])); // too small
+    let mut src = source(vec![]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  // A missing ALAC cookie is dropped.
+  #[test]
+  fn alac_without_config_dropped() {
+    let mut b = audio_builder("alac", 2, 44_100.0);
+    b.codec_private_hex = None;
+    let mut src = source(vec![]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  // ---- PARSER-183: multi-sample first-bytes read ---------------------------
+
+  // DTS header split so it only decodes once bytes from a SECOND sample are
+  // collected — the multi-sample read must span both samples.
+  #[test]
+  fn read_first_bytes_spans_multiple_samples() {
+    // File layout: [pad 8][half-frame A][half-frame B].  Two index samples
+    // point at A and B; concatenating them yields a decodable DTS frame.
+    let frame = build_dts_frame();
+    let split = frame.len() / 2;
+    let (a, c) = frame.split_at(split);
+    let mut data = vec![0u8; 8];
+    data.extend_from_slice(a);
+    data.extend_from_slice(c);
+    let off_a = 8u64;
+    let off_b = 8u64 + a.len() as u64;
+
+    let mut b = audio_builder("A_DTS", 0, 0.0);
+    b.first_samples = vec![(off_a, a.len() as u64), (off_b, c.len() as u64)];
+    let mut src = source(data);
+    let got = read_first_bytes(&mut src, &dl(), &b, MAX_FIRST_BYTES).unwrap().unwrap();
+    assert_eq!(got, frame);
+  }
+
+  // The multi-sample read stops once the requested window is filled.
+  #[test]
+  fn read_first_bytes_stops_at_requested_window() {
+    let mut b = video_builder("avc1", 100, 100);
+    // Three samples of 4 bytes each at 0/4/8; request only 6 bytes.
+    b.first_samples = vec![(0, 4), (4, 4), (8, 4)];
+    let mut src = source(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    let got = read_first_bytes(&mut src, &dl(), &b, 6).unwrap().unwrap();
+    assert_eq!(got, vec![1, 2, 3, 4, 5, 6]);
+  }
+
+  // Falls back to the single-sample fields when no index was reconstructed.
+  #[test]
+  fn read_first_bytes_falls_back_to_single_sample() {
+    let mut b = video_builder("avc1", 100, 100);
+    b.first_sample_file_offset = Some(2);
+    b.first_sample_size = Some(3);
+    let mut src = source(vec![9, 8, 7, 6, 5]);
+    let got = read_first_bytes(&mut src, &dl(), &b, 16).unwrap().unwrap();
+    assert_eq!(got, vec![7, 6, 5]);
+  }
+
   // r_qtmp4.cpp:3845-3853: S_VOBSUB needs an esds decoder config ≥ 64 bytes.
   #[test]
   fn vobsub_short_decoder_config_dropped() {
@@ -625,6 +895,14 @@ mod tests {
     assert!(is_dts("A_DTS"));
     assert!(is_dts("dtsc"));
     assert!(!is_avc("hev1"));
+    assert!(is_mp2_mp3("A_MPEG/L3"));
+    assert!(is_mp2_mp3("A_MPEG/L2"));
+    assert!(is_mp2_mp3(".mp3"));
+    assert!(is_ac3("A_AC3"));
+    assert!(is_ac3("ac-3"));
+    assert!(is_alac("alac"));
+    assert!(is_alac("A_ALAC"));
+    assert!(!is_alac("mp4a"));
   }
 
   // --- fixtures ---
