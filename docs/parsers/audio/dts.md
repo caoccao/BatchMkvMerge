@@ -1,0 +1,34 @@
+# DTS / DTS-HD Parser
+
+Implementation progress: 94%
+
+## Purpose
+
+The DTS parser recognises DTS core streams and DTS-HD chunked files. It reports codec family, channel count, sample rate, bit depth, and DTS-HD specialization when the header exposes it.
+
+## Implementation
+
+- Primary implementation: `src-tauri/src/media_metadata/audio/dts.rs`
+- Upstream basis: `../mkvtoolnix/src/input/r_dts.cpp`, `../mkvtoolnix/src/input/r_dts.h`, `../mkvtoolnix/src/common/dts.cpp`, `../mkvtoolnix/src/common/dts.h`, `../mkvtoolnix/src/common/dts_parser.cpp`, `../mkvtoolnix/src/common/dts_parser.h`
+
+The Rust implementation detects 16-bit big-endian, 16-bit little-endian, 14-bit big-endian, and 14-bit little-endian sync forms. It can transform 14-bit and swapped data into a normal frame view before parsing. DTS-HD `DTSHDHDR` and `STRMDATA` chunks are recognised, and extension substreams are inspected for XLL, LBR, X96, XCH, channel masks, and source PCM resolution.
+
+## Data Structures
+
+```mermaid
+flowchart TD
+  A["File prefix"] --> B["sync or DTSHDHDR"]
+  B --> C["byte-swap / 14-bit transform"]
+  C --> D["Header"]
+  D --> E["DtsType and assets"]
+  E --> F["AudioTrackProperties"]
+  E --> G["CodecInfo A_DTS"]
+  F --> H["MediaMetadata"]
+  G --> H
+```
+
+Key structures include `Header`, `DtsType`, internal `Asset`, and helper enums for frame and LFE types.
+
+## Gaps and Handling
+
+Only the first DTS-HD `STRMDATA` payload is used for metadata. Upstream keeps richer packet-era state for selecting core versus extension payloads while muxing, which is not needed for the native metadata parser. When DTS-HD chunk chains are malformed, Rust favors bounded, conservative extraction instead of attempting full recovery.
