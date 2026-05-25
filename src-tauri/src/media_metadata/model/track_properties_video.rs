@@ -32,6 +32,9 @@ pub struct VideoTrackProperties {
     pub display_unit: Option<DisplayUnit>,
     pub crop: Option<CropRect>,
     pub color: Option<ColorMetadata>,
+    /// Matroska `KaxVideoColourSpace` (0x2EB524) — raw FOURCC for uncompressed
+    /// tracks.  Hex-encoded so non-printable bytes round-trip safely.
+    pub color_space_hex: Option<String>,
     pub projection: Option<ProjectionMetadata>,
     pub stereo_mode: Option<StereoMode>,
     pub alpha_mode: Option<AlphaMode>,

@@ -543,6 +543,11 @@ export type VideoTrackProperties = {
 	displayUnit: DisplayUnit | null,
 	crop: CropRect | null,
 	color: ColorMetadata | null,
+	/**
+	 *  Matroska `KaxVideoColourSpace` (0x2EB524) — raw FOURCC for uncompressed
+	 *  tracks.  Hex-encoded so non-printable bytes round-trip safely.
+	 */
+	colorSpaceHex: string | null,
 	projection: ProjectionMetadata | null,
 	stereoMode: StereoMode | null,
 	alphaMode: AlphaMode | null,

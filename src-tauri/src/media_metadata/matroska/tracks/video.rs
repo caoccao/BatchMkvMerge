@@ -51,6 +51,9 @@ pub struct VideoBuilder {
     pub interlace: Option<InterlaceFlag>,
     pub stereo_mode: Option<StereoMode>,
     pub colour: Option<ColorMetadata>,
+    /// Raw bytes of `KaxVideoColourSpace` (0x2EB524) when present — typically a
+    /// 4-byte FOURCC for uncompressed video tracks (PARSER-068).
+    pub color_space: Option<Vec<u8>>,
     pub projection: Option<ProjectionMetadata>,
     pub default_duration_ns: Option<u64>,
     pub frame_rate: Option<f64>,
@@ -64,7 +67,23 @@ impl VideoBuilder {
         };
         // Display dimensions default to pixel dimensions when absent — matches
         // mkvtoolnix's `find_child_value(..., track->v_width)` behaviour.
-        let display_dimensions = match (self.display_width.or(self.pixel_width), self.display_height.or(self.pixel_height)) {
+        let (raw_dw, raw_dh) = (
+            self.display_width.or(self.pixel_width),
+            self.display_height.or(self.pixel_height),
+        );
+        // PARSER-066: certain muxers abuse DisplayWidth/Height to carry just
+        // an aspect ratio (e.g. 16/9).  Port
+        // `kax_track_t::fix_display_dimension_parameters` in
+        // `r_matroska.cpp:283-300` to rescale those values back to the
+        // pixel-dimension range when the heuristic matches.
+        let (fixed_dw, fixed_dh) = fix_display_dimensions(
+            self.pixel_width,
+            self.pixel_height,
+            self.display_width,
+            self.display_height,
+            self.display_unit,
+        );
+        let display_dimensions = match (fixed_dw.or(raw_dw), fixed_dh.or(raw_dh)) {
             (Some(w), Some(h)) => Some(Dimensions2D { width: w, height: h }),
             _ => None,
         };
@@ -97,6 +116,7 @@ impl VideoBuilder {
             display_unit: self.display_unit,
             crop,
             color: self.colour,
+            color_space_hex: self.color_space.as_deref().map(hex_encode),
             projection: self.projection,
             stereo_mode: self.stereo_mode,
             alpha_mode: self.alpha_mode,
@@ -186,6 +206,15 @@ pub fn parse(
             }
             ids::VIDEO_COLOUR => {
                 builder.colour = Some(parse_colour(src, child, deadline)?);
+                Ok(ChildAction::Consumed)
+            }
+            ids::VIDEO_COLOR_SPACE => {
+                // PARSER-068: raw colour-space identifier (FOURCC for
+                // uncompressed video).  Cap the read at 16 bytes — the
+                // spec describes a 4-byte FOURCC; anything larger is
+                // certainly malformed.
+                let bytes = ebml::read_binary(src, child, 16)?;
+                builder.color_space = Some(bytes);
                 Ok(ChildAction::Consumed)
             }
             ids::VIDEO_PROJECTION => {
@@ -409,6 +438,80 @@ fn parse_projection(
     Ok(p)
 }
 
+/// Port of `kax_track_t::fix_display_dimension_parameters` in
+/// `r_matroska.cpp:283-300`.  Returns `(fixed_dw, fixed_dh)` when the rescue
+/// heuristic matches, else `(None, None)`.  Gates:
+///
+/// - DisplayUnit must be absent or 0 (pixels).  Anything else is a real
+///   display-unit and must be preserved.
+/// - Both pixel and display dimensions must be present.
+/// - `8 * dwidth <= pixel_width` *and* `8 * dheight <= pixel_height` — i.e. the
+///   declared dimensions are at least 8× smaller than the raster.
+/// - `gcd(dwidth, dheight) == 1` — the values look like a coprime aspect.
+///
+/// When all checks pass we expand back into the pixel-dimension range while
+/// preserving the aspect ratio.  We deliberately port the literal C++ logic
+/// (including the order-of-assignment in the else branch).
+fn fix_display_dimensions(
+    pixel_width: Option<u32>,
+    pixel_height: Option<u32>,
+    display_width: Option<u32>,
+    display_height: Option<u32>,
+    display_unit: Option<DisplayUnit>,
+) -> (Option<u32>, Option<u32>) {
+    let pw = match pixel_width {
+        Some(v) if v > 0 => v as u64,
+        _ => return (None, None),
+    };
+    let ph = match pixel_height {
+        Some(v) if v > 0 => v as u64,
+        _ => return (None, None),
+    };
+    let dw = match display_width {
+        Some(v) if v > 0 => v as u64,
+        _ => return (None, None),
+    };
+    let dh = match display_height {
+        Some(v) if v > 0 => v as u64,
+        _ => return (None, None),
+    };
+    // Display unit absent or explicit Pixels (= 0).  Mkvtoolnix gates on
+    // `v_display_unit == 0`, treating absence as the default.
+    match display_unit {
+        None | Some(DisplayUnit::Pixels) => {}
+        _ => return (None, None),
+    }
+    if 8 * dw > pw || 8 * dh > ph {
+        return (None, None);
+    }
+    if gcd(dw, dh) != 1 {
+        return (None, None);
+    }
+    if dw > dh {
+        if (ph * dw) % dh == 0 {
+            return (Some((ph * dw / dh) as u32), Some(ph as u32));
+        }
+    } else if (pw * dh) % dw == 0 {
+        // Faithful port of `r_matroska.cpp:296-299`.  The original C++
+        // assigns `v_dwidth = v_width` *before* computing `v_dheight =
+        // v_width * v_dheight / v_dwidth`, which makes the dheight formula
+        // collapse to its input.  We replicate the visible outcome:
+        // `dwidth` jumps to `pixel_width`, `dheight` is unchanged.
+        let _ = (pw * dh) / dw; // formula left here for documentation
+        return (Some(pw as u32), Some(dh as u32));
+    }
+    (None, None)
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
+}
+
 fn classify_display_unit(v: u64) -> DisplayUnit {
     match v {
         0 => DisplayUnit::Pixels,
@@ -488,6 +591,65 @@ mod tests {
         parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
         let v = builder.build();
         assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 1920, height: 1080 }));
+    }
+
+    // ---- PARSER-066: rescue aspect-ratio-style display dimensions -------
+
+    #[test]
+    fn display_dimensions_expanded_when_used_as_aspect_ratio() {
+        // 1920x1080 raster with DisplayWidth/Height = 16/9 → rescaled to
+        // (1920, 1080) (mkvtoolnix `fix_display_dimension_parameters`).
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_WIDTH, 1, 1920));
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_HEIGHT, 1, 1080));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_WIDTH, 2, 16));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_HEIGHT, 2, 9));
+        let (_b, h, mut s) = build_video(payload);
+        let mut builder = VideoBuilder::default();
+        parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+        let v = builder.build();
+        assert_eq!(
+            v.display_dimensions,
+            Some(Dimensions2D { width: 1920, height: 1080 })
+        );
+    }
+
+    #[test]
+    fn display_dimensions_unchanged_when_explicit_unit_is_dar() {
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_WIDTH, 1, 1920));
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_HEIGHT, 1, 1080));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_WIDTH, 2, 16));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_HEIGHT, 2, 9));
+        // DisplayUnit = 3 (DisplayAspectRatio) — fix-up must NOT touch us.
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_UNIT, 2, 3));
+        let (_b, h, mut s) = build_video(payload);
+        let mut builder = VideoBuilder::default();
+        parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+        let v = builder.build();
+        assert_eq!(
+            v.display_dimensions,
+            Some(Dimensions2D { width: 16, height: 9 })
+        );
+    }
+
+    #[test]
+    fn display_dimensions_preserved_when_not_aspect_ratio_shaped() {
+        // 1440x1080 raster with DisplayWidth/Height = 1920/1080 — explicit
+        // anamorphic display, gcd != 1.  Leave alone.
+        let mut payload = Vec::new();
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_WIDTH, 1, 1440));
+        payload.extend(encode_element_uint(ids::VIDEO_PIXEL_HEIGHT, 1, 1080));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_WIDTH, 2, 1920));
+        payload.extend(encode_element_uint(ids::VIDEO_DISPLAY_HEIGHT, 2, 1080));
+        let (_b, h, mut s) = build_video(payload);
+        let mut builder = VideoBuilder::default();
+        parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+        let v = builder.build();
+        assert_eq!(
+            v.display_dimensions,
+            Some(Dimensions2D { width: 1920, height: 1080 })
+        );
     }
 
     #[test]
@@ -825,6 +987,21 @@ mod tests {
         let mut builder = VideoBuilder::default();
         parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
         assert_eq!(builder.build().display_unit, Some(DisplayUnit::DisplayAspectRatio));
+    }
+
+    // ---- PARSER-068: KaxVideoColourSpace ------------------------------
+
+    #[test]
+    fn colour_space_fourcc_round_trips() {
+        // VIDEO_COLOR_SPACE id 0x2EB524 needs width=3 encoding.
+        let payload = encode_element(ids::VIDEO_COLOR_SPACE, 3, b"YV12");
+        let (_b, h, mut s) = build_video(payload);
+        let mut builder = VideoBuilder::default();
+        parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+        assert_eq!(
+            builder.build().color_space_hex.as_deref(),
+            Some("59563132")
+        );
     }
 
     #[test]

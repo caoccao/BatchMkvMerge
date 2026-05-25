@@ -169,11 +169,31 @@ impl CommonBuilder {
 }
 
 fn resolve_language(ietf: &Option<String>, iso639: &Option<String>) -> Option<Language> {
-    // Matroska spec defaults the language to "eng" when no explicit Language
-    // element is present — mirror that here.
+    // PARSER-067: mkvtoolnix `r_matroska.cpp:1443-1499` distinguishes three
+    // cases for KaxTrackLanguage:
+    //   1. element absent      → defaults to "eng" (Matroska spec).
+    //   2. element present and parses as a valid ISO-639-2 code → use it.
+    //   3. element present but empty or invalid → "und" (undetermined).
+    // KaxLanguageIETF then overrides when valid (`effective_language`).
     let ietf_hint = ietf.as_deref().filter(|s| !s.trim().is_empty());
-    let iso_hint = iso639.as_deref();
-    Some(Language::resolve(ietf_hint, iso_hint, /*default_eng=*/ true))
+    if let Some(tag) = ietf_hint {
+        if let Some(lang) = Language::from_ietf(tag) {
+            return Some(lang);
+        }
+    }
+    let iso_present = iso639.is_some();
+    let iso_valid = iso639
+        .as_deref()
+        .map(|c| !c.is_empty() && crate::media_metadata::language::iso_639::is_valid(c))
+        .unwrap_or(false);
+    if iso_valid {
+        return Some(Language::from_iso_639_2(iso639.as_deref().unwrap()));
+    }
+    if iso_present {
+        // Present but invalid / empty.
+        return Some(Language::undetermined());
+    }
+    Some(Language::english_default())
 }
 
 fn read_content_encodings(
@@ -308,6 +328,29 @@ mod tests {
         let c = builder.build();
         let lang = c.language.as_ref().unwrap();
         assert_eq!(lang.iso639_2, "fra");
+    }
+
+    // ---- PARSER-067: present-but-invalid → und; absent → eng ----------
+
+    #[test]
+    fn language_absent_defaults_to_eng() {
+        let builder = walk_into_builder(Vec::new());
+        let lang = builder.build().language.unwrap();
+        assert_eq!(lang.iso639_2, "eng");
+    }
+
+    #[test]
+    fn language_present_but_invalid_resolves_to_und() {
+        let payload = encode_element_string(ids::TRACK_LANGUAGE, 3, "xyz");
+        let lang = walk_into_builder(payload).build().language.unwrap();
+        assert_eq!(lang.iso639_2, "und");
+    }
+
+    #[test]
+    fn language_present_but_empty_resolves_to_und() {
+        let payload = encode_element_string(ids::TRACK_LANGUAGE, 3, "");
+        let lang = walk_into_builder(payload).build().language.unwrap();
+        assert_eq!(lang.iso639_2, "und");
     }
 
     #[test]
