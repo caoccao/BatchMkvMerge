@@ -31,6 +31,7 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
+use crate::media_metadata::model::attachment::Attachment;
 
 use super::riff::{self, ChunkHeader};
 
@@ -63,6 +64,10 @@ pub struct AviSubtitleDemuxer {
   /// Detected text encoding label (e.g. `UTF-8`).  Mirrors
   /// `mm_text_io_c::get_encoding()` surfaced via `id::encoding`.
   pub encoding: Option<String>,
+  /// Embedded `[Fonts]` / `[Graphics]` attachments harvested from an SSA/ASS
+  /// payload (PARSER-213, mirrors `avi_reader_c::identify_attachments`).  Empty
+  /// for SRT and for SSA payloads without attachment sections.
+  pub attachments: Vec<Attachment>,
 }
 
 impl AviSubtitleKind {
@@ -229,12 +234,18 @@ fn classify_subtitle(data: &[u8]) -> Option<AviSubtitleDemuxer> {
     return Some(AviSubtitleDemuxer {
       kind: AviSubtitleKind::Srt,
       encoding,
+      attachments: Vec::new(),
     });
   }
   if crate::media_metadata::subtitles::ssa::classify(&text).is_some() {
+    // PARSER-213: harvest the embedded `[Fonts]` / `[Graphics]` attachments,
+    // mirroring upstream's `identify_attachments` which re-parses the SSA
+    // payload with an `ssa_parser_c` (`../mkvtoolnix/src/input/r_avi.cpp:942-959`).
+    let attachments = crate::media_metadata::subtitles::ssa::parse_ssa(&text).attachments;
     return Some(AviSubtitleDemuxer {
       kind: AviSubtitleKind::Ssa,
       encoding,
+      attachments,
     });
   }
   None
@@ -277,6 +288,48 @@ mod tests {
     let ssa = b"[Script Info]\r\nScriptType: v4.00+\r\n[V4+ Styles]\r\n";
     let demux = classify_gab2(&gab2_with_subtitle(ssa)).unwrap();
     assert_eq!(demux.kind, AviSubtitleKind::Ssa);
+    assert!(demux.attachments.is_empty());
+  }
+
+  /// Minimal SSA UUencode (mirrors `subtitles::ssa::decode_uu`'s inverse).
+  fn uu_encode(data: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < data.len() {
+      let chunk = &data[i..(i + 3).min(data.len())];
+      let mut value: u32 = 0;
+      for (idx, b) in chunk.iter().enumerate() {
+        value |= u32::from(*b) << ((2 - idx) * 8);
+      }
+      let chars_out = match chunk.len() {
+        3 => 4,
+        2 => 3,
+        _ => 2,
+      };
+      for idx in 0..chars_out {
+        let group = (value >> (6 * (3 - idx))) & 0x3f;
+        out.push((group as u8 + 33) as char);
+      }
+      i += 3;
+    }
+    out
+  }
+
+  #[test]
+  fn classify_gab2_ssa_harvests_font_attachment() {
+    // PARSER-213: an SSA payload with an embedded `[Fonts]` block yields an
+    // attachment with the decoded MIME type.
+    let font = [0x00u8, 0x01, 0x00, 0x00, 0x00, 0x42, 0x43, 0x44];
+    let mut ssa = String::from("[Script Info]\r\nScriptType: v4.00+\r\n[V4+ Styles]\r\n[Fonts]\r\n");
+    ssa.push_str("fontname: myfont.ttf\r\n");
+    ssa.push_str(&uu_encode(&font));
+    ssa.push_str("\r\n");
+    let demux = classify_gab2(&gab2_with_subtitle(ssa.as_bytes())).unwrap();
+    assert_eq!(demux.kind, AviSubtitleKind::Ssa);
+    assert_eq!(demux.attachments.len(), 1);
+    assert_eq!(demux.attachments[0].file_name, "myfont.ttf");
+    assert_eq!(demux.attachments[0].mime_type.as_deref(), Some("font/sfnt"));
+    assert_eq!(demux.attachments[0].size, font.len() as u64);
   }
 
   #[test]

@@ -108,13 +108,13 @@ impl Reader for TtaReader {
     let mut bytes = vec![0u8; 22];
     let read = src.read_at_most(&mut bytes)?;
     let header = parse_header(&bytes[..read]).ok_or(ParseError::Unrecognised)?;
-    if !validate_seek_table(src, start as u64)? {
-      return Err(ParseError::Malformed {
-        format: "tta",
-        offset: start as u64 + 22,
-        reason: "broken TTA seek table".to_string(),
-      });
-    }
+    // PARSER-217: mkvtoolnix's `tta_reader_c::read_headers` returns right
+    // after reading the fixed header when `g_identifying` is set
+    // (`../mkvtoolnix/src/input/r_tta.cpp:54-55`); the seek-table walk and its
+    // "broken seek table" error only run for non-identify muxing
+    // (`r_tta.cpp:61-80`).  Identification is exactly our header-only role, so
+    // we no longer validate the seek table — files mkvmerge can still
+    // identify from the fixed header are no longer rejected as malformed.
 
     out.container.format = ContainerFormat::Tta;
     out.container.recognized = true;
@@ -150,28 +150,6 @@ impl Reader for TtaReader {
     });
     Ok(())
   }
-}
-
-fn validate_seek_table(src: &mut FileSource, start: u64) -> Result<bool, ParseError> {
-  let Some(file_len) = src.length() else {
-    return Ok(true);
-  };
-  let logical_size = file_len.saturating_sub(start);
-  if logical_size < 30 {
-    return Ok(false);
-  }
-  src.seek_to(start + 22)?;
-  let mut seek_sum = 26u64;
-  let mut points = 0u32;
-  loop {
-    let point = src.read_u32_le()? as u64;
-    seek_sum = seek_sum.saturating_add(point + 4);
-    points += 1;
-    if seek_sum >= logical_size || points > 1_000_000 {
-      break;
-    }
-  }
-  Ok(points > 0 && seek_sum == logical_size)
 }
 
 #[cfg(test)]
@@ -272,14 +250,21 @@ mod tests {
   }
 
   #[test]
-  fn read_headers_rejects_broken_seek_table() {
+  fn read_headers_identifies_from_fixed_header_without_seek_table() {
+    // PARSER-217: a file with only the 22-byte fixed header (no/empty seek
+    // table) is still identified, matching mkvmerge's identify path which
+    // returns before seek-table validation.
     use crate::media_metadata::deadline::Deadline;
     let bytes = build_tta1_header(2, 16, 44_100, 88_200);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.tta", 0);
-    let err = TtaReader
+    TtaReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
-      .unwrap_err();
-    assert!(matches!(err, ParseError::Malformed { .. }));
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Tta);
+    let a = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.bit_depth, Some(16));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
   }
 }

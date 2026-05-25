@@ -1,6 +1,6 @@
 # Dirac Elementary Stream Parser
 
-Implementation progress: 62%
+Implementation progress: 70%
 
 ## Purpose
 
@@ -11,7 +11,7 @@ The Dirac parser recognises raw Dirac streams, extracts sequence-header informat
 - Primary implementation: `src-tauri/src/media_metadata/elementary/dirac.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_dirac.cpp`, `../mkvtoolnix/src/input/r_dirac.h`, upstream Dirac helper code under `../mkvtoolnix/src/common`
 
-The parser looks for `BBCD` parse-info magic with a sequence-header parse code, decodes Dirac variable-length integers, handles custom dimensions, and maps a subset of standard video format indexes.
+Mirroring `dirac_es_reader_c::probe_file`, the stream must *start* with the Dirac sync word (`BBCD`) before the parser runs; the parser then locates a sequence-header parse unit, decodes Dirac variable-length integers, handles custom dimensions, and maps a subset of standard video format indexes.
 
 ## Data Structures
 
@@ -28,10 +28,4 @@ The internal `SequenceHeader` contains width, height, interlace/progressive stat
 
 ## Gaps and Handling
 
-Upstream validates parse-unit chaining from the start of the stream and exposes more standard-format details such as frame rate, aspect ratio, clean area, top-field-first, and default duration. Rust accepts sequence headers found within the prefix window and emits the stable dimensions it can decode. This improves tolerance but can differ from mkvmerge's stricter probe behavior.
-
-## Open Issues
-
-### PARSER-222: Dirac probe accepts a sequence header anywhere in the prefix
-
-Native `probe()` returns true when `parse_sequence_header()` finds a `BBCD` sequence-header parse unit anywhere in the first MiB (`src-tauri/src/media_metadata/elementary/dirac.rs:34-59`, `111-115`). Upstream requires the stream to start with the Dirac sync word before feeding the data to the Dirac parser (`../mkvtoolnix/src/input/r_dirac.cpp:27-42`). Files with unrelated leading data before a later `BBCD` sequence-header-looking blob can therefore be native false positives.
+Upstream exposes more standard-format details such as frame rate, aspect ratio, clean area, top-field-first, and default duration. The probe now requires the stream to start with the Dirac sync word (matching upstream), then locates the sequence header within the prefix window and emits the stable dimensions it can decode.

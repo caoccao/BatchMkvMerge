@@ -52,6 +52,8 @@ struct VideoState {
   width: Option<u32>,
   height: Option<u32>,
   frame_rate: Option<f64>,
+  /// Per-frame duration in ns from the AVC/HEVC SPS VUI timing, when present.
+  sps_default_duration_ns: Option<u64>,
   headers_read: bool,
   codec_private: Option<Vec<u8>>,
   codec_config: Option<VideoCodecConfig>,
@@ -240,11 +242,25 @@ fn build_video_track(track_id: i64, video: &VideoState) -> Track {
     codec_config: video.codec_config.clone(),
     ..VideoTrackProperties::default()
   };
-  if let Some(fps) = video.frame_rate {
+  // PARSER-218: the per-frame duration comes from the AMF `framerate` first;
+  // for AVC/HEVC it then falls back to the SPS VUI timing and finally to
+  // mkvmerge's 25 fps default, matching `new_stream_v_avc`/`new_stream_v_hevc`
+  // (`../mkvtoolnix/src/input/r_flv.cpp:427-445`, `455-472`).
+  const DEFAULT_DURATION_25FPS_NS: u64 = 1_000_000_000 / 25;
+  let amf_duration = video.frame_rate.and_then(|fps| {
     if fps > 0.0 {
-      vp.default_duration_ns = Some((1_000_000_000.0 / fps).round() as u64);
+      Some((1_000_000_000.0 / fps).round() as u64)
+    } else {
+      None
     }
-  }
+  });
+  vp.default_duration_ns = amf_duration.or_else(|| {
+    if matches!(video.codec, Some(VideoCodecId::H264) | Some(VideoCodecId::H265)) {
+      Some(video.sps_default_duration_ns.unwrap_or(DEFAULT_DURATION_25FPS_NS))
+    } else {
+      None
+    }
+  });
   Track {
     id: track_id,
     track_type: TrackType::Video,
@@ -375,6 +391,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
             state.width = Some(dim.width);
             state.height = Some(dim.height);
           }
+          state.sps_default_duration_ns = parsed.default_duration_ns;
           state.headers_read = parsed.complete;
         }
       }
@@ -388,6 +405,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
             state.width = Some(dim.width);
             state.height = Some(dim.height);
           }
+          state.sps_default_duration_ns = parsed.default_duration_ns;
           state.headers_read = parsed.complete;
         }
       }
@@ -413,6 +431,8 @@ struct ParsedVideoConfig {
   dimensions: Option<Dimensions2D>,
   config: Option<VideoCodecConfig>,
   complete: bool,
+  /// Per-frame duration in ns derived from SPS VUI timing, when present.
+  default_duration_ns: Option<u64>,
 }
 
 fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
@@ -485,6 +505,7 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
     ..VideoCodecConfig::default()
   };
   let mut dimensions = None;
+  let mut default_duration_ns = None;
   if let Some(sps) = sps_info {
     dimensions = Some(Dimensions2D {
       width: sps.display_width,
@@ -497,12 +518,14 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
     config.chroma_format = Some(classify_avc_chroma(sps.chroma_format_idc));
     config.bit_depth_luma = Some(sps.bit_depth_luma as u32);
     config.bit_depth_chroma = Some(sps.bit_depth_chroma as u32);
+    default_duration_ns = sps.default_duration_ns;
   }
 
   ParsedVideoConfig {
     dimensions,
     config: Some(config),
     complete: saw_sps && saw_pps,
+    default_duration_ns,
   }
 }
 
@@ -542,6 +565,7 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
   };
 
   let mut dimensions = None;
+  let mut default_duration_ns = None;
   let mut saw_vps = false;
   let mut saw_sps = false;
   let mut saw_pps = false;
@@ -592,6 +616,7 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
           config.chroma_format = Some(classify_hevc_chroma(sps.chroma_format_idc));
           config.bit_depth_luma = Some(sps.bit_depth_luma as u32);
           config.bit_depth_chroma = Some(sps.bit_depth_chroma as u32);
+          default_duration_ns = sps.default_duration_ns;
         }
       }
     }
@@ -601,6 +626,7 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
     dimensions,
     config: Some(config),
     complete: saw_vps && saw_sps && saw_pps,
+    default_duration_ns,
   }
 }
 
@@ -893,6 +919,41 @@ mod tests {
     let v = out.tracks.iter().find(|t| t.track_type == TrackType::Video).unwrap();
     assert_eq!(v.codec.id, "V_MPEGH/ISO/HEVC");
     assert!(v.codec.codec_private.is_some());
+  }
+
+  #[test]
+  fn h264_without_amf_or_sps_timing_falls_back_to_25fps() {
+    // PARSER-218: no onMetaData framerate and an SPS without VUI timing →
+    // mkvmerge's 25 fps default (40 ms per frame).
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0]; // key frame + H.264 seq header
+    video_payload.extend(minimal_avcc());
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let v = out.tracks.iter().find(|t| t.track_type == TrackType::Video).unwrap();
+    let vp = v.properties.video.as_ref().unwrap();
+    assert_eq!(vp.default_duration_ns, Some(40_000_000));
+  }
+
+  #[test]
+  fn non_avc_video_without_framerate_has_no_default_duration() {
+    // The 25 fps fallback is AVC/HEVC-specific; Sorenson H.263 keeps no
+    // default duration when AMF carried no frame rate.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut payload = vec![(1 << 4) | 2];
+    payload.extend(flv1_dimensions_payload(640, 360));
+    blob.extend(build_tag(TAG_VIDEO, &payload));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("flv1.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let v = out.tracks.iter().find(|t| t.track_type == TrackType::Video).unwrap();
+    assert_eq!(v.properties.video.as_ref().unwrap().default_duration_ns, None);
   }
 
   #[test]

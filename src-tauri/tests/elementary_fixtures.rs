@@ -66,10 +66,21 @@ fn parses_mpeg_video_es() {
 
 // -- DV --
 
+/// Build a marker-dense DV stream: eight 80-byte DIF section headers
+/// (`0x1f 0x07 0x00 <byte4>`) so the upstream marker-density probe accepts it.
+/// `byte4 = 0x3f` → dsf 0 (NTSC); `0xbf` → dsf 1 (PAL).
+fn build_dv_stream(byte4: u8) -> Vec<u8> {
+  let mut bytes = Vec::new();
+  for _ in 0..8 {
+    bytes.extend_from_slice(&[0x1F, 0x07, 0x00, byte4]);
+    bytes.extend_from_slice(&[0u8; 76]);
+  }
+  bytes
+}
+
 #[test]
 fn parses_dv_ntsc() {
-  let mut bytes = vec![0x1F, 0x07, 0x00, 0x00];
-  bytes.extend_from_slice(&[0u8; 76]);
+  let bytes = build_dv_stream(0x3F);
   let path = write_tempfile(&bytes, "dv");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);
@@ -78,8 +89,7 @@ fn parses_dv_ntsc() {
 
 #[test]
 fn parses_dv_pal() {
-  let mut bytes = vec![0x1F, 0x07, 0x00, 0x80];
-  bytes.extend_from_slice(&[0u8; 76]);
+  let bytes = build_dv_stream(0xBF);
   let path = write_tempfile(&bytes, "dv");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

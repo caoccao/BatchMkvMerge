@@ -104,6 +104,74 @@ const FRAME_SIZES: [[u16; 3]; 38] = [
   [1280, 1394, 1920],
 ];
 
+/// E-AC-3 `strmtyp` (frame type) values (`../mkvtoolnix/src/common/ac3.h:32-34`).
+const FRAME_TYPE_INDEPENDENT: u8 = 0;
+const FRAME_TYPE_DEPENDENT: u8 = 1;
+const FRAME_TYPE_RESERVED: u8 = 3;
+
+/// Distinct channel-layout bits.  The actual values are immaterial — only
+/// distinctness (so OR-ing layouts dedups shared speakers) and population
+/// count matter.  Mirrors the speakers referenced by `s_acmod_to_channel_layout`
+/// and `s_custom_channel_map_to_layout` (`../mkvtoolnix/src/common/channels.h`).
+mod ch {
+  pub const FRONT_LEFT: u64 = 1 << 0;
+  pub const FRONT_RIGHT: u64 = 1 << 1;
+  pub const FRONT_CENTER: u64 = 1 << 2;
+  pub const LOW_FREQUENCY: u64 = 1 << 3;
+  pub const BACK_LEFT: u64 = 1 << 4;
+  pub const BACK_RIGHT: u64 = 1 << 5;
+  pub const FRONT_LEFT_OF_CENTER: u64 = 1 << 6;
+  pub const FRONT_RIGHT_OF_CENTER: u64 = 1 << 7;
+  pub const BACK_CENTER: u64 = 1 << 8;
+  pub const SIDE_LEFT: u64 = 1 << 9;
+  pub const SIDE_RIGHT: u64 = 1 << 10;
+  pub const TOP_FRONT_LEFT: u64 = 1 << 11;
+  pub const TOP_FRONT_CENTER: u64 = 1 << 12;
+  pub const TOP_FRONT_RIGHT: u64 = 1 << 13;
+  pub const TOP_CENTER: u64 = 1 << 14;
+  pub const SURROUND_DIRECT_LEFT: u64 = 1 << 15;
+  pub const SURROUND_DIRECT_RIGHT: u64 = 1 << 16;
+  pub const WIDE_LEFT: u64 = 1 << 17;
+  pub const WIDE_RIGHT: u64 = 1 << 18;
+  pub const TOP_BACK_LEFT: u64 = 1 << 19;
+  pub const TOP_BACK_RIGHT: u64 = 1 << 20;
+  pub const LOW_FREQUENCY_2: u64 = 1 << 21;
+}
+
+/// `acmod` → channel layout (`../mkvtoolnix/src/common/ac3.cpp:34-43`).
+const ACMOD_TO_LAYOUT: [u64; 8] = [
+  ch::FRONT_LEFT | ch::FRONT_RIGHT,
+  ch::FRONT_CENTER,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT | ch::FRONT_CENTER,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT | ch::BACK_CENTER,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT | ch::FRONT_CENTER | ch::BACK_CENTER,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT | ch::SIDE_LEFT | ch::SIDE_RIGHT,
+  ch::FRONT_LEFT | ch::FRONT_RIGHT | ch::FRONT_CENTER | ch::SIDE_LEFT | ch::SIDE_RIGHT,
+];
+
+/// E-AC-3 dependent-frame custom channel map bit → layout
+/// (`../mkvtoolnix/src/common/ac3.cpp:45-62`).  Indexed MSB-first by the
+/// 16-bit `chanmap` field.
+const CUSTOM_MAP_TO_LAYOUT: [u64; 16] = [
+  ch::FRONT_LEFT,
+  ch::FRONT_CENTER,
+  ch::FRONT_RIGHT,
+  ch::SIDE_LEFT,
+  ch::SIDE_RIGHT,
+  ch::FRONT_LEFT_OF_CENTER | ch::FRONT_RIGHT_OF_CENTER,
+  ch::BACK_LEFT | ch::BACK_RIGHT,
+  ch::BACK_CENTER,
+  ch::TOP_CENTER,
+  ch::SURROUND_DIRECT_LEFT | ch::SURROUND_DIRECT_RIGHT,
+  ch::WIDE_LEFT | ch::WIDE_RIGHT,
+  ch::TOP_FRONT_LEFT | ch::TOP_FRONT_RIGHT,
+  ch::TOP_FRONT_CENTER,
+  ch::TOP_BACK_LEFT | ch::TOP_BACK_RIGHT,
+  ch::LOW_FREQUENCY_2,
+  ch::LOW_FREQUENCY,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ac3Variant {
   Ac3,
@@ -117,6 +185,12 @@ pub struct Ac3Frame {
   pub frame_length: usize,
   pub channels: u32,
   pub bsid: u8,
+  /// E-AC-3 `strmtyp`; always [`FRAME_TYPE_INDEPENDENT`] for AC-3.
+  pub frame_type: u8,
+  /// Speaker layout bitmask (excludes the LFE, which is tracked by `lfeon`).
+  pub channel_layout: u64,
+  /// `lfeon` — the low-frequency-effects channel is present.
+  pub lfeon: bool,
 }
 
 /// Decode an AC-3 / E-AC-3 frame header. Port of `frame_c::decode_header`.
@@ -196,28 +270,37 @@ fn decode_header_type_ac3(br: &mut BitReader<'_>, bsid: u8) -> Option<Ac3Frame> 
   if acmod == 0x02 {
     br.skip_bits(2).ok()?; // dsurmod
   }
-  let lfeon = br.read_bit().ok()? as u32;
+  let lfeon = br.read_bit().ok()?;
 
   let sample_rate = SAMPLE_RATES[fscod as usize];
   let frame_length = (FRAME_SIZES[frmsizecod][fscod as usize] as usize) * 2;
   if frame_length == 0 {
     return None;
   }
+  let channel_layout = ACMOD_TO_LAYOUT[acmod as usize];
   Some(Ac3Frame {
     variant: Ac3Variant::Ac3,
     sample_rate,
     frame_length,
-    channels: channels_from_acmod(acmod) + lfeon,
+    channels: channel_layout.count_ones() + u32::from(lfeon),
     bsid,
+    frame_type: FRAME_TYPE_INDEPENDENT,
+    channel_layout,
+    lfeon,
   })
 }
 
-/// Port of `frame_c::decode_header_type_eac3`. The bit reader is positioned at
-/// bit 16 (just past the sync word).
+/// Port of `frame_c::decode_header_type_eac3`
+/// (`../mkvtoolnix/src/common/ac3.cpp:131-200`). The bit reader is positioned
+/// at bit 16 (just past the sync word).
+///
+/// PARSER-216: the decode now continues past `lfeon` through `dialnorm`,
+/// `compre`, the dual-mono second `dialnorm`, and — for dependent frames — the
+/// `chanmape`/`chanmap` block, so the per-frame `channel_layout` reflects the
+/// dependent-substream custom channel map.
 fn decode_header_type_eac3(br: &mut BitReader<'_>, bsid: u8) -> Option<Ac3Frame> {
   let frame_type = br.read_bits(2).ok()? as u8;
-  if frame_type == 0x03 {
-    // FRAME_TYPE_RESERVED
+  if frame_type == FRAME_TYPE_RESERVED {
     return None;
   }
   br.skip_bits(3).ok()?; // sub stream id
@@ -231,7 +314,34 @@ fn decode_header_type_eac3(br: &mut BitReader<'_>, bsid: u8) -> Option<Ac3Frame>
     return None;
   }
   let acmod = br.read_bits(3).ok()? as u8;
-  let lfeon = br.read_bit().ok()? as u32;
+  let lfeon = br.read_bit().ok()?;
+  br.skip_bits(5).ok()?; // bsid (already decoded by the caller)
+  br.skip_bits(5).ok()?; // dialnorm
+  if br.read_bit().ok()? {
+    br.skip_bits(8).ok()?; // compr
+  }
+  if acmod == 0x00 {
+    // dual mono mode — second dialnorm + optional compr2
+    br.skip_bits(5).ok()?; // dialnorm2
+    if br.read_bit().ok()? {
+      br.skip_bits(8).ok()?; // compr2
+    }
+  }
+
+  let channel_layout = if frame_type == FRAME_TYPE_DEPENDENT && br.read_bit().ok()? {
+    // chanmape present — fold the 16-bit custom channel map into a layout.
+    let chanmap = br.read_bits(16).ok()?;
+    let mut layout = 0u64;
+    for (idx, &bits) in CUSTOM_MAP_TO_LAYOUT.iter().enumerate() {
+      let mask = 1u64 << (15 - idx);
+      if chanmap & mask != 0 {
+        layout |= bits;
+      }
+    }
+    layout
+  } else {
+    ACMOD_TO_LAYOUT[acmod as usize]
+  };
 
   let sr_index = if fscod == 0x03 { 3 + fscod2 } else { fscod } as usize;
   let sample_rate = EAC3_SAMPLE_RATES[sr_index];
@@ -239,23 +349,44 @@ fn decode_header_type_eac3(br: &mut BitReader<'_>, bsid: u8) -> Option<Ac3Frame>
     variant: Ac3Variant::Eac3,
     sample_rate,
     frame_length,
-    channels: channels_from_acmod(acmod) + lfeon,
+    channels: channel_layout.count_ones() + u32::from(lfeon),
     bsid,
+    frame_type,
+    channel_layout,
+    lfeon,
   })
 }
 
-fn channels_from_acmod(acmod: u8) -> u32 {
-  match acmod {
-    0 => 2,
-    1 => 1,
-    2 => 2,
-    3 => 3,
-    4 => 3,
-    5 => 4,
-    6 => 4,
-    7 => 5,
-    _ => 0,
+/// Port of `frame_c::get_effective_number_of_channels`
+/// (`../mkvtoolnix/src/common/ac3.cpp:340-349`).  Aggregates the independent
+/// E-AC-3 frame at `offset` with any immediately-following dependent frames:
+/// their custom channel maps are OR-ed into the layout and their LFE channels
+/// are summed (PARSER-216).  AC-3 has no dependent substreams, so this returns
+/// the single frame's channel count.
+fn effective_channels(bytes: &[u8], offset: usize) -> Option<u32> {
+  let first = decode_frame_at(bytes, offset)?;
+  let mut layout = first.channel_layout;
+  let mut lfe_channels = u32::from(first.lfeon);
+
+  if first.variant == Ac3Variant::Eac3 {
+    let mut pos = offset.checked_add(first.frame_length)?;
+    while pos < bytes.len() {
+      if pos + 16 < bytes.len() && get_u16_be(&bytes[pos..]) == 0x0110 {
+        pos += 16;
+      }
+      let Some(frame) = decode_frame_at(bytes, pos) else {
+        break;
+      };
+      if frame.frame_type != FRAME_TYPE_DEPENDENT || frame.frame_length < 8 {
+        break;
+      }
+      layout |= frame.channel_layout;
+      lfe_channels += u32::from(frame.lfeon);
+      pos += frame.frame_length;
+    }
   }
+
+  Some(layout.count_ones() + lfe_channels)
 }
 
 /// Port of `parser_c::find_consecutive_frames`. Scans for [`MIN_CONFIRM_FRAMES`]
@@ -365,6 +496,8 @@ impl Reader for Ac3Reader {
     let bytes = &probe[start..read];
     let offset = find_frame_sync(bytes).ok_or(ParseError::Unrecognised)?;
     let frame = decode_frame(&bytes[offset..]).ok_or(ParseError::Unrecognised)?;
+    // PARSER-216: fold dependent-substream channel maps into the count.
+    let channels = effective_channels(bytes, offset).unwrap_or(frame.channels);
 
     let (codec_id, codec_name, format) = match frame.variant {
       Ac3Variant::Ac3 => ("A_AC3", "AC-3", ContainerFormat::Ac3),
@@ -377,7 +510,7 @@ impl Reader for Ac3Reader {
     let mut common = CommonTrackProperties::default();
     common.number = Some(1);
     let audio = AudioTrackProperties {
-      channels: Some(frame.channels),
+      channels: Some(channels),
       sampling_frequency: Some(frame.sample_rate as f64),
       ..AudioTrackProperties::default()
     };
@@ -449,6 +582,70 @@ pub(crate) fn build_ac3_stream(frames: usize, fscod: u8, frmsizecod: u8) -> Vec<
   bytes
 }
 
+/// MSB-first bit writer used to synthesise E-AC-3 frame headers in tests.
+#[cfg(test)]
+struct BitBuf {
+  bits: Vec<bool>,
+}
+
+#[cfg(test)]
+impl BitBuf {
+  fn new() -> Self {
+    Self { bits: Vec::new() }
+  }
+  fn put(&mut self, value: u32, n: u32) {
+    for i in (0..n).rev() {
+      self.bits.push((value >> i) & 1 == 1);
+    }
+  }
+  fn bit(&mut self, b: bool) {
+    self.bits.push(b);
+  }
+  fn finish(self, total_len: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; total_len.max(HEADER_BYTES)];
+    bytes[0] = 0x0B;
+    bytes[1] = 0x77;
+    for (i, &b) in self.bits.iter().enumerate() {
+      if b {
+        bytes[2 + i / 8] |= 0x80 >> (i % 8);
+      }
+    }
+    bytes
+  }
+}
+
+/// Build a synthetic E-AC-3 frame.  `fscod`/`fscod2` are fixed to 0 (48 kHz);
+/// a `chanmap` is only emitted when `frame_type == FRAME_TYPE_DEPENDENT`.
+#[cfg(test)]
+pub(crate) fn build_eac3_frame(frame_type: u8, frmsiz: u16, acmod: u8, lfeon: bool, bsid: u8, chanmap: Option<u16>) -> Vec<u8> {
+  let mut w = BitBuf::new();
+  w.put(frame_type as u32, 2);
+  w.put(0, 3); // sub_stream_id
+  w.put(frmsiz as u32, 11);
+  w.put(0, 2); // fscod = 0 → 48 kHz
+  w.put(0, 2); // fscod2
+  w.put(acmod as u32, 3);
+  w.bit(lfeon);
+  w.put(bsid as u32, 5);
+  w.put(0, 5); // dialnorm
+  w.bit(false); // compre
+  if acmod == 0 {
+    w.put(0, 5); // dialnorm2
+    w.bit(false); // compr2e
+  }
+  if frame_type == FRAME_TYPE_DEPENDENT {
+    match chanmap {
+      Some(map) => {
+        w.bit(true); // chanmape
+        w.put(map as u32, 16);
+      }
+      None => w.bit(false),
+    }
+  }
+  let frame_length = ((frmsiz as usize) + 1) << 1;
+  w.finish(frame_length)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -464,10 +661,10 @@ mod tests {
   }
 
   #[test]
-  fn channels_from_acmod_full_table() {
+  fn acmod_to_layout_channel_counts() {
     let pairs = [(0, 2), (1, 1), (2, 2), (3, 3), (4, 3), (5, 4), (6, 4), (7, 5)];
     for (acmod, expected) in pairs {
-      assert_eq!(channels_from_acmod(acmod), expected);
+      assert_eq!(ACMOD_TO_LAYOUT[acmod as usize].count_ones(), expected);
     }
   }
 
@@ -669,5 +866,50 @@ mod tests {
   fn find_frame_sync_returns_none_without_enough_frames() {
     let bytes = build_ac3_stream(3, 0, 8);
     assert_eq!(find_frame_sync(&bytes), None);
+  }
+
+  // ---- PARSER-216: E-AC-3 dependent-frame channel maps ----------------
+
+  #[test]
+  fn eac3_dependent_frame_decodes_custom_channel_map() {
+    // chanmap custom-map index 6 = back-left | back-right.
+    let chanmap = 1u16 << (15 - 6);
+    let frame = build_eac3_frame(FRAME_TYPE_DEPENDENT, 20, 7, false, 16, Some(chanmap));
+    let f = decode_frame(&frame).unwrap();
+    assert_eq!(f.variant, Ac3Variant::Eac3);
+    assert_eq!(f.frame_type, FRAME_TYPE_DEPENDENT);
+    assert_eq!(f.channel_layout, ch::BACK_LEFT | ch::BACK_RIGHT);
+  }
+
+  #[test]
+  fn eac3_independent_frame_uses_acmod_layout() {
+    let frame = build_eac3_frame(FRAME_TYPE_INDEPENDENT, 20, 7, true, 16, None);
+    let f = decode_frame(&frame).unwrap();
+    assert_eq!(f.frame_type, FRAME_TYPE_INDEPENDENT);
+    assert_eq!(f.channel_layout, ACMOD_TO_LAYOUT[7]);
+    assert!(f.lfeon);
+    // 3/2 (5 speakers) + LFE.
+    assert_eq!(f.channels, 6);
+  }
+
+  #[test]
+  fn eac3_effective_channels_folds_dependent_substream() {
+    // Independent 3/2 + LFE = 6 channels.
+    let indep = build_eac3_frame(FRAME_TYPE_INDEPENDENT, 20, 7, true, 16, None);
+    // Dependent frame adds back-left/back-right via the custom channel map.
+    let chanmap = 1u16 << (15 - 6);
+    let dep = build_eac3_frame(FRAME_TYPE_DEPENDENT, 20, 7, false, 16, Some(chanmap));
+    let mut stream = indep.clone();
+    stream.extend_from_slice(&dep);
+    // The independent frame alone reports 6 channels...
+    assert_eq!(decode_frame(&indep).unwrap().channels, 6);
+    // ...but the effective layout folds in the two dependent channels → 8.
+    assert_eq!(effective_channels(&stream, 0).unwrap(), 8);
+  }
+
+  #[test]
+  fn effective_channels_matches_single_ac3_frame() {
+    let frame = build_ac3_frame_full(0, 8, 8, 7, true);
+    assert_eq!(effective_channels(&frame, 0).unwrap(), 6);
   }
 }

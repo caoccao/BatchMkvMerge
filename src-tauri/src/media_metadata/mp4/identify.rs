@@ -39,6 +39,25 @@ pub fn finalise(
 
   let mvex = &moov.mvex_defaults;
   let movie_matrix = moov.movie_matrix;
+
+  // PARSER-212: QuickTime chapter tracks referenced by `tref/chap` are counted
+  // as chapters and excluded from the track list.  A Nero `chpl` list, parsed
+  // during the `moov` walk, takes precedence (mkvtoolnix's `read_chapter_track`
+  // returns early when chapters already exist, `r_qtmp4.cpp:1172`).
+  let chapter_track_ids: std::collections::HashSet<u32> =
+    moov.tracks.iter().flat_map(|t| t.chapter_track_ids.iter().copied()).collect();
+  if out.chapters.num_entries == 0 {
+    if let Some(count) = moov
+      .tracks
+      .iter()
+      .filter(|t| t.track_id.is_some_and(|id| chapter_track_ids.contains(&id)))
+      .find_map(|t| t.sample_count.filter(|&c| c > 0))
+    {
+      out.chapters.num_entries = count;
+      out.chapters.num_editions = 1;
+    }
+  }
+
   // PARSER-161: assign ids compactly — a `trak` we end up dropping (metadata
   // handler, unknown handler, invalid timing, unsupported `mp4a`, missing AAC
   // config) must not burn an id, so the next emitted track keeps the lower
@@ -46,6 +65,12 @@ pub fn finalise(
   // is set only after the demuxer is successfully handled and pushed.
   let mut next_id: i64 = 0;
   for builder in moov.tracks {
+    // A track that is a chapter source is consumed as chapters and excluded
+    // from the output track list (mkvtoolnix erases `is_chapters()` demuxers,
+    // `r_qtmp4.cpp:325`); it must not burn a track id.
+    if builder.track_id.is_some_and(|id| chapter_track_ids.contains(&id)) {
+      continue;
+    }
     if let Some(t) = build_track(builder, next_id, mvex, &fragment_track_counts, &movie_matrix) {
       out.tracks.push(t);
       next_id += 1;
@@ -634,6 +659,47 @@ mod tests {
     let mut m = MediaMetadata::new("clip.mp4", 0);
     finalise(moov, false, HashMap::new(), &mut m);
     assert_eq!(m.tracks[0].properties.common.num_index_entries, Some(250));
+  }
+
+  // ---- PARSER-212: QuickTime tref/chap chapter tracks -----------------
+
+  #[test]
+  fn quicktime_chapter_track_counted_and_excluded() {
+    let mut moov = MoovBuilder::default();
+    let mut video = video_builder(1, "avc1", Some("eng"));
+    video.chapter_track_ids = vec![2];
+    moov.tracks.push(video);
+    // Chapter text track (id 2) with 5 samples → 5 chapters.
+    let mut chap = subtitle_builder(2, "text");
+    chap.sample_count = Some(5);
+    moov.tracks.push(chap);
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    // The chapter track is consumed, not emitted as a subtitle track.
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].track_type, TrackType::Video);
+    assert_eq!(m.chapters.num_entries, 5);
+    assert_eq!(m.chapters.num_editions, 1);
+  }
+
+  #[test]
+  fn nero_chapters_take_precedence_over_chapter_track() {
+    let mut moov = MoovBuilder::default();
+    let mut video = video_builder(1, "avc1", None);
+    video.chapter_track_ids = vec![2];
+    moov.tracks.push(video);
+    let mut chap = subtitle_builder(2, "text");
+    chap.sample_count = Some(5);
+    moov.tracks.push(chap);
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    // Simulate a Nero `chpl` list already parsed during the moov walk.
+    m.chapters.num_entries = 3;
+    m.chapters.num_editions = 1;
+    finalise(moov, false, HashMap::new(), &mut m);
+    // chpl wins, but the chapter track is still excluded from the list.
+    assert_eq!(m.chapters.num_entries, 3);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].track_type, TrackType::Video);
   }
 
   #[test]

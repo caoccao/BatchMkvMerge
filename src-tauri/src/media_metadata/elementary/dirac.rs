@@ -55,7 +55,7 @@ impl Reader for DiracReader {
     let mut head = vec![0u8; PROBE_BYTES];
     let read = src.read_at_most(&mut head)?;
     src.seek_to(0)?;
-    Ok(parse_sequence_header(&head[..read]).is_some())
+    Ok(starts_with_sync(&head[..read]) && parse_sequence_header(&head[..read]).is_some())
   }
 
   fn read_headers(
@@ -67,6 +67,9 @@ impl Reader for DiracReader {
     let mut head = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut head)?;
+    if !starts_with_sync(&head[..read]) {
+      return Err(ParseError::Unrecognised);
+    }
     let sequence = parse_sequence_header(&head[..read]).ok_or(ParseError::Unrecognised)?;
 
     out.container.format = ContainerFormat::Dirac;
@@ -106,6 +109,16 @@ impl Reader for DiracReader {
     });
     Ok(())
   }
+}
+
+/// PARSER-222: mkvtoolnix's `dirac_es_reader_c::probe_file()` requires the
+/// stream to *start* with the Dirac sync word (`get_uint32_be(buffer) ==
+/// SYNC_WORD`, `../mkvtoolnix/src/input/r_dirac.cpp:33-35`) before handing
+/// the data to the parser.  Searching for a `BBCD` sequence header anywhere
+/// in the prefix turned unrelated files that happen to contain a later
+/// sequence-header-shaped blob into false positives.
+fn starts_with_sync(bytes: &[u8]) -> bool {
+  bytes.len() >= 4 && bytes[..4] == PARSE_INFO_MAGIC
 }
 
 fn parse_sequence_header(bytes: &[u8]) -> Option<SequenceHeader> {
@@ -320,6 +333,28 @@ mod tests {
       })
     );
     assert_eq!(video.interlace, Some(InterlaceFlag::Progressive));
+  }
+
+  #[test]
+  fn probe_rejects_sequence_header_not_at_stream_start() {
+    // PARSER-222: unrelated leading bytes before a later BBCD sequence
+    // header must not be claimed — the stream has to start with the sync.
+    let mut bytes = vec![0xAAu8; 16];
+    bytes.extend(build_dirac_stream());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!DiracReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn read_headers_rejects_sequence_header_not_at_stream_start() {
+    let mut bytes = vec![0xAAu8; 16];
+    bytes.extend(build_dirac_stream());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.drc", 0);
+    let err = DiracReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
   }
 
   #[test]

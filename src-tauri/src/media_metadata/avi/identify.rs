@@ -79,10 +79,20 @@ pub fn finalise(
   }
 
   // Subtitle ids follow the audio tracks: `1 + audio_tracks + i`
-  // (`r_avi.cpp:933`).
-  for (i, demuxer) in subtitles.into_iter().enumerate() {
+  // (`r_avi.cpp:933`).  PARSER-213: SSA/ASS demuxers also contribute their
+  // embedded `[Fonts]` / `[Graphics]` attachments, emitted with sequential ids
+  // continuing from any already present (mirrors `identify_attachments`'
+  // `set_attachment_id_base(g_attachments.size())`).
+  let mut attachment_id = out.attachments.len() as u32;
+  for (i, mut demuxer) in subtitles.into_iter().enumerate() {
     let id = 1 + audio_count + i as i64;
+    let attachments = std::mem::take(&mut demuxer.attachments);
     out.tracks.push(make_subtitle_track(id, demuxer));
+    for mut attachment in attachments {
+      attachment_id += 1;
+      attachment.id = attachment_id;
+      out.attachments.push(attachment);
+    }
   }
 
   out.tags.per_track_count = out.tracks.iter().map(|t| t.properties.tags.len() as u32).sum();
@@ -669,6 +679,7 @@ mod tests {
       AviSubtitleDemuxer {
         kind: AviSubtitleKind::Srt,
         encoding: Some("UTF-8".to_string()),
+        attachments: Vec::new(),
       },
     );
     assert_eq!(track.track_type, TrackType::Subtitles);
@@ -782,10 +793,12 @@ mod tests {
         AviSubtitleDemuxer {
           kind: AviSubtitleKind::Srt,
           encoding: Some("UTF-8".to_string()),
+          attachments: Vec::new(),
         },
         AviSubtitleDemuxer {
           kind: AviSubtitleKind::Ssa,
           encoding: None,
+          attachments: Vec::new(),
         },
       ],
       &mut m,
@@ -797,6 +810,36 @@ mod tests {
     assert_eq!(m.tracks[2].codec.id, "S_TEXT/UTF8");
     assert_eq!(m.tracks[3].id, 3);
     assert_eq!(m.tracks[3].codec.id, "S_TEXT/ASS");
+  }
+
+  #[test]
+  fn finalise_emits_ssa_embedded_attachments() {
+    use crate::media_metadata::model::attachment::Attachment;
+    let attachment = Attachment {
+      id: 1,
+      file_name: "myfont.ttf".to_string(),
+      mime_type: Some("font/sfnt".to_string()),
+      description: Some("SSA/ASS embedded font".to_string()),
+      size: 1024,
+      uid_hex: None,
+    };
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![AviSubtitleDemuxer {
+        kind: AviSubtitleKind::Ssa,
+        encoding: None,
+        attachments: vec![attachment],
+      }],
+      &mut m,
+    );
+    // PARSER-213: the SSA demuxer's font is surfaced as a global attachment.
+    assert_eq!(m.attachments.len(), 1);
+    assert_eq!(m.attachments[0].id, 1);
+    assert_eq!(m.attachments[0].file_name, "myfont.ttf");
+    assert_eq!(m.attachments[0].mime_type.as_deref(), Some("font/sfnt"));
   }
 
   #[test]

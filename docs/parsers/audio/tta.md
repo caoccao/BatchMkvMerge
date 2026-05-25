@@ -1,6 +1,6 @@
 # TTA Parser
 
-Implementation progress: 78%
+Implementation progress: 85%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The TTA parser recognises `TTA1` lossless audio files and reports channel count,
 - Shared helper: `src-tauri/src/media_metadata/audio/id3v2.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_tta.cpp`, `../mkvtoolnix/src/input/r_tta.h`
 
-The reader skips leading ID3v2 data, parses the fixed TTA1 header, derives duration from `data_length / sample_rate`, and validates the seek table enough to reject obviously broken headers.
+The reader skips leading ID3v2 data, parses the fixed TTA1 header, and derives duration from `data_length / sample_rate`. Matching `tta_reader_c::read_headers`, which returns right after the fixed header during identification (`g_identifying`) and only walks the seek table for non-identify muxing, the seek table is not validated — this is exactly the identification role.
 
 ## Data Structures
 
@@ -20,20 +20,14 @@ The reader skips leading ID3v2 data, parses the fixed TTA1 header, derives durat
 flowchart TD
   A["FileSource"] --> B["payload_start"]
   B --> C["TtaHeader"]
-  C --> D["seek-table validation"]
   C --> E["AudioTrackProperties"]
-  D --> F["MediaMetadata"]
-  E --> F
+  C --> D["duration"]
+  E --> F["MediaMetadata"]
+  D --> F
 ```
 
 `TtaHeader` carries audio format, channels, bits per sample, sample rate, and sample count.
 
 ## Gaps and Handling
 
-Upstream does not validate the seek table during identification in the same way; Rust validation can therefore reject damaged files earlier. The Rust code also does not subtract every possible trailing tag form during seek-table validation. This is conservative for a metadata parser: uncertain files fail as malformed rather than appearing extractable.
-
-## Open Issues
-
-### PARSER-217: Damaged seek tables reject identification
-
-Native `read_headers()` always validates the TTA seek table and returns `Malformed` when the table length sum does not match the logical file size (`src-tauri/src/media_metadata/audio/tta.rs:100-117`). Upstream reads the TTA header and immediately returns during identification before seek-table validation (`../mkvtoolnix/src/input/r_tta.cpp:48-60`); the seek-table walk only runs for non-identify muxing (`r_tta.cpp:61-80`). Damaged files that mkvmerge can still identify from the fixed header fail native metadata parsing entirely.
+Like mkvmerge's identification path, the reader no longer validates the seek table, so damaged files that still carry a valid fixed header are identified rather than rejected. The seek-table walk and its trailing-tag accounting (`tag_present_at_end`) are muxing-time concerns outside this header-only parser.

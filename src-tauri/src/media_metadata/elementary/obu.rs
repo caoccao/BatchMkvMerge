@@ -373,7 +373,14 @@ where
       pos += consumed;
       size
     } else {
-      bytes.len().saturating_sub(pos)
+      // PARSER-220: mkvtoolnix's `parse_obu()` throws
+      // `obu_without_size_unsupported_x` for an OBU without
+      // `obu_has_size_field` (`../mkvtoolnix/src/common/av1.cpp:414-421`),
+      // and the parse loop breaks — neither this OBU nor anything after it
+      // is parsed.  Mirror that by stopping the walk before visiting the
+      // size-less OBU, so raw AV1-like data that mkvmerge rejects is not
+      // claimed here.
+      return None;
     };
     let payload_end = pos.saturating_add(payload_len).min(bytes.len());
     if let Some(value) = visit(header.obu_type, &bytes[pos..payload_end]) {
@@ -799,6 +806,42 @@ mod tests {
     bytes.extend(build_frame_obu());
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(ObuReader.probe(&mut s).unwrap());
+  }
+
+  // ---- PARSER-220: OBUs without a size field are rejected -------------
+
+  #[test]
+  fn probe_rejects_obu_without_size_field() {
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    // sequence_header OBU with has_size_field = 0 (type=1 → 0x08), so no
+    // LEB128 size follows.  mkvmerge throws obu_without_size_unsupported_x
+    // and rejects the stream; the native walk must stop here too.
+    let mut bytes = vec![0x12u8, 0x00]; // temporal_delimiter (sized)
+    bytes.push(0x08); // sequence_header, has_size_field = 0
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_frame_obu());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!ObuReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn read_headers_rejects_obu_without_size_field() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    let mut bytes = vec![0x12u8, 0x00];
+    bytes.push(0x08); // sequence_header, has_size_field = 0
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_frame_obu());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.obu", 0);
+    let err = ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
   }
 
   // ---- PARSER-065: color description + subsampling parity -------------

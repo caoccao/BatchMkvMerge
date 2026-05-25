@@ -101,6 +101,11 @@ pub struct TrackBuilder {
   /// Surfaced as `num_index_entries` (PARSER-145).
   pub sample_count: Option<u32>,
 
+  /// PARSER-212: track IDs referenced by this track's `tref/chap` (QuickTime
+  /// chapter track references).  Mirrors `m_chapter_track_ids`
+  /// (`../mkvtoolnix/src/input/r_qtmp4.cpp:1666-1679`).
+  pub chapter_track_ids: Vec<u32>,
+
   /// PARSER-179: block-addition mappings collected from `dvcC` / `dvvC` /
   /// `hvcE` sample-entry boxes — each is `(fourcc, raw_payload_bytes)`.
   /// mkvtoolnix stores these via `add_data_as_block_addition`
@@ -186,10 +191,38 @@ pub fn parse(src: &mut FileSource, parent: &BoxHeader, deadline: &Deadline) -> R
       edts::parse(src, child, deadline, &mut builder)?;
       Ok(ChildAction::Consumed)
     }
+    b"tref" => {
+      parse_tref(src, child, deadline, &mut builder)?;
+      Ok(ChildAction::Consumed)
+    }
     _ => Ok(ChildAction::Skip),
   })?;
   builder.merge_codec_config();
   Ok(builder)
+}
+
+/// Parse a `tref` (track reference) container, collecting the track IDs of any
+/// `chap` (chapter) reference into `builder.chapter_track_ids`.  Mirrors
+/// `handle_tref_atom` (`../mkvtoolnix/src/input/r_qtmp4.cpp:1666-1679`).
+fn parse_tref(
+  src: &mut FileSource,
+  parent: &BoxHeader,
+  deadline: &Deadline,
+  builder: &mut TrackBuilder,
+) -> Result<(), ParseError> {
+  atom::walk_children(src, parent, "mp4::tref", deadline, |src, child| {
+    if &child.kind.0 == b"chap" {
+      let payload = atom::read_payload(src, child, 4096)?;
+      for chunk in payload.chunks_exact(4) {
+        builder
+          .chapter_track_ids
+          .push(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+      }
+      Ok(ChildAction::Consumed)
+    } else {
+      Ok(ChildAction::Skip)
+    }
+  })
 }
 
 #[cfg(test)]
@@ -225,6 +258,22 @@ mod tests {
     let b = parse(&mut s, &parent, &dl()).unwrap();
     assert!(b.track_id.is_none());
     assert!(b.display_dimensions().is_none());
+  }
+
+  #[test]
+  fn tref_chap_collects_chapter_track_ids() {
+    // PARSER-212: a `tref/chap` reference records the chapter track id.
+    let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(1, 1920, 1080));
+    let chap = encode_box(b"chap", &7u32.to_be_bytes());
+    let tref = encode_box(b"tref", &chap);
+    let mut trak_payload = tkhd;
+    trak_payload.extend(tref);
+    let trak = encode_box(b"trak", &trak_payload);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(trak));
+    let parent = atom::read_box_header(&mut s).unwrap();
+    let b = parse(&mut s, &parent, &dl()).unwrap();
+    assert_eq!(b.track_id, Some(1));
+    assert_eq!(b.chapter_track_ids, vec![7]);
   }
 
   #[test]

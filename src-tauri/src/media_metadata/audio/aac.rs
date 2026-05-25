@@ -83,12 +83,19 @@ const AOT_AAC_LTP: u32 = 0x04;
 const AOT_SBR: u32 = 0x05;
 const AOT_AAC_SCALABLE: u32 = 0x06;
 const AOT_TWINVQ: u32 = 0x07;
+/// Parametric Stereo (HE-AACv2) — treated as an SBR-style extension
+/// (`../mkvtoolnix/src/common/mp4.h:68`, `aac.cpp:1224-1232`).
+const AOT_PS: u32 = 0x1d;
 const AOT_ER_AAC_LC: u32 = 0x11;
 const AOT_ER_AAC_LTP: u32 = 0x13;
 const AOT_ER_AAC_SCALABLE: u32 = 0x14;
 const AOT_ER_TWINVQ: u32 = 0x15;
 const AOT_ER_BSAC: u32 = 0x16;
 const AOT_ER_AAC_LD: u32 = 0x17;
+
+/// `PROFILE_SBR` (`../mkvtoolnix/src/common/aac.h:37`).  Raw AAC identification
+/// promotes low-sample-rate ADTS streams to this profile (PARSER-215).
+const PROFILE_SBR: u32 = 4;
 
 // ISO/IEC 14496-3 table 1.16 — Sampling Frequency Index (16 entries; the last
 // three are reserved / escape and map to 0 here, matching mkvtoolnix).
@@ -112,6 +119,8 @@ pub struct AacHeader {
   pub output_sample_rate: u32,
   pub channels: u32,
   pub sbr: bool,
+  /// Parametric Stereo (HE-AACv2) signalled via the PS object type.
+  pub ps: bool,
   pub samples_per_frame: u32,
   /// Total frame length in bytes (ADTS only; 0 for LOAS-derived headers).
   pub bytes: usize,
@@ -185,6 +194,15 @@ impl<'a> Bits<'a> {
 
   fn get_bit(&mut self) -> Option<bool> {
     Some(self.get_bits(1)? != 0)
+  }
+
+  /// Read `n` bits without advancing the cursor (mirrors `bits::reader_c::peek_bits`).
+  /// Returns `0` when fewer than `n` bits remain so guard expressions stay total.
+  fn peek_bits(&mut self, n: u32) -> u64 {
+    let saved = self.pos;
+    let value = self.get_bits(n).unwrap_or(0);
+    self.pos = saved;
+    value
   }
 
   fn skip_bits(&mut self, n: u64) -> Option<()> {
@@ -279,6 +297,7 @@ pub fn decode_adts(bytes: &[u8]) -> Option<AacHeader> {
     output_sample_rate: 0,
     channels,
     sbr: false,
+    ps: false,
     samples_per_frame: 1024,
     bytes: frame_bytes,
     is_valid: true,
@@ -365,6 +384,7 @@ fn parse_audio_specific_config(bc: &mut Bits, look_for_sync_extension: bool) -> 
     ..AacHeader::default()
   };
   let mut sbr = false;
+  let mut ps = false;
   let mut output_sample_rate = 0u32;
   let mut extension_object_type = 0u32;
 
@@ -372,9 +392,16 @@ fn parse_audio_specific_config(bc: &mut Bits, look_for_sync_extension: bool) -> 
   let channel_config = bc.get_bits(4)? as usize;
   let mut channels = lookup_channels(channel_config);
 
-  // Explicit SBR signalling.
-  if object_type == AOT_SBR {
+  // Explicit SBR signalling — and PS (HE-AACv2), which mkvtoolnix treats as
+  // an SBR-style extension when its bitstream guard passes (PARSER-214,
+  // `../mkvtoolnix/src/common/aac.cpp:1224-1232`).
+  let enter_sbr_extension = object_type == AOT_SBR
+    || (object_type == AOT_PS && !((bc.peek_bits(3) & 0x03) != 0 && (bc.peek_bits(9) & 0x3f) == 0));
+  if enter_sbr_extension {
     sbr = true;
+    if object_type == AOT_PS {
+      ps = true;
+    }
     output_sample_rate = read_sample_rate(bc)?;
     extension_object_type = object_type;
     object_type = read_object_type(bc)?;
@@ -442,6 +469,7 @@ fn parse_audio_specific_config(bc: &mut Bits, look_for_sync_extension: bool) -> 
   header.output_sample_rate = output_sample_rate;
   header.channels = channels;
   header.sbr = sbr;
+  header.ps = ps;
   header.is_valid = true;
   Some(header)
 }
@@ -461,7 +489,7 @@ pub(crate) fn codec_config_from_header(header: &AacHeader, raw: &[u8]) -> AudioC
     aac_object_type: Some(header.profile + 1),
     aac_frame_length: Some(header.samples_per_frame),
     aac_sbr_present: Some(header.sbr),
-    aac_ps_present: Some(false),
+    aac_ps_present: Some(header.ps),
     raw_hex: Some(raw.iter().map(|b| format!("{:02x}", b)).collect()),
     ..AudioCodecConfig::default()
   }
@@ -798,7 +826,17 @@ impl Reader for AacReader {
     let read = src.read_at_most(&mut probe)?;
     let (start, _end) = id3v2::payload_bounds(&probe[..read]);
     let bytes = &probe[start..read];
-    let (_offset, header) = find_first_valid_header(bytes).ok_or(ParseError::Unrecognised)?;
+    let (_offset, mut header) = find_first_valid_header(bytes).ok_or(ParseError::Unrecognised)?;
+
+    // PARSER-215: raw AAC identification promotes ADTS headers with sample
+    // rates up to 24 kHz to the SBR profile before emitting metadata
+    // (`../mkvtoolnix/src/input/r_aac.cpp:73-76`).  `aac_reader_c::identify`
+    // then reports `aac_is_sbr` from `profile == PROFILE_SBR`, so reflect the
+    // promotion in both the profile and the SBR flag.
+    if header.sample_rate > 0 && header.sample_rate <= 24_000 {
+      header.profile = PROFILE_SBR;
+      header.sbr = true;
+    }
 
     out.container.format = ContainerFormat::Aac;
     out.container.recognized = true;
@@ -817,6 +855,7 @@ impl Reader for AacReader {
       aac_object_type: Some(header.profile + 1),
       aac_frame_length: Some(header.samples_per_frame),
       aac_sbr_present: Some(header.sbr),
+      aac_ps_present: Some(header.ps),
       ..AudioCodecConfig::default()
     };
     let audio = AudioTrackProperties {
@@ -1152,6 +1191,25 @@ mod tests {
     assert_eq!(audio.sampling_frequency, Some(48_000.0));
     let cfg = audio.codec_config.as_ref().unwrap();
     assert_eq!(cfg.aac_object_type, Some(2)); // LC = profile 1 + 1
+    assert_eq!(cfg.aac_sbr_present, Some(false)); // 48 kHz not promoted
+  }
+
+  #[test]
+  fn read_headers_promotes_low_rate_adts_to_sbr() {
+    // PARSER-215: 16 kHz ADTS (sr_index 8) is identified as AAC SBR.
+    let bytes = build_adts_stream(10, 1, 8, 2); // LC, 16 kHz, stereo
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.aac", 0);
+    AacReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    let cfg = audio.codec_config.as_ref().unwrap();
+    assert_eq!(cfg.aac_object_type, Some(PROFILE_SBR + 1)); // promoted to SBR
+    assert_eq!(cfg.aac_sbr_present, Some(true));
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("AAC SBR"));
+    // The core sampling frequency is still reported as-is.
+    assert_eq!(audio.sampling_frequency, Some(16_000.0));
   }
 
   // ---- PARSER-007: LOAS/LATM -----------------------------------------
@@ -1325,6 +1383,49 @@ mod tests {
     let h = parse_asc(&asc, false).unwrap();
     assert!(h.sbr);
     assert_eq!(h.channels, 2);
+  }
+
+  #[test]
+  fn asc_ps_object_type_treated_as_sbr_extension() {
+    // PARSER-214: object_type 29 (Parametric Stereo / HE-AACv2) is decoded as
+    // an SBR-style extension — output sample rate is read and the inner object
+    // type follows, and the PS flag is set.
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, AOT_PS as u64); // object_type PS
+    w.put_bits(4, 3); // core sample rate index 48 kHz
+    w.put_bits(4, 2); // channel_config stereo
+    w.put_bits(4, 3); // output sample rate index (read_sample_rate)
+    w.put_bits(5, AOT_AAC_LC as u64); // inner object_type LC
+    w.put_bits(1, 0); // GA frame_length_flag
+    w.put_bits(1, 0); // depends_on_core_coder
+    w.put_bits(1, 0); // extension_flag
+    w.byte_align();
+    let asc = w.into_bytes();
+    let h = parse_asc(&asc, false).unwrap();
+    assert!(h.sbr);
+    assert!(h.ps);
+    assert_eq!(h.output_sample_rate, 48_000);
+    assert_eq!(h.channels, 2);
+    // profile stays object_type(PS) - 1, matching mkvtoolnix.
+    assert_eq!(h.profile, AOT_PS - 1);
+    // The shared codec config surfaces aac_ps_present.
+    assert_eq!(codec_config_from_header(&h, &asc).aac_ps_present, Some(true));
+  }
+
+  #[test]
+  fn asc_non_ps_reports_ps_absent() {
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, AOT_AAC_LC as u64);
+    w.put_bits(4, 3); // 48 kHz
+    w.put_bits(4, 2); // stereo
+    w.put_bits(1, 0);
+    w.put_bits(1, 0);
+    w.put_bits(1, 0);
+    w.byte_align();
+    let asc = w.into_bytes();
+    let h = parse_asc(&asc, false).unwrap();
+    assert!(!h.ps);
+    assert_eq!(codec_config_from_header(&h, &asc).aac_ps_present, Some(false));
   }
 
   #[test]

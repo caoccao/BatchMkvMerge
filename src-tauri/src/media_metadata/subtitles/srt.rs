@@ -47,6 +47,10 @@ use super::encoding;
 const PROBE_BYTES: usize = 16 * 1024;
 
 /// `true` when `text` contains a line matching the SRT timecode pattern.
+///
+/// This scans *every* line and is used to classify an already-extracted
+/// subtitle payload (e.g. AVI GAB2) whose container kind is unknown.  It is
+/// deliberately *not* used for whole-file probing — see [`looks_like_srt`].
 pub fn has_srt_timecode_line(text: &str) -> bool {
   for line in text.lines() {
     if looks_like_srt_timecode(line.trim()) {
@@ -54,6 +58,48 @@ pub fn has_srt_timecode_line(text: &str) -> bool {
     }
   }
   false
+}
+
+/// Whole-file SRT probe — port of `srt_parser_c::probe`
+/// (`../mkvtoolnix/src/input/subtitles.cpp:106-124`).
+///
+/// Upstream strips leading blank lines, requires the first non-empty line to
+/// parse as a number (the cue index), and only then tests the *immediately
+/// following* line against the timestamp regex.  Scanning the whole prefix
+/// for any timestamp-shaped line (PARSER-223) let text files with an
+/// incidental timestamp be misclassified as SRT.
+pub fn looks_like_srt(text: &str) -> bool {
+  let mut lines = text.lines();
+  // Skip leading blank lines, then the first non-empty line must be a number.
+  let index_line = loop {
+    match lines.next() {
+      Some(line) => {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+          break trimmed;
+        }
+      }
+      None => return false,
+    }
+  };
+  if !is_srt_index(index_line) {
+    return false;
+  }
+  // The line immediately after the index must be an SRT timecode line.
+  match lines.next() {
+    Some(line) => looks_like_srt_timecode(line.trim()),
+    None => false,
+  }
+}
+
+/// Mirror of `mtx::string::parse_number` for the SRT cue index: the whole
+/// (stripped) line must be an optionally-signed run of ASCII digits.
+fn is_srt_index(line: &str) -> bool {
+  let body = line
+    .strip_prefix('-')
+    .or_else(|| line.strip_prefix('+'))
+    .unwrap_or(line);
+  !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn looks_like_srt_timecode(line: &str) -> bool {
@@ -163,7 +209,7 @@ impl Reader for SrtReader {
       return Ok(false);
     }
     let text = encoding::decode_lossy(&buf[..read]);
-    Ok(has_srt_timecode_line(&text))
+    Ok(looks_like_srt(&text))
   }
 
   fn read_headers(
@@ -177,7 +223,7 @@ impl Reader for SrtReader {
     let read = src.read_at_most(&mut buf)?;
     let detected = encoding::detect(&buf[..read]);
     let text = encoding::decode_lossy(&buf[..read]);
-    if !has_srt_timecode_line(&text) {
+    if !looks_like_srt(&text) {
       return Err(ParseError::Unrecognised);
     }
 
@@ -290,5 +336,49 @@ mod tests {
   fn probe_returns_false_on_random_bytes() {
     let mut s = FileSource::from_reader_for_test(Cursor::new(vec![0xAAu8; 1024]));
     assert!(!SrtReader.probe(&mut s).unwrap());
+  }
+
+  // ---- PARSER-223: structural probe (index line, then timestamp) -------
+
+  #[test]
+  fn looks_like_srt_requires_index_then_timestamp() {
+    assert!(looks_like_srt("1\n00:00:00,000 --> 00:00:02,500\nHello\n"));
+    // Leading blank lines are skipped before the index line.
+    assert!(looks_like_srt("\n\n  \n42\n00:00:01,000 --> 00:00:02,000\nHi\n"));
+  }
+
+  #[test]
+  fn looks_like_srt_rejects_incidental_timestamp_line() {
+    // A text file whose first non-empty line is not a cue index must be
+    // rejected even though a later line *is* a clean timestamp line
+    // (PARSER-223).
+    let text = "Title: My Notes\n00:00:01,000 --> 00:00:02,000\nsome note\n";
+    assert!(!looks_like_srt(text));
+    // The whole-payload scanner still finds the timestamp — it is used for
+    // already-classified subtitle payloads, not whole-file probing.
+    assert!(has_srt_timecode_line(text));
+  }
+
+  #[test]
+  fn looks_like_srt_rejects_index_without_following_timestamp() {
+    assert!(!looks_like_srt("1\nHello there\n00:00:01,000 --> 00:00:02,000\n"));
+    assert!(!looks_like_srt("1\n"));
+  }
+
+  #[test]
+  fn probe_rejects_incidental_timestamp_file() {
+    let text = "readme\nsee 00:00:01,000 --> 00:00:02,000 below\n";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(text.as_bytes().to_vec()));
+    assert!(!SrtReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn is_srt_index_accepts_optionally_signed_digits() {
+    assert!(is_srt_index("1"));
+    assert!(is_srt_index("-3"));
+    assert!(is_srt_index("+12"));
+    assert!(!is_srt_index("1a"));
+    assert!(!is_srt_index(""));
+    assert!(!is_srt_index("-"));
   }
 }

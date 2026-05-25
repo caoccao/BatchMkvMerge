@@ -1,6 +1,6 @@
 # FLV Parser
 
-Implementation progress: 82%
+Implementation progress: 88%
 
 ## Purpose
 
@@ -13,6 +13,8 @@ The FLV parser recognises Flash Video files, reads tag headers, extracts script 
 - Upstream basis: `../mkvtoolnix/src/input/r_flv.cpp`, `../mkvtoolnix/src/input/r_flv.h`, upstream AMF helpers
 
 The parser validates the FLV header, walks tags in a bounded region, skips encrypted tags, decodes AMF0 `onMetaData` values for width, height, and frame rate, and parses AAC, MP3, H.264, H.265, Sorenson H.263, VP6, and VP6-alpha metadata.
+
+For the per-frame duration mkvmerge reports, the AMF `framerate` wins; for AVC/HEVC the value then falls back to the SPS VUI timing (`num_units_in_tick` / `time_scale`) and finally to mkvmerge's 25 fps default, matching `new_stream_v_avc` / `new_stream_v_hevc` (`../mkvtoolnix/src/input/r_flv.cpp:427-445`, `455-472`). Other codecs keep a default duration only when AMF supplied a frame rate.
 
 ## Data Structures
 
@@ -31,10 +33,4 @@ Key structures are `FlvHeader`, `FlvTagHeader`, `AudioTagFlags`, `VideoCodecId`,
 
 ## Gaps and Handling
 
-Rust extracts selected AMF fields and does not perform timestamp/min-offset work or packet muxing. It may lack upstream's default 25 fps fallback when video headers do not carry timing. Unsupported Screen video codecs are dropped like upstream, and encrypted payloads are skipped rather than parsed.
-
-## Open Issues
-
-### PARSER-218: AVC/HEVC frame-rate fallback and SPS timing are not mirrored
-
-Native `build_video_track()` only sets `default_duration_ns` when AMF/script metadata has already populated `video.frame_rate` (`src-tauri/src/media_metadata/flv/reader.rs:237-247`). The AVC/HEVC sequence-header paths decode dimensions/configuration but do not fill timing or the mkvmerge fallback. Upstream parses AVC SPS timing and defaults to 25 fps when no timing is found (`../mkvtoolnix/src/input/r_flv.cpp:427-445`), and applies the same logic for HEVC (`r_flv.cpp:455-472`). FLV AVC/HEVC files without an AMF `framerate` value can therefore lose mkvmerge's default-duration metadata.
+Rust extracts selected AMF fields and does not perform timestamp/min-offset work or packet muxing. AVC/HEVC now mirror upstream's SPS-timing-then-25-fps default-duration fallback. Unsupported Screen video codecs are dropped like upstream, and encrypted payloads are skipped rather than parsed.

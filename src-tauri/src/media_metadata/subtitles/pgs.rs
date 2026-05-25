@@ -22,7 +22,8 @@
 //! ```text
 //! 4 bytes  PTS (90 kHz)
 //! 4 bytes  DTS (90 kHz)
-//! 1 byte   segment_type (0x14 PDS, 0x15 ODS, 0x16 PCS, 0x17 WDS, 0x80 END)
+//! 1 byte   segment_type (0x14 PDS, 0x15 ODS, 0x16 PCS, 0x17 WDS,
+//!          0x18 ICS interactive composition, 0x80 END)
 //! 2 bytes  segment_length (big-endian)
 //! ...      segment payload
 //! ```
@@ -41,23 +42,20 @@ const PROBE_BYTES: usize = 64 * 1024;
 const SEGMENT_HEADER_LEN: usize = 13;
 pub const MAGIC: [u8; 2] = *b"PG";
 
-fn is_valid_segment_type(b: u8) -> bool {
-  matches!(b, 0x14 | 0x15 | 0x16 | 0x17 | 0x80)
-}
-
-/// Walk segment headers and count well-formed ones.  mkvtoolnix's
-/// `r_hdmv_pgs.cpp::probe_file` requires two consecutive segments that both
-/// start with the `PG` magic — so this routine returns `None` when fewer than
-/// two valid segment headers are observed within `bytes`.
+/// Walk segment headers and count well-formed ones.  Faithful to
+/// `hdmv_pgs_reader_c::probe_file` (`../mkvtoolnix/src/input/r_hdmv_pgs.cpp:26-37`),
+/// which only checks the `PG` magic, skips by the declared `segment_length`,
+/// and verifies the next segment also starts with `PG` — it does **not**
+/// validate `segment_type`.  Gating on a fixed set of segment types
+/// (PARSER-219) turned valid chains carrying interactive-composition (`0x18`)
+/// or future segment types near the start into false negatives, so the type
+/// check has been dropped.  Returns `None` when fewer than two `PG`-magic
+/// segment headers are observed within `bytes`.
 pub fn count_segments(bytes: &[u8]) -> Option<usize> {
   let mut pos = 0usize;
   let mut count = 0usize;
   while pos + SEGMENT_HEADER_LEN <= bytes.len() {
-    if &bytes[pos..pos + 2] != &MAGIC {
-      break;
-    }
-    let seg_type = bytes[pos + 10];
-    if !is_valid_segment_type(seg_type) {
+    if bytes[pos..pos + 2] != MAGIC {
       break;
     }
     let seg_len = u16::from_be_bytes([bytes[pos + 11], bytes[pos + 12]]) as usize;
@@ -169,10 +167,24 @@ mod tests {
   }
 
   #[test]
-  fn count_segments_rejects_invalid_segment_type() {
-    let mut blob = build_segment(0x16, &[]);
-    blob[10] = 0x42; // unknown type
-    assert!(count_segments(&blob).is_none());
+  fn count_segments_accepts_interactive_composition_segment() {
+    // PARSER-219: interactive-composition (0x18) and other segment types
+    // near the start must not cause a false negative — upstream walks by
+    // length and only checks the `PG` magic.
+    let mut blob = build_segment(0x18, &[0u8; 5]);
+    blob.extend(build_segment(0x16, &[0u8; 11]));
+    blob.extend(build_segment(0x80, &[]));
+    assert_eq!(count_segments(&blob), Some(3));
+  }
+
+  #[test]
+  fn count_segments_walks_unknown_segment_type_by_length() {
+    // An unknown type is followed by the declared length to the next PG
+    // header, matching mkvtoolnix's probe which never inspects the type.
+    let mut blob = build_segment(0x16, &[0u8; 4]);
+    blob[10] = 0x42; // unknown type, but a valid PG-magic header
+    blob.extend(build_segment(0x17, &[0u8; 6]));
+    assert_eq!(count_segments(&blob), Some(2));
   }
 
   #[test]
