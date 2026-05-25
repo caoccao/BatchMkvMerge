@@ -31,6 +31,16 @@ use protocol::{MediaMetadataErrorPayload, UpdateCheckResult, UpdateCheckState};
 
 static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_renderer() {
+  if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    // SAFETY: This runs during process startup before Tauri or Tokio spawn threads.
+    unsafe {
+      std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+  }
+}
+
 fn convert_error(error: anyhow::Error) -> String {
   error.to_string()
 }
@@ -132,6 +142,9 @@ fn skip_version(version: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  #[cfg(target_os = "linux")]
+  configure_linux_webkit_renderer();
+
   let runtime = tokio::runtime::Builder::new_multi_thread()
     .worker_threads(4)
     .enable_all()
