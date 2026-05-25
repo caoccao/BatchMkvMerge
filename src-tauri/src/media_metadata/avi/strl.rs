@@ -137,7 +137,7 @@ pub enum StreamFormat {
     Other(Vec<u8>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BitmapInfoHeader {
     pub size: u32,
     pub width: i32,
@@ -146,6 +146,10 @@ pub struct BitmapInfoHeader {
     pub bit_count: u16,
     pub compression: [u8; 4],
     pub image_size: u32,
+    /// Codec-specific extradata that trails the 40-byte standard
+    /// BITMAPINFOHEADER.  Mirrors mkvtoolnix's
+    /// `BITMAPINFOHEADER + extradata` codec_private blob (PARSER-085).
+    pub extra: Vec<u8>,
 }
 
 impl BitmapInfoHeader {
@@ -200,6 +204,14 @@ fn parse_bitmapinfoheader(bytes: &[u8], offset: u64) -> Result<StreamFormat, Par
     let bit_count = u16::from_le_bytes([bytes[14], bytes[15]]);
     let compression = [bytes[16], bytes[17], bytes[18], bytes[19]];
     let image_size = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    // PARSER-085: trailing bytes after the 40-byte header carry codec-private
+    // extradata (DivX/Xvid MPEG-4 ASP, x264 SPS+PPS, etc.).  mkvtoolnix copies
+    // `BITMAPINFOHEADER + extradata` into the packetizer's codec_private blob.
+    let extra = if bytes.len() > 40 {
+        bytes[40..].to_vec()
+    } else {
+        Vec::new()
+    };
     Ok(StreamFormat::Video(BitmapInfoHeader {
         size,
         width,
@@ -208,7 +220,28 @@ fn parse_bitmapinfoheader(bytes: &[u8], offset: u64) -> Result<StreamFormat, Par
         bit_count,
         compression,
         image_size,
+        extra,
     }))
+}
+
+/// Decode the [`VideoPropertiesHeader`] from a `vprp` chunk payload.  The
+/// `alVIDEO_PROPERTIES` struct is at least 36 bytes (`avilib.h:227-239`); we
+/// reject truncated chunks.  PARSER-084.
+fn parse_vprp(bytes: &[u8]) -> Option<VideoPropertiesHeader> {
+    if bytes.len() < 36 {
+        return None;
+    }
+    // Offsets per `alVIDEO_PROPERTIES`:
+    //   20: u16 frame_aspect_ratio_y (note: y first)
+    //   22: u16 frame_aspect_ratio_x
+    //   24: u32 frame_width_in_pixels
+    //   28: u32 frame_height_in_lines
+    Some(VideoPropertiesHeader {
+        frame_aspect_ratio_y: u16::from_le_bytes([bytes[20], bytes[21]]),
+        frame_aspect_ratio_x: u16::from_le_bytes([bytes[22], bytes[23]]),
+        frame_width_in_pixels: u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+        frame_height_in_lines: u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+    })
 }
 
 fn parse_waveformatex(bytes: &[u8], offset: u64) -> Result<StreamFormat, ParseError> {
@@ -250,12 +283,24 @@ fn parse_waveformatex(bytes: &[u8], offset: u64) -> Result<StreamFormat, ParseEr
     }))
 }
 
+/// `vprp` (Video Properties Header) fields used to derive display aspect
+/// ratio.  PARSER-084.  Mirrors `alVIDEO_PROPERTIES` in
+/// `mkvtoolnix/lib/avilib-0.6.10/avilib.h:227-239`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoPropertiesHeader {
+    pub frame_aspect_ratio_x: u16,
+    pub frame_aspect_ratio_y: u16,
+    pub frame_width_in_pixels: u32,
+    pub frame_height_in_lines: u32,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct StreamBuilder {
     pub header: Option<StreamHeader>,
     pub format: Option<StreamFormat>,
     pub name: Option<String>,
     pub private: Option<Vec<u8>>,
+    pub vprp: Option<VideoPropertiesHeader>,
 }
 
 /// Walk one `strl` LIST.  Returns the populated builder.
@@ -301,6 +346,15 @@ pub fn parse_strl(
             }
             b"strd" => {
                 builder.private = Some(riff::read_payload(src, child, 64 * 1024)?);
+                Ok(ChildAction::Consumed)
+            }
+            b"vprp" => {
+                // PARSER-084: Video Properties Header carries the frame
+                // aspect ratio mkvtoolnix uses to derive display dimensions.
+                let bytes = riff::read_payload(src, child, 4 * 1024)?;
+                if let Some(vprp) = parse_vprp(&bytes) {
+                    builder.vprp = Some(vprp);
+                }
                 Ok(ChildAction::Consumed)
             }
             _ => Ok(ChildAction::Skip),
@@ -617,10 +671,11 @@ mod tests {
             bit_count: 24,
             compression: [0; 4],
             image_size: 0,
+            extra: Vec::new(),
         };
         assert!(bmih.is_uncompressed());
 
-        let dib = BitmapInfoHeader { compression: *b"DIB ", ..bmih };
+        let dib = BitmapInfoHeader { compression: *b"DIB ", ..bmih.clone() };
         assert!(dib.is_uncompressed());
 
         let h264 = BitmapInfoHeader { compression: *b"H264", ..bmih };

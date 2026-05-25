@@ -30,7 +30,8 @@ use crate::media_metadata::model::MediaMetadata;
 use super::avih::MainAviHeader;
 use super::odml::OdmlInfo;
 use super::strl::{
-    AviStreamKind, BitmapInfoHeader, StreamBuilder, StreamFormat, WaveFormatEx,
+    AviStreamKind, BitmapInfoHeader, StreamBuilder, StreamFormat, VideoPropertiesHeader,
+    WaveFormatEx,
 };
 
 /// Drive the per-stream conversion and stamp container fields.
@@ -86,8 +87,12 @@ fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
             (TrackType::Video, Some(StreamFormat::Video(bmih))) => {
                 let codec_id = fourcc_to_string(&bmih.compression);
                 let codec_name = fourcc::lookup(&codec_id).map(|e| e.name.to_string());
-                let video = video_properties(&bmih, &header);
-                (codec_id, codec_name, None, Some(video), None, None)
+                let video = video_properties(&bmih, &header, builder.vprp.as_ref());
+                // PARSER-085: surface `BITMAPINFOHEADER + extradata` as the
+                // video codec_private blob.  Mirrors mkvtoolnix's
+                // `r_avi.cpp:188-206` storage of the whole bmih + extra bytes.
+                let private = Some(CodecPrivate::from_bytes(&bmih_codec_private(&bmih)));
+                (codec_id, codec_name, private, Some(video), None, None)
             }
             (TrackType::Audio, Some(StreamFormat::Audio(wf))) => {
                 // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real format tag in
@@ -164,7 +169,11 @@ fn make_track(id: i64, builder: StreamBuilder) -> Option<Track> {
     })
 }
 
-fn video_properties(bmih: &BitmapInfoHeader, header: &super::strl::StreamHeader) -> VideoTrackProperties {
+fn video_properties(
+    bmih: &BitmapInfoHeader,
+    header: &super::strl::StreamHeader,
+    vprp: Option<&VideoPropertiesHeader>,
+) -> VideoTrackProperties {
     let width = bmih.width.max(0) as u32;
     let height = bmih.height.unsigned_abs(); // height may be negative ⇒ top-down DIB
     let pixel = if width > 0 && height > 0 {
@@ -172,10 +181,21 @@ fn video_properties(bmih: &BitmapInfoHeader, header: &super::strl::StreamHeader)
     } else {
         None
     };
+    // PARSER-084: when `vprp` carries a frame aspect ratio, derive display
+    // dimensions from it instead of mirroring the pixel dimensions.  Mirrors
+    // `avi_reader_c::handle_video_aspect_ratio` (`r_avi.cpp:241-273`).
+    let display = match (pixel, vprp) {
+        (Some(p), Some(v))
+            if v.frame_aspect_ratio_x != 0 && v.frame_aspect_ratio_y != 0 && p.width != 0 && p.height != 0 =>
+        {
+            Some(display_dimensions_from_aspect(p, v))
+        }
+        _ => pixel,
+    };
     let default_duration_ns = header.frame_duration_ns();
     let mut props = VideoTrackProperties {
         pixel_dimensions: pixel,
-        display_dimensions: pixel,
+        display_dimensions: display,
         default_duration_ns,
         ..VideoTrackProperties::default()
     };
@@ -186,6 +206,48 @@ fn video_properties(bmih: &BitmapInfoHeader, header: &super::strl::StreamHeader)
         props.color = Some(color);
     }
     props
+}
+
+fn display_dimensions_from_aspect(
+    pixel: Dimensions2D,
+    vprp: &VideoPropertiesHeader,
+) -> Dimensions2D {
+    let x = vprp.frame_aspect_ratio_x as u64;
+    let y = vprp.frame_aspect_ratio_y as u64;
+    let pw = pixel.width as u64;
+    let ph = pixel.height as u64;
+    // Compare aspect ratio (x/y) with pixel ratio (pw/ph) via cross multiply.
+    if x * ph >= y * pw {
+        Dimensions2D {
+            width: ((x * ph + y / 2) / y) as u32,
+            height: pixel.height,
+        }
+    } else {
+        Dimensions2D {
+            width: pixel.width,
+            height: ((y * pw + x / 2) / x) as u32,
+        }
+    }
+}
+
+/// Serialise the BITMAPINFOHEADER + trailing extradata into a contiguous
+/// 40+N-byte blob (PARSER-085).  Mirrors mkvtoolnix's
+/// `r_avi.cpp:188-206` codec_private layout.
+fn bmih_codec_private(bmih: &BitmapInfoHeader) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(40 + bmih.extra.len());
+    bytes.extend_from_slice(&bmih.size.to_le_bytes());
+    bytes.extend_from_slice(&bmih.width.to_le_bytes());
+    bytes.extend_from_slice(&bmih.height.to_le_bytes());
+    bytes.extend_from_slice(&bmih.planes.to_le_bytes());
+    bytes.extend_from_slice(&bmih.bit_count.to_le_bytes());
+    bytes.extend_from_slice(&bmih.compression);
+    bytes.extend_from_slice(&bmih.image_size.to_le_bytes());
+    // The remaining 16 bytes of the standard BITMAPINFOHEADER (x/y ppm,
+    // colors used/important) are stored as zeros — we never decode them and
+    // mkvtoolnix's packetizers don't depend on the values.
+    bytes.extend_from_slice(&[0u8; 16]);
+    bytes.extend_from_slice(&bmih.extra);
+    bytes
 }
 
 fn audio_properties(wf: &WaveFormatEx) -> AudioTrackProperties {
@@ -219,9 +281,12 @@ fn fourcc_to_string(bytes: &[u8; 4]) -> String {
 }
 
 /// Detect a GAB2 subtitle block (VirtualDub) in a text stream's strf and
-/// classify it as SRT or SSA/ASS (PARSER-060). The block is `"GAB2\0"`
-/// followed by `(u16 type, u32 size, data)` entries; type 4 carries the
-/// subtitle file content.
+/// classify it as SRT or SSA/ASS (PARSER-060 / PARSER-087).  The block is
+/// `"GAB2\0"` followed by `(u16 type, u32 size, data)` entries; type 4 carries
+/// the subtitle file content.  PARSER-087 routes the payload through the
+/// canonical SRT / SSA text probers instead of the previous hand-rolled string
+/// search so character-set handling and edge cases match the standalone
+/// subtitle readers.
 fn gab2_codec(fmt: &StreamFormat) -> Option<(&'static str, &'static str)> {
     let StreamFormat::Other(bytes) = fmt else {
         return None;
@@ -239,12 +304,11 @@ fn gab2_codec(fmt: &StreamFormat) -> Option<(&'static str, &'static str)> {
         let data_end = (data_start + size).min(bytes.len());
         if block_type == 4 {
             let data = &bytes[data_start..data_end];
-            let head = &data[..data.len().min(512)];
-            let text = String::from_utf8_lossy(head);
-            if text.contains("[Script Info]") || text.contains("Styles") {
+            let text = crate::media_metadata::subtitles::encoding::decode_lossy(data);
+            if crate::media_metadata::subtitles::ssa::classify(&text).is_some() {
                 return Some(("S_TEXT/ASS", "SSA/ASS (GAB2)"));
             }
-            if text.contains("-->") {
+            if crate::media_metadata::subtitles::srt::has_srt_timecode_line(&text) {
                 return Some(("S_TEXT/UTF8", "SRT (GAB2)"));
             }
             return Some(("S_TEXT/UTF8", "GAB2 Subtitle"));
@@ -333,12 +397,14 @@ mod tests {
             bit_count: 24,
             compression: *b"H264",
             image_size: 0,
+            extra: Vec::new(),
         };
         let builder = StreamBuilder {
             header: Some(dummy_video_header()),
             format: Some(StreamFormat::Video(bmih)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(0, builder).unwrap();
         assert_eq!(track.track_type, TrackType::Video);
@@ -346,6 +412,103 @@ mod tests {
         let v = track.properties.video.as_ref().unwrap();
         assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 1920, height: 1080 }));
         assert_eq!(v.default_duration_ns, Some(41_708_333));
+    }
+
+    // ---- PARSER-084: vprp display aspect ratio ---------------------------
+
+    #[test]
+    fn vprp_sixteen_nine_aspect_expands_display_width() {
+        // 1440x1080 raster with vprp 16:9 → display 1920x1080.
+        let bmih = BitmapInfoHeader {
+            size: 40,
+            width: 1440,
+            height: 1080,
+            planes: 1,
+            bit_count: 24,
+            compression: *b"H264",
+            image_size: 0,
+            extra: Vec::new(),
+        };
+        let builder = StreamBuilder {
+            header: Some(dummy_video_header()),
+            format: Some(StreamFormat::Video(bmih)),
+            name: None,
+            private: None,
+            vprp: Some(VideoPropertiesHeader {
+                frame_aspect_ratio_x: 16,
+                frame_aspect_ratio_y: 9,
+                frame_width_in_pixels: 1440,
+                frame_height_in_lines: 1080,
+            }),
+        };
+        let track = make_track(0, builder).unwrap();
+        let v = track.properties.video.unwrap();
+        assert_eq!(
+            v.display_dimensions,
+            Some(Dimensions2D { width: 1920, height: 1080 })
+        );
+    }
+
+    #[test]
+    fn vprp_invalid_zero_aspect_is_ignored() {
+        let bmih = BitmapInfoHeader {
+            size: 40,
+            width: 1920,
+            height: 1080,
+            planes: 1,
+            bit_count: 24,
+            compression: *b"H264",
+            image_size: 0,
+            extra: Vec::new(),
+        };
+        let builder = StreamBuilder {
+            header: Some(dummy_video_header()),
+            format: Some(StreamFormat::Video(bmih)),
+            name: None,
+            private: None,
+            vprp: Some(VideoPropertiesHeader {
+                frame_aspect_ratio_x: 0,
+                frame_aspect_ratio_y: 0,
+                frame_width_in_pixels: 0,
+                frame_height_in_lines: 0,
+            }),
+        };
+        let track = make_track(0, builder).unwrap();
+        let v = track.properties.video.unwrap();
+        assert_eq!(
+            v.display_dimensions,
+            Some(Dimensions2D { width: 1920, height: 1080 })
+        );
+    }
+
+    // ---- PARSER-085: BITMAPINFOHEADER + extradata as codec_private -----
+
+    #[test]
+    fn video_extradata_is_stored_in_codec_private() {
+        let bmih = BitmapInfoHeader {
+            size: 40,
+            width: 1920,
+            height: 1080,
+            planes: 1,
+            bit_count: 24,
+            compression: *b"XVID",
+            image_size: 0,
+            extra: vec![0x01, 0x02, 0x03, 0x04],
+        };
+        let builder = StreamBuilder {
+            header: Some(dummy_video_header()),
+            format: Some(StreamFormat::Video(bmih)),
+            name: None,
+            private: None,
+            vprp: None,
+        };
+        let track = make_track(0, builder).unwrap();
+        let private = track.codec.codec_private.unwrap();
+        assert_eq!(private.length, 44);
+        // First 4 bytes are the BMIH `size` (40) in LE.
+        assert!(private.hex.starts_with("28000000"));
+        // Last 8 chars are the 4 extradata bytes.
+        assert!(private.hex.ends_with("01020304"));
     }
 
     #[test]
@@ -358,12 +521,14 @@ mod tests {
             bit_count: 24,
             compression: *b"H264",
             image_size: 0,
+            extra: Vec::new(),
         };
         let builder = StreamBuilder {
             header: Some(dummy_video_header()),
             format: Some(StreamFormat::Video(bmih)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(0, builder).unwrap();
         let v = track.properties.video.unwrap();
@@ -386,6 +551,7 @@ mod tests {
             format: Some(StreamFormat::Audio(wf)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(1, builder).unwrap();
         assert_eq!(track.track_type, TrackType::Audio);
@@ -413,6 +579,7 @@ mod tests {
             format: Some(StreamFormat::Audio(wf)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(1, builder).unwrap();
         let private = track.codec.codec_private.unwrap();
@@ -426,6 +593,7 @@ mod tests {
             format: None,
             name: Some("English".to_string()),
             private: None,
+            vprp: None,
         };
         let track = make_track(2, builder).unwrap();
         assert_eq!(track.track_type, TrackType::Subtitles);
@@ -458,6 +626,7 @@ mod tests {
             format: Some(StreamFormat::Audio(wf)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(1, builder).unwrap();
         assert_eq!(track.codec.id, "0x0001");
@@ -483,6 +652,7 @@ mod tests {
             format: Some(StreamFormat::Other(gab2)),
             name: None,
             private: None,
+            vprp: None,
         };
         let track = make_track(2, builder).unwrap();
         assert_eq!(track.track_type, TrackType::Subtitles);
@@ -508,6 +678,7 @@ mod tests {
             format: None,
             name: None,
             private: None,
+            vprp: None,
         };
         assert!(make_track(0, builder).is_none());
     }
