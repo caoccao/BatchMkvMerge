@@ -118,7 +118,39 @@ fn video_sample_entry(fourcc_kind: &[u8; 4], width: u16, height: u16) -> Vec<u8>
   encode_box(fourcc_kind, &p)
 }
 
-fn audio_sample_entry(fourcc_kind: &[u8; 4], channels: u16, sample_rate: u32) -> Vec<u8> {
+/// Build an `esds` box carrying an MPEG-4 ES descriptor with the given
+/// objectTypeIndication and AudioSpecificConfig.  Mirrors the lib's
+/// `esds::build_esds_payload` so real `mp4a` fixtures survive the
+/// missing-decoder-config filtering (PARSER-150).
+fn esds(object_type: u8, audio_specific_config: &[u8]) -> Vec<u8> {
+  const TAG_ES_DESCRIPTOR: u8 = 0x03;
+  const TAG_DECODER_CONFIG: u8 = 0x04;
+  const TAG_DEC_SPECIFIC_INFO: u8 = 0x05;
+
+  let mut p = vec![0u8; 4]; // FullBox header
+  let dec_specific = {
+    let mut v = vec![TAG_DEC_SPECIFIC_INFO, audio_specific_config.len() as u8];
+    v.extend_from_slice(audio_specific_config);
+    v
+  };
+  let dec_config = {
+    let mut v = vec![TAG_DECODER_CONFIG, (13 + dec_specific.len()) as u8, object_type, 0x15];
+    v.extend_from_slice(&[0u8; 3]); // bufferSizeDB
+    v.extend_from_slice(&0u32.to_be_bytes()); // maxBitrate
+    v.extend_from_slice(&0u32.to_be_bytes()); // avgBitrate
+    v.extend_from_slice(&dec_specific);
+    v
+  };
+  let es_descriptor = {
+    let mut v = vec![TAG_ES_DESCRIPTOR, (3 + dec_config.len()) as u8, 0, 0, 0];
+    v.extend_from_slice(&dec_config);
+    v
+  };
+  p.extend_from_slice(&es_descriptor);
+  encode_box(b"esds", &p)
+}
+
+fn audio_sample_entry(fourcc_kind: &[u8; 4], channels: u16, sample_rate: u32, children: &[u8]) -> Vec<u8> {
   let mut p = Vec::new();
   p.extend_from_slice(&[0u8; 6]);
   p.extend_from_slice(&1u16.to_be_bytes());
@@ -127,6 +159,7 @@ fn audio_sample_entry(fourcc_kind: &[u8; 4], channels: u16, sample_rate: u32) ->
   p.extend_from_slice(&16u16.to_be_bytes()); // sample_size
   p.extend_from_slice(&[0u8; 4]); // compression_id + packet_size
   p.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+  p.extend_from_slice(children);
   encode_box(fourcc_kind, &p)
 }
 
@@ -166,7 +199,10 @@ fn video_trak(track_id: u32, codec: &[u8; 4], lang: &str, width: u16, height: u1
 }
 
 fn audio_trak(track_id: u32, codec: &[u8; 4], lang: &str, sample_rate: u32, channels: u16) -> Vec<u8> {
-  let stbl_payload = stsd(vec![audio_sample_entry(codec, channels, sample_rate)]);
+  // mp4a entries carry an esds with an AAC AudioSpecificConfig, as real
+  // AAC-in-MP4 files do (PARSER-150 drops mp4a tracks that lack one).
+  let entry = audio_sample_entry(codec, channels, sample_rate, &esds(0x40, &[0x12, 0x10]));
+  let stbl_payload = stsd(vec![entry]);
   let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl_payload));
   let mut mdia = mdhd(sample_rate, 0, lang);
   mdia.extend(hdlr(b"soun", "SoundHandler"));

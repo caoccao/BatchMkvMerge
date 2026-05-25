@@ -149,8 +149,10 @@ fn parses_opus_stream() {
   assert_eq!(m.tracks[0].track_type, TrackType::Audio);
   let a = m.tracks[0].properties.audio.as_ref().unwrap();
   assert_eq!(a.channels, Some(2));
+  // PARSER-152: the OpusHead input_sample_rate is reported as the sampling
+  // frequency; output_sampling_frequency is left unset (mkvtoolnix parity).
   assert_eq!(a.sampling_frequency, Some(48000.0));
-  assert_eq!(a.output_sampling_frequency, Some(48000.0));
+  assert_eq!(a.output_sampling_frequency, None);
 }
 
 #[test]
