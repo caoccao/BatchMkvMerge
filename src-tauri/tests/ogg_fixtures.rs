@@ -120,8 +120,14 @@ fn write_tempfile(bytes: &[u8], ext: &str) -> std::path::PathBuf {
 fn parses_vorbis_stream_with_comments() {
   let bos = vorbis_identification(2, 44100);
   let comments = vorbis_comment_packet("libvorbis", &[("TITLE", "Track"), ("ARTIST", "Artist")]);
+  // PARSER-181: Vorbis needs three header packets (ident + comments + setup)
+  // before its `headers_read` is satisfied; without the setup packet the
+  // stream is now erased by finalise (r_ogm.cpp:633).
+  let mut setup = vec![0x05u8];
+  setup.extend_from_slice(b"vorbis");
+  setup.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
   let mut bytes = build_page(HEADER_FLAG_BOS, 0, 0xC0FE, 0, &[&bos]);
-  bytes.extend(build_page(0, 0, 0xC0FE, 1, &[&comments]));
+  bytes.extend(build_page(0, 0, 0xC0FE, 1, &[&comments, &setup]));
   let path = write_tempfile(&bytes, "ogg");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

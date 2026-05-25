@@ -52,6 +52,23 @@ pub struct VideoTrackProperties {
   /// `true` when the source container signals a horizontal flip.  Derived
   /// from a negative-determinant tkhd matrix.
   pub flipped: Option<bool>,
+  /// Block-addition mappings — opaque per-frame side data the muxer carries
+  /// through verbatim.  PARSER-179: MP4 Dolby Vision configuration boxes
+  /// (`dvcC` / `dvvC` / `hvcE`) are stored here as
+  /// `block_addition_mapping_t{ id_type, id_extra_data }`
+  /// (`r_qtmp4.cpp:3318-3327`), not as the primary decoder configuration
+  /// record.
+  pub block_addition_mappings: Vec<BlockAdditionMapping>,
+}
+
+/// One block-addition mapping (`block_addition_mapping_t` in mkvtoolnix).  The
+/// `id_type` is the source FOURCC (e.g. `dvcC`); `data_hex` is the raw
+/// box payload, hex-encoded.  PARSER-179.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAdditionMapping {
+  pub id_type: String,
+  pub data_hex: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
@@ -416,5 +433,24 @@ mod tests {
     assert_eq!(s, "\"high\"");
     let back: HevcTier = serde_json::from_str(&s).unwrap();
     assert_eq!(back, HevcTier::High);
+  }
+
+  #[test]
+  fn block_addition_mapping_round_trips_camel_case() {
+    let mapping = BlockAdditionMapping {
+      id_type: "dvcC".to_owned(),
+      data_hex: "01000403".to_owned(),
+    };
+    let s = serde_json::to_string(&mapping).unwrap();
+    assert!(s.contains("\"idType\":\"dvcC\""));
+    assert!(s.contains("\"dataHex\":\"01000403\""));
+    let back: BlockAdditionMapping = serde_json::from_str(&s).unwrap();
+    assert_eq!(back, mapping);
+  }
+
+  #[test]
+  fn block_addition_mappings_default_empty() {
+    let v = VideoTrackProperties::default();
+    assert!(v.block_addition_mappings.is_empty());
   }
 }

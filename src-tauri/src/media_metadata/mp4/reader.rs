@@ -182,6 +182,12 @@ impl Reader for Mp4Reader {
     out.container.recognized = true;
     out.container.supported = true;
 
+    // PARSER-177: verify each track against its first sample (bounded,
+    // deadline-checked) before assembly.  mkvtoolnix drops unverifiable
+    // tracks and salvages AVC tracks missing an avcC.  This must run with the
+    // live `src` (finalise has none).
+    super::verify::verify_tracks(src, deadline, &mut moov_builder)?;
+
     super::identify::finalise(moov_builder, is_fragmented, fragment_counts, out);
     Ok(())
   }
@@ -316,7 +322,21 @@ mod tests {
     let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(track_id, width, height));
     let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(48000, 1024, lang));
     let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"vide", "VideoHandler"));
-    let entry = build_video_sample_entry(codec, width, height, 24, &[]);
+    // PARSER-177: a real avc1 trak carries an avcC so the first-sample
+    // verification pass keeps it via the avcC branch (no bitstream salvage
+    // needed).  build_avcc_payload yields a record well over 4 bytes.
+    let avcc = encode_box(
+      b"avcC",
+      &crate::media_metadata::mp4::codec_specific::avcc::build_avcc_payload(
+        66,
+        30,
+        3,
+        &[&[0u8; 4]],
+        &[&[0u8; 2]],
+        None,
+      ),
+    );
+    let entry = build_video_sample_entry(codec, width, height, 24, &avcc);
     let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
     let stbl = encode_box(b"stbl", &stsd);
     let minf = encode_box(b"minf", &stbl);
@@ -697,5 +717,266 @@ mod tests {
     assert!(out.tracks.is_empty());
     assert_eq!(out.container.recognized, true);
     assert_eq!(out.container.supported, true);
+  }
+
+  // ---- PARSER-177: first-sample verification (reader level) -------------
+
+  /// stco with a single chunk_offset entry.
+  fn build_stco(chunk_offset: u32) -> Vec<u8> {
+    let mut p = vec![0u8; 4]; // version + flags
+    p.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+    p.extend_from_slice(&chunk_offset.to_be_bytes());
+    encode_box(b"stco", &p)
+  }
+
+  /// stsz with a fixed sample_size of 0 and one per-sample size entry.
+  fn build_stsz(first_sample_size: u32) -> Vec<u8> {
+    let mut p = vec![0u8; 4]; // version + flags
+    p.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0 (per-sample)
+    p.extend_from_slice(&1u32.to_be_bytes()); // sample_count = 1
+    p.extend_from_slice(&first_sample_size.to_be_bytes());
+    encode_box(b"stsz", &p)
+  }
+
+  /// Build a video trak with an explicit sample-entry child blob plus
+  /// stco/stsz so the first-sample verification pass can locate sample 0.
+  fn build_video_trak_with_sample_table(
+    track_id: u32,
+    codec: &[u8; 4],
+    width: u16,
+    height: u16,
+    sample_entry_children: &[u8],
+    chunk_offset: u32,
+    first_sample_size: u32,
+  ) -> Vec<u8> {
+    let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(track_id, width, height));
+    let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(48000, 1024, "und"));
+    let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"vide", "VideoHandler"));
+    let entry = build_video_sample_entry(codec, width, height, 24, sample_entry_children);
+    let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
+    let mut stbl = stsd;
+    stbl.extend(build_stsz(first_sample_size));
+    stbl.extend(build_stco(chunk_offset));
+    let stbl = encode_box(b"stbl", &stbl);
+    let minf = encode_box(b"minf", &stbl);
+    let mut mdia = mdhd;
+    mdia.extend(hdlr);
+    mdia.extend(minf);
+    let mdia = encode_box(b"mdia", &mdia);
+    let mut trak = tkhd;
+    trak.extend(mdia);
+    encode_box(b"trak", &trak)
+  }
+
+  fn build_audio_trak_with_sample_table(
+    track_id: u32,
+    codec: &[u8; 4],
+    channels: u16,
+    sample_rate: u32,
+    chunk_offset: u32,
+    first_sample_size: u32,
+  ) -> Vec<u8> {
+    let tkhd = encode_box(b"tkhd", &build_tkhd_payload_v0(track_id, 0, 0));
+    let mdhd = encode_box(b"mdhd", &build_mdhd_payload_v0(sample_rate, 0, "und"));
+    let hdlr = encode_box(b"hdlr", &build_hdlr_payload(b"soun", "SoundHandler"));
+    let entry = build_audio_sample_entry_v0(codec, channels, 16, sample_rate, &[]);
+    let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
+    let mut stbl = stsd;
+    stbl.extend(build_stsz(first_sample_size));
+    stbl.extend(build_stco(chunk_offset));
+    let stbl = encode_box(b"stbl", &stbl);
+    let minf = encode_box(b"minf", &stbl);
+    let mut mdia = mdhd;
+    mdia.extend(hdlr);
+    mdia.extend(minf);
+    let mdia = encode_box(b"mdia", &mdia);
+    let mut trak = tkhd;
+    trak.extend(mdia);
+    encode_box(b"trak", &trak)
+  }
+
+  /// Assemble `ftyp + mdat(sample_data) + moov(trak)`.  Placing `mdat` before
+  /// `moov` makes the sample's file offset deterministic: it is
+  /// `len(ftyp) + 8` (the mdat box header), which the caller passes as the
+  /// `chunk_offset` baked into the trak's stco.
+  fn build_mp4_mdat_first(trak_builder: impl FnOnce(u32) -> Vec<u8>, sample_data: &[u8]) -> Vec<u8> {
+    let mut ftyp_payload = Vec::new();
+    ftyp_payload.extend_from_slice(b"mp42");
+    ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_payload.extend_from_slice(b"isom");
+    let ftyp = encode_box(b"ftyp", &ftyp_payload);
+    let mdat = encode_box(b"mdat", sample_data);
+    let sample_offset = (ftyp.len() + 8) as u32; // 8 = mdat header
+    let trak = trak_builder(sample_offset);
+    let mvhd = encode_box(b"mvhd", &build_mvhd_payload_v0(1000, 60_000, 2));
+    let mut moov_payload = mvhd;
+    moov_payload.extend(trak);
+    let moov = encode_box(b"moov", &moov_payload);
+    let mut bytes = ftyp;
+    bytes.extend(mdat);
+    bytes.extend(moov);
+    bytes
+  }
+
+  fn avc_annex_b_sps_pps() -> Vec<u8> {
+    // Baseline 1920x1080 SPS + PPS, mirrors the avc reader fixtures.
+    let mut bytes = vec![0x00, 0x00, 0x00, 0x01, 0x67, 66u8, 0u8, 40u8];
+    let mut w = TestBits::default();
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(false);
+    w.write_ue(119);
+    w.write_ue(67);
+    w.write_bit(true);
+    w.write_bit(false);
+    w.write_bit(true);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(4);
+    bytes.extend(w.into_bytes());
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]);
+    bytes
+  }
+
+  #[derive(Default)]
+  struct TestBits {
+    buf: Vec<u8>,
+    bit_index: u8,
+  }
+  impl TestBits {
+    fn write_bit(&mut self, b: bool) {
+      if self.bit_index == 0 {
+        self.buf.push(0);
+      }
+      if b {
+        let last = self.buf.len() - 1;
+        self.buf[last] |= 1 << (7 - self.bit_index);
+      }
+      self.bit_index = (self.bit_index + 1) % 8;
+    }
+    fn write_bits(&mut self, value: u64, n: u32) {
+      for i in 0..n {
+        self.write_bit((value >> (n - 1 - i)) & 1 != 0);
+      }
+    }
+    fn write_ue(&mut self, value: u32) {
+      let codeword = value as u64 + 1;
+      let nb = 64 - codeword.leading_zeros();
+      for _ in 0..(nb - 1) {
+        self.write_bit(false);
+      }
+      self.write_bits(codeword, nb);
+    }
+    fn into_bytes(mut self) -> Vec<u8> {
+      self.write_bit(true);
+      while self.bit_index != 0 {
+        self.write_bit(false);
+      }
+      self.buf
+    }
+  }
+
+  // (a) r_qtmp4.cpp:3798-3799: avc1 carrying an avcC is kept.
+  #[test]
+  fn verify_avc1_with_avcc_kept() {
+    let trak = build_video_trak(1, b"avc1", "eng", 1920, 1080); // includes avcC
+    let bytes = build_minimal_mp4(b"mp42", vec![trak]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+  }
+
+  // (b) r_qtmp4.cpp:3801 derive_track_params_from_avc_bitstream: avc1 with no
+  // avcC but a decodable SPS in the first sample is salvaged and kept.
+  #[test]
+  fn verify_avc1_without_avcc_salvaged_from_mdat() {
+    let es = avc_annex_b_sps_pps();
+    let sample_len = es.len() as u32;
+    let bytes = build_mp4_mdat_first(
+      |chunk_offset| build_video_trak_with_sample_table(1, b"avc1", 1920, 1080, &[], chunk_offset, sample_len),
+      &es,
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let cfg = out.tracks[0].properties.video.as_ref().unwrap().codec_config.as_ref().unwrap();
+    assert_eq!(cfg.profile_idc, Some(66));
+  }
+
+  // (c) r_qtmp4.cpp:3804: avc1 with no avcC and junk first bytes is dropped.
+  #[test]
+  fn verify_avc1_without_avcc_and_junk_dropped() {
+    let junk = vec![0xAAu8; 128];
+    let bytes = build_mp4_mdat_first(
+      |chunk_offset| build_video_trak_with_sample_table(1, b"avc1", 1920, 1080, &[], chunk_offset, 128),
+      &junk,
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  // (d) r_qtmp4.cpp:3810: hev1 with no hvcC is dropped.
+  #[test]
+  fn verify_hev1_without_hvcc_dropped() {
+    let trak = build_video_trak_with_sample_table(1, b"hev1", 3840, 2160, &[], 0, 0);
+    let bytes = build_minimal_mp4(b"mp42", vec![trak]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  // (e) r_qtmp4.cpp:3719-3731: DTS with a real header in the first sample is
+  // kept with channels/rate; without a header it is dropped.
+  #[test]
+  fn verify_dts_with_header_kept() {
+    let frame = crate::media_metadata::audio::dts::build_dts_core_frame(6, 13);
+    let sample_len = frame.len() as u32;
+    let bytes = build_mp4_mdat_first(
+      |chunk_offset| build_audio_trak_with_sample_table(1, b"dtsc", 6, 48_000, chunk_offset, sample_len),
+      &frame,
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let a = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert!(a.channels.unwrap() > 0);
+    assert!(a.sampling_frequency.unwrap() > 0.0);
+  }
+
+  #[test]
+  fn verify_dts_without_header_dropped() {
+    let junk = vec![0u8; 128];
+    let bytes = build_mp4_mdat_first(
+      |chunk_offset| build_audio_trak_with_sample_table(1, b"dtsc", 6, 48_000, chunk_offset, 128),
+      &junk,
+    );
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  // (f) r_qtmp4.cpp:3687-3690: a zero-channel audio track is dropped.
+  #[test]
+  fn verify_zero_channel_audio_dropped() {
+    // A non-mp4a PCM-ish entry with zero channels — no esds, so no codec
+    // refinement, and zero channels fails the audio-general gate.
+    let trak = build_audio_trak_with_sample_table(1, b"sowt", 0, 48_000, 0, 0);
+    let bytes = build_minimal_mp4(b"mp42", vec![trak]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mp4", 0);
+    Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert!(out.tracks.is_empty());
   }
 }

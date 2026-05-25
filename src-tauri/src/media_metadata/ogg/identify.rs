@@ -67,6 +67,15 @@ pub fn finalise(states: Vec<BitstreamState>, out: &mut MediaMetadata) {
     let Some(metadata) = state.metadata else {
       continue;
     };
+    // PARSER-181: erase streams whose headers were never fully read, mirroring
+    // mkvtoolnix's `erase_if(!headers_read)` at r_ogm.cpp:633.  A stream that
+    // never collected its required header-packet set (e.g. a Vorbis BOS with no
+    // comment/setup packets) is dropped here and — like the metadata == None
+    // case above — must not consume a track id, keeping the compact id
+    // assignment intact.
+    if state.header_packets.len() < header_packet_target(&metadata.codec_id) {
+      continue;
+    }
     let track = make_track(
       track_id,
       state.serial,
@@ -223,7 +232,14 @@ mod tests {
     BitstreamState {
       serial: 0xC0FE,
       first_packet: Vec::new(),
-      header_packets: vec![b"\x01vorbis-ident".to_vec()],
+      // PARSER-181: A_VORBIS's header_packet_target is 3 (ident + comments +
+      // setup); supply the full set so finalise's `erase_if(!headers_read)`
+      // (r_ogm.cpp:633) keeps the track.
+      header_packets: vec![
+        b"\x01vorbis-ident".to_vec(),
+        b"\x03vorbis-comments".to_vec(),
+        b"\x05vorbis-setup".to_vec(),
+      ],
       metadata: Some(metadata),
       vorbis_tags: vec![TagEntry {
         name: "TITLE".to_string(),
@@ -324,6 +340,30 @@ mod tests {
     finalise(vec![skipped, state_with_vorbis()], &mut m);
     assert_eq!(m.tracks.len(), 1);
     assert_eq!(m.tracks[0].id, 0);
+  }
+
+  #[test]
+  fn stream_with_incomplete_headers_is_dropped() {
+    // PARSER-181: a Vorbis stream (header_packet_target == 3) that only has its
+    // BOS ident packet is erased by finalise, mirroring mkvtoolnix's
+    // `erase_if(!headers_read)` at r_ogm.cpp:633.  It must also not consume a
+    // track id, so a following complete stream keeps id 0.
+    let incomplete = BitstreamState {
+      serial: 9,
+      first_packet: Vec::new(),
+      header_packets: vec![b"\x01vorbis-ident".to_vec()], // only 1 of 3
+      metadata: Some(BitstreamMetadata::audio_only("A_VORBIS", "Vorbis")),
+      vorbis_tags: Vec::new(),
+      comment_language: None,
+      vendor: None,
+    };
+    let mut complete = state_with_vorbis();
+    complete.header_packets = vec![b"ident".to_vec(), b"comments".to_vec(), b"setup".to_vec()];
+    let mut m = MediaMetadata::new("clip.ogg", 0);
+    finalise(vec![incomplete, complete], &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].id, 0);
+    assert_eq!(m.tracks[0].codec.id, "A_VORBIS");
   }
 
   #[test]

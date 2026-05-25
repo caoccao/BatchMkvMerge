@@ -69,6 +69,12 @@ fn build_track(
   fragment_track_counts: &std::collections::HashMap<u32, u32>,
   movie_matrix: &[[i32; 3]; 3],
 ) -> Option<Track> {
+  // PARSER-177: tracks the reader's first-sample verification pass rejected
+  // (broken / missing decoder config that mkvtoolnix could not salvage) are
+  // dropped before the compact-id assignment, so they do not burn an id.
+  if builder.probe_failed {
+    return None;
+  }
   // PARSER-146: tracks whose mdhd was unsupported / had a zero timescale are
   // dropped (mkvtoolnix skips them rather than emitting bad timing).
   if builder.media_invalid {
@@ -178,9 +184,25 @@ fn build_track(
     tags: builder.tags,
     ..TrackProperties::default()
   };
+  // PARSER-179: carry the builder's block-addition mappings (dvcC / dvvC /
+  // hvcE) onto the video track.  Done before the per-type move of
+  // `builder.video` so the bytes survive even when no other video config is
+  // present.
+  let block_addition_mappings: Vec<crate::media_metadata::model::track_properties_video::BlockAdditionMapping> = builder
+    .block_additions
+    .iter()
+    .map(
+      |(fourcc, bytes)| crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
+        id_type: fourcc.clone(),
+        data_hex: super::codec_specific::hex_encode(bytes),
+      },
+    )
+    .collect();
+
   match track_type {
     TrackType::Video => {
       let mut video = builder.video.unwrap_or_default();
+      video.block_addition_mappings = block_addition_mappings;
       if video.display_dimensions.is_none() {
         if let (Some(w), Some(h)) = display_from_fixed(builder.display_width_fixed, builder.display_height_fixed) {
           video.display_dimensions = Some(Dimensions2D { width: w, height: h });
@@ -234,6 +256,25 @@ fn build_track(
     codec,
     properties,
   })
+}
+
+/// PARSER-177: resolve the effective codec id for a track builder, mirroring
+/// `r_qtmp4.cpp::determine_codec` — the `esds` objectTypeIndication wins over
+/// the raw sample-entry FOURCC for the generic MPEG-4 system entries
+/// (`mp4a` / `mp4v` / `mp4s` / `mp4 `).  Factored out so both the reader's
+/// verification pass and `build_track` agree on the codec used for gating.
+/// Returns the empty string when the builder carries no codec id.
+pub fn effective_codec_id(builder: &super::moov::TrackBuilder) -> String {
+  let codec_id = builder.codec_id_str.clone().unwrap_or_default();
+  let is_mp4_system_entry = matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ");
+  if is_mp4_system_entry {
+    if let Some(ot) = builder.esds_object_type {
+      if let Some((id, _name)) = codec_from_object_type(ot) {
+        return id.to_string();
+      }
+    }
+  }
+  codec_id
 }
 
 /// Map an MPEG-4 `objectTypeIndication` to a (codec_id, name) pair. Mirrors the

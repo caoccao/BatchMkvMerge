@@ -107,15 +107,17 @@ impl Reader for OggReader {
         past_bos_run = true;
       }
 
-      // PARSER-080: stop once every in-use bitstream has its
-      // identification + comment headers parsed AND we've moved
-      // far enough into the file that no more BOS pages can plausibly
-      // arrive.  Mirrors mkvtoolnix's `r_ogm.cpp:598-633` which rewinds
-      // once `headers_read` is true for every active stream.  The
-      // `pages_consumed > 4` guard keeps non-conformant inputs that
-      // sandwich a late BOS page from being truncated by an over-eager
-      // early break.
-      if past_bos_run && pages_consumed > 4 && all_streams_have_comments(&states) {
+      // PARSER-181: stop once every in-use bitstream has read its required
+      // header packets (its `headers_read` is satisfied) AND we've moved far
+      // enough into the file that no more BOS pages can plausibly arrive.
+      // Mirrors mkvtoolnix's `r_ogm.cpp:598-633` which terminates the header
+      // read once `headers_read` is true for every active stream — it does
+      // NOT wait for decoded comments (FLAC/Speex/Kate/OGM never decode any,
+      // so the old `all_streams_have_comments` gate ran to MAX_PAGES and
+      // weakened the 1 s contract).  The `pages_consumed > 4` guard keeps
+      // non-conformant inputs that sandwich a late BOS page from being
+      // truncated by an over-eager early break.
+      if past_bos_run && pages_consumed > 4 && all_streams_have_headers(&states) {
         break;
       }
 
@@ -212,9 +214,21 @@ fn handle_page(
     // Complete packet now in `entry.buffer`.
     let packet = std::mem::take(&mut entry.buffer);
     entry.pending = false;
+    // PARSER-180: mkvtoolnix's `handle_stream_comments` (r_ogm.cpp:826-836)
+    // parses `packet_data[1]` — the SECOND header packet — as Vorbis
+    // comments for every non-FLAC demuxer.  The BOS ident packet is
+    // `header_packets[0]`; the first non-BOS complete packet becomes
+    // `header_packets[1]`.  We therefore decide whether to decode comments
+    // *before* appending, so the comment-decode attempt is restricted to
+    // exactly the second header packet.  This matters once prefix detection
+    // is loosened: the Vorbis SETUP packet (`0x05vorbis`) also matches the
+    // `^.vorbis` prefix and would otherwise be mis-parsed.
+    let is_comment_packet = states[idx].header_packets.len() == 1;
     remember_header_packet(idx, &packet, states);
-    // The codec-defined comment header carries tags and chapters.
-    try_decode_comment_packet(&packet, idx, states, out);
+    if is_comment_packet {
+      // The second header packet carries tags and chapters.
+      try_decode_comment_packet(&packet, idx, states, out);
+    }
   }
 }
 
@@ -309,39 +323,62 @@ fn parse_chapter_timestamp_ns(value: &str) -> Option<u64> {
   )
 }
 
+/// PARSER-180: decode a VorbisComment block out of a comment packet using the
+/// same prefix auto-detection as mkvtoolnix's
+/// `parse_vorbis_comments_from_packet` (common/tags/vorbis.cpp:221-279).  This
+/// runs for every non-FLAC stream (r_ogm.cpp:827) regardless of codec id —
+/// `handle_stream_comments` always parses `packet_data[1]` through the generic
+/// VorbisComment routine.
+///
+/// Recognised prefixes (auto-detected from the first 8 bytes):
+///   * `OpusTags`              → comment block at offset 8
+///   * first byte + `vorbis`   → offset 7 (Vorbis ident-style AND OGM streams
+///                               whose comment packet is `0x03vorbis`)
+///   * `OVP80`                 → offset 7 (VP8-in-Ogg)
+///   * `0x81theora`            → offset 7 (intentional Theora superset that the
+///                               native parser already supported — kept so we
+///                               don't regress Theora comment parsing)
+///
+/// FLAC-in-Ogg (`A_FLAC`) is excluded, mirroring r_ogm.cpp:827.
 fn decode_comment_packet(packet: &[u8], codec_id: &str) -> Option<comments::VorbisComments> {
-  match codec_id {
-    "A_VORBIS" => {
-      if packet.len() > 7 && packet[0] == 0x03 && &packet[1..7] == b"vorbis" {
-        comments::parse(&packet[7..])
-      } else {
-        None
-      }
-    }
-    "A_OPUS" => {
-      if packet.len() > 8 && &packet[..8] == b"OpusTags" {
-        comments::parse(&packet[8..])
-      } else {
-        None
-      }
-    }
-    "V_THEORA" => {
-      if packet.len() > 7 && packet[0] == 0x81 && &packet[1..7] == b"theora" {
-        comments::parse(&packet[7..])
-      } else {
-        None
-      }
-    }
-    _ => None,
+  if codec_id == "A_FLAC" {
+    return None;
+  }
+  let offset = comment_block_offset(packet)?;
+  comments::parse(&packet[offset..])
+}
+
+/// Auto-detect the VorbisComment block offset from the comment packet's prefix.
+/// Mirrors common/tags/vorbis.cpp:227-247.
+fn comment_block_offset(packet: &[u8]) -> Option<usize> {
+  if packet.len() > 8 && &packet[..8] == b"OpusTags" {
+    Some(8)
+  } else if packet.len() > 7 && &packet[1..7] == b"vorbis" {
+    // `^.vorbis` — any first byte followed by "vorbis" (covers Vorbis
+    // ident-style 0x03 and OGM comment packets alike).
+    Some(7)
+  } else if packet.len() > 7 && &packet[..5] == b"OVP80" {
+    // VP8-in-Ogg.
+    Some(7)
+  } else if packet.len() > 7 && packet[0] == 0x81 && &packet[1..7] == b"theora" {
+    // Theora comment header (`0x81theora`).  Intentional superset of
+    // mkvtoolnix — keep so Theora comment parsing does not regress.
+    Some(7)
+  } else {
+    None
   }
 }
 
-fn all_streams_have_comments(states: &[BitstreamState]) -> bool {
+/// PARSER-181: every in-use stream has read its required header packets.
+/// Mirrors the `headers_read` loop in r_ogm.cpp:619-625 — the reader stops once
+/// every active demuxer has parsed the number of header packets its codec
+/// requires (see `identify::header_packet_target`), not once comments decode.
+fn all_streams_have_headers(states: &[BitstreamState]) -> bool {
   !states.is_empty()
-    && states
-      .iter()
-      .filter(|s| s.metadata.is_some())
-      .all(|s| !s.vorbis_tags.is_empty() || s.vendor.is_some())
+    && states.iter().filter(|s| s.metadata.is_some()).all(|s| {
+      let codec_id = s.metadata.as_ref().map(|m| m.codec_id.as_str()).unwrap_or_default();
+      s.header_packets.len() >= identify::header_packet_target(codec_id)
+    })
 }
 
 #[cfg(test)]
@@ -350,7 +387,7 @@ mod tests {
   use crate::media_metadata::deadline::Deadline;
   use crate::media_metadata::model::container::ContainerFormat;
   use crate::media_metadata::model::track::TrackType;
-  use crate::media_metadata::ogg::codecs::{opus, theora, vorbis};
+  use crate::media_metadata::ogg::codecs::{flac, ogm, opus, speex, theora, vorbis};
   use crate::media_metadata::ogg::comments::build_block;
   use crate::media_metadata::ogg::page::{HEADER_FLAG_BEGINNING_OF_STREAM, build_page};
   use std::io::Cursor;
@@ -372,7 +409,15 @@ mod tests {
     };
     comments_pkt.extend(build_block("libvorbis 1.3.7", &tags));
     comments_pkt.push(0x01); // framing bit
-    let page_comments = build_page(0, 0, serial, 1, &[&comments_pkt]);
+
+    // PARSER-181: Vorbis needs three header packets (ident + comments + setup)
+    // before `headers_read` is satisfied (header_packet_target == 3).  Append a
+    // setup packet (0x05 + "vorbis") on the comments page so the stream
+    // survives finalise's `erase_if(!headers_read)` (r_ogm.cpp:633).
+    let mut setup_pkt = vec![0x05];
+    setup_pkt.extend_from_slice(b"vorbis");
+    setup_pkt.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+    let page_comments = build_page(0, 0, serial, 1, &[&comments_pkt, &setup_pkt]);
 
     let mut bytes = page_bos;
     bytes.extend(page_comments);
@@ -403,7 +448,10 @@ mod tests {
     let t = &out.tracks[0];
     assert_eq!(t.track_type, TrackType::Audio);
     assert_eq!(t.codec.id, "A_VORBIS");
-    assert!(t.codec.codec_private.is_none());
+    // PARSER-181: the fixture now supplies the full 3-packet Vorbis header set
+    // (ident + comments + setup), so the track carries xiph-laced codec private
+    // data — a complete Vorbis stream always does.
+    assert!(t.codec.codec_private.is_some());
     // TITLE + LANGUAGE + VENDOR
     assert_eq!(t.properties.tags.len(), 3);
     let lang = t.properties.common.language.as_ref().unwrap();
@@ -464,8 +512,12 @@ mod tests {
       ],
     ));
     comments_pkt.push(0x01);
+    // PARSER-181: Vorbis needs a third (setup) header packet to survive.
+    let mut setup_pkt = vec![0x05];
+    setup_pkt.extend_from_slice(b"vorbis");
+    setup_pkt.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
     let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
-    bytes.extend(build_page(0, 0, 1, 1, &[&comments_pkt]));
+    bytes.extend(build_page(0, 0, 1, 1, &[&comments_pkt, &setup_pkt]));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogg", 0);
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -476,22 +528,154 @@ mod tests {
   #[test]
   fn read_headers_handles_two_independent_streams() {
     let v = build_vorbis_stream(1, None);
-    let mut t_bos = vec![0x80];
-    t_bos.extend_from_slice(b"theora");
-    t_bos.extend(
-      theora::build_identification_packet(640, 480, 24, 1)[7..]
-        .iter()
-        .copied(),
-    );
     let theora_full = theora::build_identification_packet(640, 480, 24, 1);
     let theora_page = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 2, 0, &[&theora_full]);
+    // PARSER-181: Theora's header_packet_target is 3 (ident + comment + setup).
+    // A BOS-only stream would be erased by finalise (r_ogm.cpp:633), so supply
+    // the comment (0x81"theora") and setup (0x82"theora") header packets too.
+    let mut theora_comment = vec![0x81];
+    theora_comment.extend_from_slice(b"theora");
+    theora_comment.extend(build_block("libtheora 1.1", &[("LANGUAGE", "deu")]));
+    let mut theora_setup = vec![0x82];
+    theora_setup.extend_from_slice(b"theora");
+    theora_setup.extend_from_slice(&[0x11, 0x22, 0x33]);
+    let theora_headers_page = build_page(0, 0, 2, 1, &[&theora_comment, &theora_setup]);
     let mut bytes = v;
     bytes.extend(theora_page);
+    bytes.extend(theora_headers_page);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogv", 0);
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert!(out.tracks.iter().any(|t| t.codec.id == "A_VORBIS"));
-    assert!(out.tracks.iter().any(|t| t.codec.id == "V_THEORA"));
+    let theora = out.tracks.iter().find(|t| t.codec.id == "V_THEORA").unwrap();
+    // PARSER-180: the generic comment-packet path now decodes Theora's
+    // LANGUAGE comment from the second header packet.
+    assert_eq!(theora.properties.common.language.as_ref().unwrap().iso639_2, "deu");
+  }
+
+  #[test]
+  fn read_headers_decodes_ogm_comment_packet_generically() {
+    // PARSER-180: an OGM stream's comment packet (`0x03vorbis` + block) is now
+    // parsed through the generic VorbisComment path (r_ogm.cpp:826-836 always
+    // parses packet_data[1] for non-FLAC demuxers), yielding language + tags.
+    // OGM video's TITLE is promoted to the container title (ms_compat), so we
+    // assert language/tags rather than track name.
+    let bos = ogm::build_audio_header(48000, 2, 16); // format tag 0x00ff → AAC
+    let mut comment_pkt = vec![0x03];
+    comment_pkt.extend_from_slice(b"vorbis");
+    comment_pkt.extend(build_block(
+      "libVorbis OGM",
+      &[("TITLE", "OGM Audio"), ("LANGUAGE", "jpn"), ("ARTIST", "X")],
+    ));
+    comment_pkt.push(0x01);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    // OGM audio header_packet_target is 1, so the BOS alone keeps it; the
+    // second packet is the comment packet we want decoded.
+    bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogm", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_AAC");
+    assert_eq!(t.properties.common.language.as_ref().unwrap().iso639_2, "jpn");
+    // TITLE + LANGUAGE + ARTIST + VENDOR
+    assert_eq!(t.properties.tags.len(), 4);
+  }
+
+  #[test]
+  fn read_headers_decodes_speex_comment_packet() {
+    // PARSER-180: a Speex stream's comment packet (`0x03vorbis` + block, the
+    // Speex VorbisComment convention) is decoded generically.  Speex's
+    // header_packet_target is 2 (ident + comments).
+    let bos = speex::build_identification_packet(16000, 1);
+    let mut comment_pkt = vec![0x03];
+    comment_pkt.extend_from_slice(b"vorbis");
+    comment_pkt.extend(build_block("libspeex 1.2", &[("TITLE", "Voice"), ("LANGUAGE", "spa")]));
+    comment_pkt.push(0x01);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.spx", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_SPEEX");
+    assert_eq!(t.properties.common.language.as_ref().unwrap().iso639_2, "spa");
+    assert_eq!(t.properties.common.track_name.as_deref(), Some("Voice"));
+  }
+
+  #[test]
+  fn read_headers_does_not_parse_flac_comment_packet() {
+    // PARSER-180: FLAC-in-Ogg is excluded from generic comment parsing
+    // (r_ogm.cpp:827 skips A_FLAC).  Even though its second packet looks like a
+    // VorbisComment block, no tags/language must be harvested.  FLAC's
+    // header_packet_target is 1, so the BOS alone keeps the track.
+    let bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
+    let mut comment_pkt = vec![0x04]; // native FLAC VORBIS_COMMENT block header
+    comment_pkt.extend(build_block("reference libFLAC", &[("TITLE", "Song"), ("LANGUAGE", "eng")]));
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_FLAC");
+    assert!(t.properties.common.language.is_none());
+    assert!(t.properties.common.track_name.is_none());
+    assert!(t.properties.tags.is_empty());
+  }
+
+  #[test]
+  fn read_headers_drops_stream_whose_headers_never_complete() {
+    // PARSER-181: a Vorbis BOS with no comment/setup packets never reaches its
+    // header_packet_target of 3, so finalise erases it (r_ogm.cpp:633's
+    // `erase_if(!headers_read)`).  The result is zero tracks even though the
+    // BOS was identified.
+    let bos = vorbis::build_identification_packet(2, 44100);
+    let bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert!(out.tracks.is_empty());
+    // Container is still recognised — only the incomplete stream is dropped.
+    assert_eq!(out.container.format, ContainerFormat::Ogg);
+  }
+
+  #[test]
+  fn comment_block_offset_detects_recognised_prefixes() {
+    // PARSER-180: prefix auto-detection (common/tags/vorbis.cpp:227-247).
+    let mut opus = b"OpusTags".to_vec();
+    opus.push(0);
+    assert_eq!(comment_block_offset(&opus), Some(8));
+
+    let mut vorbis = vec![0x03];
+    vorbis.extend_from_slice(b"vorbis_");
+    assert_eq!(comment_block_offset(&vorbis), Some(7));
+
+    let mut vp8 = b"OVP80".to_vec();
+    vp8.extend_from_slice(&[0u8; 4]);
+    assert_eq!(comment_block_offset(&vp8), Some(7));
+
+    let mut theora = vec![0x81];
+    theora.extend_from_slice(b"theora_");
+    assert_eq!(comment_block_offset(&theora), Some(7));
+
+    // Unrecognised prefix and too-short buffers yield None.
+    assert_eq!(comment_block_offset(b"junkjunk0"), None);
+    assert_eq!(comment_block_offset(b"\x03vorbi"), None);
+  }
+
+  #[test]
+  fn decode_comment_packet_excludes_flac_even_with_vorbis_prefix() {
+    // PARSER-180: A_FLAC is skipped (r_ogm.cpp:827) regardless of prefix.
+    let mut pkt = vec![0x03];
+    pkt.extend_from_slice(b"vorbis");
+    pkt.extend(build_block("v", &[("TITLE", "X")]));
+    assert!(decode_comment_packet(&pkt, "A_FLAC").is_none());
+    // The same bytes decode for any non-FLAC codec id.
+    assert!(decode_comment_packet(&pkt, "A_SPEEX").is_some());
   }
 
   #[test]

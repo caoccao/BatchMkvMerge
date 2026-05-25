@@ -127,21 +127,52 @@ fn parse_first_entry(
   let mut bytes_consumed: u64 = 8;
 
   let handler = builder.handler_type;
+  let is_video;
+  let is_subtitle;
   match handler {
     Some(h) if &h == b"vide" => {
+      is_video = true;
+      is_subtitle = false;
       bytes_consumed += parse_video_sample_entry(src, entry, builder, payload, bytes_consumed)?;
     }
     Some(h) if &h == b"soun" => {
+      is_video = false;
+      is_subtitle = false;
       bytes_consumed += parse_audio_sample_entry(src, entry, builder, payload, bytes_consumed)?;
+    }
+    Some(h) if matches!(&h, b"subt" | b"sbtl" | b"text" | b"subp") => {
+      // Subtitle sample entries have no extra fixed struct beyond the 8-byte
+      // header — the remaining bytes after it are the private data.
+      is_video = false;
+      is_subtitle = true;
     }
     _ => {
       // Unknown handler — leave the cursor where it is.
+      is_video = false;
+      is_subtitle = false;
     }
+  }
+
+  let remaining = payload.saturating_sub(bytes_consumed);
+
+  // PARSER-178: mirror mkvtoolnix's `parse_video_header_priv_atoms`
+  // (r_qtmp4.cpp:3329-3344) and `parse_subtitles_header_priv_atoms`
+  // (r_qtmp4.cpp:3386-3396).  For a VIDEO sample entry whose codec is not one
+  // we parse via dedicated child boxes (avc1/avc3, hvc1/hev1, av01, mp4v,
+  // xvid) — or a SUBTITLE sample entry whose fourcc is not `mp4s` — the entire
+  // remaining sample-entry payload is preserved verbatim as codec private
+  // (`priv.clone(mem, size)`), rather than walked for sub-boxes.
+  if is_video && !is_known_priv_video_fourcc(&entry.kind.0) {
+    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
+    return Ok(());
+  }
+  if is_subtitle && &entry.kind.0 != b"mp4s" {
+    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
+    return Ok(());
   }
 
   // Walk any remaining bytes as child sample-entry sub-boxes (avcC, hvcC,
   // esds, colr, pasp, dvcC, ...).
-  let remaining = payload.saturating_sub(bytes_consumed);
   if remaining >= 8 {
     let synthetic = BoxHeader {
       start: entry.payload_start() + bytes_consumed,
@@ -151,6 +182,41 @@ fn parse_first_entry(
     };
     src.seek_to(entry.payload_start() + bytes_consumed)?;
     walk_sample_entry_children(src, &synthetic, deadline, builder)?;
+  }
+  Ok(())
+}
+
+/// Video FOURCCs whose codec-specific child boxes (`avcC`, `hvcC`, `av1C`, …)
+/// we parse individually.  Mirrors the `!codec.is(...) && !fourcc.equiv(...)`
+/// guard in `r_qtmp4.cpp:3335-3340`: AVC, HEVC, AV1, `mp4v`, `xvid` keep the
+/// child-box walk; everything else preserves the raw remaining bytes.
+fn is_known_priv_video_fourcc(fourcc: &[u8; 4]) -> bool {
+  matches!(
+    fourcc,
+    b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"av01" | b"mp4v" | b"xvid" | b"XVID"
+  )
+}
+
+/// PARSER-178: capture the whole remaining sample-entry payload (the bytes
+/// after the fixed video/audio/subtitle struct) as codec private data, capped
+/// for safety.  Mirrors `priv.clear(); priv.emplace_back(memory_c::clone(mem,
+/// size))`.
+fn capture_remaining_as_private(
+  src: &mut FileSource,
+  entry: &BoxHeader,
+  builder: &mut TrackBuilder,
+  bytes_consumed: u64,
+  remaining: u64,
+) -> Result<(), ParseError> {
+  const PRIV_CAP: u64 = 64 * 1024;
+  if remaining == 0 {
+    return Ok(());
+  }
+  src.seek_to(entry.payload_start() + bytes_consumed)?;
+  let want = remaining.min(PRIV_CAP);
+  let bytes = src.read_vec_capped(want, PRIV_CAP)?;
+  if !bytes.is_empty() {
+    builder.codec_private_hex = Some(codec_specific::hex_encode(&bytes));
   }
   Ok(())
 }
@@ -417,15 +483,14 @@ fn parse_alac(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
   Ok(())
 }
 
-/// Preserve a Dolby Vision enhancement-layer `hvcE` box as opaque codec
-/// private data (PARSER-149).  Unlike `dvcC` / `dvvC`, `hvcE` is not a DV
-/// configuration record, so we only record the bytes when nothing else has
-/// claimed the codec-private slot.
+/// Preserve a Dolby Vision enhancement-layer `hvcE` box as a block addition
+/// (PARSER-179).  Like `dvcC` / `dvvC`, mkvtoolnix records `hvcE` via
+/// `add_data_as_block_addition` (`r_qtmp4.cpp:3377-3378`) — opaque per-frame
+/// side data, not the codec-private decoder config.
 fn parse_hvce(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
   let payload = atom::read_payload(src, header, 64 * 1024)?;
-  if builder.codec_private_hex.is_none() {
-    builder.codec_private_hex = Some(codec_specific::hex_encode(&payload));
-  }
+  let fourcc: String = header.kind.0.iter().map(|b| *b as char).collect();
+  builder.block_additions.push((fourcc, payload));
   Ok(())
 }
 
@@ -804,27 +869,100 @@ mod tests {
     assert!(b.codec_private_hex.is_some());
   }
 
-  // ---- PARSER-149: hvcE preserved as opaque private data ---------------
+  // ---- PARSER-178: unknown video / subtitle private data preserved -----
 
+  // r_qtmp4.cpp:3335-3344: a video sample entry whose codec is not
+  // AVC/HEVC/AV1 and whose fourcc is not mp4v/xvid keeps the WHOLE remaining
+  // sample-entry payload as codec private.
   #[test]
-  fn hvce_box_recorded_without_fabricating_dv_profile() {
+  fn unknown_video_fourcc_preserves_trailing_private_bytes() {
+    // A QuickTime codec (`rle `) with trailing private bytes after the
+    // 68-byte video struct.
+    let entry = build_video_sample_entry(b"rle ", 320, 240, 24, &[0xDE, 0xAD, 0xBE, 0xEF, 0x01]);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_id_str.as_deref(), Some("rle "));
+    assert_eq!(b.codec_private_hex.as_deref(), Some("deadbeef01"));
+    // The video struct dims still parse.
+    assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().width, 320);
+  }
+
+  // Recognised video codecs still walk their dedicated child boxes rather
+  // than swallowing them as raw private bytes.
+  #[test]
+  fn known_video_fourcc_still_walks_child_boxes() {
+    let pasp = encode_box(
+      b"pasp",
+      &crate::media_metadata::mp4::codec_specific::pasp::build_pasp_payload(40, 33),
+    );
+    let entry = build_video_sample_entry(b"avc1", 720, 480, 24, &pasp);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    let cfg = b.video_codec_config.unwrap();
+    assert_eq!(cfg.sample_aspect_ratio.unwrap().num, 40);
+  }
+
+  // r_qtmp4.cpp:3392-3396: a non-`mp4s` subtitle sample entry preserves all
+  // remaining bytes as priv.
+  #[test]
+  fn non_mp4s_subtitle_preserves_private_bytes() {
+    // Build a non-mp4s subtitle sample entry: 8-byte header + private bytes.
+    let mut e = Vec::new();
+    e.extend_from_slice(&[0u8; 6]); // reserved
+    e.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    e.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]); // private bytes
+    let entry = encode_box(b"tx3g", &e);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"sbtl");
+    assert_eq!(b.codec_id_str.as_deref(), Some("tx3g"));
+    assert_eq!(b.codec_private_hex.as_deref(), Some("11223344"));
+  }
+
+  // An `mp4s` subtitle entry keeps the child-box walk (its esds is decoded).
+  #[test]
+  fn mp4s_subtitle_walks_children() {
+    let esds_payload = crate::media_metadata::mp4::codec_specific::esds::build_esds_payload(0x40, &[0x12, 0x10]);
+    let esds = encode_box(b"esds", &esds_payload);
+    let mut e = Vec::new();
+    e.extend_from_slice(&[0u8; 6]); // reserved
+    e.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    e.extend_from_slice(&esds);
+    let entry = encode_box(b"mp4s", &e);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"subt");
+    // The mp4s esds object type was decoded, not swallowed as raw bytes.
+    assert!(b.esds_object_type.is_some());
+  }
+
+  // ---- PARSER-179: hvcE / dvcC preserved as block additions ------------
+
+  // r_qtmp4.cpp:3377-3378 records hvcE via add_data_as_block_addition.
+  #[test]
+  fn hvce_box_recorded_as_block_addition() {
     let hvce = encode_box(b"hvcE", &[0x01, 0x02, 0x03, 0x04, 0x05]);
     let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &hvce);
     let payload = build_stsd_payload(&[entry]);
     let b = run(payload, *b"vide");
-    // hvcE bytes preserved as codec private; no DV profile fabricated.
-    assert_eq!(b.codec_private_hex.as_deref(), Some("0102030405"));
+    // hvcE bytes preserved as a block addition; no codec private, no DV config.
+    assert!(b.codec_private_hex.is_none());
     assert!(b.video_codec_config.is_none());
+    assert_eq!(b.block_additions.len(), 1);
+    assert_eq!(b.block_additions[0].0, "hvcE");
+    assert_eq!(b.block_additions[0].1, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
   }
 
+  // r_qtmp4.cpp:3377-3378 records dvcC via add_data_as_block_addition, not as
+  // the decoder configuration record.
   #[test]
-  fn video_entry_with_dvcc_child_decodes_dolby_vision() {
+  fn video_entry_with_dvcc_child_recorded_as_block_addition() {
     let dvcc_payload = crate::media_metadata::mp4::codec_specific::dvcc::build_dvcc_payload(8, 6, true, true, true);
     let dvcc = encode_box(b"dvcC", &dvcc_payload);
     let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &dvcc);
     let payload = build_stsd_payload(&[entry]);
     let b = run(payload, *b"vide");
-    let cfg = b.video_codec_config.unwrap();
-    assert!(cfg.profile_name.unwrap().contains("Dolby Vision"));
+    assert!(b.video_codec_config.is_none());
+    assert_eq!(b.block_additions.len(), 1);
+    assert_eq!(b.block_additions[0].0, "dvcC");
+    assert_eq!(b.block_additions[0].1, dvcc_payload);
   }
 }

@@ -30,27 +30,77 @@ use crate::media_metadata::model::track_properties_video::{Dimensions2D, VideoTr
 
 use super::stream_table::StreamRow;
 
-/// PARSER-158: codec parameters recovered from a bounded PES header probe,
-/// keyed by elementary PID.  Audio channels / sampling frequency and video
-/// pixel dimensions that the PMT alone cannot supply.
+/// PARSER-158 / PARSER-170: codec parameters recovered from a bounded PES
+/// header probe.  Audio channels / sampling frequency / bit depth and video
+/// pixel dimensions that the PMT alone cannot supply, plus the TextST dialog
+/// style codec_private.
 #[derive(Debug, Clone, Default)]
 pub struct EsEnrichment {
   pub channels: Option<u32>,
   pub sampling_frequency: Option<f64>,
+  pub bits_per_sample: Option<u32>,
   pub pixel_dimensions: Option<(u32, u32)>,
+  /// PARSER-170: TextST codec_private (the dialog style segment).
+  pub codec_private: Option<Vec<u8>>,
+}
+
+/// PARSER-169: per-row probe outcome.  `keep == false` drops the row, mirroring
+/// mkvtoolnix's `probed_ok && codec` filter (r_mpeg_ts.cpp:1547-1572).  Tracks
+/// whose bounded PES content probe never succeeded must NOT be emitted; tracks
+/// that need no content probe (PGS / DVBSUB / Teletext) are kept unconditionally
+/// (r_mpeg_ts.cpp:1080-1084, 527-533, 820-843).
+#[derive(Debug, Clone, Default)]
+pub struct RowProbe {
+  pub keep: bool,
+  pub enrichment: EsEnrichment,
 }
 
 pub fn finalise(rows: Vec<StreamRow>, out: &mut MediaMetadata) {
-  finalise_with_sdt(rows, &std::collections::HashMap::new(), &std::collections::HashMap::new(), out);
+  // Back-compat: keep every classified row (probed_ok = true) with no probe
+  // enrichment.  Used by tests that build rows directly and don't model the
+  // PES content probe.
+  let probes: Vec<RowProbe> = rows
+    .iter()
+    .map(|_| RowProbe {
+      keep: true,
+      enrichment: EsEnrichment::default(),
+    })
+    .collect();
+  finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, out);
 }
 
-/// As [`finalise`], but also applies SDT service provider/name keyed by
-/// program (service id) — PARSER-055 — and PES-probed codec parameters keyed
-/// by elementary PID — PARSER-158.
+/// Back-compat shim for the older `(rows, sdt, enrichment_by_pid)` signature.
+/// Builds a keep-all probe list and merges the PID-keyed enrichment.  Used only
+/// by tests; the reader now calls [`finalise_with_probes`] directly.
+#[cfg(test)]
 pub fn finalise_with_sdt(
   rows: Vec<StreamRow>,
   sdt: &std::collections::HashMap<u16, (String, String)>,
   enrichment: &std::collections::HashMap<u16, EsEnrichment>,
+  out: &mut MediaMetadata,
+) {
+  let probes: Vec<RowProbe> = rows
+    .iter()
+    .map(|row| RowProbe {
+      keep: true,
+      enrichment: enrichment.get(&row.pid).cloned().unwrap_or_default(),
+    })
+    .collect();
+  finalise_with_probes(rows, sdt, &probes, out);
+}
+
+/// Finalise the per-PID stream registry into protocol tracks + programs.
+///
+/// `probes` runs parallel to `rows`: each entry's `keep` flag mirrors
+/// mkvtoolnix's `probed_ok && codec` filter (PARSER-169,
+/// r_mpeg_ts.cpp:1547-1572) and its `enrichment` carries the bounded-PES
+/// codec parameters (PARSER-158 / PARSER-170).  Applies SDT service
+/// provider/name keyed by program (PARSER-055) and pairs Dolby Vision
+/// base/enhancement layers (PARSER-173).
+pub fn finalise_with_probes(
+  rows: Vec<StreamRow>,
+  sdt: &std::collections::HashMap<u16, (String, String)>,
+  probes: &[RowProbe],
   out: &mut MediaMetadata,
 ) {
   out.container.format = ContainerFormat::MpegTs;
@@ -84,18 +134,32 @@ pub fn finalise_with_sdt(
     }
   }
 
-  // PARSER-160: assign ids with a compact `track_id++` sequence over the
-  // *emitted* tracks only.  Skipping an unknown/unsupported PMT row must not
-  // leave a gap, so the first valid track always gets id 0 — matching
-  // mkvtoolnix's `r_mpeg_ts.cpp:1546-1562` which only bumps `track_id` for
-  // probed-OK tracks.
+  // PARSER-173: pair Dolby Vision base/enhancement layers and hide (drop) the
+  // enhancement layer.  Mirrors `pair_dovi_base_and_enhancement_layer_tracks`
+  // (r_mpeg_ts.cpp:1429-1472) + the hidden-track skip during identification
+  // (r_mpeg_ts.cpp:1699-1701).
+  let hidden = compute_hidden_dovi_layers(&rows, probes);
+
+  // PARSER-160 / PARSER-169: assign ids with a compact `track_id++` sequence
+  // over the *emitted* tracks only.  A skipped row (unknown, not probed_ok, or
+  // a hidden DV enhancement layer) must not leave a gap, matching mkvtoolnix's
+  // `r_mpeg_ts.cpp:1546-1562` which only bumps `track_id` for surviving tracks.
   let mut track_id = 0i64;
-  for row in rows.into_iter() {
+  for (idx, row) in rows.iter().enumerate() {
     if matches!(row.track_kind, crate::media_metadata::codec::TrackKind::Unknown) {
       // Skip system/private streams we can't classify.
       continue;
     }
-    let track = make_track(track_id, &row, enrichment.get(&row.pid));
+    // PARSER-169: drop rows whose bounded PES content probe never succeeded.
+    if !probes.get(idx).map(|p| p.keep).unwrap_or(false) {
+      continue;
+    }
+    // PARSER-173: drop the hidden DV enhancement layer.
+    if hidden[idx] {
+      continue;
+    }
+    let enrichment = probes.get(idx).map(|p| &p.enrichment);
+    let track = make_track(track_id, row, enrichment);
     if let Some(entry) = seen_programs.get_mut(&row.program_number) {
       entry.track_ids.push(track.id);
     }
@@ -103,6 +167,92 @@ pub fn finalise_with_sdt(
     track_id += 1;
   }
   out.container.properties.programs = seen_programs.into_values().collect();
+}
+
+/// PARSER-173: for each surviving track carrying a Dolby Vision config, find a
+/// matching base-layer track — by the descriptor's base-layer PID when present,
+/// else by the resolution/codec heuristic — and mark the enhancement layer
+/// hidden.  Returns a per-row `hidden` flag parallel to `rows`.  Port of
+/// `pair_dovi_base_and_enhancement_layer_tracks` (r_mpeg_ts.cpp:1429-1472) +
+/// `contains_dovi_base_layer_for_enhancement_layer` (r_mpeg_ts.cpp:1132-1165).
+fn compute_hidden_dovi_layers(rows: &[StreamRow], probes: &[RowProbe]) -> Vec<bool> {
+  let mut hidden = vec![false; rows.len()];
+
+  let dims = |idx: usize| -> Option<(u32, u32)> { probes.get(idx).and_then(|p| p.enrichment.pixel_dimensions) };
+
+  for (el_idx, el) in rows.iter().enumerate() {
+    let Some(el_profile) = el.dovi_profile else {
+      continue;
+    };
+    // The EL must survive the probe filter to be considered.
+    if !probes.get(el_idx).map(|p| p.keep).unwrap_or(false) {
+      continue;
+    }
+
+    let mut bl_idx: Option<usize> = None;
+
+    if let Some(base_pid) = el.dovi_base_layer_pid {
+      // Pair by the explicit base-layer PID from the descriptor.
+      bl_idx = (0..rows.len()).find(|&idx| idx != el_idx && rows[idx].pid == base_pid);
+    } else {
+      // Resolution/codec heuristic over all candidate base-layer tracks.
+      for (cand_idx, cand) in rows.iter().enumerate() {
+        if cand_idx == el_idx {
+          continue;
+        }
+        if contains_dovi_base_layer(cand, el, el_profile, dims(cand_idx), dims(el_idx)) {
+          bl_idx = Some(cand_idx);
+          break;
+        }
+      }
+    }
+
+    if bl_idx.is_some() {
+      hidden[el_idx] = true;
+    }
+  }
+
+  hidden
+}
+
+/// Port of `track_c::contains_dovi_base_layer_for_enhancement_layer`
+/// (r_mpeg_ts.cpp:1132-1165).  `cand` is the candidate base layer; `el` is the
+/// enhancement layer carrying the DV config.
+fn contains_dovi_base_layer(
+  cand: &StreamRow,
+  el: &StreamRow,
+  el_profile: u32,
+  cand_dims: Option<(u32, u32)>,
+  el_dims: Option<(u32, u32)>,
+) -> bool {
+  // Same codec.
+  if cand.codec_id != el.codec_id {
+    return false;
+  }
+  // Only DV profiles 4 and 7 use a separate base layer.
+  if el_profile != 4 && el_profile != 7 {
+    return false;
+  }
+  let Some((cw, ch)) = cand_dims else {
+    return false;
+  };
+  let Some((ew, eh)) = el_dims else {
+    return false;
+  };
+  let resolution_type = if cw == 3840 && ch == 2160 {
+    'U'
+  } else if cw == 1920 && ch == 1080 {
+    'F'
+  } else {
+    '?'
+  };
+
+  if el_profile == 4 {
+    resolution_type == 'F' && ew == cw / 2 && eh == ch / 2
+  } else {
+    // profile == 7
+    (resolution_type == 'F' && ew == cw && eh == ch) || (resolution_type == 'U' && ew == cw / 2 && eh == ch / 2)
+  }
 }
 
 fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Track {
@@ -115,7 +265,10 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
   };
 
   let mut common = CommonTrackProperties::default();
-  common.number = Some((id as u64) + 1);
+  // PARSER-171: mkvtoolnix sets both `number` and `stream_id` to the
+  // elementary PID (r_mpeg_ts.cpp:1705-1706); only the compact 0-based `id`
+  // (m_id) is a sequence over surviving tracks (r_mpeg_ts.cpp:1562).
+  common.number = Some(row.pid as u64);
   common.stream_id = Some(row.pid as u32);
   common.program_number = Some(row.program_number as u32);
   common.teletext_page = row.teletext_page;
@@ -140,12 +293,13 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
       properties.video = Some(video);
     }
     TrackType::Audio => {
-      // PARSER-158: channels / sampling frequency recovered from the first
-      // audio frame header in the PES payload.
+      // PARSER-158 / PARSER-170: channels / sampling frequency / bit depth
+      // recovered from the first audio frame header in the PES payload.
       let mut audio = AudioTrackProperties::default();
       if let Some(e) = enrichment {
         audio.channels = e.channels;
         audio.sampling_frequency = e.sampling_frequency;
+        audio.bit_depth = e.bits_per_sample;
       }
       properties.audio = Some(audio);
     }
@@ -161,7 +315,12 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
     _ => {}
   }
 
-  let codec_private = row.codec_private.as_ref().map(|bytes| CodecPrivate::from_bytes(bytes));
+  // PARSER-170: TextST codec_private is built from the PES dialog-style segment
+  // (enrichment), so prefer it over the (absent) descriptor-derived bytes.
+  let codec_private = enrichment
+    .and_then(|e| e.codec_private.as_ref())
+    .or(row.codec_private.as_ref())
+    .map(|bytes| CodecPrivate::from_bytes(bytes));
 
   Track {
     id,
@@ -193,6 +352,8 @@ mod tests {
       track_kind: kind,
       codec_private: None,
       hearing_impaired: None,
+      dovi_profile: None,
+      dovi_base_layer_pid: None,
     }
   }
 
@@ -232,7 +393,9 @@ mod tests {
     finalise(rows, &mut m);
     assert_eq!(m.tracks.len(), 2);
     assert_eq!(m.tracks[0].id, 0);
-    assert_eq!(m.tracks[0].properties.common.number, Some(1));
+    // PARSER-171: `number` is the elementary PID, not id+1.
+    assert_eq!(m.tracks[0].properties.common.number, Some(0x101));
+    assert_eq!(m.tracks[0].properties.common.stream_id, Some(0x101));
     assert_eq!(m.tracks[1].id, 1);
     // The program's track_ids reference the compact ids, no gap.
     let prog = &m.container.properties.programs[0];
@@ -321,5 +484,136 @@ mod tests {
     finalise(vec![r], &mut m);
     let sub = m.tracks[0].properties.subtitle.as_ref().unwrap();
     assert!(!sub.text_subtitles);
+  }
+
+  // ---- PARSER-169: probed_ok gating drops rows -------------------------
+
+  #[test]
+  fn finalise_with_probes_drops_unprobed_rows() {
+    let rows = vec![
+      row(0x100, TrackKind::Video, "V_MPEG2"),
+      row(0x101, TrackKind::Audio, "A_AAC"),
+    ];
+    // Video probed_ok, audio not.
+    let probes = vec![
+      RowProbe {
+        keep: true,
+        enrichment: EsEnrichment {
+          pixel_dimensions: Some((1920, 1080)),
+          ..EsEnrichment::default()
+        },
+      },
+      RowProbe::default(),
+    ];
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].codec.id, "V_MPEG2");
+    assert_eq!(m.tracks[0].id, 0);
+  }
+
+  // ---- PARSER-173: Dolby Vision base/enhancement pairing ---------------
+
+  fn dv_row(pid: u16, codec_id: &str, profile: u32, base_layer_pid: Option<u16>) -> StreamRow {
+    let mut r = row(pid, TrackKind::Video, codec_id);
+    r.dovi_profile = Some(profile);
+    r.dovi_base_layer_pid = base_layer_pid;
+    r
+  }
+
+  fn video_probe(w: u32, h: u32) -> RowProbe {
+    RowProbe {
+      keep: true,
+      enrichment: EsEnrichment {
+        pixel_dimensions: Some((w, h)),
+        ..EsEnrichment::default()
+      },
+    }
+  }
+
+  #[test]
+  fn dovi_pairing_by_base_layer_pid_hides_enhancement_layer() {
+    // Base layer on PID 0x100 (real HEVC); the enhancement layer on PID 0x101
+    // names the base PID in its DV descriptor.  The EL is hidden/dropped.
+    let rows = vec![
+      row(0x100, TrackKind::Video, "V_MPEGH/ISO/HEVC"),
+      dv_row(0x101, "V_MPEGH/ISO/HEVC", 7, Some(0x100)),
+    ];
+    let probes = vec![video_probe(3840, 2160), video_probe(3840, 2160)];
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].properties.common.stream_id, Some(0x100));
+  }
+
+  #[test]
+  fn dovi_pairing_by_resolution_heuristic_profile_7() {
+    // Profile 7, base 4K ('U'), EL at half resolution (1920x1080), same codec.
+    let rows = vec![
+      row(0x100, TrackKind::Video, "V_MPEGH/ISO/HEVC"),
+      dv_row(0x101, "V_MPEGH/ISO/HEVC", 7, None),
+    ];
+    let probes = vec![video_probe(3840, 2160), video_probe(1920, 1080)];
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].properties.common.stream_id, Some(0x100));
+  }
+
+  #[test]
+  fn dovi_no_base_layer_keeps_enhancement_track() {
+    // No base-layer PID and no matching base resolution → the DV track is kept
+    // as-is (r_mpeg_ts.cpp:1462-1465).
+    let rows = vec![dv_row(0x101, "V_MPEGH/ISO/HEVC", 7, None)];
+    let probes = vec![video_probe(1920, 1080)];
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].properties.common.stream_id, Some(0x101));
+  }
+
+  #[test]
+  fn dovi_base_layer_pid_not_found_keeps_enhancement_track() {
+    // The DV descriptor names a base PID that no row carries → fallback keeps
+    // the EL track.
+    let rows = vec![dv_row(0x101, "V_MPEGH/ISO/HEVC", 7, Some(0x999))];
+    let probes = vec![video_probe(3840, 2160)];
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_probes(rows, &std::collections::HashMap::new(), &probes, &mut m);
+    assert_eq!(m.tracks.len(), 1);
+  }
+
+  #[test]
+  fn contains_dovi_base_layer_profile_4_requires_half_resolution() {
+    // Profile 4: base 1080p ('F'), EL at half resolution (960x540).
+    let bl = row(0x100, TrackKind::Video, "V_MPEGH/ISO/HEVC");
+    let el = dv_row(0x101, "V_MPEGH/ISO/HEVC", 4, None);
+    assert!(contains_dovi_base_layer(
+      &bl,
+      &el,
+      4,
+      Some((1920, 1080)),
+      Some((960, 540))
+    ));
+    // Mismatched codec rejects.
+    let bl_other = row(0x100, TrackKind::Video, "V_MPEG4/ISO/AVC");
+    assert!(!contains_dovi_base_layer(
+      &bl_other,
+      &el,
+      4,
+      Some((1920, 1080)),
+      Some((960, 540))
+    ));
+    // Unsupported profile rejects.
+    assert!(!contains_dovi_base_layer(
+      &bl,
+      &el,
+      5,
+      Some((1920, 1080)),
+      Some((960, 540))
+    ));
+    // Missing dimensions reject.
+    assert!(!contains_dovi_base_layer(&bl, &el, 4, None, Some((960, 540))));
+    assert!(!contains_dovi_base_layer(&bl, &el, 4, Some((1920, 1080)), None));
   }
 }

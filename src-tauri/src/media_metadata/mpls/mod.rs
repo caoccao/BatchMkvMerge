@@ -38,7 +38,7 @@ use crate::media_metadata::language::Language;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::duration::DurationValue;
-use crate::media_metadata::model::playlist::PlaylistInfo;
+use crate::media_metadata::model::playlist::{PlaylistInfo, PlaylistStream, PlaylistStreamKind};
 use crate::media_metadata::mpeg_ts::MpegTsReader;
 use crate::media_metadata::reader::Reader;
 
@@ -124,8 +124,57 @@ pub fn try_open(
     chapters: playlist.chapter_count,
     total_size,
     files: segment_files.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+    // PARSER-182: surface the STN-table stream objects mkvtoolnix keeps
+    // available (`mpls.cpp:361-445` / `mpls.h:94-149`) instead of discarding
+    // everything but the per-PID language.
+    streams: collect_playlist_streams(&playlist),
   });
   Ok(true)
+}
+
+/// PARSER-182: flatten every play item's STN table into the playlist-level
+/// stream list mkvtoolnix exposes.  Streams are collected in a stable order
+/// (video, then audio, then PG — matching `parse_stn`'s read order at
+/// `mpls.cpp:361-389`) and de-duplicated by PID (first occurrence wins) so
+/// repeated play items don't emit duplicate rows; each `StnStream` keeps its
+/// full field set from `mpls.cpp:391-447` / `mpls.h:94-149`.
+fn collect_playlist_streams(playlist: &parser::Playlist) -> Vec<PlaylistStream> {
+  let mut streams = Vec::new();
+  let mut seen_pids: HashSet<u16> = HashSet::new();
+  type Selector = fn(&parser::PlayItem) -> &Vec<parser::StnStream>;
+  let groups: [(PlaylistStreamKind, Selector); 3] = [
+    (PlaylistStreamKind::Video, |item| &item.stn.video),
+    (PlaylistStreamKind::Audio, |item| &item.stn.audio),
+    (PlaylistStreamKind::PresentationGraphics, |item| &item.stn.pg),
+  ];
+  for (kind, select) in groups {
+    for item in &playlist.items {
+      for stream in select(item) {
+        if !seen_pids.insert(stream.pid) {
+          continue;
+        }
+        streams.push(to_playlist_stream(kind, stream));
+      }
+    }
+  }
+  streams
+}
+
+/// Map one parsed STN [`parser::StnStream`] onto the wire-format
+/// [`PlaylistStream`] (`mpls.h:94-101`).
+fn to_playlist_stream(kind: PlaylistStreamKind, stream: &parser::StnStream) -> PlaylistStream {
+  PlaylistStream {
+    kind,
+    stream_type: stream.stream_type,
+    coding_type: stream.coding_type,
+    pid: stream.pid,
+    sub_path_id: stream.sub_path_id,
+    sub_clip_id: stream.sub_clip_id,
+    format: stream.format,
+    rate: stream.rate,
+    character_code: stream.char_code,
+    language: stream.language.clone().filter(|l| !l.is_empty()),
+  }
 }
 
 /// Read one `.m2ts` segment's headers into a fresh [`MediaMetadata`].  Returns
@@ -390,15 +439,42 @@ mod tests {
     assert!(!try_open(&mut src, &path, &no_deadline(), &mut out).unwrap());
   }
 
-  /// Build a minimal single-program TS segment (PAT + PMT + padding) carrying
-  /// the given `(stream_type, elementary_pid, descriptors)` streams.
+  /// Wrap an elementary-stream payload in a minimal PES packet and emit one TS
+  /// packet on `pid`.
+  fn pes_packet(pid: u16, es: &[u8]) -> Vec<u8> {
+    use crate::media_metadata::mpeg_ts::packet;
+    let mut pes = vec![0x00, 0x00, 0x01, 0xE0];
+    let pes_len = (3 + es.len()) as u16;
+    pes.extend_from_slice(&pes_len.to_be_bytes());
+    pes.push(0x80);
+    pes.push(0x00);
+    pes.push(0x00);
+    pes.extend_from_slice(es);
+    packet::build_packet(pid, true, &pes)
+  }
+
+  /// Build a minimal single-program TS segment (PAT + PMT + per-stream PES +
+  /// padding) carrying the given `(stream_type, elementary_pid, descriptors)`
+  /// streams.  PARSER-169: PMT-listed audio/video rows now survive only when a
+  /// decodable PES header is present, so for the codecs the tests use
+  /// (MPEG-2 video 0x02, AAC 0x0F) a real elementary header is emitted.  PGS
+  /// subtitles (0x90) are probed_ok unconditionally and need no payload.
   fn build_ts_segment(streams: &[(u8, u16, Vec<u8>)]) -> Vec<u8> {
+    use crate::media_metadata::audio::aac;
+    use crate::media_metadata::elementary::mpeg_video;
     use crate::media_metadata::mpeg_ts::{packet, pat, pmt};
     let pmt_pid = 0x100u16;
     let pat_section = pat::build_section(1, &[(1, pmt_pid)]);
     let mut bytes = packet::build_packet_with_pointer(0, &pat_section);
     let pmt_section = pmt::build_section(1, pmt_pid, &[], streams);
     bytes.extend(packet::build_packet_with_pointer(pmt_pid, &pmt_section));
+    for (stream_type, pid, _descs) in streams {
+      match stream_type {
+        0x02 => bytes.extend(pes_packet(*pid, &mpeg_video::build_sequence_header(1280, 720, 4))),
+        0x0F => bytes.extend(pes_packet(*pid, &aac::build_adts_frame(1, 3, 2))),
+        _ => {}
+      }
+    }
     for _ in 0..6 {
       bytes.extend(packet::build_packet(0x1FFF, false, &[]));
     }
@@ -410,8 +486,10 @@ mod tests {
     // PARSER-155: an audio PID that only appears in the second segment must be
     // merged into the track list.
     let mpls = build_simple_mpls();
-    let seg1 = build_ts_segment(&[(0x1B, 0x110, vec![]), (0x0F, 0x111, vec![])]);
-    let seg2 = build_ts_segment(&[(0x1B, 0x110, vec![]), (0x0F, 0x112, vec![])]);
+    // PARSER-169: use MPEG-2 video (0x02) so `build_ts_segment` can emit a
+    // decodable PES header and the rows survive the probed_ok filter.
+    let seg1 = build_ts_segment(&[(0x02, 0x110, vec![]), (0x0F, 0x111, vec![])]);
+    let seg2 = build_ts_segment(&[(0x02, 0x110, vec![]), (0x0F, 0x112, vec![])]);
     let (root, mpls_path) = build_bd_tree(&mpls, &[("00001.m2ts", &seg1), ("00002.m2ts", &seg2)]);
 
     let mut src = FileSource::from_reader_for_test(Cursor::new(mpls.clone()));
@@ -435,7 +513,7 @@ mod tests {
     let sp = parser::build_subpath(parser::SUB_PATH_TYPE_TEXT_SUBTITLE_PRESENTATION, "00100");
     let mpls = parser::build_mpls_with(&[item], &[sp]);
 
-    let main_seg = build_ts_segment(&[(0x1B, 0x110, vec![])]);
+    let main_seg = build_ts_segment(&[(0x02, 0x110, vec![])]);
     let sub_seg = build_ts_segment(&[(0x90, 0x1200, vec![])]); // PGS subtitle
     let (root, mpls_path) = build_bd_tree(&mpls, &[("00001.m2ts", &main_seg), ("00100.m2ts", &sub_seg)]);
 
@@ -469,6 +547,63 @@ mod tests {
     assert!(handled);
     let track = out.tracks.iter().find(|t| t.properties.common.stream_id == Some(0x111)).unwrap();
     assert_eq!(track.properties.common.language.as_ref().map(|l| l.iso639_2.as_str()), Some("jpn"));
+  }
+
+  #[test]
+  fn playlist_streams_surface_stn_table_deduplicated() {
+    // PARSER-182: an STN carrying video + audio + PG streams (with coding
+    // types, language, char code) surfaces them in
+    // `playlist.streams` with the right kinds/pids/coding types, and repeated
+    // play items do not emit duplicate rows (mpls.cpp:361-445 /
+    // mpls.h:94-149).
+    let video = parser::build_video_stn_stream(0x1011, 0x1b, 6, 1); // AVC, p1080
+    let audio = parser::build_audio_stn_stream(0x1100, b"jpn"); // AC-3
+    let pg = parser::build_pg_stn_stream(0x1200, b"eng"); // PGS subtitle
+    let item1 = parser::build_item_with_stn_groups(
+      "00001",
+      0,
+      45_000,
+      std::slice::from_ref(&video),
+      std::slice::from_ref(&audio),
+      std::slice::from_ref(&pg),
+    );
+    // Second play item repeats the very same STN streams (same PIDs).
+    let item2 = parser::build_item_with_stn_groups("00002", 0, 90_000, &[video], &[audio], &[pg]);
+    let mpls = parser::build_mpls_with(&[item1, item2], &[]);
+
+    let seg1 = build_ts_segment(&[(0x02, 0x1011, vec![]), (0x0F, 0x1100, vec![]), (0x90, 0x1200, vec![])]);
+    let seg2 = build_ts_segment(&[(0x02, 0x1011, vec![]), (0x0F, 0x1100, vec![]), (0x90, 0x1200, vec![])]);
+    let (root, mpls_path) = build_bd_tree(&mpls, &[("00001.m2ts", &seg1), ("00002.m2ts", &seg2)]);
+
+    let mut src = FileSource::from_reader_for_test(Cursor::new(mpls.clone()));
+    let mut out = MediaMetadata::new("00000.mpls", mpls.len() as u64);
+    let handled = try_open(&mut src, &mpls_path, &no_deadline(), &mut out).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(handled);
+    let pl = out.container.properties.playlist.unwrap();
+    // De-duplicated across the two play items: three streams, not six.
+    assert_eq!(pl.streams.len(), 3, "video + audio + pg, deduplicated by PID");
+
+    // Stable order: video, then audio, then PG.
+    let v = &pl.streams[0];
+    assert_eq!(v.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::Video);
+    assert_eq!(v.pid, 0x1011);
+    assert_eq!(v.coding_type, 0x1b);
+    assert_eq!(v.format, 6);
+    assert_eq!(v.rate, 1);
+
+    let a = &pl.streams[1];
+    assert_eq!(a.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::Audio);
+    assert_eq!(a.pid, 0x1100);
+    assert_eq!(a.coding_type, 0x81);
+    assert_eq!(a.language.as_deref(), Some("jpn"));
+
+    let p = &pl.streams[2];
+    assert_eq!(p.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::PresentationGraphics);
+    assert_eq!(p.pid, 0x1200);
+    assert_eq!(p.coding_type, 0x90);
+    assert_eq!(p.language.as_deref(), Some("eng"));
   }
 
   #[test]

@@ -105,6 +105,27 @@ fn hdlr(handler_type: &[u8; 4], name: &str) -> Vec<u8> {
   encode_box(b"hdlr", &p)
 }
 
+/// A minimal valid `avcC` configuration record (≥ 4 bytes) so the PARSER-177
+/// first-sample verification keeps an `avc1` track via the avcC branch instead
+/// of attempting a (here impossible) bitstream salvage from the stub `mdat`.
+fn avcc() -> Vec<u8> {
+  let mut p = Vec::new();
+  p.push(1); // configurationVersion
+  p.push(66); // AVCProfileIndication (Baseline)
+  p.push(0); // profile_compatibility
+  p.push(30); // AVCLevelIndication
+  p.push(0xFF); // 6 reserved bits + lengthSizeMinusOne = 3
+  p.push(0xE1); // 3 reserved bits + numOfSequenceParameterSets = 1
+  let sps: &[u8] = &[0x67, 0x42, 0x00, 0x1E];
+  p.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+  p.extend_from_slice(sps);
+  p.push(1); // numOfPictureParameterSets
+  let pps: &[u8] = &[0x68, 0xCE];
+  p.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+  p.extend_from_slice(pps);
+  encode_box(b"avcC", &p)
+}
+
 fn video_sample_entry(fourcc_kind: &[u8; 4], width: u16, height: u16) -> Vec<u8> {
   let mut p = Vec::new();
   p.extend_from_slice(&[0u8; 6]); // reserved
@@ -115,6 +136,11 @@ fn video_sample_entry(fourcc_kind: &[u8; 4], width: u16, height: u16) -> Vec<u8>
   p.extend_from_slice(&[0u8; 8 + 4 + 2 + 32]);
   p.extend_from_slice(&24u16.to_be_bytes()); // depth
   p.extend_from_slice(&0u16.to_be_bytes());
+  // PARSER-177: carry an avcC for avc1/avc3 entries so the verification pass
+  // keeps the track.
+  if matches!(fourcc_kind, b"avc1" | b"avc3") {
+    p.extend(avcc());
+  }
   encode_box(fourcc_kind, &p)
 }
 

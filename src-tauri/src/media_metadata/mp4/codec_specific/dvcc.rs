@@ -15,30 +15,21 @@
  *   limitations under the License.
  */
 
-//! `dvcC` / `dvvC` — Dolby Vision configuration box.  Per Dolby's "Dolby
-//! Vision Streams Within the ISO Base Media File Format" §3.2.
+//! `dvcC` / `dvvC` — Dolby Vision configuration box.
 //!
-//! Layout:
-//!
-//! ```text
-//! u8  dv_version_major
-//! u8  dv_version_minor
-//! u8  reserved(5) | dv_profile(2) | rpu_present(1)  -- bit packing varies by spec rev
-//! ...
-//! ```
-//!
-//! We extract profile + level + BL/EL/RPU presence flags and store them as
-//! human-readable strings in `VideoCodecConfig.profile_name` / `.level_name`.
-//! The raw 24-byte payload is preserved as hex.
+//! PARSER-179: mkvtoolnix does NOT treat the `dvcC` / `dvvC` payload as the
+//! primary decoder configuration record.  It stores the raw bytes as a
+//! block-addition mapping via `add_data_as_block_addition`
+//! (`r_qtmp4.cpp:3377-3378`): `block_addition_mapping_t{ id_type: fourcc,
+//! id_extra_data: bytes }`.  We mirror that here — the raw payload is recorded
+//! on the track builder keyed by the box FOURCC and the `VideoCodecConfig`
+//! is left untouched.
 
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
-use crate::media_metadata::model::track_properties_video::VideoCodecConfig;
 
 use crate::media_metadata::mp4::atom::{self, BoxHeader};
 use crate::media_metadata::mp4::moov::trak::TrackBuilder;
-
-use super::hex_encode;
 
 const MIN_PAYLOAD: usize = 4;
 const MAX_PAYLOAD: u64 = 256;
@@ -52,37 +43,10 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
       reason: format!("dvcC payload {} bytes too small", payload.len()),
     });
   }
-  let major = payload[0];
-  let minor = payload[1];
-  let byte2 = payload[2];
-  let byte3 = payload[3];
-  // Dolby uses a 7-bit profile + 6-bit level packed across bytes 2-3.
-  let dv_profile = (byte2 >> 1) & 0x7F;
-  let dv_level = ((byte2 & 0x01) << 5) | ((byte3 >> 3) & 0x1F);
-  let rpu_present = (byte3 >> 2) & 0x01;
-  let el_present = (byte3 >> 1) & 0x01;
-  let bl_present = byte3 & 0x01;
-
-  let mut details = format!(
-    "Dolby Vision v{}.{} profile {} level {}",
-    major, minor, dv_profile, dv_level,
-  );
-  if bl_present == 1 {
-    details.push_str(" BL");
-  }
-  if el_present == 1 {
-    details.push_str("+EL");
-  }
-  if rpu_present == 1 {
-    details.push_str("+RPU");
-  }
-
-  let cfg = builder.video_codec_config.get_or_insert_with(VideoCodecConfig::default);
-  cfg.profile_name = Some(details);
-  cfg.profile_idc = Some(dv_profile as u32);
-  cfg.level_idc = Some(dv_level as u32);
-  cfg.level_name = Some(dv_level.to_string());
-  cfg.raw_hex = Some(hex_encode(&payload));
+  // PARSER-179: store as a block addition keyed by the box FOURCC, not as
+  // the codec configuration record.
+  let fourcc: String = header.kind.0.iter().map(|b| *b as char).collect();
+  builder.block_additions.push((fourcc, payload));
   Ok(())
 }
 
@@ -102,8 +66,8 @@ mod tests {
   use crate::media_metadata::mp4::atom::encode_box;
   use std::io::Cursor;
 
-  fn run(payload: Vec<u8>) -> TrackBuilder {
-    let bytes = encode_box(b"dvcC", &payload);
+  fn run(fourcc: &[u8; 4], payload: Vec<u8>) -> TrackBuilder {
+    let bytes = encode_box(fourcc, &payload);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let h = atom::read_box_header(&mut s).unwrap();
     let mut b = TrackBuilder::default();
@@ -111,36 +75,25 @@ mod tests {
     b
   }
 
+  // PARSER-179: r_qtmp4.cpp:3377-3378 records dvcC/dvvC via
+  // add_data_as_block_addition rather than as the decoder config.
   #[test]
-  fn profile_8_level_6_with_bl_el_rpu() {
+  fn dvcc_recorded_as_block_addition_not_codec_config() {
     let payload = build_dvcc_payload(8, 6, true, true, true);
-    let b = run(payload);
-    let cfg = b.video_codec_config.unwrap();
-    assert_eq!(cfg.profile_idc, Some(8));
-    assert_eq!(cfg.level_idc, Some(6));
-    let name = cfg.profile_name.unwrap();
-    assert!(name.contains("profile 8"));
-    assert!(name.contains("BL+EL+RPU"));
+    let b = run(b"dvcC", payload.clone());
+    // No VideoCodecConfig is fabricated from the DV box.
+    assert!(b.video_codec_config.is_none());
+    assert_eq!(b.block_additions.len(), 1);
+    assert_eq!(b.block_additions[0].0, "dvcC");
+    assert_eq!(b.block_additions[0].1, payload);
   }
 
   #[test]
-  fn profile_5_bl_only() {
+  fn dvvc_keyed_by_its_own_fourcc() {
     let payload = build_dvcc_payload(5, 3, true, false, false);
-    let b = run(payload);
-    let cfg = b.video_codec_config.unwrap();
-    assert!(cfg.profile_name.unwrap().ends_with("BL"));
-  }
-
-  #[test]
-  fn raw_hex_round_trips() {
-    let payload = build_dvcc_payload(8, 6, true, false, true);
-    let b = run(payload.clone());
-    let raw = b.video_codec_config.unwrap().raw_hex.unwrap();
-    let decoded: Vec<u8> = (0..raw.len())
-      .step_by(2)
-      .map(|i| u8::from_str_radix(&raw[i..i + 2], 16).unwrap())
-      .collect();
-    assert_eq!(decoded, payload);
+    let b = run(b"dvvC", payload.clone());
+    assert_eq!(b.block_additions[0].0, "dvvC");
+    assert_eq!(b.block_additions[0].1, payload);
   }
 
   #[test]

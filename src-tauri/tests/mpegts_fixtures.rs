@@ -89,11 +89,70 @@ fn build_packet_with_pointer(pid: u16, section: &[u8]) -> Vec<u8> {
   build_packet(pid, true, &payload)
 }
 
-fn build_ts(pmt_pid: u16, streams: &[(u8, u16, Vec<u8>)]) -> Vec<u8> {
+/// Wrap an elementary-stream payload in a minimal PES packet (extended-header
+/// form, no PTS/DTS) and emit one TS packet on `pid`.
+fn build_pes_packet(pid: u16, es: &[u8]) -> Vec<u8> {
+  let mut pes = vec![0x00, 0x00, 0x01, 0xE0];
+  let pes_len = (3 + es.len()) as u16;
+  pes.extend_from_slice(&pes_len.to_be_bytes());
+  pes.push(0x80);
+  pes.push(0x00);
+  pes.push(0x00);
+  pes.extend_from_slice(es);
+  build_packet(pid, true, &pes)
+}
+
+/// A valid MPEG-2 sequence header (1280x720) — start code `00 00 01 B3` +
+/// 12-bit width + 12-bit height + 4-bit aspect + 4-bit frame-rate-code.
+fn mpeg2_sequence_header() -> Vec<u8> {
+  let (width, height): (u32, u32) = (1280, 720);
+  let mut bytes = vec![0x00, 0x00, 0x01, 0xB3];
+  bytes.push(((width >> 4) & 0xFF) as u8);
+  bytes.push((((width & 0x0F) << 4) | ((height >> 8) & 0x0F)) as u8);
+  bytes.push((height & 0xFF) as u8);
+  bytes.push((1u8 << 4) | 4); // aspect_ratio marker + frame_rate_code 4
+  bytes.extend_from_slice(&[0u8; 4]);
+  bytes
+}
+
+/// A valid 8-byte ADTS AAC frame (profile 1, sr_index 3 = 48 kHz, 2 channels).
+fn adts_frame() -> Vec<u8> {
+  let (profile, sr_index, channel_config, frame_length): (u8, u8, u8, u16) = (1, 3, 2, 8);
+  let mut bytes = vec![0u8; frame_length as usize];
+  bytes[0] = 0xFF;
+  bytes[1] = 0xF1;
+  bytes[2] = (profile << 6) | (sr_index << 2) | ((channel_config >> 2) & 0x01);
+  bytes[3] = ((channel_config & 0x03) << 6) | ((frame_length >> 11) as u8 & 0x03);
+  bytes[4] = ((frame_length >> 3) & 0xFF) as u8;
+  bytes[5] = (((frame_length & 0x07) << 5) | 0x1F) as u8;
+  bytes[6] = 0xFC;
+  bytes
+}
+
+/// A minimal AC-3 frame (fscod 0 = 48 kHz, frmsizecod 0 = 128 bytes, bsid 8,
+/// acmod 2 stereo, no LFE) decodable by the native AC-3 header parser.
+fn ac3_frame() -> Vec<u8> {
+  let (fscod, frmsizecod, bsid, acmod): (u8, u8, u8, u8) = (0, 0, 8, 2);
+  let mut bytes = vec![0u8; 128];
+  bytes[0] = 0x0B;
+  bytes[1] = 0x77;
+  bytes[4] = (fscod << 6) | (frmsizecod & 0x3F);
+  bytes[5] = (bsid & 0x1F) << 3;
+  bytes[6] = (acmod & 0x07) << 5; // lfeon = 0
+  bytes
+}
+
+/// Build a single-program TS (PAT + PMT) and append one PES packet (built from
+/// `es`) per `(pid, es)` entry after the PMT, so PARSER-169's probed_ok filter
+/// keeps the rows.
+fn build_ts_with_pes(pmt_pid: u16, streams: &[(u8, u16, Vec<u8>)], pes: &[(u16, Vec<u8>)]) -> Vec<u8> {
   let pat = build_pat_section(1, &[(1, pmt_pid)]);
   let pmt = build_pmt_section(1, pmt_pid, streams);
   let mut bytes = build_packet_with_pointer(0, &pat);
   bytes.extend(build_packet_with_pointer(pmt_pid, &pmt));
+  for (pid, es) in pes {
+    bytes.extend(build_pes_packet(*pid, es));
+  }
   for _ in 0..8 {
     bytes.extend(build_packet(0x1FFF, false, &[]));
   }
@@ -117,28 +176,38 @@ fn write_tempfile(bytes: &[u8]) -> std::path::PathBuf {
 }
 
 #[test]
-fn parses_minimal_ts_with_avc_and_aac() {
-  let bytes = build_ts(
+fn parses_minimal_ts_with_video_and_aac() {
+  // PARSER-169: PMT-listed rows survive only when their bounded PES header
+  // probes successfully, so each stream carries a real elementary header.
+  // (AVC SPS bytes are hard to synthesise by hand in an integration test, so
+  // the video stream is MPEG-2 here; the AVC SPS path is covered by the unit
+  // tests in elementary/avc + mpeg_ts::reader.)
+  let bytes = build_ts_with_pes(
     0x100,
     &[
-      (0x1B, 0x110, vec![0x0A, 0x04, b'e', b'n', b'g', 0x00]), // H.264 + lang
+      (0x02, 0x110, vec![0x0A, 0x04, b'e', b'n', b'g', 0x00]), // MPEG-2 + lang
       (0x0F, 0x111, vec![]),                                   // AAC
     ],
+    &[(0x110, mpeg2_sequence_header()), (0x111, adts_frame())],
   );
   let path = write_tempfile(&bytes);
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);
   assert_eq!(m.container.format, ContainerFormat::MpegTs);
   assert_eq!(m.tracks.len(), 2);
-  assert_eq!(m.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
+  assert_eq!(m.tracks[0].codec.id, "V_MPEG2");
   assert_eq!(m.tracks[1].codec.id, "A_AAC");
+  // PARSER-171: `number` equals the elementary PID.
+  assert_eq!(m.tracks[0].properties.common.number, Some(0x110));
+  assert_eq!(m.tracks[1].properties.common.number, Some(0x111));
   assert_eq!(m.tracks[0].properties.common.language.as_ref().unwrap().iso639_2, "eng");
 }
 
 #[test]
 fn ts_with_ac3_descriptor_promotes_private_stream_to_ac3() {
+  // PARSER-169: the promoted A_AC3 row also needs a decodable AC-3 PES frame.
   let descs = vec![0x6A, 0x00]; // TAG_AC3, length 0
-  let bytes = build_ts(0x100, &[(0x06, 0x120, descs)]);
+  let bytes = build_ts_with_pes(0x100, &[(0x06, 0x120, descs)], &[(0x120, ac3_frame())]);
   let path = write_tempfile(&bytes);
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

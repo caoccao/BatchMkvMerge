@@ -39,5 +39,6 @@ pub mod identify;
 pub mod meta;
 pub mod moov;
 pub mod reader;
+pub mod verify;
 
 pub use reader::Mp4Reader;

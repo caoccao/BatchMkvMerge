@@ -124,6 +124,7 @@ impl VideoBuilder {
       codec_config: None,
       rotation_degrees: None,
       flipped: None,
+      block_addition_mappings: Vec::new(),
     }
   }
 }

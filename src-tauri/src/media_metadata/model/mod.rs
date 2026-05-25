@@ -40,7 +40,7 @@ pub use chapter::ChapterSummary;
 pub use container::{Container, ContainerFormat, ContainerProperties};
 pub use duration::DurationValue;
 pub use metadata::{MediaMetadata, PARSER_PROTOCOL_VERSION};
-pub use playlist::PlaylistInfo;
+pub use playlist::{PlaylistInfo, PlaylistStream, PlaylistStreamKind};
 pub use program::Program;
 pub use tag::{TagEntry, TagsBundle};
 pub use track::{CodecInfo, CodecPrivate, Track, TrackProperties, TrackType};

@@ -26,7 +26,8 @@ use batch_mkvmerge_lib::media_metadata::model::{
   ChapterSummary, ChromaFormat, ChromaSiting, ChromaSubsampling, Chromaticity, CodecInfo, CodecPrivate, ColorMetadata,
   ColorRange, CommonTrackProperties, Container, ContainerFormat, ContainerProperties, CropRect, Dimensions2D,
   DisplayUnit, DurationValue, FieldOrder, HevcTier, InterlaceFlag, MasterMetadata, MediaMetadata, PlaylistInfo,
-  Program, ProjectionMetadata, ProjectionPose, ProjectionType, SampleAspectRatio, StereoMode, SubtitleTrackProperties,
+  PlaylistStream, PlaylistStreamKind, Program, ProjectionMetadata, ProjectionPose, ProjectionType, SampleAspectRatio,
+  StereoMode, SubtitleTrackProperties,
   TagEntry, TagsBundle, Track, TrackFlag, TrackProperties, TrackType, VideoCodecConfig, VideoTrackProperties, Warning,
   WarningCategory,
 };
@@ -91,6 +92,8 @@ fn generate() -> String {
     .register::<TagsBundle>()
     .register::<Program>()
     .register::<PlaylistInfo>()
+    .register::<PlaylistStream>()
+    .register::<PlaylistStreamKind>()
     .register::<DurationValue>()
     .register::<Warning>()
     .register::<WarningCategory>()

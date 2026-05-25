@@ -23,8 +23,9 @@
 //! Codec headers in the depacketised payload supply video dimensions, the
 //! AVC-vs-MPEG distinction, and audio parameters (PARSER-052).
 
-use crate::media_metadata::audio::{ac3, mp3};
+use crate::media_metadata::audio::{ac3, dts, mp3, truehd};
 use crate::media_metadata::codec::TrackKind;
+use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::elementary::{avc, mpeg_video};
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
@@ -240,6 +241,31 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> (Option<VideoTrackProper
             a.channels = Some(f.channels);
           }
         }
+      } else if codec.id == "A_DTS" {
+        // PARSER-176: decode the first DTS header from the accumulated
+        // payload (`r_mpeg_ps.cpp:820-844`).
+        if let Some((channels, sample_rate, _bits)) = dts::first_header_params(payload) {
+          a.channels = Some(channels);
+          a.sampling_frequency = Some(sample_rate as f64);
+        }
+      } else if codec.id == "A_TRUEHD" {
+        // PARSER-176: scan TrueHD frames for the first non-AC-3 sync frame
+        // (`r_mpeg_ps.cpp:846-884`).  Embedded AC-3 frames are skipped.
+        for frame in truehd::parse_frames(payload) {
+          if frame.frame_type == truehd::FrameType::Sync && frame.codec != truehd::Codec::Ac3 {
+            a.channels = Some(frame.channels);
+            a.sampling_frequency = Some(frame.sampling_rate as f64);
+            break;
+          }
+        }
+      } else if codec.id == "A_PCM/INT/BIG" {
+        // PARSER-176: DVD-VOB LPCM header (`new_stream_a_pcm`,
+        // `r_mpeg_ps.cpp:886-910`).  NB: this layout differs from BD-TS LPCM.
+        if let Some((channels, sample_rate, bits)) = decode_lpcm_header(payload) {
+          a.channels = Some(channels);
+          a.sampling_frequency = Some(sample_rate as f64);
+          a.bit_depth = Some(bits);
+        }
       } else if codec.id.starts_with("A_MPEG") {
         if let Some((_off, h)) = mp3::find_consecutive_mp3_headers(payload, 2) {
           a.sampling_frequency = Some(h.sampling_frequency as f64);
@@ -250,6 +276,24 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> (Option<VideoTrackProper
     }
     _ => (None, None),
   }
+}
+
+/// Decode the DVD-VOB LPCM header (`new_stream_a_pcm`,
+/// `r_mpeg_ps.cpp:886-910`).  Returns `(channels, sample_rate, bits_per_sample)`
+/// or `None` when the bit reader underruns or `bits_per_sample == 28` (which
+/// mkvtoolnix rejects via `throw false`).
+fn decode_lpcm_header(payload: &[u8]) -> Option<(u32, u32, u32)> {
+  const LPCM_FREQUENCY_TABLE: [u32; 4] = [48000, 96000, 44100, 32000];
+  let mut bc = BitReader::new(payload);
+  bc.skip_bits(8).ok()?; // emphasis(1), muse(1), reserved(1), frame number(5)
+  let bits_per_sample = 16 + (bc.read_bits(2).ok()? as u32) * 4;
+  let sample_rate = LPCM_FREQUENCY_TABLE[bc.read_bits(2).ok()? as usize];
+  bc.skip_bits(1).ok()?; // reserved
+  let channels = (bc.read_bits(3).ok()? as u32) + 1;
+  if bits_per_sample == 28 {
+    return None;
+  }
+  Some((channels, sample_rate, bits_per_sample))
 }
 
 fn first_avc_sps(payload: &[u8]) -> Option<avc::sps::AvcSps> {
@@ -283,7 +327,11 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
       _ => continue,
     };
     let mut common = CommonTrackProperties::default();
-    common.number = Some((idx as u64) + 1);
+    // PARSER-175: `number` encodes stream identity, not a 1-based index.
+    // mkvtoolnix sets `number = (sub_id << 32) | stream_id`
+    // (`r_mpeg_ps.cpp:1406-1408`) while exposing stream_id / sub_stream_id
+    // separately; the compact 0-based `idx` stays on `Track.id`.
+    common.number = Some(((obs.sub_id.unwrap_or(0) as u64) << 32) | (obs.stream_id as u64));
     common.stream_id = Some(obs.stream_id as u32);
     if let Some(sub) = obs.sub_id {
       common.sub_stream_id = Some(sub as u32);
@@ -401,6 +449,114 @@ mod tests {
     assert_eq!(sub.variant.as_deref(), Some("VobSub"));
     assert_eq!(t.properties.common.stream_id, Some(0xBD));
     assert_eq!(t.properties.common.sub_stream_id, Some(0x20));
+  }
+
+  // ---- PARSER-175: number encodes stream identity ---------------------
+
+  #[test]
+  fn number_encodes_stream_and_sub_id() {
+    let mut m = MediaMetadata::new("clip.vob", 0);
+    finalise(
+      vec![obs(0xE0, None, None), obs(0xBD, Some(0xA0), None)],
+      &mut m,
+    );
+    // Bare video stream: sub_id defaults to 0 → number == stream_id.
+    assert_eq!(m.tracks[0].properties.common.number, Some(0xE0));
+    assert_eq!(m.tracks[0].id, 0);
+    // Private-stream-1 LPCM: number == (sub_id << 32) | stream_id.
+    assert_eq!(m.tracks[1].properties.common.number, Some((0xA0u64 << 32) | 0xBD));
+    assert_eq!(m.tracks[1].properties.common.stream_id, Some(0xBD));
+    assert_eq!(m.tracks[1].properties.common.sub_stream_id, Some(0xA0));
+    assert_eq!(m.tracks[1].id, 1);
+  }
+
+  // ---- PARSER-176: DTS / TrueHD / LPCM payload probing ----------------
+
+  #[test]
+  fn dts_payload_decodes_channels_and_rate() {
+    // Build a minimal DTS core frame via the audio::dts test helper so the
+    // decode path matches the real header layout.  amode 6 = 3 channels,
+    // sfreq idx 13 = 48000.
+    let buf = dts::build_dts_core_frame(6, 13);
+    let mut m = MediaMetadata::new("clip.vob", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xBD,
+        sub_id: Some(0x88),
+        psm_stream_type: None,
+        payload: buf,
+      }],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 1);
+    let t = &m.tracks[0];
+    assert_eq!(t.codec.id, "A_DTS");
+    let a = t.properties.audio.as_ref().unwrap();
+    assert_eq!(a.sampling_frequency, Some(48_000.0));
+    assert_eq!(a.channels, Some(3));
+  }
+
+  #[test]
+  fn lpcm_decode_header_helper() {
+    // emphasis/muse/reserved/frame-number byte, then bps=24, freq=48000, ch=6.
+    let payload = [0x00u8, 0b10_00_0_101];
+    let (channels, sample_rate, bits) = decode_lpcm_header(&payload).unwrap();
+    assert_eq!(channels, 6);
+    assert_eq!(sample_rate, 48_000);
+    assert_eq!(bits, 24);
+  }
+
+  #[test]
+  fn lpcm_decode_header_rejects_28_bit() {
+    // bps field = 0b11 → 16 + 3*4 = 28 → mkvtoolnix rejects (throw false).
+    let payload = [0x00u8, 0b11_00_0_001];
+    assert!(decode_lpcm_header(&payload).is_none());
+  }
+
+  #[test]
+  fn lpcm_decode_header_underrun_returns_none() {
+    assert!(decode_lpcm_header(&[0x00]).is_none());
+  }
+
+  #[test]
+  fn lpcm_payload_through_finalise() {
+    let payload = vec![0x00u8, 0b01_10_0_001]; // bps=20, freq=44100, ch=2
+    let mut m = MediaMetadata::new("clip.vob", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xBD,
+        sub_id: Some(0xA0),
+        psm_stream_type: None,
+        payload,
+      }],
+      &mut m,
+    );
+    let a = m.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
+    assert_eq!(a.bit_depth, Some(20));
+  }
+
+  #[test]
+  fn truehd_payload_decodes_first_sync_frame() {
+    // rate_bits 0 → 48000; chanmap bit 0 set → 2 channels (CHANNEL_COUNT[0]).
+    let buf = truehd::build_truehd_frame(0, 0b1);
+    let mut m = MediaMetadata::new("clip.vob", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xBD,
+        sub_id: Some(0xB1),
+        psm_stream_type: None,
+        payload: buf,
+      }],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 1);
+    let t = &m.tracks[0];
+    assert_eq!(t.codec.id, "A_TRUEHD");
+    let a = t.properties.audio.as_ref().unwrap();
+    assert_eq!(a.sampling_frequency, Some(48_000.0));
+    assert_eq!(a.channels, Some(2));
   }
 
   #[test]

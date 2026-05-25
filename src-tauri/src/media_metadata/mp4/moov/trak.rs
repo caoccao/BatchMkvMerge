@@ -86,6 +86,10 @@ pub struct TrackBuilder {
   /// `esds` objectTypeIndication — distinguishes AAC / MP3 / AC-3 / DTS for
   /// generic `mp4a` / `mp4v` sample entries (PARSER-043).
   pub esds_object_type: Option<u8>,
+  /// PARSER-177: length in bytes of the `esds` DecoderSpecificInfo (tag 0x05),
+  /// i.e. mkvtoolnix's `esds.decoder_config`.  Used by the reader verification
+  /// pass to gate MP4V (must be present) and VobSub (must be ≥ 64 bytes).
+  pub esds_decoder_specific_len: Option<usize>,
 
   /// Set when the track's `mdhd` is unsupported / malformed (bad version or
   /// zero timescale).  Such tracks are dropped from the output rather than
@@ -96,6 +100,24 @@ pub struct TrackBuilder {
   /// Number of samples in the (non-fragmented) track, taken from `stsz`.
   /// Surfaced as `num_index_entries` (PARSER-145).
   pub sample_count: Option<u32>,
+
+  /// PARSER-179: block-addition mappings collected from `dvcC` / `dvvC` /
+  /// `hvcE` sample-entry boxes — each is `(fourcc, raw_payload_bytes)`.
+  /// mkvtoolnix stores these via `add_data_as_block_addition`
+  /// (`r_qtmp4.cpp:3318-3327`) rather than as the primary codec config.
+  pub block_additions: Vec<(String, Vec<u8>)>,
+
+  /// PARSER-177: absolute file offset of sample 0 (chunk_offset[0] from
+  /// `stco` / `co64`).  Used by the reader's first-sample verification pass
+  /// for bounded reads.
+  pub first_sample_file_offset: Option<u64>,
+  /// PARSER-177: size in bytes of sample 0 (`stsz` first entry, or the fixed
+  /// `sample_size` when non-zero).
+  pub first_sample_size: Option<u64>,
+  /// PARSER-177: set true by the reader's verification pass for tracks
+  /// mkvtoolnix would reject (broken / missing decoder config).  `finalise`
+  /// drops these before assigning compact ids.
+  pub probe_failed: bool,
 }
 
 impl TrackBuilder {

@@ -65,6 +65,16 @@ export type AudioTrackProperties = {
 };
 
 /**
+ *  One block-addition mapping (`block_addition_mapping_t` in mkvtoolnix).  The
+ *  `id_type` is the source FOURCC (e.g. `dvcC`); `data_hex` is the raw
+ *  box payload, hex-encoded.  PARSER-179.
+ */
+export type BlockAdditionMapping = {
+	idType: string,
+	dataHex: string,
+};
+
+/**
  *  Best-effort channel layout description.  `channels` is the count; `kind`
  *  is the canonical layout name when known.
  */
@@ -363,7 +373,54 @@ export type PlaylistInfo = {
 	totalSize: number,
 	/**  File-system paths of the segment files in playback order. */
 	files: string[],
+	/**
+	 *  PARSER-182: the STN-table streams the playlist declares (video, then
+	 *  audio, then PG), de-duplicated by PID across play items.  Mirrors the
+	 *  stream objects mkvtoolnix retains on `stn_t`
+	 *  (`mkvtoolnix/src/common/bluray/mpls.h:94-149`).
+	 */
+	streams: PlaylistStream[],
 };
+
+/**
+ *  One STN-table stream of a Blu-ray playlist.  Mirrors mkvtoolnix's
+ *  `stream_t` (`mkvtoolnix/src/common/bluray/mpls.h:94-101`), parsed in
+ *  `mkvtoolnix/src/common/bluray/mpls.cpp:391-447`.  Surfaced so that the STN
+ *  coding type, format/rate, character code, and sub-path/sub-clip linkage are
+ *  no longer thrown away after parsing.
+ */
+export type PlaylistStream = {
+	/**  Which STN group the stream belongs to (video / audio / PG). */
+	kind: PlaylistStreamKind,
+	/**  STN `stream_entry` stream_type (1 = play item, 2/3 = sub-path). */
+	streamType: number,
+	/**
+	 *  BD stream coding type (0x02 MPEG-2, 0x1b AVC, 0x80 LPCM, 0x90 PGS,
+	 *  0x92 TextST, ...).
+	 */
+	codingType: number,
+	/**  Elementary stream PID inside the referenced clip. */
+	pid: number,
+	/**  Sub-path id (set only for stream_type 2/3). */
+	subPathId: number,
+	/**  Sub-clip id (set only for stream_type 2). */
+	subClipId: number,
+	/**  video_format / audio_format nibble as parsed. */
+	format: number,
+	/**  frame_rate / sample_rate nibble as parsed. */
+	rate: number,
+	/**  Text-subtitle character code (set only for TextST coding type). */
+	characterCode: number,
+	/**  ISO 639-2 alpha-3 language, when the coding type carries one. */
+	language: string | null,
+};
+
+/**
+ *  Which STN group an MPLS playlist stream came from.  Mirrors the three
+ *  stream vectors retained on mkvtoolnix's `stn_t`
+ *  (`mkvtoolnix/src/common/bluray/mpls.h:103-108`).
+ */
+export type PlaylistStreamKind = "video" | "audio" | "presentationGraphics";
 
 /**
  *  One MPEG-TS / MPEG-PS program (a logical sub-mux).  Most files have
@@ -572,6 +629,15 @@ export type VideoTrackProperties = {
 	 *  from a negative-determinant tkhd matrix.
 	 */
 	flipped: boolean | null,
+	/**
+	 *  Block-addition mappings — opaque per-frame side data the muxer carries
+	 *  through verbatim.  PARSER-179: MP4 Dolby Vision configuration boxes
+	 *  (`dvcC` / `dvvC` / `hvcE`) are stored here as
+	 *  `block_addition_mapping_t{ id_type, id_extra_data }`
+	 *  (`r_qtmp4.cpp:3318-3327`), not as the primary decoder configuration
+	 *  record.
+	 */
+	blockAdditionMappings: BlockAdditionMapping[],
 };
 
 /**

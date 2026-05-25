@@ -39,11 +39,21 @@ pub struct StreamRow {
   pub codec_private: Option<Vec<u8>>,
   /// PARSER-092: hearing-impaired flag for teletext type 5 entries.
   pub hearing_impaired: Option<bool>,
+  /// PARSER-173: Dolby Vision profile from the DV PMT descriptor (0xB0).
+  pub dovi_profile: Option<u32>,
+  /// PARSER-173: base-layer PID from the DV PMT descriptor when
+  /// `bl_present_flag` is false (r_mpeg_ts.cpp:712-715).
+  pub dovi_base_layer_pid: Option<u16>,
 }
 
 /// Canonical Matroska-style codec id string for known MPEG-TS stream types.
 /// Mirrors mkvtoolnix's mapping in `r_mpeg_ts.cpp::create_packetizer`.
 fn canonical_codec_id(stream_type: u8) -> Option<&'static str> {
+  // PARSER-172: only the stream types mkvtoolnix actually supports resolve to a
+  // real codec.  Anything else falls through `determine_codec_from_stream_type`
+  // as Unknown (r_mpeg_ts.cpp:1012-1095, supported set r_mpeg_ts.h:55-87).  In
+  // particular 0x20/0x21 (MVC / JPEG-2000) must NOT map to AVC, and 0x88 / 0xA0
+  // are not recognised.
   Some(match stream_type {
     0x01 => "V_MPEG1",
     0x02 => "V_MPEG2",
@@ -52,18 +62,16 @@ fn canonical_codec_id(stream_type: u8) -> Option<&'static str> {
     0x0F | 0x11 => "A_AAC",
     0x10 => "V_MPEG4/ISO/ASP",
     0x1B => "V_MPEG4/ISO/AVC",
-    0x20 => "V_MPEG4/ISO/AVC",
-    0x21 => "V_MPEG4/ISO/AVC",
     0x24 => "V_MPEGH/ISO/HEVC",
+    0xEA => "V_VC1",
     // BD-style PMT stream types (ATSC / Blu-ray)
     0x80 => "A_PCM",
     0x81 => "A_AC3",
-    0x82 | 0x85 | 0x88 => "A_DTS",
+    0x82 | 0x85 | 0x86 => "A_DTS",
     0x83 => "A_TRUEHD",
     0x84 | 0x87 => "A_EAC3",
-    0x86 => "A_DTS",
-    0xA1 | 0xA2 => "A_AC3",
-    0xA0 => "V_VC1",
+    0xA1 => "A_AC3",
+    0xA2 => "A_DTS",
     0x90 => "S_HDMV/PGS",
     0x92 => "S_HDMV/TEXTST",
     _ => return None,
@@ -160,6 +168,8 @@ pub fn build_rows(
         track_kind: TrackKind::Subtitle,
         codec_private: Some(sub.codec_private().to_vec()),
         hearing_impaired: None,
+        dovi_profile: None,
+        dovi_base_layer_pid: None,
       })
       .collect();
   }
@@ -188,6 +198,8 @@ pub fn build_rows(
           track_kind: TrackKind::Subtitle,
           codec_private: None,
           hearing_impaired: Some(e.is_hearing_impaired()),
+          dovi_profile: None,
+          dovi_base_layer_pid: None,
         })
         .collect();
     }
@@ -210,6 +222,16 @@ pub fn build_rows(
     kind = TrackKind::Audio;
   }
 
+  // PARSER-173: carry the Dolby Vision descriptor (profile + optional
+  // base-layer PID) onto the row so the reader can pair base/enhancement
+  // layers.  mkvtoolnix only stores the DV config for private-PES streams
+  // (r_mpeg_ts.cpp:694-720); for those the enhancement layer is typically a
+  // video stream promoted by a co-located HEVC/registration descriptor.
+  let (dovi_profile, dovi_base_layer_pid) = match stream_desc.dovi {
+    Some(d) if kind == TrackKind::Video => (Some(d.profile), d.base_layer_pid),
+    _ => (None, None),
+  };
+
   let primary = StreamRow {
     pid,
     stream_type: entry.stream_type,
@@ -222,6 +244,8 @@ pub fn build_rows(
     track_kind: kind,
     codec_private: None,
     hearing_impaired: None,
+    dovi_profile,
+    dovi_base_layer_pid,
   };
 
   // PARSER-159: a Blu-ray TrueHD stream (stream_type 0x83) carries an embedded
@@ -242,6 +266,8 @@ pub fn build_rows(
       track_kind: TrackKind::Audio,
       codec_private: None,
       hearing_impaired: None,
+      dovi_profile: None,
+      dovi_base_layer_pid: None,
     };
     return vec![primary, coupled];
   }
@@ -267,8 +293,39 @@ pub fn build_row(
 mod tests {
   use super::*;
   use crate::media_metadata::mpeg_ts::descriptors::{
-    TAG_AC3, TAG_DTS, TAG_EAC3, TAG_HEVC, TAG_ISO_639_LANGUAGE, TAG_TELETEXT, build_descriptor, walk,
+    TAG_AC3, TAG_DOVI, TAG_DTS, TAG_EAC3, TAG_HEVC, TAG_ISO_639_LANGUAGE, TAG_TELETEXT, build_descriptor, walk,
   };
+
+  /// Build a Dolby Vision descriptor body (bit-packed) with profile 7 and a
+  /// base-layer PID (bl_present_flag = false).
+  fn dovi_body(profile: u32, base_layer_pid: u16) -> Vec<u8> {
+    let mut bits: Vec<u8> = Vec::new();
+    let mut push = |value: u64, n: u32| {
+      for i in (0..n).rev() {
+        bits.push(((value >> i) & 1) as u8);
+      }
+    };
+    push(1, 8); // dv_version_major
+    push(0, 8); // dv_version_minor
+    push(profile as u64, 7);
+    push(0, 6); // dv_level
+    push(0, 1); // rpu_present_flag
+    push(0, 1); // bl_present_flag = false
+    push(0, 1); // el_present_flag
+    push(base_layer_pid as u64, 13);
+    push(0, 3);
+    push(0, 4); // dv_bl_signal_compatibility_id
+    push(0, 4);
+    let mut out = Vec::new();
+    for chunk in bits.chunks(8) {
+      let mut byte = 0u8;
+      for (i, &b) in chunk.iter().enumerate() {
+        byte |= b << (7 - i);
+      }
+      out.push(byte);
+    }
+    out
+  }
 
   fn entry(stream_type: u8, descriptors: Vec<u8>) -> PmtStreamEntry {
     PmtStreamEntry {
@@ -276,6 +333,30 @@ mod tests {
       elementary_pid: 0x1234,
       descriptors,
     }
+  }
+
+  #[test]
+  fn dovi_descriptor_on_video_carries_profile_and_base_layer_pid() {
+    // PARSER-173: a private-PES (0x06) stream with an HEVC descriptor (→ video)
+    // plus a Dolby Vision descriptor carries the DV profile + base-layer PID.
+    let mut descs = build_descriptor(TAG_HEVC, &[]);
+    descs.extend(build_descriptor(TAG_DOVI, &dovi_body(7, 0x1010)));
+    let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+    assert_eq!(row.track_kind, TrackKind::Video);
+    assert_eq!(row.dovi_profile, Some(7));
+    assert_eq!(row.dovi_base_layer_pid, Some(0x1010));
+  }
+
+  #[test]
+  fn dovi_descriptor_on_non_video_is_ignored() {
+    // A DV descriptor on a stream that does not resolve to video carries no DV
+    // pairing data (mkvtoolnix only stores the config for video EL streams).
+    let descs = build_descriptor(TAG_DOVI, &dovi_body(7, 0x1010));
+    // stream_type 0x0F (AAC) → audio kind.
+    let row = build_row(0x1234, 1, &entry(0x0F, descs), &DescriptorSummary::default());
+    assert_eq!(row.track_kind, TrackKind::Audio);
+    assert_eq!(row.dovi_profile, None);
+    assert_eq!(row.dovi_base_layer_pid, None);
   }
 
   #[test]
@@ -488,6 +569,7 @@ mod tests {
 
   #[test]
   fn canonical_codec_id_covers_known_stream_types() {
+    // PARSER-172: only mkvtoolnix-supported stream types map to a real codec.
     let cases = [
       (0x01u8, "V_MPEG1"),
       (0x02, "V_MPEG2"),
@@ -498,6 +580,7 @@ mod tests {
       (0x11, "A_AAC"),
       (0x1B, "V_MPEG4/ISO/AVC"),
       (0x24, "V_MPEGH/ISO/HEVC"),
+      (0xEA, "V_VC1"),
       (0x80, "A_PCM"),
       (0x81, "A_AC3"),
       (0x82, "A_DTS"),
@@ -506,16 +589,19 @@ mod tests {
       (0x85, "A_DTS"),
       (0x86, "A_DTS"),
       (0x87, "A_EAC3"),
-      (0x88, "A_DTS"),
-      (0xA0, "V_VC1"),
       (0x90, "S_HDMV/PGS"),
       (0x92, "S_HDMV/TEXTST"),
       (0xA1, "A_AC3"),
-      (0xA2, "A_AC3"),
+      (0xA2, "A_DTS"),
     ];
     for (st, expected) in cases {
       assert_eq!(canonical_codec_id(st), Some(expected), "stream_type 0x{st:02X}");
     }
     assert_eq!(canonical_codec_id(0xEE), None);
+    // PARSER-172: removed mappings now fall through.
+    assert_eq!(canonical_codec_id(0x20), None);
+    assert_eq!(canonical_codec_id(0x21), None);
+    assert_eq!(canonical_codec_id(0x88), None);
+    assert_eq!(canonical_codec_id(0xA0), None);
   }
 }

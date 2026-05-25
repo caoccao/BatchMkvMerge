@@ -19,6 +19,8 @@
 //!
 //! - Probe scans the first 32 KiB for a leading pack header or a
 //!   system-header + packet start-code pair (PARSER-049).
+//! - Header parsing walks a bounded probe range up to 10 MiB (PARSER-174),
+//!   mirroring mkvtoolnix's `calculate_probe_range(file_size, 10 MiB)` floor.
 //! - PES packets are depacketised per stream; Program Stream Map entries are
 //!   parsed (PARSER-051) and private-stream-1 substream ids are recorded so
 //!   the codec can be resolved later (PARSER-050); the accumulated elementary
@@ -36,7 +38,14 @@ use super::identify::{self, StreamObservation};
 use super::packet::{self, PACK_HEADER, SYSTEM_HEADER, StartCode};
 use super::{pes, stream_map};
 
-const PROBE_BYTES: usize = 64 * 1024;
+// PARSER-174: mkvtoolnix's `read_headers` probes packets up to
+// `calculate_probe_range(file_size, 10 * 1024 * 1024)`, whose floor is the
+// 10 MiB fixed minimum (`r_mpeg_ps.cpp:83-186`).  We mirror that bounded
+// window — `read_at_most` only fills what is actually available, so small
+// files are unaffected.  The percentage scaling above 10 MiB is intentionally
+// NOT implemented: capping at the fixed 10 MiB minimum keeps the scan inside
+// the ~1 second deadline contract.
+const PROBE_BYTES: usize = 10 * 1024 * 1024;
 const PROBE_SCAN: usize = 32 * 1024;
 const STREAM_PAYLOAD_CAP: usize = 256 * 1024;
 const MAX_STREAMS: usize = 64;
@@ -158,8 +167,22 @@ impl Reader for MpegPsReader {
           } else {
             None
           };
+          // PARSER-176: for 0xBD private-stream-1 audio substreams, mkvtoolnix
+          // reads the 1-byte sub_id and then skips an extra framing header
+          // before the elementary payload (`r_mpeg_ps.cpp:443-462`).  The
+          // header is 4 bytes for TrueHD/MLP (sub_id 0xB0..=0xBF), else 3
+          // bytes, and applies for sub_id in 0x80..=0x8F or 0x98..=0xCF.  The
+          // VobSub range (0x20..=0x3F) gets no extra skip.  AC-3/DTS/TrueHD
+          // probing scans for a sync word so they tolerate either offset, but
+          // LPCM reads a fixed-offset header and needs the correct start.
+          let extra_skip = match sub_id {
+            Some(s) if (0x80..=0x8F).contains(&s) || (0x98..=0xCF).contains(&s) => {
+              if (0xB0..=0xBF).contains(&s) { 4usize } else { 3usize }
+            }
+            _ => 0usize,
+          };
           let data_start = if sid == 0xBD {
-            (payload_abs + 1).min(bytes.len())
+            (payload_abs + 1 + extra_skip).min(bytes.len())
           } else {
             payload_abs
           };
@@ -327,6 +350,60 @@ mod tests {
     assert_eq!(out.tracks.len(), 1);
     assert_eq!(out.tracks[0].codec.id, "V_VC1");
     assert_eq!(out.tracks[0].track_type, TrackType::Video);
+  }
+
+  // ---- PARSER-174: bounded 10 MiB probe window -------------------------
+
+  #[test]
+  fn read_headers_finds_stream_beyond_64kib() {
+    // A video PES whose start code lives well past the old 64 KiB window is
+    // now reached because the probe range was widened to 10 MiB.  The filler
+    // is 0xFF bytes so it carries no spurious `00 00 01` start codes.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(PACK_HEADER));
+    bytes.extend_from_slice(&[0u8; 10]);
+    bytes.extend_from_slice(&vec![0xFFu8; 200 * 1024]); // > 64 KiB filler
+    bytes.extend_from_slice(&start_code(0xE0));
+    bytes.extend_from_slice(&8u16.to_be_bytes());
+    bytes.extend_from_slice(&[0u8; 8]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mpg", 0);
+    MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+  }
+
+  // ---- PARSER-176: LPCM private-stream-1 framing-header skip ------------
+
+  #[test]
+  fn lpcm_private_stream_payload_offset_skips_framing_header() {
+    // 0xBD packet, sub_id 0xA0 (LPCM).  After the 1-byte sub_id mkvtoolnix
+    // skips a 3-byte audio framing header before the elementary payload, so
+    // the LPCM header bytes must follow that skip to decode correctly.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(PACK_HEADER));
+    bytes.extend_from_slice(&[0u8; 10]);
+    bytes.extend_from_slice(&start_code(0xBD));
+    bytes.extend_from_slice(&20u16.to_be_bytes()); // packet length
+    bytes.extend_from_slice(&[0x80, 0x80, 0x00]); // PES flags + header_data_length=0
+    bytes.push(0xA0); // sub_id → LPCM
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00]); // 3-byte audio framing header
+    // LPCM header: skip 8 bits, then bps=2 (16+2*4=24), freq idx=0 (48000),
+    // skip 1 bit, channels = 5+1 = 6.  Byte layout after the 8-bit skip:
+    //   bits: bps(2)=10, freq(2)=00, reserved(1)=0, channels(3)=101 -> 0b10000101
+    bytes.push(0x00); // emphasis/muse/reserved/frame-number (skipped)
+    bytes.push(0b10_00_0_101); // bps=24, freq=48000, channels=6
+    bytes.extend_from_slice(&[0u8; 8]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.vob", 0);
+    MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let t = &out.tracks[0];
+    assert_eq!(t.codec.id, "A_PCM/INT/BIG");
+    let a = t.properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(6));
+    assert_eq!(a.sampling_frequency, Some(48000.0));
+    assert_eq!(a.bit_depth, Some(24));
   }
 
   // ---- PARSER-051: Program Stream Map ----------------------------------

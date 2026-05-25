@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 
-use crate::media_metadata::audio::{aac, ac3, mp3};
+use crate::media_metadata::audio::{aac, ac3, dts, mp3, truehd};
 use crate::media_metadata::codec::TrackKind;
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::elementary::{avc, hevc, mpeg_video, vc1};
@@ -40,7 +40,7 @@ use crate::media_metadata::reader::Reader;
 
 use super::descriptors::DescriptorSummary;
 use super::descriptors::service;
-use super::identify::{self, EsEnrichment};
+use super::identify::{self, EsEnrichment, RowProbe};
 use super::packet::{self, PACKET_SIZE_BD_M2TS, detect_packet_size_aligned};
 use super::pat;
 use super::pmt;
@@ -57,7 +57,15 @@ const PES_PAYLOAD_CAP: usize = 64 * 1024;
 const MAX_PES_PIDS: usize = 32;
 /// Packet budget scanned (after all PMTs are seen) before stopping, so the
 /// per-PID PES buffers have a chance to fill for the header probe.
-const PES_PROBE_PACKET_BUDGET: usize = 4096;
+///
+/// PARSER-169: mkvtoolnix probes at least 5 MiB before declaring a content
+/// probe successful (`min_size_to_probe`, r_mpeg_ts.cpp:1347-1376).  Because
+/// tracks now survive only when their bounded PES probe succeeds, we must read
+/// far enough that the per-PID buffers can fill or we would under-report
+/// relative to mkvmerge.  5 MiB of 188-byte packets ≈ 27 900 packets; keep it
+/// well under MAX_PACKETS (64 Ki packets) and still bounded by the deadline +
+/// EOF + the per-PID PES cap.
+const PES_PROBE_PACKET_BUDGET: usize = 28 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MpegTsReader;
@@ -240,16 +248,21 @@ impl Reader for MpegTsReader {
             track_kind: kind,
             codec_private: None,
             hearing_impaired: None,
+            dovi_profile: None,
+            dovi_base_layer_pid: None,
           });
         }
       }
     }
 
-    // PARSER-158: probe each track's PES payload for codec parameters the PMT
-    // alone cannot supply (audio channels / sampling rate, video dimensions).
-    let enrichment = compute_enrichment(&rows, &pes_payloads);
+    // PARSER-158 / PARSER-169 / PARSER-170: probe each row's PES payload for
+    // the codec parameters the PMT alone cannot supply (audio channels /
+    // sampling rate / bit depth, video dimensions, TextST codec_private) and
+    // decide whether the row is `probed_ok`.  Rows that need no content probe
+    // (PGS / DVBSUB / Teletext) are kept unconditionally.
+    let probes = compute_probes(&rows, &pes_payloads);
 
-    identify::finalise_with_sdt(rows, &sdt_map, &enrichment, out);
+    identify::finalise_with_probes(rows, &sdt_map, &probes, out);
     Ok(())
   }
 }
@@ -275,29 +288,107 @@ fn strip_pes_header(bytes: &[u8]) -> &[u8] {
   }
 }
 
-/// PARSER-158: build the per-PID enrichment map by running the codec-specific
-/// header probe over the accumulated elementary stream.  One entry per PID
-/// (the primary stream); the TrueHD/AC-3 coupled case (stream_type 0x83) is
-/// skipped because its embedded sub-stream needs the demux-time splitter.
-fn compute_enrichment(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> HashMap<u16, EsEnrichment> {
-  let mut map: HashMap<u16, EsEnrichment> = HashMap::new();
-  for row in rows {
-    if map.contains_key(&row.pid) || row.stream_type == 0x83 {
+/// PARSER-169 / PARSER-170: build a per-row probe list parallel to `rows`.  Each
+/// `RowProbe.keep` mirrors mkvtoolnix's `probed_ok` flag
+/// (r_mpeg_ts.cpp:1547-1572):
+///
+/// * Audio/video content codecs are `keep` only when their bounded PES header
+///   decode succeeded.
+/// * PGS subtitles (r_mpeg_ts.cpp:1080-1084), DVBSUB (r_mpeg_ts.cpp:527-533)
+///   and Teletext (r_mpeg_ts.cpp:820-843) are always `keep`.
+/// * TextST is `keep` only when the dialog-style segment is present
+///   (r_mpeg_ts.cpp:501-525).
+/// * A stream_type 0x83 TrueHD primary is `keep` once a TrueHD sync is found;
+///   its coupled `A_AC3` row is `keep` only when an embedded AC-3 frame is also
+///   found (r_mpeg_ts.cpp:454-499, 1554-1567).
+fn compute_probes(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> Vec<RowProbe> {
+  let mut probes: Vec<RowProbe> = Vec::with_capacity(rows.len());
+  for row in rows.iter() {
+    // stream_type 0x83 produces two coupled rows (TrueHD + AC-3) on one PID;
+    // probe the shared payload once and gate each independently.
+    if row.stream_type == 0x83 {
+      let (truehd, ac3) = probe_truehd_pair(pes.get(&row.pid).map(|v| strip_pes_header(v)));
+      // The primary TrueHD row is emitted first, then the coupled AC-3 row.
+      let is_primary = row.codec_id == "A_TRUEHD";
+      let probe = if is_primary {
+        match truehd {
+          Some(e) => RowProbe { keep: true, enrichment: e },
+          None => RowProbe::default(),
+        }
+      } else {
+        match ac3 {
+          Some(e) => RowProbe { keep: true, enrichment: e },
+          None => RowProbe::default(),
+        }
+      };
+      probes.push(probe);
       continue;
     }
-    let Some(raw) = pes.get(&row.pid) else {
+
+    // Subtitle tracks that need no content probe are always probed_ok.
+    if matches!(row.codec_id.as_str(), "S_HDMV/PGS" | "S_DVBSUB" | "S_TELETEXT") {
+      probes.push(RowProbe {
+        keep: true,
+        enrichment: EsEnrichment::default(),
+      });
       continue;
-    };
-    if let Some(enrichment) = enrich_for_codec(&row.codec_id, strip_pes_header(raw)) {
-      map.insert(row.pid, enrichment);
+    }
+
+    let es = pes.get(&row.pid).map(|v| strip_pes_header(v)).unwrap_or(&[]);
+    match enrich_for_codec(&row.codec_id, row.stream_type, es) {
+      Some(enrichment) => probes.push(RowProbe { keep: true, enrichment }),
+      None => probes.push(RowProbe::default()),
     }
   }
-  map
+  probes
+}
+
+/// PARSER-170: probe the shared PES payload of a stream_type 0x83 TrueHD track.
+/// Returns `(truehd_enrichment, ac3_enrichment)` — the first non-AC-3 sync
+/// frame's params (TrueHD/MLP) and, when present, the first embedded AC-3
+/// frame's params.  Mirrors `new_stream_a_truehd` (r_mpeg_ts.cpp:454-499).
+fn probe_truehd_pair(es: Option<&[u8]>) -> (Option<EsEnrichment>, Option<EsEnrichment>) {
+  let Some(es) = es else {
+    return (None, None);
+  };
+  let frames = truehd::parse_frames(es);
+  let mut thd: Option<EsEnrichment> = None;
+  let mut ac3: Option<EsEnrichment> = None;
+  for frame in frames {
+    if frame.codec == truehd::Codec::Ac3 {
+      if ac3.is_none() {
+        ac3 = Some(EsEnrichment {
+          channels: opt_pos(frame.channels),
+          sampling_frequency: opt_rate(frame.sampling_rate),
+          ..EsEnrichment::default()
+        });
+      }
+    } else if thd.is_none() {
+      thd = Some(EsEnrichment {
+        channels: opt_pos(frame.channels),
+        sampling_frequency: opt_rate(frame.sampling_rate),
+        ..EsEnrichment::default()
+      });
+    }
+    if thd.is_some() && ac3.is_some() {
+      break;
+    }
+  }
+  (thd, ac3)
+}
+
+fn opt_pos(v: u32) -> Option<u32> {
+  if v > 0 { Some(v) } else { None }
+}
+
+fn opt_rate(v: u32) -> Option<f64> {
+  if v > 0 { Some(v as f64) } else { None }
 }
 
 /// Decode the codec-specific header at the start of an elementary stream into
-/// the parameters mkvmerge recovers from its bounded probe.
-fn enrich_for_codec(codec_id: &str, es: &[u8]) -> Option<EsEnrichment> {
+/// the parameters mkvmerge recovers from its bounded probe.  Returns `None`
+/// (probe failed → drop the track) when no decodable header is found.
+fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnrichment> {
   match codec_id {
     "V_MPEG4/ISO/AVC" => {
       for nal in avc::nal::split_nal_units(es) {
@@ -363,8 +454,78 @@ fn enrich_for_codec(codec_id: &str, es: &[u8]) -> Option<EsEnrichment> {
         ..EsEnrichment::default()
       })
     }
+    // PARSER-170: DTS — decode the first DTS header for channels + sampling
+    // frequency (r_mpeg_ts.cpp:411-425).
+    "A_DTS" => {
+      let header = dts::first_header_params(es)?;
+      Some(EsEnrichment {
+        channels: opt_pos(header.0),
+        sampling_frequency: opt_rate(header.1),
+        bits_per_sample: opt_pos(header.2),
+        ..EsEnrichment::default()
+      })
+    }
+    // PARSER-170: Blu-ray LPCM (stream_type 0x80) — the 4-byte BD LPCM header
+    // sits at the very start of the PES elementary payload
+    // (r_mpeg_ts.cpp:427-452).
+    "A_PCM" if stream_type == 0x80 => decode_bd_lpcm_header(es),
+    // PARSER-170: TextST — capture the dialog style segment as codec_private
+    // (r_mpeg_ts.cpp:501-525).
+    "S_HDMV/TEXTST" => decode_textst_codec_private(es),
     _ => None,
   }
+}
+
+/// PARSER-170: decode the 4-byte Blu-ray LPCM header that prefixes the PES
+/// elementary payload.  Port of `new_stream_a_pcm` (r_mpeg_ts.cpp:427-452):
+///
+/// * `channels`         = `s_channels[buffer[2] >> 4]`
+/// * `bits_per_sample`  = `{0,16,20,24}[buffer[3] >> 6]`
+/// * `sample_rate`      from `buffer[2] & 0x0f`: 1→48000, 4→96000, 5→192000.
+fn decode_bd_lpcm_header(es: &[u8]) -> Option<EsEnrichment> {
+  const CHANNELS: [u32; 16] = [0, 1, 0, 2, 3, 3, 4, 4, 5, 6, 7, 8, 0, 0, 0, 0];
+  const BITS: [u32; 4] = [0, 16, 20, 24];
+  if es.len() < 4 {
+    return None;
+  }
+  let channels = CHANNELS[(es[2] >> 4) as usize];
+  let bits = BITS[(es[3] >> 6) as usize];
+  let sample_rate = match es[2] & 0x0f {
+    1 => 48_000,
+    4 => 96_000,
+    5 => 192_000,
+    _ => 0,
+  };
+  // A header with no recoverable parameter is treated as a failed probe so the
+  // track is dropped, matching mkvtoolnix's FILE_STATUS_MOREDATA path.
+  if channels == 0 && sample_rate == 0 && bits == 0 {
+    return None;
+  }
+  Some(EsEnrichment {
+    channels: opt_pos(channels),
+    sampling_frequency: opt_rate(sample_rate),
+    bits_per_sample: opt_pos(bits),
+    ..EsEnrichment::default()
+  })
+}
+
+/// PARSER-170: build the TextST codec_private from the dialog style segment.
+/// Port of `new_stream_s_hdmv_textst` (r_mpeg_ts.cpp:501-525): the segment
+/// descriptor is `[type(1)=0x81][size(2 BE)]` followed by the segment data; the
+/// codec_private is the whole `size + 3` byte block.
+fn decode_textst_codec_private(es: &[u8]) -> Option<EsEnrichment> {
+  if es.len() < 3 || es[0] != 0x81 {
+    return None;
+  }
+  let dialog_segment_size = u16::from_be_bytes([es[1], es[2]]) as usize;
+  let total = dialog_segment_size + 3;
+  if total > es.len() {
+    return None;
+  }
+  Some(EsEnrichment {
+    codec_private: Some(es[..total].to_vec()),
+    ..EsEnrichment::default()
+  })
 }
 
 /// Decode the first ADTS frame found at a `0xFFF` sync in `es` — the PMT stream
@@ -495,6 +656,23 @@ mod tests {
     crate::media_metadata::mpeg_ts::packet::build_packet(0x1FFF, false, &[])
   }
 
+  /// Wrap an elementary-stream payload in a minimal PES packet (extended-header
+  /// form, no PTS/DTS) and emit it as a single TS packet on `pid`.  The ES must
+  /// be small enough to fit one 188-byte TS packet (≤ ~175 bytes).
+  fn pes_packet(pid: u16, es: &[u8]) -> Vec<u8> {
+    let mut pes = vec![0x00, 0x00, 0x01, 0xE0]; // video-range stream id
+    let pes_len = (3 + es.len()) as u16; // flags(2) + header_data_length(1) + ES
+    pes.extend_from_slice(&pes_len.to_be_bytes());
+    pes.push(0x80); // '10' marker + flags
+    pes.push(0x00); // no PTS/DTS
+    pes.push(0x00); // PES_header_data_length = 0
+    pes.extend_from_slice(es);
+    packet::build_packet(pid, true, &pes)
+  }
+
+  /// PARSER-169: a PMT-listed track now survives only when its bounded PES
+  /// header probe succeeds, so `assemble_ts` embeds a real MPEG-2 sequence
+  /// header (video PID 0x110) and a real ADTS frame (audio PID 0x111).
   fn assemble_ts(pmt_pid: u16) -> Vec<u8> {
     let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
     let pat_pkt = build_packet_with_pointer(0, &pat_section);
@@ -503,13 +681,17 @@ mod tests {
       pmt_pid,
       &[],
       &[
-        (0x1B, 0x110, vec![0x0A, 0x04, b'e', b'n', b'g', 0x00]),
-        (0x0F, 0x111, vec![]),
+        (0x02, 0x110, vec![0x0A, 0x04, b'e', b'n', b'g', 0x00]), // MPEG-2 video
+        (0x0F, 0x111, vec![]),                                   // AAC
       ],
     );
     let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    let video_es = mpeg_video::build_sequence_header(1280, 720, 4);
+    let audio_es = aac::build_adts_frame(1, 3, 2); // sr_index 3 = 48 kHz, ch 2
     let mut bytes = pat_pkt;
     bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(0x110, &video_es));
+    bytes.extend(pes_packet(0x111, &audio_es));
     for _ in 0..6 {
       bytes.extend(padding());
     }
@@ -540,7 +722,10 @@ mod tests {
   }
 
   #[test]
-  fn read_headers_extracts_avc_and_aac_tracks() {
+  fn read_headers_extracts_video_and_aac_tracks() {
+    // PARSER-169: both PMT rows carry a decodable PES header, so both survive
+    // the `probed_ok` filter.  The video row probes to its MPEG-2 dimensions
+    // and the audio row to its AAC channels / sampling frequency.
     let bytes = assemble_ts(0x100);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ts", 0);
@@ -550,11 +735,45 @@ mod tests {
       crate::media_metadata::model::container::ContainerFormat::MpegTs
     );
     assert_eq!(out.tracks.len(), 2);
-    assert_eq!(out.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
+    assert_eq!(out.tracks[0].codec.id, "V_MPEG2");
     assert_eq!(out.tracks[1].codec.id, "A_AAC");
+    // PARSER-171: `number` equals the elementary PID.
+    assert_eq!(out.tracks[0].properties.common.number, Some(0x110));
+    assert_eq!(out.tracks[1].properties.common.number, Some(0x111));
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(v.pixel_dimensions.as_ref().map(|d| (d.width, d.height)), Some((1280, 720)));
+    let a = out.tracks[1].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(48000.0));
     let lang = out.tracks[0].properties.common.language.as_ref().unwrap();
     assert_eq!(lang.iso639_2, "eng");
     assert_eq!(out.container.properties.programs.len(), 1);
+  }
+
+  #[test]
+  fn read_headers_drops_pmt_row_without_pes_payload() {
+    // PARSER-169: a PMT entry advertised but never carrying a decodable PES
+    // header must be dropped (mkvtoolnix `probed_ok` filter,
+    // r_mpeg_ts.cpp:1547-1572).  Here only the video PID gets a PES payload;
+    // the AAC PID is silent, so only the video track survives.
+    let pmt_pid = 0x100u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x02, 0x110, vec![]), (0x0F, 0x111, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    let video_es = mpeg_video::build_sequence_header(1920, 1080, 4);
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(0x110, &video_es));
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "V_MPEG2");
+    assert_eq!(out.tracks[0].id, 0);
   }
 
   // ---- PARSER-054: PMT split across packets -----------------------------
@@ -599,13 +818,24 @@ mod tests {
       cc = (cc + 1) & 0x0F;
       idx = chunk_end;
     }
+    // PARSER-169: PMT rows now survive only when their PES header probes
+    // successfully.  Give the second stream (an AAC PID, 0x201) a real ADTS
+    // PES payload.  The unlisted-PID fallback sniffer recognises only
+    // AVC/MPEG-2/AC-3/MP3 — never AAC — so an A_AAC track on 0x201 can only
+    // appear if the PMT (split across two packets) was correctly reassembled
+    // and classified that PID as AAC.
+    bytes.extend(pes_packet(0x201, &aac::build_adts_frame(1, 3, 2)));
     for _ in 0..6 {
       bytes.extend(padding());
     }
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ts", 0);
     MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
-    assert_eq!(out.tracks.len(), 40);
+    // Only the AAC PID carried a decodable PES payload; the other 39 silent
+    // rows are dropped by the probed_ok filter.
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    assert_eq!(out.tracks[0].properties.common.number, Some(0x201));
   }
 
   // ---- PARSER-055: SDT service name -------------------------------------
@@ -722,33 +952,163 @@ mod tests {
 
     // MPEG-2 video → pixel dimensions.
     let es = mpeg_video::build_sequence_header(1280, 720, 4);
-    assert_eq!(enrich_for_codec("V_MPEG2", &es).unwrap().pixel_dimensions, Some((1280, 720)));
+    assert_eq!(enrich_for_codec("V_MPEG2", 0x02, &es).unwrap().pixel_dimensions, Some((1280, 720)));
 
     // VC-1 → pixel dimensions.
     let es = vc1::build_sequence_header(1920, 1080);
-    assert_eq!(enrich_for_codec("V_VC1", &es).unwrap().pixel_dimensions, Some((1920, 1080)));
+    assert_eq!(enrich_for_codec("V_VC1", 0xEA, &es).unwrap().pixel_dimensions, Some((1920, 1080)));
 
     // MP3 → channels + sampling frequency.
     let es = mp3::build_mp3_frame_v1(128, 44100, false);
-    let m = enrich_for_codec("A_MPEG/L3", &es).unwrap();
+    let m = enrich_for_codec("A_MPEG/L3", 0x03, &es).unwrap();
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(44100.0));
 
     // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2).
     let es = aac::build_adts_frame(1, 3, 2);
-    let m = enrich_for_codec("A_AAC", &es).unwrap();
+    let m = enrich_for_codec("A_AAC", 0x0F, &es).unwrap();
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(48000.0));
 
     // AC-3 (acmod 7 + LFE = 6 channels, 48 kHz).
     let es = ac3::build_ac3_frame_full(0, 0, 8, 7, true);
-    let m = enrich_for_codec("A_AC3", &es).unwrap();
+    let m = enrich_for_codec("A_AC3", 0x81, &es).unwrap();
     assert_eq!(m.channels, Some(6));
     assert_eq!(m.sampling_frequency, Some(48000.0));
 
     // Unknown / unprobeable codec yields nothing.
-    assert!(enrich_for_codec("S_HDMV/PGS", &es).is_none());
-    assert!(enrich_for_codec("A_AC3", &[0u8; 4]).is_none());
+    assert!(enrich_for_codec("S_HDMV/PGS", 0x90, &es).is_none());
+    assert!(enrich_for_codec("A_AC3", 0x81, &[0u8; 4]).is_none());
+  }
+
+  // ---- PARSER-170: DTS / Blu-ray LPCM / TrueHD / TextST enrichment ------
+
+  #[test]
+  fn enrich_for_codec_decodes_dts() {
+    // amode 6 = 3 channels, sfreq idx 13 = 48 kHz, source_pcm_resolution 16.
+    let es = crate::media_metadata::audio::dts::build_dts_core_frame(6, 13);
+    let m = enrich_for_codec("A_DTS", 0x82, &es).unwrap();
+    assert_eq!(m.channels, Some(3));
+    assert_eq!(m.sampling_frequency, Some(48000.0));
+    assert_eq!(m.bits_per_sample, Some(16));
+    // Garbage DTS payload → failed probe.
+    assert!(enrich_for_codec("A_DTS", 0x82, &[0u8; 32]).is_none());
+  }
+
+  #[test]
+  fn decode_bd_lpcm_header_decodes_channels_rate_bits() {
+    // buffer[2] >> 4 = channels index, buffer[2] & 0x0f = rate code,
+    // buffer[3] >> 6 = bits index.  Pick: ch index 9 → 6 channels, rate 4 →
+    // 96 kHz, bits index 3 → 24 bits.
+    let es = [0x00u8, 0x00, (9 << 4) | 0x04, 3 << 6];
+    let m = decode_bd_lpcm_header(&es).unwrap();
+    assert_eq!(m.channels, Some(6));
+    assert_eq!(m.sampling_frequency, Some(96000.0));
+    assert_eq!(m.bits_per_sample, Some(24));
+    // Routed through enrich_for_codec only for stream_type 0x80.
+    let m = enrich_for_codec("A_PCM", 0x80, &es).unwrap();
+    assert_eq!(m.channels, Some(6));
+    // All-zero header carries no parameters → failed probe.
+    assert!(decode_bd_lpcm_header(&[0u8; 4]).is_none());
+    assert!(decode_bd_lpcm_header(&[0u8; 3]).is_none());
+  }
+
+  #[test]
+  fn decode_textst_codec_private_captures_dialog_style_segment() {
+    // [0x81][size=4 BE][4 bytes of data] → codec_private = 7 bytes.
+    let es = [0x81u8, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF, 0xFF, 0xFF];
+    let m = decode_textst_codec_private(&es).unwrap();
+    assert_eq!(m.codec_private.as_deref(), Some(&[0x81u8, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF][..]));
+    // Wrong segment type or truncation → failed probe.
+    assert!(decode_textst_codec_private(&[0x80u8, 0x00, 0x04, 0, 0, 0, 0]).is_none());
+    assert!(decode_textst_codec_private(&[0x81u8, 0x00, 0x10, 0xDE]).is_none());
+    assert!(decode_textst_codec_private(&[0x81u8]).is_none());
+  }
+
+  #[test]
+  fn probe_truehd_pair_finds_truehd_and_coupled_ac3() {
+    use crate::media_metadata::audio::ac3::build_ac3_frame;
+    use crate::media_metadata::audio::truehd::build_truehd_frame;
+    let mut data = build_truehd_frame(1, 0b1111); // 96 kHz, 6 channels
+    data.extend(build_truehd_frame(1, 0b1111));
+    data.extend(build_ac3_frame(0, 8)); // AC-3 48 kHz
+    let (thd, ac3) = probe_truehd_pair(Some(&data));
+    let thd = thd.unwrap();
+    assert_eq!(thd.channels, Some(6));
+    assert_eq!(thd.sampling_frequency, Some(96000.0));
+    let ac3 = ac3.unwrap();
+    assert_eq!(ac3.sampling_frequency, Some(48000.0));
+
+    // TrueHD with no embedded AC-3 → the coupled probe is None.
+    let mut only_thd = build_truehd_frame(1, 0b1111);
+    only_thd.extend(build_truehd_frame(1, 0b1111));
+    let (thd, ac3) = probe_truehd_pair(Some(&only_thd));
+    assert!(thd.is_some());
+    assert!(ac3.is_none());
+
+    // No payload → both None.
+    assert_eq!(probe_truehd_pair(None).0.is_none(), true);
+  }
+
+  #[test]
+  fn read_headers_truehd_with_coupled_ac3_keeps_both() {
+    // PARSER-169 / PARSER-170: stream_type 0x83 emits a TrueHD primary + an
+    // AC-3 coupled row.  When the PES carries both a TrueHD sync and an
+    // embedded AC-3 frame, both survive the probed_ok filter.
+    use crate::media_metadata::audio::ac3::build_ac3_frame;
+    use crate::media_metadata::audio::truehd::build_truehd_frame;
+    let pmt_pid = 0x100u16;
+    let thd_pid = 0x120u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x83, thd_pid, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    // Keep the ES small enough to fit one 188-byte TS packet: one 32-byte
+    // TrueHD sync frame + one 128-byte AC-3 frame (frmsizecod 0 @ 48 kHz).
+    let mut es = build_truehd_frame(1, 0b1111);
+    es.extend(build_ac3_frame(0, 0));
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(thd_pid, &es));
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 2);
+    assert_eq!(out.tracks[0].codec.id, "A_TRUEHD");
+    assert_eq!(out.tracks[1].codec.id, "A_AC3");
+    let thd = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(thd.channels, Some(6));
+    assert_eq!(thd.sampling_frequency, Some(96000.0));
+  }
+
+  #[test]
+  fn read_headers_truehd_without_coupled_ac3_drops_ac3_row() {
+    // PARSER-169: when only a TrueHD sync (no embedded AC-3) is present, the
+    // primary survives but the coupled AC-3 row is dropped
+    // (r_mpeg_ts.cpp:1554-1567).
+    use crate::media_metadata::audio::truehd::build_truehd_frame;
+    let pmt_pid = 0x100u16;
+    let thd_pid = 0x120u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x83, thd_pid, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    let mut es = build_truehd_frame(1, 0b1111);
+    es.extend(build_truehd_frame(1, 0b1111));
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(thd_pid, &es));
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_TRUEHD");
   }
 
   #[test]

@@ -417,9 +417,58 @@ pub(crate) fn build_audio_stn_stream(pid: u16, lang: &[u8; 3]) -> Vec<u8> {
   out
 }
 
+/// Build one STN video stream descriptor (stream_entry + stream_attributes).
+/// `coding_type` defaults to AVC (0x1b) when set so the format/rate nibbles are
+/// parsed (mpls.cpp:422-425).
+#[cfg(test)]
+pub(crate) fn build_video_stn_stream(pid: u16, coding_type: u8, format: u8, rate: u8) -> Vec<u8> {
+  // stream_entry: length + [stream_type=1, pid].
+  let mut entry = vec![1u8];
+  entry.extend(pid.to_be_bytes());
+  let mut out = vec![entry.len() as u8];
+  out.extend(entry);
+  // stream_attributes: length + [coding_type, format/rate nibbles].
+  let attr = vec![coding_type, (format << 4) | (rate & 0x0f)];
+  out.push(attr.len() as u8);
+  out.extend(attr);
+  out
+}
+
+/// Build one STN presentation-graphics stream descriptor (stream_entry +
+/// stream_attributes); PG coding type carries only an ISO-639 language
+/// (mpls.cpp:434-435).
+#[cfg(test)]
+pub(crate) fn build_pg_stn_stream(pid: u16, lang: &[u8; 3]) -> Vec<u8> {
+  // stream_entry: length + [stream_type=1, pid].
+  let mut entry = vec![1u8];
+  entry.extend(pid.to_be_bytes());
+  let mut out = vec![entry.len() as u8];
+  out.extend(entry);
+  // stream_attributes: length + [coding_type=0x90 (PGS), lang].
+  let mut attr = vec![0x90u8];
+  attr.extend_from_slice(lang);
+  out.push(attr.len() as u8);
+  out.extend(attr);
+  out
+}
+
 /// Build a framed play item that carries the given STN audio streams.
 #[cfg(test)]
 pub(crate) fn build_item_with_stn(clip: &str, in_t: u32, out_t: u32, audio: &[Vec<u8>]) -> Vec<u8> {
+  build_item_with_stn_groups(clip, in_t, out_t, &[], audio, &[])
+}
+
+/// Build a framed play item carrying the given STN video / audio / PG streams.
+/// Mirrors `parse_stn`'s count-byte layout (mpls.cpp:361-389).
+#[cfg(test)]
+pub(crate) fn build_item_with_stn_groups(
+  clip: &str,
+  in_t: u32,
+  out_t: u32,
+  video: &[Vec<u8>],
+  audio: &[Vec<u8>],
+  pg: &[Vec<u8>],
+) -> Vec<u8> {
   let mut body = Vec::new();
   body.extend(clip.as_bytes()); // 5
   body.extend(b"M2TS"); // 4
@@ -428,11 +477,18 @@ pub(crate) fn build_item_with_stn(clip: &str, in_t: u32, out_t: u32, audio: &[Ve
   body.extend(out_t.to_be_bytes());
   body.extend([0u8; 12]); // UO mask + flags
   body.extend([0u8; 4]); // STN length + reserved
-  body.push(0); // num_video
+  body.push(video.len() as u8); // num_video
   body.push(audio.len() as u8); // num_audio
-  body.extend([0u8; 5]); // num_pg / num_ig / num_sec_audio / num_sec_video / num_pip_pg
+  body.push(pg.len() as u8); // num_pg
+  body.extend([0u8; 4]); // num_ig / num_sec_audio / num_sec_video / num_pip_pg
   body.extend([0u8; 5]); // reserved
+  for s in video {
+    body.extend_from_slice(s);
+  }
   for s in audio {
+    body.extend_from_slice(s);
+  }
+  for s in pg {
     body.extend_from_slice(s);
   }
   let mut framed = (body.len() as u16).to_be_bytes().to_vec();

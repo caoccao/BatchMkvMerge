@@ -125,10 +125,13 @@ const TABLE: &[StreamTypeEntry] = &[
     name: "MPEG-4 generic sections",
     kind: TrackKind::Unknown,
   },
+  // PARSER-172: mkvtoolnix does not support stream_type 0x15 (synchronised
+  // text); `determine_codec_from_stream_type` leaves it Unknown so it is
+  // dropped (r_mpeg_ts.cpp:1012-1095, r_mpeg_ts.h:55-87).
   StreamTypeEntry {
     stream_type: 0x15,
     name: "Synchronised text",
-    kind: TrackKind::Subtitle,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x1A,
@@ -140,35 +143,38 @@ const TABLE: &[StreamTypeEntry] = &[
     name: "AVC/H.264",
     kind: TrackKind::Video,
   },
+  // PARSER-172: 0x1C/0x1D/0x1E/0x1F/0x20/0x21/0x25/0x42 are not in
+  // mkvtoolnix's supported set (r_mpeg_ts.h:55-87); they fall through
+  // `determine_codec_from_stream_type` as Unknown and get dropped.
   StreamTypeEntry {
     stream_type: 0x1C,
     name: "MPEG-4 raw audio",
-    kind: TrackKind::Audio,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x1D,
     name: "MPEG-4 timed text",
-    kind: TrackKind::Subtitle,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x1E,
     name: "MPEG-4 auxiliary video",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x1F,
     name: "AVC sub-bitstream",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x20,
     name: "MVC sub-bitstream",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x21,
     name: "JPEG-2000",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x24,
@@ -178,12 +184,12 @@ const TABLE: &[StreamTypeEntry] = &[
   StreamTypeEntry {
     stream_type: 0x25,
     name: "HEVC temporal sub-bitstream",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x42,
     name: "AVS video (Chinese)",
-    kind: TrackKind::Video,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x7F,
@@ -235,10 +241,12 @@ const TABLE: &[StreamTypeEntry] = &[
     name: "PGS subtitles (BD)",
     kind: TrackKind::Subtitle,
   },
+  // PARSER-172: HDMV Interactive Graphics (0x91) are not in mkvtoolnix's
+  // supported set (r_mpeg_ts.h:85-86 list only PGS 0x90 + TextST 0x92).
   StreamTypeEntry {
     stream_type: 0x91,
     name: "Interactive graphics (BD)",
-    kind: TrackKind::Subtitle,
+    kind: TrackKind::Unknown,
   },
   StreamTypeEntry {
     stream_type: 0x92,

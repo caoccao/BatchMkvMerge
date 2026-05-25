@@ -55,7 +55,8 @@ pub struct DescriptorSummary {
   pub is_eac3: bool,
   pub is_dts: bool,
   pub is_hevc: bool,
-  pub dovi_profile: Option<u32>,
+  /// PARSER-173: Dolby Vision descriptor (profile + optional base-layer PID).
+  pub dovi: Option<dovi::DoviDescriptor>,
   pub service_name: Option<String>,
   /// DVB subtitling descriptor (0x59) entries — PARSER-091.
   pub subtitling_entries: Vec<subtitling::SubtitlingEntry>,
@@ -120,7 +121,7 @@ pub fn walk(descriptors: &[u8]) -> DescriptorSummary {
         summary.is_hevc = hevc::decode(body);
       }
       TAG_DOVI => {
-        summary.dovi_profile = dovi::decode(body);
+        summary.dovi = dovi::decode(body);
       }
       TAG_SERVICE => {
         if let Some(name) = service::decode(body) {

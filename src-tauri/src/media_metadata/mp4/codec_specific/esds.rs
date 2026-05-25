@@ -53,9 +53,13 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
   let mut cfg = AudioCodecConfig::default();
   cfg.raw_hex = Some(hex_encode(&payload));
   let mut object_type: Option<u8> = None;
-  walk(&mut cursor, &mut cfg, &mut object_type);
+  let mut decoder_specific_len: Option<usize> = None;
+  walk(&mut cursor, &mut cfg, &mut object_type, &mut decoder_specific_len);
   builder.audio_codec_config = Some(cfg);
   builder.esds_object_type = object_type;
+  // PARSER-177: record the DecoderSpecificInfo length for the reader's
+  // verification gates (MP4V / VobSub).
+  builder.esds_decoder_specific_len = decoder_specific_len;
   builder.codec_private_hex = Some(hex_encode(&payload));
   Ok(())
 }
@@ -112,7 +116,12 @@ impl<'a> Cursor<'a> {
   }
 }
 
-fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig, object_type_out: &mut Option<u8>) {
+fn walk(
+  cursor: &mut Cursor,
+  cfg: &mut AudioCodecConfig,
+  object_type_out: &mut Option<u8>,
+  decoder_specific_len_out: &mut Option<usize>,
+) {
   while let Some(tag) = cursor.read_u8() {
     let len = match cursor.read_ber_length() {
       Some(l) => l,
@@ -140,7 +149,7 @@ fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig, object_type_out: &mut O
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out);
+        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out);
         cursor.pos = body_end;
       }
       TAG_DECODER_CONFIG => {
@@ -157,10 +166,14 @@ fn walk(cursor: &mut Cursor, cfg: &mut AudioCodecConfig, object_type_out: &mut O
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out);
+        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out);
         cursor.pos = body_end;
       }
       TAG_DEC_SPECIFIC_INFO => {
+        // PARSER-177: record the DecoderSpecificInfo length (mkvtoolnix's
+        // `esds.decoder_config`) so the verification pass can gate MP4V /
+        // VobSub tracks on its presence / size.
+        *decoder_specific_len_out = Some(len);
         if let Some(slice) = cursor.slice(len) {
           parse_audio_specific_config(slice, cfg);
         }

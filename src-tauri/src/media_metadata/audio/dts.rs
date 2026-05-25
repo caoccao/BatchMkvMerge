@@ -885,6 +885,22 @@ fn find_header(buf: &[u8], allow_no_exss_search: bool) -> Option<(usize, Header)
   if ok { Some((offset, header)) } else { None }
 }
 
+/// PARSER-170: decode the first DTS header in `buf` and return
+/// `(channels, sampling_frequency, bits_per_sample)`.  Mirrors
+/// `new_stream_a_dts` (r_mpeg_ts.cpp:411-425), which calls `mtx::dts::find_header`
+/// directly on the raw (untransformed) PES payload — MPEG-TS DTS frames are
+/// plain big-endian, so no 14→16 / byte-swap normalisation is needed.  Returns
+/// `None` (failed probe) when no decodable header is found.
+pub fn first_header_params(buf: &[u8]) -> Option<(u32, u32, u32)> {
+  let (_offset, header) = find_header(buf, false)?;
+  let bits = header.source_pcm_resolution.max(0) as u32;
+  Some((
+    header.total_num_audio_channels(),
+    header.effective_sampling_frequency(),
+    bits,
+  ))
+}
+
 /// Port of `find_consecutive_headers`.
 pub fn find_consecutive_headers(buf: &[u8], num: u32) -> Option<usize> {
   let (pos, mut header) = find_header(buf, false)?;
