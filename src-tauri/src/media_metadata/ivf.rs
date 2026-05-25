@@ -210,6 +210,7 @@ impl Reader for IvfReader {
       video.block_addition_mappings.push(BlockAdditionMapping {
         id_type: "dvvC".to_owned(),
         data_hex: hex_encode(&dovi.raw_config),
+        ..Default::default()
       });
     }
 

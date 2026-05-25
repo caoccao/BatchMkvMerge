@@ -106,10 +106,14 @@ pub fn parse(
 /// Reset the per-sample-entry builder fields before parsing one `stsd` entry so
 /// that, matching mkvtoolnix's per-entry overwrite of `dmx.stsd` / `priv`, the
 /// last entry's values win without state leaking across entries.
+///
+/// PARSER-229: the codec **identity** (`sample_entry_kind` / `codec_id_str` /
+/// `codec_name`) is deliberately *not* reset here — mkvtoolnix keeps the FIRST
+/// FourCC and only warns about later differing ones (`handle_audio_stsd_atom`
+/// / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`).  Only the
+/// per-entry sample data (dimensions / audio props / codec private / configs),
+/// which upstream genuinely overwrites each iteration, is cleared.
 fn reset_sample_entry_state(builder: &mut TrackBuilder) {
-  builder.sample_entry_kind = None;
-  builder.codec_name = None;
-  builder.codec_id_str = None;
   builder.video = None;
   builder.audio = None;
   builder.codec_private_hex = None;
@@ -134,14 +138,19 @@ fn parse_entry(
       reason: format!("sample entry payload {payload} too small"),
     });
   }
-  // PARSER-198: clear any state from a previous sample-description entry so the
-  // last entry's values win (mkvtoolnix re-allocates `dmx.stsd` per entry).
+  // PARSER-198: clear the per-entry sample data so the last entry's values win
+  // (mkvtoolnix re-allocates `dmx.stsd` per entry).
   reset_sample_entry_state(builder);
-  builder.sample_entry_kind = Some(entry.kind.0);
-  let codec_str: String = entry.kind.0.iter().map(|b| *b as char).collect();
-  builder.codec_id_str = Some(codec_str.clone());
-  if let Some(catalogue) = fourcc::lookup(&codec_str) {
-    builder.codec_name = Some(catalogue.name.to_string());
+  // PARSER-229: the codec identity is taken from the FIRST entry only.  A later
+  // entry with a differing FourCC is ignored for identity (mkvtoolnix keeps the
+  // first FourCC and warns), while its sample data below still wins.
+  if builder.codec_id_str.is_none() {
+    builder.sample_entry_kind = Some(entry.kind.0);
+    let codec_str: String = entry.kind.0.iter().map(|b| *b as char).collect();
+    if let Some(catalogue) = fourcc::lookup(&codec_str) {
+      builder.codec_name = Some(catalogue.name.to_string());
+    }
+    builder.codec_id_str = Some(codec_str);
   }
 
   // Common 8-byte sample entry header
@@ -911,17 +920,22 @@ mod tests {
     assert_eq!(cfg.aac_object_type, Some(2));
   }
 
-  // PARSER-198: every stsd entry is parsed; the LAST entry's values win, mirroring
-  // mkvtoolnix re-allocating `dmx.stsd` and re-running the per-entry parse for
-  // each sample description (r_qtmp4.cpp:1370-1394).
+  // PARSER-198 / PARSER-229: every stsd entry is parsed; the per-entry sample
+  // data (dimensions / audio props / codec private) follows the LAST entry, but
+  // the codec **identity** (FourCC) is taken from the FIRST entry — mirroring
+  // mkvtoolnix re-allocating `dmx.stsd` each iteration while keeping the first
+  // FourCC and only warning about later differing ones
+  // (r_qtmp4.cpp:1370-1394 + 3091-3099).
   #[test]
-  fn last_stsd_entry_wins_over_earlier_ones() {
+  fn first_fourcc_wins_but_sample_data_is_last() {
     let entry_a = build_video_sample_entry(b"avc1", 1920, 1080, 24, &[]);
     let entry_b = build_video_sample_entry(b"hev1", 3840, 2160, 24, &[]);
     let payload = build_stsd_payload(&[entry_a, entry_b]);
     let b = run(payload, *b"vide");
-    // Last entry wins.
-    assert_eq!(b.codec_id_str.as_deref(), Some("hev1"));
+    // Codec identity is the first FourCC.
+    assert_eq!(b.codec_id_str.as_deref(), Some("avc1"));
+    assert_eq!(b.sample_entry_kind, Some(*b"avc1"));
+    // But the per-entry sample data is the last entry's.
     let v = b.video.unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().width, 3840);
     assert_eq!(v.pixel_dimensions.unwrap().height, 2160);

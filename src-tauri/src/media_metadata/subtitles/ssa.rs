@@ -17,9 +17,12 @@
 
 //! SSA / ASS reader.
 //!
-//! Both versions begin with a `[Script Info]` section.  The distinguishing
-//! factor between SSA (v4) and ASS (v4+) is the `ScriptType:` value and the
-//! styles-section header (`[V4 Styles]` vs `[V4+ Styles]`).
+//! Probing mirrors `ssa_parser_c::probe`: the first non-comment, non-empty line
+//! must be a `[Script Info]` or `[V4(+)? Styles]` section header (section names
+//! tolerate `\s+` between words, so `[Script   Info]` / `[V4+    Styles]` are
+//! accepted).  The distinguishing factor between SSA (v4) and ASS (v4+) is the
+//! `ScriptType: v4.00+` line and the `[V4+ Styles]` section header; the variant
+//! defaults to SSA, matching upstream's `m_is_ass` flag.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -61,49 +64,158 @@ enum SsaSection {
   Graphics,
 }
 
+/// Classify an SSA/ASS file: returns the variant when the probe claims the
+/// file, else `None`.
+///
+/// The probe mirrors `ssa_parser_c::probe`
+/// (`../mkvtoolnix/src/input/subtitles.cpp:305-338`): the **first** non-comment,
+/// non-empty line (within the first 100 lines) must be a `[Script Info]` or
+/// `[V4(+)? Styles]` section header — a marker appearing only further into the
+/// file does not qualify (PARSER-234).  The SSA-vs-ASS distinction then mirrors
+/// `ssa_parser_c::parse`'s `m_is_ass` flag: it defaults to SSA and is promoted
+/// to ASS by a `ScriptType: v4.00+` line or a `[V4+ Styles]` section.
 pub fn classify(text: &str) -> Option<SsaVariant> {
-  let mut script_info_seen = false;
+  if !probe_ssa(text) {
+    return None;
+  }
+  Some(detect_variant(text))
+}
+
+/// Port of `ssa_parser_c::probe`.
+fn probe_ssa(text: &str) -> bool {
+  let mut line_number = 0;
   for line in text.lines() {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
+    line_number += 1;
+    // Upstream reads at most 100 lines.
+    if line_number > 100 {
+      return false;
+    }
+    // Skip comments (`^\s*[!;]`) and empty/whitespace-only lines (`^\s*$`).
+    if is_ssa_comment_or_empty(line) {
       continue;
     }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower == "[script info]" {
-      script_info_seen = true;
+    // The first meaningful line decides: a wanted section header claims the
+    // file, anything else rejects it.
+    return matches_script_info(line) || matches_v4_styles(line).is_some();
+  }
+  false
+}
+
+/// Port of `ssa_parser_c::parse`'s `m_is_ass` detection.
+fn detect_variant(text: &str) -> SsaVariant {
+  let mut is_ass = false;
+  for line in text.lines() {
+    if line.trim().eq_ignore_ascii_case("ScriptType: v4.00+") {
+      is_ass = true;
       continue;
     }
-    if lower == "[v4+ styles]" {
-      return Some(SsaVariant::Ass);
-    }
-    if lower == "[v4 styles]" {
-      return Some(SsaVariant::Ssa);
-    }
-    if let Some(rest) = lower.strip_prefix("scripttype:") {
-      let v = rest.trim();
-      if v.contains("v4.00+") {
-        return Some(SsaVariant::Ass);
-      }
-      if v.contains("v4.00") {
-        return Some(SsaVariant::Ssa);
-      }
+    // Only the `+` (`[V4+ Styles]`) form promotes to ASS; plain `[V4 Styles]`
+    // leaves the SSA default in place.
+    if matches_v4_styles(line) == Some(true) {
+      is_ass = true;
     }
   }
-  if script_info_seen {
-    // Header alone → assume modern ASS.
-    Some(SsaVariant::Ass)
+  if is_ass { SsaVariant::Ass } else { SsaVariant::Ssa }
+}
+
+/// Mirror of the probe's `comment_re = "^\s*$|^\s*[!;]"`.
+fn is_ssa_comment_or_empty(line: &str) -> bool {
+  let t = line.trim_start();
+  t.is_empty() || t.starts_with('!') || t.starts_with(';')
+}
+
+/// Match `^\s*\[` followed by the supplied words in order, each separated from
+/// the previous by one or more whitespace characters (`\s+`), then `\]`.  The
+/// comparison is case-insensitive and prefix-anchored (trailing content after
+/// `]` is tolerated), mirroring mkvtoolnix's section regexes — so spacing
+/// variants such as `[Script   Info]` are accepted (PARSER-234).
+fn matches_bracket_section(line: &str, words: &[&str]) -> bool {
+  let bytes = line.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  if i >= bytes.len() || bytes[i] != b'[' {
+    return false;
+  }
+  i += 1;
+  for (idx, word) in words.iter().enumerate() {
+    if idx > 0 {
+      let start = i;
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+      }
+      if i == start {
+        return false; // `\s+` requires at least one whitespace
+      }
+    }
+    let wb = word.as_bytes();
+    if i + wb.len() > bytes.len() || !bytes[i..i + wb.len()].eq_ignore_ascii_case(wb) {
+      return false;
+    }
+    i += wb.len();
+  }
+  i < bytes.len() && bytes[i] == b']'
+}
+
+/// `^\s*\[Script\s+Info\]`.
+fn matches_script_info(line: &str) -> bool {
+  matches_bracket_section(line, &["Script", "Info"])
+}
+
+/// `^\s*\[Events\]`.
+fn matches_events(line: &str) -> bool {
+  matches_bracket_section(line, &["Events"])
+}
+
+/// `^\s*\[Graphics\]`.
+fn matches_graphics(line: &str) -> bool {
+  matches_bracket_section(line, &["Graphics"])
+}
+
+/// `^\s*\[Fonts\]`.
+fn matches_fonts(line: &str) -> bool {
+  matches_bracket_section(line, &["Fonts"])
+}
+
+/// `^\s*\[V4\+?\s+Styles\]`.  Returns `Some(true)` for the `+` (ASS) form,
+/// `Some(false)` for plain `[V4 Styles]` (SSA), `None` when it does not match a
+/// styles section header.
+fn matches_v4_styles(line: &str) -> Option<bool> {
+  let bytes = line.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  if i >= bytes.len() || bytes[i] != b'[' {
+    return None;
+  }
+  i += 1;
+  if i + 2 > bytes.len() || !bytes[i..i + 2].eq_ignore_ascii_case(b"V4") {
+    return None;
+  }
+  i += 2;
+  let mut is_plus = false;
+  if i < bytes.len() && bytes[i] == b'+' {
+    is_plus = true;
+    i += 1;
+  }
+  let start = i;
+  while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  if i == start {
+    return None; // `\s+`
+  }
+  if i + 6 > bytes.len() || !bytes[i..i + 6].eq_ignore_ascii_case(b"Styles") {
+    return None;
+  }
+  i += 6;
+  if i < bytes.len() && bytes[i] == b']' {
+    Some(is_plus)
   } else {
     None
   }
-}
-
-/// Test whether `trimmed` (already left-trimmed) is the named section header,
-/// case-insensitively.  Mirrors the upstream `^\s*\[Name\]` regexes — we accept
-/// a leading-trim + bracketed-name match without trailing-content tolerance,
-/// which is what every real-world SSA/ASS file emits.
-fn is_section(trimmed: &str, name: &str) -> bool {
-  let lower = trimmed.to_ascii_lowercase();
-  lower == format!("[{name}]")
 }
 
 /// Result of the single-pass SSA/ASS header parse: the global header (codec
@@ -138,18 +250,16 @@ pub fn parse_ssa(text: &str) -> SsaParse {
     let line = raw.trim_start();
     let mut add_to_global = true;
 
-    if is_section(line, "v4+ styles") {
+    if matches_v4_styles(line).is_some() {
       section = SsaSection::V4Styles;
-    } else if is_section(line, "v4 styles") {
-      section = SsaSection::V4Styles;
-    } else if is_section(line, "script info") {
+    } else if matches_script_info(line) {
       section = SsaSection::Info;
-    } else if is_section(line, "events") {
+    } else if matches_events(line) {
       section = SsaSection::Events;
-    } else if is_section(line, "graphics") {
+    } else if matches_graphics(line) {
       section = SsaSection::Graphics;
       add_to_global = false;
-    } else if is_section(line, "fonts") {
+    } else if matches_fonts(line) {
       section = SsaSection::Fonts;
       add_to_global = false;
     } else if section == SsaSection::Events {
@@ -429,8 +539,51 @@ mod tests {
   }
 
   #[test]
-  fn classify_falls_back_to_ass_when_only_script_info_seen() {
-    assert_eq!(classify("[Script Info]\n"), Some(SsaVariant::Ass));
+  fn classify_defaults_to_ssa_when_only_script_info_seen() {
+    // mkvtoolnix's `m_is_ass` defaults to false, so a bare `[Script Info]`
+    // header with no `ScriptType: v4.00+` / `[V4+ Styles]` is SSA, not ASS.
+    assert_eq!(classify("[Script Info]\n"), Some(SsaVariant::Ssa));
+  }
+
+  // ---- PARSER-234: first-line probe + section-name spacing -------------
+
+  #[test]
+  fn classify_rejects_when_first_meaningful_line_is_not_a_section() {
+    // A `ScriptType:` / styles marker only further down must not claim the
+    // file — upstream only inspects the first non-comment line.
+    assert!(classify("Title: my notes\nScriptType: v4.00+\n[V4+ Styles]\n").is_none());
+    assert!(classify("random text\n[Script Info]\n").is_none());
+  }
+
+  #[test]
+  fn classify_skips_comments_and_blanks_before_the_section() {
+    // `;` and `!` comment lines plus blank lines are skipped before the first
+    // meaningful line is tested.
+    let text = "; a comment\n! another\n\n   \n[Script Info]\nScriptType: v4.00+\n";
+    assert_eq!(classify(text), Some(SsaVariant::Ass));
+  }
+
+  #[test]
+  fn classify_accepts_extra_whitespace_in_section_names() {
+    let ass = "[Script   Info]\nScriptType: v4.00+\n[V4+    Styles]\n";
+    assert_eq!(classify(ass), Some(SsaVariant::Ass));
+    let ssa = "[Script\tInfo]\n[V4   Styles]\n";
+    assert_eq!(classify(ssa), Some(SsaVariant::Ssa));
+  }
+
+  #[test]
+  fn parse_ssa_recognises_spaced_fonts_section() {
+    let font_bytes = [0x00u8, 0x01, 0x00, 0x00, 0xAB];
+    let uu = uu_encode(&font_bytes);
+    let text = format!(
+      "[Script Info]\n\n[V4+   Styles]\nFormat: Name\n\n[Fonts]\nfontname: spaced.ttf\n{uu}\n\n[Events]\n"
+    );
+    let parsed = parse_ssa(&text);
+    assert_eq!(parsed.attachments.len(), 1);
+    assert_eq!(parsed.attachments[0].file_name, "spaced.ttf");
+    let global = parsed.global.unwrap();
+    assert!(!global.contains("fontname:"));
+    assert!(!global.contains(&uu));
   }
 
   #[test]

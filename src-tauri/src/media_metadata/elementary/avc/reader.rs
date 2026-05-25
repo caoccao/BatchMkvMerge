@@ -76,14 +76,17 @@ impl Reader for AvcReader {
 
     let mut common = CommonTrackProperties::default();
     common.number = Some(1);
+    // PARSER-240: pixel dimensions are the cropped luma size; display
+    // dimensions apply the VUI sample aspect ratio when one is present.
+    let (display_width, display_height) = sps.display_dimensions();
     let video = VideoTrackProperties {
       pixel_dimensions: Some(Dimensions2D {
         width: sps.display_width,
         height: sps.display_height,
       }),
       display_dimensions: Some(Dimensions2D {
-        width: sps.display_width,
-        height: sps.display_height,
+        width: display_width,
+        height: display_height,
       }),
       default_duration_ns: sps.default_duration_ns,
       codec_config: Some(VideoCodecConfig {
@@ -233,8 +236,10 @@ mod tests {
       w.write_bit(false); // chroma_loc_info_present_flag
       w.write_bit(true); // timing_info_present_flag
       w.write_bits(1, 32); // num_units_in_tick
-      w.write_bits(60, 32); // time_scale => 30 fps frames
+      w.write_bits(60, 32); // time_scale
       w.write_bit(true); // fixed_frame_rate_flag
+    } else {
+      w.write_bit(false); // vui_parameters_present_flag
     }
     w.into_bytes()
   }
@@ -348,7 +353,8 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     let v = out.tracks[0].properties.video.as_ref().unwrap();
-    assert_eq!(v.default_duration_ns, Some(33_333_333));
+    // PARSER-238: num_units_in_tick=1, time_scale=60 → 1e9 / 60 (no ×2).
+    assert_eq!(v.default_duration_ns, Some(16_666_666));
   }
 
   #[test]

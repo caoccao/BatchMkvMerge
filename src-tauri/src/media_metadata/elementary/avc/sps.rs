@@ -40,9 +40,67 @@ pub struct AvcSps {
   pub bit_depth_chroma: u8,
   pub coded_width: u32,
   pub coded_height: u32,
+  /// Cropped pixel dimensions (mkvtoolnix's `get_width()` / `get_height()`).
   pub display_width: u32,
   pub display_height: u32,
+  /// Sample aspect ratio from the VUI (`0/0` when none was signalled).
+  pub par_num: u32,
+  pub par_den: u32,
   pub default_duration_ns: Option<u64>,
+}
+
+impl AvcSps {
+  /// Apply the VUI sample-aspect-ratio to the cropped pixel dimensions, a port
+  /// of `es_parser_c::get_display_dimensions`
+  /// (`../mkvtoolnix/src/common/xyzvc/es_parser.cpp:571-584`): with PAR ≥ 1 the
+  /// width is stretched, otherwise the height is.  Returns the cropped pixel
+  /// dimensions unchanged when no usable PAR was found (PARSER-240).
+  pub fn display_dimensions(&self) -> (u32, u32) {
+    if self.par_num == 0 || self.par_den == 0 {
+      return (self.display_width, self.display_height);
+    }
+    let (num, den) = (self.par_num as u64, self.par_den as u64);
+    if num >= den {
+      let width = (self.display_width as u64 * num + den / 2) / den;
+      (width as u32, self.display_height)
+    } else {
+      let height = (self.display_height as u64 * den + num / 2) / num;
+      (self.display_width, height as u32)
+    }
+  }
+}
+
+/// Predefined sample-aspect-ratio table (`s_predefined_pars`,
+/// `../mkvtoolnix/src/common/avc/util.cpp:42-58`).  Index 0 (unspecified) and
+/// any out-of-range `aspect_ratio_idc` yield no PAR.
+const SAR_PREDEFINED: [(u32, u32); 17] = [
+  (0, 0),
+  (1, 1),
+  (12, 11),
+  (10, 11),
+  (16, 11),
+  (40, 33),
+  (24, 11),
+  (20, 11),
+  (32, 11),
+  (80, 33),
+  (18, 11),
+  (15, 11),
+  (64, 33),
+  (160, 99),
+  (4, 3),
+  (3, 2),
+  (2, 1),
+];
+/// `EXTENDED_SAR` aspect_ratio_idc — explicit 16-bit PAR numerator/denominator.
+const EXTENDED_SAR: u64 = 255;
+
+/// Decoded VUI fields the parser needs: sample aspect ratio and frame timing.
+#[derive(Debug, Default, Clone, Copy)]
+struct VuiInfo {
+  par_num: u32,
+  par_den: u32,
+  default_duration_ns: Option<u64>,
 }
 
 /// High-family profiles (per H.264 §7.3.2.1.1) that carry the extra
@@ -137,14 +195,13 @@ pub fn parse(rbsp: &[u8]) -> Result<AvcSps, ParseError> {
   let crop_y_unit = sub_height * (if frame_mbs_only_flag { 1 } else { 2 });
   let display_width = coded_width.saturating_sub((crop_left + crop_right) * crop_x_unit);
   let display_height = coded_height.saturating_sub((crop_top + crop_bottom) * crop_y_unit);
-  let default_duration_ns = if reader.remaining_bits() >= 72 {
-    if reader.read_bit()? {
-      parse_vui_timing(&mut reader)?
-    } else {
-      None
-    }
+  // VUI: capture the sample aspect ratio (PARSER-240) and frame timing
+  // (PARSER-238).  A truncated/malformed VUI yields no PAR or timing rather
+  // than failing the whole SPS parse.
+  let vui = if reader.read_bit().unwrap_or(false) {
+    parse_vui(&mut reader).unwrap_or_default()
   } else {
-    None
+    VuiInfo::default()
   };
 
   Ok(AvcSps {
@@ -158,42 +215,58 @@ pub fn parse(rbsp: &[u8]) -> Result<AvcSps, ParseError> {
     coded_height,
     display_width,
     display_height,
-    default_duration_ns,
+    par_num: vui.par_num,
+    par_den: vui.par_den,
+    default_duration_ns: vui.default_duration_ns,
   })
 }
 
-fn parse_vui_timing(reader: &mut BitReader<'_>) -> Result<Option<u64>, ParseError> {
+/// Decode the VUI parameters mkvtoolnix consumes (`../mkvtoolnix/src/common/avc/util.cpp:316-383`).
+fn parse_vui(reader: &mut BitReader<'_>) -> Result<VuiInfo, ParseError> {
+  let mut info = VuiInfo::default();
+  // aspect_ratio_info_present_flag
   if reader.read_bit()? {
     let aspect_ratio_idc = reader.read_bits(8)?;
-    if aspect_ratio_idc == 255 {
-      reader.skip_bits(32)?;
+    if aspect_ratio_idc == EXTENDED_SAR {
+      info.par_num = reader.read_bits(16)? as u32;
+      info.par_den = reader.read_bits(16)? as u32;
+    } else if (aspect_ratio_idc as usize) < SAR_PREDEFINED.len() {
+      let (num, den) = SAR_PREDEFINED[aspect_ratio_idc as usize];
+      info.par_num = num;
+      info.par_den = den;
     }
   }
+  // overscan_info_present_flag
   if reader.read_bit()? {
-    reader.skip_bits(1)?;
+    reader.skip_bits(1)?; // overscan_appropriate_flag
   }
+  // video_signal_type_present_flag
   if reader.read_bit()? {
-    reader.skip_bits(3)?;
+    reader.skip_bits(4)?; // video_format(3) + video_full_range_flag(1)
     if reader.read_bit()? {
-      reader.skip_bits(24)?;
+      // colour_description_present_flag
+      reader.skip_bits(24)?; // colour_primaries / transfer / matrix
     }
   }
+  // chroma_loc_info_present_flag
   if reader.read_bit()? {
-    let _ = reader.read_ue()?;
-    let _ = reader.read_ue()?;
+    let _ = reader.read_ue()?; // chroma_sample_loc_type_top_field
+    let _ = reader.read_ue()?; // chroma_sample_loc_type_bottom_field
   }
-  if !reader.read_bit()? {
-    return Ok(None);
+  // timing_info_present_flag
+  if reader.read_bit()? {
+    let num_units_in_tick = reader.read_bits(32)?;
+    let time_scale = reader.read_bits(32)?;
+    let _fixed_frame_rate_flag = reader.read_bit()?;
+    if num_units_in_tick != 0 && time_scale != 0 {
+      // PARSER-238: `timing_info_t::default_duration()` is
+      // `num_units_in_tick * 1e9 / time_scale` — no factor of two
+      // (`../mkvtoolnix/src/common/avc/util.cpp:98-101`).
+      info.default_duration_ns =
+        Some(((num_units_in_tick as u128 * 1_000_000_000u128) / time_scale as u128) as u64);
+    }
   }
-  let num_units_in_tick = reader.read_bits(32)?;
-  let time_scale = reader.read_bits(32)?;
-  let _fixed_frame_rate_flag = reader.read_bit()?;
-  if num_units_in_tick == 0 || time_scale == 0 {
-    return Ok(None);
-  }
-  Ok(Some(
-    ((num_units_in_tick as u128 * 2 * 1_000_000_000u128) / time_scale as u128) as u64,
-  ))
+  Ok(info)
 }
 
 fn skip_scaling_list(reader: &mut BitReader<'_>, size: u32) -> Result<(), ParseError> {
@@ -300,6 +373,46 @@ mod tests {
     w.write_ue(0); // crop_right
     w.write_ue(0); // crop_top
     w.write_ue(crop_bottom);
+    w.write_bit(false); // vui_parameters_present_flag
+    w.into_bytes()
+  }
+
+  /// Encode a baseline SPS tail carrying a VUI with the given aspect ratio and
+  /// optional timing, so PAR / display-dimension handling can be tested.
+  fn encode_sps_tail_with_vui(
+    pic_width_in_mbs_minus1: u32,
+    pic_height_in_map_units_minus1: u32,
+    crop_bottom: u32,
+    aspect_ratio_idc: u8,
+    par: Option<(u16, u16)>,
+  ) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_ue(0); // seq_parameter_set_id
+    w.write_ue(0); // log2_max_frame_num_minus4
+    w.write_ue(0); // pic_order_cnt_type
+    w.write_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+    w.write_ue(0); // num_ref_frames
+    w.write_bit(false); // gaps_in_frame_num_value_allowed_flag
+    w.write_ue(pic_width_in_mbs_minus1);
+    w.write_ue(pic_height_in_map_units_minus1);
+    w.write_bit(true); // frame_mbs_only_flag
+    w.write_bit(false); // direct_8x8_inference_flag
+    w.write_bit(true); // frame_cropping_flag
+    w.write_ue(0); // crop_left
+    w.write_ue(0); // crop_right
+    w.write_ue(0); // crop_top
+    w.write_ue(crop_bottom);
+    w.write_bit(true); // vui_parameters_present_flag
+    w.write_bit(true); // aspect_ratio_info_present_flag
+    w.write_bits(aspect_ratio_idc as u64, 8);
+    if let Some((num, den)) = par {
+      w.write_bits(num as u64, 16);
+      w.write_bits(den as u64, 16);
+    }
+    w.write_bit(false); // overscan_info_present_flag
+    w.write_bit(false); // video_signal_type_present_flag
+    w.write_bit(false); // chroma_loc_info_present_flag
+    w.write_bit(false); // timing_info_present_flag
     w.into_bytes()
   }
 
@@ -366,6 +479,49 @@ mod tests {
   fn rejects_truncated_rbsp() {
     let rbsp = vec![100u8, 0u8];
     assert!(matches!(parse(&rbsp), Err(ParseError::Malformed { .. })));
+  }
+
+  // ---- PARSER-240: VUI sample aspect ratio → display dimensions --------
+
+  #[test]
+  fn predefined_par_stretches_display_width() {
+    // aspect_ratio_idc 14 → 4:3 PAR (s_predefined_pars[14] == {4,3}).
+    let mut rbsp = vec![66u8, 0u8, 40u8];
+    rbsp.extend(encode_sps_tail_with_vui(119, 67, 4, 14, None));
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.par_num, 4);
+    assert_eq!(sps.par_den, 3);
+    // 1920 × 4/3 = 2560, height unchanged.
+    assert_eq!(sps.display_dimensions(), (2560, 1080));
+  }
+
+  #[test]
+  fn extended_par_below_one_stretches_height() {
+    // EXTENDED_SAR (255) with PAR 1:2 → par < 1 → height stretched.
+    let mut rbsp = vec![66u8, 0u8, 40u8];
+    rbsp.extend(encode_sps_tail_with_vui(119, 67, 4, 255, Some((1, 2))));
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!((sps.par_num, sps.par_den), (1, 2));
+    // height 1080 × 2/1 = 2160, width unchanged.
+    assert_eq!(sps.display_dimensions(), (1920, 2160));
+  }
+
+  #[test]
+  fn no_par_leaves_display_equal_to_cropped() {
+    let rbsp = build_baseline_1080p();
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.par_num, 0);
+    assert_eq!(sps.display_dimensions(), (1920, 1080));
+  }
+
+  #[test]
+  fn unity_par_does_not_change_display() {
+    // aspect_ratio_idc 1 → 1:1.
+    let mut rbsp = vec![66u8, 0u8, 40u8];
+    rbsp.extend(encode_sps_tail_with_vui(119, 67, 4, 1, None));
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!((sps.par_num, sps.par_den), (1, 1));
+    assert_eq!(sps.display_dimensions(), (1920, 1080));
   }
 
   #[test]

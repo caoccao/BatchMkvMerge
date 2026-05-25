@@ -29,6 +29,14 @@
 //!
 //! Block type 0 = STREAMINFO (mandatory, first).  Block type 4 =
 //! VORBIS_COMMENT — same layout as the in-Ogg variant decoded by [`crate::media_metadata::ogg::comments`].
+//!
+//! The FLAC codec-private header is rebuilt to match mkvtoolnix's
+//! `flac_reader_c::read_headers` (`r_flac.cpp:57-89`): the `"fLaC"` magic plus
+//! **every metadata block except PICTURE and PADDING**, with the "last metadata
+//! block" flag re-normalised so only the final kept block carries it
+//! (PARSER-225).  PICTURE blocks become attachments; their declared payload
+//! length is trusted from the block header, so cover art larger than the
+//! bounded header read is still surfaced (PARSER-226).
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -55,8 +63,24 @@ const BLOCK_TYPE_PICTURE: u8 = 6;
 const MAX_META_BLOCKS: usize = 4096;
 /// Cap on a single VORBIS_COMMENT block read.
 const MAX_COMMENT_BYTES: u64 = 16 * 1024 * 1024;
+/// Cap on any single metadata block read verbatim into the codec-private
+/// header (STREAMINFO / APPLICATION / SEEKTABLE / CUESHEET / unknown).
+const MAX_KEPT_BLOCK_BYTES: u64 = 16 * 1024 * 1024;
 /// Cap on a PICTURE block header (excluding payload) read into memory.
 const MAX_PICTURE_HEADER_BYTES: u64 = 1024 * 1024;
+
+/// Append a metadata block (`header` + `body`) to the FLAC codec-private blob,
+/// clearing the "last metadata block" flag.  Returns the offset of the block's
+/// header byte so the caller can set the flag on the final kept block, exactly
+/// as `r_flac.cpp:71-85` does when re-emitting the kept blocks (PARSER-225).
+fn append_kept_block(codec_private: &mut Vec<u8>, header: &[u8; 4], body: &[u8]) -> usize {
+  let offset = codec_private.len();
+  let mut normalised = *header;
+  normalised[0] &= 0x7f; // clear last-block flag; the final block is set later
+  codec_private.extend_from_slice(&normalised);
+  codec_private.extend_from_slice(body);
+  offset
+}
 
 /// Byte offset where the FLAC stream starts, skipping a leading ID3v2 tag.
 /// Mirrors `r_flac.cpp`'s `mtx::id3::skip_v2_tag` (PARSER-023).
@@ -86,6 +110,9 @@ pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseE
 
   let mut metadata = FlacMetadata::default();
   metadata.codec_private.extend_from_slice(b"fLaC");
+  // Offset of the most-recently-appended kept block's header byte; the final
+  // kept block gets the "last metadata block" flag set after the walk.
+  let mut last_kept_offset: Option<usize> = None;
   let mut pos = start + 4;
   let mut blocks = 0usize;
 
@@ -105,14 +132,16 @@ pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseE
     let body_pos = pos + 4;
 
     match block_type {
-      BLOCK_TYPE_STREAMINFO if length >= 34 => {
+      BLOCK_TYPE_STREAMINFO => {
         src.seek_to(body_pos)?;
-        let mut info = [0u8; 34];
-        if src.read_at_most(&mut info)? == 34 {
-          metadata.streaminfo = Some(decode_streaminfo(&info));
-          metadata.codec_private.extend_from_slice(&header);
-          metadata.codec_private.extend_from_slice(&info);
+        let want = length.min(MAX_KEPT_BLOCK_BYTES) as usize;
+        let mut body = vec![0u8; want];
+        let n = src.read_at_most(&mut body)?;
+        body.truncate(n);
+        if body.len() >= 34 {
+          metadata.streaminfo = Some(decode_streaminfo(&body));
         }
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, &body));
       }
       BLOCK_TYPE_VORBIS_COMMENT => {
         src.seek_to(body_pos)?;
@@ -124,26 +153,49 @@ pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseE
           metadata.vendor = Some(c.vendor);
           metadata.tags = c.entries;
         }
-        metadata.codec_private.extend_from_slice(&header);
-        metadata.codec_private.extend_from_slice(&body);
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, &body));
       }
+      // PARSER-225: PICTURE and PADDING are the only blocks mkvmerge strips
+      // from the FLAC header (`r_flac.cpp:62-68`); everything else is kept.
+      BLOCK_TYPE_PADDING => {}
       BLOCK_TYPE_PICTURE => {
-        src.seek_to(body_pos)?;
-        let header_want = length.min(MAX_PICTURE_HEADER_BYTES) as usize;
-        let mut body = vec![0u8; header_want];
-        let n = src.read_at_most(&mut body)?;
-        body.truncate(n);
-        if let Some(p) = decode_picture(&body) {
-          metadata.pictures.push(p);
+        // PARSER-226: the attachment listing only needs the declared payload
+        // length, not the bytes.  Validate against the block length (and that
+        // the block is wholly within the file) instead of the truncated read,
+        // so large cover-art beyond the read cap is still surfaced — mkvmerge
+        // receives the full picture from libFLAC regardless of size.
+        if body_pos.saturating_add(length) <= file_size {
+          src.seek_to(body_pos)?;
+          let header_want = length.min(MAX_PICTURE_HEADER_BYTES) as usize;
+          let mut body = vec![0u8; header_want];
+          let n = src.read_at_most(&mut body)?;
+          body.truncate(n);
+          if let Some(p) = decode_picture(&body, length as usize) {
+            metadata.pictures.push(p);
+          }
         }
       }
-      _ => {}
+      // APPLICATION (2), SEEKTABLE (3), CUESHEET (5), and unknown blocks are
+      // kept verbatim in the codec-private header (PARSER-225).
+      _ => {
+        src.seek_to(body_pos)?;
+        let want = length.min(MAX_KEPT_BLOCK_BYTES) as usize;
+        let mut body = vec![0u8; want];
+        let n = src.read_at_most(&mut body)?;
+        body.truncate(n);
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, &body));
+      }
     }
 
     pos = body_pos + length;
     if last_block || pos >= file_size {
       break;
     }
+  }
+
+  // Set the "last metadata block" flag on the final kept block (r_flac.cpp:82).
+  if let Some(offset) = last_kept_offset {
+    metadata.codec_private[offset] |= 0x80;
   }
 
   Ok(Some(metadata))
@@ -189,16 +241,17 @@ pub fn parse(bytes: &[u8]) -> Option<FlacMetadata> {
   }
   let mut metadata = FlacMetadata::default();
   metadata.codec_private.extend_from_slice(b"fLaC");
+  let mut last_kept_offset: Option<usize> = None;
   let mut pos = 4usize;
   loop {
     if pos + 4 > bytes.len() {
       break;
     }
-    let header = bytes[pos];
-    let last_block = header & 0x80 != 0;
-    let block_type = header & 0x7F;
-    let length =
-      (((bytes[pos + 1] as usize) << 16) | ((bytes[pos + 2] as usize) << 8) | bytes[pos + 3] as usize) as usize;
+    let mut header = [0u8; 4];
+    header.copy_from_slice(&bytes[pos..pos + 4]);
+    let last_block = header[0] & 0x80 != 0;
+    let block_type = header[0] & 0x7F;
+    let length = ((header[1] as usize) << 16) | ((header[2] as usize) << 8) | header[3] as usize;
     pos += 4;
     let body_end = pos + length;
     if body_end > bytes.len() {
@@ -206,39 +259,54 @@ pub fn parse(bytes: &[u8]) -> Option<FlacMetadata> {
     }
     let body = &bytes[pos..body_end];
     match block_type {
-      BLOCK_TYPE_STREAMINFO if body.len() >= 34 => {
-        metadata.streaminfo = Some(decode_streaminfo(body));
-        metadata.codec_private.extend_from_slice(&bytes[pos - 4..body_end]);
+      BLOCK_TYPE_STREAMINFO => {
+        if body.len() >= 34 {
+          metadata.streaminfo = Some(decode_streaminfo(body));
+        }
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, body));
       }
       BLOCK_TYPE_VORBIS_COMMENT => {
         if let Some(c) = comments::parse(body) {
           metadata.vendor = Some(c.vendor);
           metadata.tags = c.entries;
         }
-        metadata.codec_private.extend_from_slice(&bytes[pos - 4..body_end]);
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, body));
       }
+      // PARSER-225: only PICTURE and PADDING are excluded from the header.
       BLOCK_TYPE_PADDING => {}
       BLOCK_TYPE_PICTURE => {
-        if let Some(p) = decode_picture(body) {
+        if let Some(p) = decode_picture(body, length) {
           metadata.pictures.push(p);
         }
       }
-      _ => {}
+      _ => {
+        last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, body));
+      }
     }
     pos = body_end;
     if last_block {
       break;
     }
   }
+  if let Some(offset) = last_kept_offset {
+    metadata.codec_private[offset] |= 0x80;
+  }
   Some(metadata)
 }
 
-/// Decode the first portion of a FLAC PICTURE metadata block.  Matches the
-/// fixed prefix in FLAC spec §8.4: picture-type / MIME / description / dims /
-/// declared data length, all big-endian u32 except the strings.  We deliberately
-/// do **not** materialise the picture body itself — the declared length lets us
-/// emit it as an [`Attachment`] with the correct size.
-fn decode_picture(body: &[u8]) -> Option<FlacPicture> {
+/// Decode the fixed prefix of a FLAC PICTURE metadata block.  Matches FLAC spec
+/// §8.4: picture-type / MIME / description / dims / declared data length, all
+/// big-endian u32 except the strings.  We deliberately do **not** materialise
+/// the picture body itself — the declared length lets us emit it as an
+/// [`Attachment`] with the correct size.
+///
+/// `block_length` is the declared metadata-block length (which, on disk, equals
+/// the header fields plus the payload).  Validation is against that declared
+/// length rather than the in-memory `body` slice, so a picture whose payload
+/// exceeds the bounded read cap is still surfaced (PARSER-226) while a block
+/// whose declared payload does not fit the block (truncated / inconsistent) is
+/// dropped, matching libFLAC's all-or-nothing block read (PARSER-154).
+fn decode_picture(body: &[u8], block_length: usize) -> Option<FlacPicture> {
   let mut pos = 0usize;
   let picture_type = read_be_u32(body, &mut pos)?;
   let mime_len = read_be_u32(body, &mut pos)? as usize;
@@ -250,11 +318,10 @@ fn decode_picture(body: &[u8]) -> Option<FlacPicture> {
     let _ = read_be_u32(body, &mut pos)?;
   }
   let data_length = read_be_u32(body, &mut pos)?;
-  // PARSER-154: mkvtoolnix drops pictures whose data is missing or whose
-  // declared length is zero (r_flac.cpp:249-253). Require the declared bytes
-  // to be non-empty and actually present in the (complete) metadata block so
-  // zero-byte / truncated cover-art attachments are not reported.
-  if data_length == 0 || pos.saturating_add(data_length as usize) > body.len() {
+  // mkvtoolnix drops pictures whose data is missing or zero-length
+  // (`!picture.data || !picture.data_length`, r_flac.cpp:251). Require the
+  // declared payload to be non-empty and to fit within the declared block.
+  if data_length == 0 || pos.saturating_add(data_length as usize) > block_length {
     return None;
   }
   Some(FlacPicture {
@@ -672,6 +739,81 @@ mod tests {
     assert_eq!(m.tags[0].value, "Far");
   }
 
+  // ---- PARSER-225: codec-private keeps all non-PICTURE/PADDING blocks --
+
+  #[test]
+  fn codec_private_keeps_application_seektable_and_cuesheet() {
+    let mut bytes = b"fLaC".to_vec();
+    // STREAMINFO (type 0, not last).
+    bytes.extend(block_header(false, 0, 34));
+    let mut info = vec![0u8; 34];
+    info[..2].copy_from_slice(&4096u16.to_be_bytes());
+    info[2..4].copy_from_slice(&4096u16.to_be_bytes());
+    let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 96_000u64;
+    info[10..18].copy_from_slice(&packed.to_be_bytes());
+    bytes.extend(info);
+    // APPLICATION (type 2): 4-byte id + payload.
+    let app = b"riff\x01\x02\x03\x04".to_vec();
+    bytes.extend(block_header(false, 2, app.len()));
+    bytes.extend(&app);
+    // SEEKTABLE (type 3): one 18-byte seek point.
+    let seektable = vec![0xABu8; 18];
+    bytes.extend(block_header(false, 3, seektable.len()));
+    bytes.extend(&seektable);
+    // PADDING (type 1) — must be dropped.
+    bytes.extend(block_header(false, 1, 32));
+    bytes.extend(vec![0u8; 32]);
+    // PICTURE (type 6) — must be dropped from codec-private.
+    let picture = build_picture_block(3, "image/jpeg", "Cover", 16);
+    bytes.extend(block_header(false, 6, picture.len()));
+    bytes.extend(&picture);
+    // VORBIS_COMMENT (type 4, last).
+    let comment = comments::build_block("enc", &[("TITLE", "X")]);
+    bytes.extend(block_header(true, 4, comment.len()));
+    bytes.extend(&comment);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let m = parse_source(&mut s).unwrap().unwrap();
+    let cp = &m.codec_private;
+
+    // APPLICATION + SEEKTABLE bodies survive; PICTURE/PADDING bodies do not.
+    assert!(
+      cp.windows(app.len()).any(|w| w == app.as_slice()),
+      "APPLICATION block must be kept"
+    );
+    assert!(
+      cp.windows(18).any(|w| w == seektable.as_slice()),
+      "SEEKTABLE block must be kept"
+    );
+    assert!(
+      !cp.windows(picture.len()).any(|w| w == picture.as_slice()),
+      "PICTURE block must be stripped"
+    );
+    // The final kept block (VORBIS_COMMENT) carries the last-block flag, and no
+    // earlier kept-block header does.
+    assert_eq!(cp[..4], *b"fLaC");
+    // STREAMINFO header is the first block header at offset 4 — flag cleared.
+    assert_eq!(cp[4] & 0x80, 0, "non-final kept block must clear last flag");
+    // Exactly one block header in the kept chain has the last-block flag set.
+    let last_flags = count_last_block_flags(cp);
+    assert_eq!(last_flags, 1, "exactly one last-block flag expected");
+  }
+
+  /// Walk the kept-block chain in a codec-private blob and count how many block
+  /// headers have the "last metadata block" flag set.
+  fn count_last_block_flags(cp: &[u8]) -> usize {
+    let mut pos = 4usize; // skip "fLaC"
+    let mut count = 0usize;
+    while pos + 4 <= cp.len() {
+      if cp[pos] & 0x80 != 0 {
+        count += 1;
+      }
+      let len = ((cp[pos + 1] as usize) << 16) | ((cp[pos + 2] as usize) << 8) | cp[pos + 3] as usize;
+      pos += 4 + len;
+    }
+    count
+  }
+
   // ---- PARSER-097: PICTURE blocks become attachments ------------------
 
   #[test]
@@ -692,12 +834,29 @@ mod tests {
     assert_eq!(att.size, 2048);
   }
 
+  #[test]
+  fn large_picture_beyond_read_cap_becomes_attachment() {
+    // PARSER-226: a >1 MiB picture is complete on disk; the bounded header read
+    // doesn't cover the whole payload, yet the attachment is still surfaced
+    // with the declared size.
+    let data_len = (MAX_PICTURE_HEADER_BYTES as usize) + 4096;
+    let bytes = build_flac_with_picture_and_comment(data_len);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.flac", 0);
+    FlacReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.attachments.len(), 1);
+    assert_eq!(out.attachments[0].size as usize, data_len);
+    assert_eq!(out.attachments[0].file_name, "cover.jpg");
+  }
+
   // ---- PARSER-154: zero-length / absent picture data is dropped --------
 
   #[test]
   fn decode_picture_rejects_zero_data_length() {
     let block = build_picture_block(3, "image/jpeg", "Front", 0);
-    assert!(decode_picture(&block).is_none());
+    assert!(decode_picture(&block, block.len()).is_none());
   }
 
   #[test]
@@ -707,15 +866,34 @@ mod tests {
     let len = block.len();
     // Overwrite the data_length field (last 4 bytes before the data) to claim 64.
     block[len - 8 - 4..len - 8].copy_from_slice(&64u32.to_be_bytes());
-    assert!(decode_picture(&block).is_none());
+    assert!(decode_picture(&block, block.len()).is_none());
   }
 
   #[test]
   fn decode_picture_accepts_present_non_empty_data() {
     let block = build_picture_block(3, "image/jpeg", "Front", 32);
-    let p = decode_picture(&block).unwrap();
+    let p = decode_picture(&block, block.len()).unwrap();
     assert_eq!(p.data_length, 32);
     assert_eq!(p.mime_type, "image/jpeg");
+  }
+
+  #[test]
+  fn decode_picture_accepts_payload_beyond_read_cap() {
+    // PARSER-226: only the header fields are present in `body`; the declared
+    // payload (5 MiB, set in the data_length field) is far larger than the
+    // slice but fits the declared block length, so the picture is surfaced.
+    let huge: u32 = 5 * 1024 * 1024;
+    let mut header_only = Vec::new();
+    header_only.extend_from_slice(&3u32.to_be_bytes()); // picture type
+    header_only.extend_from_slice(&("image/jpeg".len() as u32).to_be_bytes());
+    header_only.extend_from_slice(b"image/jpeg");
+    header_only.extend_from_slice(&("Front".len() as u32).to_be_bytes());
+    header_only.extend_from_slice(b"Front");
+    header_only.extend_from_slice(&[0u8; 16]); // width/height/depth/colours
+    header_only.extend_from_slice(&huge.to_be_bytes()); // declared data_length
+    let block_length = header_only.len() + huge as usize;
+    let p = decode_picture(&header_only, block_length).unwrap();
+    assert_eq!(p.data_length, huge);
   }
 
   #[test]

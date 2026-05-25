@@ -1,6 +1,6 @@
 # VobSub IDX Parser
 
-Implementation progress: 90%
+Implementation progress: 93%
 
 ## Purpose
 
@@ -36,6 +36,8 @@ flowchart TD
 
 VobSub is intercepted by path in `media_metadata::parse_with_extension_fallback` *before* the content cascade. `is_vobsub_candidate_path` matches `.idx` and `.sub` extensions; `subtitles::vobsub::try_open_by_path` then resolves the `.idx` (`resolve_idx_path`), and only claims the file when that `.idx` exists and carries the banner. A `.sub` with no banner-bearing sibling `.idx` (e.g. a MicroDVD `.sub`) declines and the normal cascade runs, so no other reader's inputs are stolen. `VobSubReader` remains in the registry for content-based `.idx` probing as a fallback. The `.sub` data file is located and recorded under `container.properties.other_files` but never demuxed.
 
+Once the banner confirms the file is VobSub, the path-aware entry points enforce the same hard checks `vobsub_reader_c::read_headers` performs (`r_vobsub.cpp:108-132`): the sibling `.sub` data file **must** exist (`require_sibling_sub`, PARSER-232) and the manifest version **must** be 7 or newer (`require_supported_version`, PARSER-233). A missing `.sub` surfaces as an `Io`/`NotFound` error, and a missing-version or pre-v7 banner surfaces as a `Malformed` error carrying the upstream "Only v7 and newer" message — neither falls through to unrelated readers. The version check also runs in the content-cascade `VobSubReader::read_headers`; the `.sub` requirement is path-specific and therefore enforced only on the path-aware entry points.
+
 ## Codec private
 
 Codec private is built from the filtered `idx_data`: the per-track control lines `id:`, `timestamp:`, `delay:`, `alt:` and `langidx:` are removed, and `#` comment / blank lines are skipped, leaving the global settings lines (`size:`, `palette:`, ...) shared across every track — matching mkvtoolnix's `idx_data`.
@@ -43,8 +45,3 @@ Codec private is built from the filtered `idx_data`: the per-track control lines
 ## Gaps and Handling
 
 Header-only: the `.sub` MPEG-PS payload is never demuxed, so per-entry SPU durations and `spu_size`/`overhead` accounting from `extract_one_spu_packet` are not computed. The `.idx` manifest is decoded up to a bounded 64 KiB prefix (these manifests are tiny in practice). These are intentional header-only departures and do not affect the track listing, languages, entry counts, or codec-private parity.
-
-## Open Issues
-
-- `PARSER-232`: Path-aware VobSub parsing does not require the sibling `.sub` data file. mkvmerge opens `.idx` and `.sub` in `read_headers` and errors when the `.sub` cannot be opened; native still claims the manifest and records tracks, listing subtitles that mkvmerge cannot actually read.
-- `PARSER-233`: The VobSub probe rejects old index versions before claiming the file. mkvmerge probes only the banner, then `read_headers` reports the explicit "v7 and newer" unsupported-header error for v6 and older files; native treats them as unrecognised and may fall through to unrelated readers.

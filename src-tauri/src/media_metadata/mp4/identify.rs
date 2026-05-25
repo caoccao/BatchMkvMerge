@@ -220,6 +220,8 @@ fn build_track(
       |(fourcc, bytes)| crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
         id_type: fourcc.clone(),
         data_hex: super::codec_specific::hex_encode(bytes),
+        // MP4 Dolby Vision config boxes carry no BlockAddIDName / Value.
+        ..Default::default()
       },
     )
     .collect();

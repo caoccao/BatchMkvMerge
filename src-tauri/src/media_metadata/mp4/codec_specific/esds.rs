@@ -54,12 +54,22 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
   cfg.raw_hex = Some(hex_encode(&payload));
   let mut object_type: Option<u8> = None;
   let mut decoder_specific_len: Option<usize> = None;
-  walk(&mut cursor, &mut cfg, &mut object_type, &mut decoder_specific_len);
+  let mut decoder_specific_data: Option<Vec<u8>> = None;
+  walk(
+    &mut cursor,
+    &mut cfg,
+    &mut object_type,
+    &mut decoder_specific_len,
+    &mut decoder_specific_data,
+  );
   builder.audio_codec_config = Some(cfg);
   builder.esds_object_type = object_type;
   // PARSER-177: record the DecoderSpecificInfo length for the reader's
   // verification gates (MP4V / VobSub).
   builder.esds_decoder_specific_len = decoder_specific_len;
+  // PARSER-230: keep the raw DecoderSpecificInfo bytes so the verification pass
+  // can unlace Vorbis-in-MP4 private data.
+  builder.esds_decoder_specific_data = decoder_specific_data;
   builder.codec_private_hex = Some(hex_encode(&payload));
   Ok(())
 }
@@ -121,6 +131,7 @@ fn walk(
   cfg: &mut AudioCodecConfig,
   object_type_out: &mut Option<u8>,
   decoder_specific_len_out: &mut Option<usize>,
+  decoder_specific_data_out: &mut Option<Vec<u8>>,
 ) {
   while let Some(tag) = cursor.read_u8() {
     let len = match cursor.read_ber_length() {
@@ -149,7 +160,7 @@ fn walk(
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out);
+        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out, decoder_specific_data_out);
         cursor.pos = body_end;
       }
       TAG_DECODER_CONFIG => {
@@ -166,7 +177,7 @@ fn walk(
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out);
+        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out, decoder_specific_data_out);
         cursor.pos = body_end;
       }
       TAG_DEC_SPECIFIC_INFO => {
@@ -176,6 +187,8 @@ fn walk(
         *decoder_specific_len_out = Some(len);
         if let Some(slice) = cursor.slice(len) {
           parse_audio_specific_config(slice, cfg);
+          // PARSER-230: retain the raw bytes for Vorbis-in-MP4 unlacing.
+          *decoder_specific_data_out = Some(slice.to_vec());
         }
         cursor.pos = body_end;
       }

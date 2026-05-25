@@ -1,6 +1,6 @@
 # Matroska / WebM Parser
 
-Implementation progress: 86%
+Implementation progress: 88%
 
 ## Purpose
 
@@ -35,6 +35,4 @@ Key structures are EBML `ElementHeader`, deferred level-1 position records, trac
 
 Upstream uses libebml/libmatroska and performs full packetizer checks, content decoding, and cluster processing for muxing. Rust is header-only and does not validate every obscure codec or content-encoding path. Unsupported or unknown details are preserved as structured codec IDs, codec-private blobs, warnings, or omitted fields rather than triggering packetizer-level behavior.
 
-## Open Issues
-
-- `PARSER-228`: `BlockAdditionMapping` is parsed with `BlockAddIDName`, `BlockAddIDValue`, `BlockAddIDType`, and `BlockAddIDExtraData`, but the shared model only exposes `id_type` and `data_hex`. mkvmerge keeps name and value too; mappings that rely on `BlockAddIDValue` or carry a useful name lose that information in native metadata.
+`BlockAdditionMapping` carries the full `block_addition_mapping_t` shape: `BlockAddIDType` (rendered as the source FOURCC when printable, else decimal), `BlockAddIDExtraData` (hex-encoded as `dataHex`), `BlockAddIDName` (`idName`), and `BlockAddIDValue` (`idValue`). Mappings keyed by value or carrying a descriptive name therefore preserve that information on the wire model.

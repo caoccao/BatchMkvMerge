@@ -27,6 +27,14 @@
 //! during header reading.  We mirror that resolution here so dragging a `.sub`
 //! file produces the same track listing as its `.idx` (PARSER-210).
 //!
+//! Probing claims the file on the banner alone (PARSER-233); the version number
+//! is validated in `read_headers` (`require_supported_version`), which reports
+//! an explicit error for missing-version and pre-v7 manifests instead of
+//! letting them fall through to unrelated readers.  The path-aware entry points
+//! additionally require the sibling `.sub` data file to exist (PARSER-232),
+//! mirroring upstream's `m_sub_file` open that errors when the `.sub` is
+//! absent.
+//!
 //! `parse_headers()` is ported faithfully (PARSER-211): per-`id:` track entry
 //! lists with `delay:` accumulation, `timestamp: HH:MM:SS:mmm, filepos: 0xNN`
 //! parsing, negative-timestamp delay correction, out-of-order sorting, and the
@@ -377,6 +385,12 @@ pub fn resolve_idx_path(path: &Path) -> PathBuf {
   }
 }
 
+/// Port of `vobsub_reader_c::probe_file` (`r_vobsub.cpp:81-99`): the file is
+/// claimed purely on the first-line banner.  The version number is **not**
+/// checked here — upstream validates it in `read_headers` and reports an
+/// explicit "v7 and newer" error for older files (PARSER-233), so the probe
+/// must claim v6-and-older manifests rather than letting them fall through to
+/// unrelated readers.
 pub fn looks_like_vobsub_idx(text: &str) -> bool {
   let line = match text.lines().next() {
     Some(l) => l.trim_start_matches('\u{feff}'),
@@ -386,7 +400,40 @@ pub fn looks_like_vobsub_idx(text: &str) -> bool {
     return false;
   }
   line.as_bytes()[..MAGIC.len()].eq_ignore_ascii_case(MAGIC.as_bytes())
-    && idx_version(text).map_or(false, |version| version >= 7)
+}
+
+/// Validate the manifest version, mirroring the checks in
+/// `vobsub_reader_c::read_headers` (`r_vobsub.cpp:124-132`): a missing version
+/// number and any version below 7 are hard errors (PARSER-233).
+fn require_supported_version(text: &str) -> Result<u32, ParseError> {
+  match idx_version(text) {
+    None => Err(ParseError::Malformed {
+      format: "vobsub",
+      offset: 0,
+      reason: "No version number found".to_string(),
+    }),
+    Some(version) if version < 7 => Err(ParseError::Malformed {
+      format: "vobsub",
+      offset: 0,
+      reason: "Only v7 and newer VobSub files are supported".to_string(),
+    }),
+    Some(version) => Ok(version),
+  }
+}
+
+/// Require the sibling `.sub` data file next to `idx_path` (PARSER-232).
+/// `vobsub_reader_c::read_headers` opens both the `.idx` and the `.sub`
+/// (`r_vobsub.cpp:108-115`) and errors when the `.sub` cannot be opened, so a
+/// VobSub `.idx` with no readable `.sub` is a hard error rather than a
+/// silently-listed track set.
+fn require_sibling_sub(idx_path: &Path) -> Result<PathBuf, ParseError> {
+  sibling_sub_path(idx_path).ok_or_else(|| ParseError::Io {
+    offset: 0,
+    source: std::io::Error::new(
+      std::io::ErrorKind::NotFound,
+      "VobSub .sub data file not found next to the .idx manifest",
+    ),
+  })
 }
 
 pub fn idx_version(text: &str) -> Option<u32> {
@@ -465,6 +512,10 @@ impl Reader for VobSubReader {
     if !looks_like_vobsub_idx(&text) {
       return Err(ParseError::Unrecognised);
     }
+    // PARSER-233: a recognised banner with an unsupported (or missing) version
+    // is a hard error, not "unrecognised".  The sibling `.sub` requirement is
+    // enforced only on the path-aware entry points, which know the file path.
+    require_supported_version(&text)?;
     populate_from_idx(&text, out);
     Ok(())
   }
@@ -481,8 +532,15 @@ pub fn parse_idx_at_path(path: &Path) -> Result<MediaMetadata, ParseError> {
   let file_name = idx_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
   let file_size = src.length().unwrap_or(0);
   let mut metadata = MediaMetadata::new(file_name, file_size);
+  // PARSER-232: the `.sub` data file must exist (mkvmerge opens it before
+  // parsing the manifest body).
+  let sub_path = require_sibling_sub(&idx_path)?;
   VobSubReader.read_headers(&mut src, &Deadline::new(60_000), &mut metadata)?;
-  record_sibling_sub(&idx_path, &mut metadata);
+  metadata
+    .container
+    .properties
+    .other_files
+    .push(sub_path.to_string_lossy().into_owned());
   Ok(metadata)
 }
 
@@ -512,19 +570,18 @@ pub fn try_open_by_path(path: &Path, metadata: &mut MediaMetadata) -> Result<boo
   if !looks_like_vobsub_idx(&text) {
     return Ok(false);
   }
+  // The banner confirms this is VobSub; from here mkvmerge has already claimed
+  // the file in `probe_file`, so a missing `.sub` (PARSER-232) or an
+  // unsupported version (PARSER-233) is a hard error, not a fall-through.
+  let sub_path = require_sibling_sub(&idx_path)?;
+  require_supported_version(&text)?;
   populate_from_idx(&text, metadata);
-  record_sibling_sub(&idx_path, metadata);
+  metadata
+    .container
+    .properties
+    .other_files
+    .push(sub_path.to_string_lossy().into_owned());
   Ok(true)
-}
-
-fn record_sibling_sub(idx_path: &Path, metadata: &mut MediaMetadata) {
-  if let Some(sub) = sibling_sub_path(idx_path) {
-    metadata
-      .container
-      .properties
-      .other_files
-      .push(sub.to_string_lossy().into_owned());
-  }
 }
 
 #[cfg(test)]
@@ -551,8 +608,36 @@ mod tests {
   }
 
   #[test]
-  fn looks_like_vobsub_idx_rejects_old_versions() {
-    assert!(!looks_like_vobsub_idx("# VobSub index file, v6\n"));
+  fn looks_like_vobsub_idx_accepts_old_versions_on_banner() {
+    // PARSER-233: the probe claims on the banner regardless of version; the
+    // version is rejected later in read_headers.
+    assert!(looks_like_vobsub_idx("# VobSub index file, v6\n"));
+    assert!(looks_like_vobsub_idx("# VobSub index file, v\n"));
+  }
+
+  #[test]
+  fn require_supported_version_rejects_old_and_missing() {
+    assert!(require_supported_version("# VobSub index file, v6\n").is_err());
+    assert!(require_supported_version("# VobSub index file, v\n").is_err());
+    assert_eq!(require_supported_version("# VobSub index file, v7\n").unwrap(), 7);
+    assert_eq!(require_supported_version("# VobSub index file, v8\n").unwrap(), 8);
+  }
+
+  #[test]
+  fn read_headers_rejects_old_version_with_explicit_error() {
+    let blob = b"# VobSub index file, v6\nsize: 720x576\n";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    let mut out = MediaMetadata::new("clip.idx", 0);
+    let err = VobSubReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    match err {
+      ParseError::Malformed { format, reason, .. } => {
+        assert_eq!(format, "vobsub");
+        assert!(reason.contains("v7 and newer"), "reason was: {reason}");
+      }
+      other => panic!("expected Malformed, got {other:?}"),
+    }
   }
 
   #[test]
@@ -790,6 +875,22 @@ timestamp: 00:00:01:000, filepos: 000000000
 
     let _ = std::fs::remove_file(&idx_path);
     let _ = std::fs::remove_file(&sub_path);
+  }
+
+  #[test]
+  fn try_open_by_path_errors_when_sub_missing() {
+    // PARSER-232: a VobSub `.idx` (banner present, v7) with no sibling `.sub`
+    // is a hard error — mkvmerge opens the `.sub` and errors when it cannot.
+    let stem = temp_stem("nosub");
+    let idx_path = stem.with_extension("idx");
+    std::fs::File::create(&idx_path)
+      .unwrap()
+      .write_all(b"# VobSub index file, v7\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 0\n")
+      .unwrap();
+    let mut m = MediaMetadata::new("clip.idx", 0);
+    let err = try_open_by_path(&idx_path, &mut m).unwrap_err();
+    assert!(matches!(err, ParseError::Io { .. }), "expected Io error, got {err:?}");
+    let _ = std::fs::remove_file(&idx_path);
   }
 
   #[test]

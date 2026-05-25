@@ -68,10 +68,19 @@ export type AudioTrackProperties = {
  *  One block-addition mapping (`block_addition_mapping_t` in mkvtoolnix).  The
  *  `id_type` is the source FOURCC (e.g. `dvcC`); `data_hex` is the raw
  *  box payload, hex-encoded.  PARSER-179.
+ * 
+ *  PARSER-228: `id_name` (`BlockAddIDName`) and `id_value` (`BlockAddIDValue`)
+ *  are carried alongside `id_type`/`data_hex`, mirroring the full
+ *  `block_addition_mapping_t` mkvtoolnix keeps — mappings that rely on the
+ *  value or a descriptive name no longer lose that information.
  */
 export type BlockAdditionMapping = {
 	idType: string,
 	dataHex: string,
+	/**  `BlockAddIDName`, when present. */
+	idName: string | null,
+	/**  `BlockAddIDValue`, when present. */
+	idValue: number | null,
 };
 
 /**

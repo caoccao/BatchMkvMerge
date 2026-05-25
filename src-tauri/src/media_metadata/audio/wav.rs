@@ -19,7 +19,10 @@
 //! classic `RIFF/WAVE`, `RF64/WAVE` (>4 GB), and Wave64 (PARSER-020). The
 //! chunk structure is walked through the whole file via seeks rather than a
 //! fixed 16 KiB window (PARSER-022), and `WAVE_FORMAT_EXTENSIBLE` (0xFFFE) is
-//! unwrapped to the subformat GUID's `data1` codec tag (PARSER-021).
+//! unwrapped to the subformat GUID's `data1` codec tag (PARSER-021). The
+//! payload byte total sums the lengths of *all* `data` chunks (PARSER-227),
+//! matching `scan_chunks_wave`'s `m_bytes_in_data_chunks` accumulation, while
+//! the AC-3/DTS payload classification still probes the first data chunk.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -279,17 +282,27 @@ fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError>
     return Ok(None);
   };
 
-  let data_chunk = find_chunk(&chunks, b"data", false);
-  let Some(data_chunk) = data_chunk else {
+  let first_data_chunk = find_chunk(&chunks, b"data", false).cloned();
+  let Some(first_data_chunk) = first_data_chunk else {
     return Ok(None);
   };
-  let data_bytes = if data_chunk.len == 0xFFFF_FFFF {
-    ds64_data_size.unwrap_or(0)
-  } else {
-    data_chunk.len
+  // PARSER-227: mkvmerge accumulates the lengths of *all* `data` chunks
+  // (`m_bytes_in_data_chunks += new_chunk.len` in `scan_chunks_wave`), so files
+  // with more than one data chunk report the full payload size.  RF64 overrides
+  // the total with the ds64 `data_size` (`scan_chunks_rf64` sets
+  // `m_bytes_in_data_chunks = m_ds64.data_size`).  The payload prefix is still
+  // classified from the first data chunk, mirroring `find_chunk("data", 0,
+  // false)` and the demuxer probe at that position.
+  let data_bytes = match ds64_data_size {
+    Some(ds64) => ds64,
+    None => chunks
+      .iter()
+      .filter(|c| id_eq(&c.id, b"data"))
+      .map(|c| c.len)
+      .sum(),
   };
   let mut probe = [0u8; 16];
-  src.seek_to(data_chunk.pos)?;
+  src.seek_to(first_data_chunk.pos)?;
   let probe_len = src.read_at_most(&mut probe)?;
   if is_ac3_payload(&probe[..probe_len]) {
     format.format_tag = 0x2000;
@@ -611,6 +624,38 @@ mod tests {
     let m = parse_source(&mut s).unwrap().unwrap();
     assert_eq!(m.wav_type, WavType::Rf64);
     assert_eq!(m.data_bytes, 500_000);
+  }
+
+  // ---- PARSER-227: accumulate all data chunks --------------------------
+
+  #[test]
+  fn accumulates_multiple_data_chunks() {
+    // Two data chunks → the byte total is the sum, not just the first chunk.
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", vec![0u8; 96_000]),
+      (b"data", vec![0u8; 96_000]),
+    ]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let m = parse_source(&mut s).unwrap().unwrap();
+    assert_eq!(m.data_bytes, 192_000);
+  }
+
+  #[test]
+  fn duration_covers_all_data_chunks() {
+    // 192 000 bytes @ 48 kHz / stereo / 16-bit == 1 second, split across two
+    // data chunks.
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", vec![0u8; 96_000]),
+      (b"data", vec![0u8; 96_000]),
+    ]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.wav", 0);
+    WavReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.properties.duration.unwrap().ns, 1_000_000_000);
   }
 
   #[test]

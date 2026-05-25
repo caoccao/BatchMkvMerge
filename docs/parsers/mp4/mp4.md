@@ -1,6 +1,6 @@
 # MP4 / QuickTime Parser
 
-Implementation progress: 90%
+Implementation progress: 93%
 
 ## Purpose
 
@@ -14,13 +14,21 @@ The MP4 parser recognises ISO BMFF, MP4, M4V, MOV, and QuickTime-style files. It
 
 The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxes, parses `ftyp`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `hdlr`, `stbl`, `stsd`, `stts`, `stsc`, `edts/elst`, `mvex/trex`, `moof/traf/tfhd/trun`, and `udta/meta/ilst`. Codec-specific parsers cover AVC, HEVC, AV1, AAC, ALAC, Opus, FLAC, color, pixel aspect ratio, and Dolby Vision block-addition records.
 
-Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the **last** entry's FOURCC / dimensions / audio properties / codec private data win; per-entry builder state is reset between entries so earlier values do not leak forward.
+Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it.
 
 Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers:
 
 - **Opus (`dOps`)** — the box body is wrapped into a Matroska/Ogg Opus ID header: the 8-byte `"OpusHead"` magic is prepended and the pre-skip, input-sample-rate and output-gain fields are converted from MP4 big-endian to little-endian (`parse_dops_audio_header_priv_atom`, `r_qtmp4.cpp:3217-3243`). The bit depth is cleared for Opus.
 - **FLAC (`dfLa`)** — the four-byte FullBox version/flags header is stripped; only the FLAC metadata block chain is stored as codec private (`parse_dfla_audio_header_priv_atom`, `r_qtmp4.cpp:3246-3266`). STREAMINFO is still decoded for sample rate / channels / bit depth.
 - **ALAC (`alac`)** — only the ALACSpecificConfig (the FullBox payload, FullBox version/flags header stripped) is stored, matching the magic cookie `create_audio_packetizer_alac` clones from `stsd_non_priv_struct_size + 12` (`r_qtmp4.cpp:1833-1839`). The verification gate (`verify.rs`) therefore requires ≥ 24 codec-private bytes (`sizeof(codec_config_t)`).
+
+Audio verification (`verify.rs`) mirrors the codec-specific early returns of `qtmp4_demuxer_c::verify_audio_parameters` (`r_qtmp4.cpp:3660-3701`):
+
+- **FLAC** is kept only when exactly one private blob (the `dfLa` metadata) is present.
+- **Opus** requires an `OpusHead` private blob of at least 19 bytes (`derive_track_params_from_opus_private_data`).
+- **Vorbis** (esds objectTypeIndication `0xDD`) has its DecoderSpecificInfo unlaced into the three Xiph-laced headers (`unlace_xiph`, a port of `unlace_memory_xiph`); the identification header then supplies the channel count and sample rate (`derive_track_params_from_vorbis_private_data`). A track that does not unlace into exactly three packets, or whose first packet is not a valid Vorbis identification header, is dropped.
+
+These three return before the generic "channels or sample rate is zero" gate, exactly as upstream does.
 
 ## Data Structures
 
@@ -42,10 +50,4 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 
 ## Gaps and Handling
 
-Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely.
-
-## Open Issues
-
-- `PARSER-229`: Multi-entry `stsd` handling over-applies last-entry-wins to the sample-entry FOURCC. mkvmerge parses every entry but keeps the first differing FOURCC and only warns about later ones; native resets `codec_id_str` for each entry, so a mixed-`stsd` track can be identified as the last codec instead of the first.
-- `PARSER-230`: Vorbis-in-MP4 `esds` decoder config is not unlaced into the three Vorbis private headers and is not validated with the Vorbis header parser. mkvmerge derives channels/rate from that private data and rejects invalid headers; native only records the object type/length, so Vorbis tracks can be dropped for zero audio fields or kept without required codec private data.
-- `PARSER-231`: MP4 Opus and FLAC audio verification is incomplete. mkvmerge rejects Opus without an `OpusHead` private blob of at least 19 bytes and FLAC without exactly one private `dfLa` blob; native's verifier only checks generic channels/rate, so malformed `Opus`/`fLaC` sample entries can survive if the sample entry itself carries nonzero audio fields.
+Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification.

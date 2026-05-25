@@ -131,6 +131,11 @@ pub struct TrackBuilder {
   /// mkvtoolnix would reject (broken / missing decoder config).  `finalise`
   /// drops these before assigning compact ids.
   pub probe_failed: bool,
+
+  /// PARSER-230: raw `esds` DecoderSpecificInfo bytes (tag 0x05), needed by the
+  /// verification pass to unlace Vorbis-in-MP4 private data into its three Xiph
+  /// headers and derive channels / sample rate from the identification header.
+  pub esds_decoder_specific_data: Option<Vec<u8>>,
 }
 
 impl TrackBuilder {

@@ -19,9 +19,12 @@
 //!
 //! USF is an XML subtitle format.  This reader is a pure-Rust port of
 //! `mkvtoolnix/src/input/r_usf.cpp`.  Probing requires an `<?xml` or `<!--`
-//! marker in the leading window (mirroring `usf_reader_c::probe_file`) and then
-//! loads the document with a real XML parser (quick-xml standing in for
-//! pugixml), validating that the document element is `<USFSubtitles>`.
+//! marker in the leading ~1000-character window (mirroring
+//! `usf_reader_c::probe_file`) and then loads the document with a real XML
+//! parser (quick-xml standing in for pugixml), validating that the document
+//! element's fully-qualified name is exactly `USFSubtitles` (namespaced roots
+//! such as `<usf:USFSubtitles>` are rejected, matching pugixml's
+//! `document_element().name()`).
 //!
 //! Header reading mirrors the upstream three-step walk:
 //!   * `parse_metadata` — default language from `<metadata><language code="">`.
@@ -53,6 +56,12 @@ use super::encoding;
 /// Upstream caps `mtx::xml::load_file` at 10 MiB for USF (r_usf.cpp line 45).
 const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 
+/// `usf_reader_c::probe_file` only accumulates leading lines until the buffer
+/// reaches ~1000 characters before searching for the `<?xml` / `<!--` marker
+/// (r_usf.cpp lines 35-42).  Native previously scanned the whole decoded
+/// document (PARSER-236).
+const MARKER_WINDOW_CHARS: usize = 1000;
+
 /// Result of a successful USF document walk: the per-track metadata plus the
 /// shared codec-private document (all `<subtitles>` subtrees removed).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -79,11 +88,22 @@ fn read_document(src: &mut FileSource) -> Result<(Vec<u8>, String), ParseError> 
   Ok((buf, text))
 }
 
-/// Returns true when the leading window carries the `<?xml` or `<!--` marker
-/// that `usf_reader_c::probe_file` (r_usf.cpp lines 41-43) requires before it
-/// attempts to load the document.
+/// Returns true when the leading ~1000-character window carries the `<?xml` or
+/// `<!--` marker that `usf_reader_c::probe_file` (r_usf.cpp lines 35-43)
+/// requires before it attempts to load the document.  Only the leading window
+/// is inspected, matching upstream's `content.length() < 1000` accumulation
+/// loop — a marker appearing further into the file does not qualify.
 fn has_xml_marker(text: &str) -> bool {
-  text.contains("<?xml") || text.contains("<!--")
+  let window: String = text.chars().take(MARKER_WINDOW_CHARS).collect();
+  window.contains("<?xml") || window.contains("<!--")
+}
+
+/// The fully-qualified (namespace-prefixed) name of an element, lossily
+/// decoded.  pugixml's `document_element().name()` keeps the prefix, so the
+/// root comparison must be against the qualified name, not the local one
+/// (PARSER-236).
+fn qualified_name(element: &quick_xml::events::BytesStart<'_>) -> String {
+  String::from_utf8_lossy(element.name().as_ref()).into_owned()
 }
 
 /// Extract the `code` attribute value (non-empty) from a start/empty element.
@@ -140,7 +160,7 @@ fn parse_document(text: &str, deadline: &Deadline) -> Result<Option<UsfDocument>
 
         if !root_seen {
           root_seen = true;
-          if name != "USFSubtitles" {
+          if qualified_name(element) != "USFSubtitles" {
             return Ok(None);
           }
         }
@@ -206,7 +226,7 @@ fn parse_document(text: &str, deadline: &Deadline) -> Result<Option<UsfDocument>
 
         if !root_seen {
           root_seen = true;
-          if name != "USFSubtitles" {
+          if qualified_name(element) != "USFSubtitles" {
             return Ok(None);
           }
         }
@@ -479,6 +499,37 @@ mod tests {
       out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
       "und"
     );
+  }
+
+  // ---- PARSER-236: marker window + exact root name --------------------
+
+  #[test]
+  fn xml_marker_only_scanned_in_leading_window() {
+    // A marker beyond the ~1000-char window is not seen (upstream stops
+    // accumulating at 1000 chars).
+    let mut blob = "x".repeat(1100);
+    blob.push_str("<?xml version=\"1.0\"?>");
+    assert!(!has_xml_marker(&blob));
+    // Within the window it is found.
+    assert!(has_xml_marker("<?xml version=\"1.0\"?>"));
+    assert!(has_xml_marker("<!-- note -->"));
+  }
+
+  #[test]
+  fn probe_rejects_namespaced_root() {
+    // pugixml's document_element().name() keeps the `usf:` prefix, so a
+    // namespaced root does not equal "USFSubtitles".
+    let blob = b"<?xml version=\"1.0\"?>\n<usf:USFSubtitles></usf:USFSubtitles>";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    assert!(!UsfReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_marker_outside_window() {
+    let mut blob = vec![b'\n'; 1100];
+    blob.extend_from_slice(b"<?xml version=\"1.0\"?><USFSubtitles></USFSubtitles>");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    assert!(!UsfReader.probe(&mut s).unwrap());
   }
 
   #[test]

@@ -65,8 +65,26 @@ pub fn looks_like_microdvd_line(line: &str) -> bool {
   !rest[close_b + 1..].is_empty()
 }
 
+/// Port of `microdvd_reader_c::probe_file` (`../mkvtoolnix/src/input/r_microdvd.cpp:25-46`).
+///
+/// Upstream reads up to 20 leading lines, skipping blank ones, and tests
+/// **only the first non-empty line** against the MicroDVD grammar.  Ordinary
+/// text that merely contains a `{n}{m}...` line further down is therefore not
+/// claimed (PARSER-237) — previously native scanned every line in the buffer.
 pub fn has_microdvd_line(text: &str) -> bool {
-  text.lines().any(|l| looks_like_microdvd_line(l.trim_start()))
+  let mut empty_lines = 0u32;
+  for line in text.lines() {
+    if empty_lines >= 20 {
+      return false;
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+      empty_lines += 1;
+      continue;
+    }
+    return looks_like_microdvd_line(trimmed);
+  }
+  false
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -162,5 +180,37 @@ mod tests {
     let blob = b"   {1}{125}Hello\n";
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
     assert!(MicroDvdReader.probe(&mut s).unwrap());
+  }
+
+  // ---- PARSER-237: only the first non-empty line is tested ------------
+
+  #[test]
+  fn probe_rejects_when_first_line_is_prose() {
+    // mkvmerge tests only the first non-empty line; a `{n}{m}` line further
+    // down must not make native claim the file.
+    let blob = b"This is just a text file.\n{1}{125}not really a subtitle\n";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    assert!(!MicroDvdReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn has_microdvd_line_skips_leading_blank_lines() {
+    assert!(has_microdvd_line("\n\n   \n{1}{125}Hello\n"));
+  }
+
+  #[test]
+  fn has_microdvd_line_bails_after_twenty_blank_lines() {
+    // 21 blank lines before the first content line — upstream stops at 20.
+    let mut text = "\n".repeat(21);
+    text.push_str("{1}{125}Hello\n");
+    assert!(!has_microdvd_line(&text));
+  }
+
+  #[test]
+  fn has_microdvd_line_accepts_first_content_line_within_cap() {
+    // 19 blank lines then the candidate — still within the 20-line window.
+    let mut text = "\n".repeat(19);
+    text.push_str("{1}{125}Hello\n");
+    assert!(has_microdvd_line(&text));
   }
 }

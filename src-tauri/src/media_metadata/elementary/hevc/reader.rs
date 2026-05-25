@@ -77,14 +77,17 @@ impl Reader for HevcReader {
 
     let mut common = CommonTrackProperties::default();
     common.number = Some(1);
+    // PARSER-240: pixel dimensions are the cropped luma size; display
+    // dimensions apply the VUI sample aspect ratio when one is present.
+    let (display_width, display_height) = sps.display_dimensions();
     let video = VideoTrackProperties {
       pixel_dimensions: Some(Dimensions2D {
         width: sps.display_width,
         height: sps.display_height,
       }),
       display_dimensions: Some(Dimensions2D {
-        width: sps.display_width,
-        height: sps.display_height,
+        width: display_width,
+        height: display_height,
       }),
       default_duration_ns: sps.default_duration_ns,
       codec_config: Some(VideoCodecConfig {

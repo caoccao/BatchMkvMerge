@@ -1,6 +1,6 @@
 # SRT Parser
 
-Implementation progress: 90%
+Implementation progress: 92%
 
 ## Purpose
 
@@ -28,8 +28,4 @@ SRT is represented directly through the shared track model; helper functions per
 
 ## Gaps and Handling
 
-The probe now matches upstream's index-line-then-timestamp-line structure, so text files containing an incidental timestamp line are no longer misclassified as SRT. The timestamp grammar itself is still not byte-identical to upstream's regex (the arrow form is matched on `" --> "` rather than the looser `[\-\s]+>`), and cue-level validation remains outside the current single-track model.
-
-## Open Issues
-
-- `PARSER-235`: The timestamp arrow grammar is stricter than mkvmerge's regex. Native requires the exact `" --> "` substring, while mkvmerge accepts flexible whitespace/hyphen forms like `00:00:01,000-->00:00:02,000` and `00:00:01,000 -> 00:00:02,000`.
+The probe now matches upstream's index-line-then-timestamp-line structure, so text files containing an incidental timestamp line are no longer misclassified as SRT. The timestamp grammar is a faithful port of upstream's `SRT_RE_TIMESTAMP_LINE` regex: each numeric field allows leading whitespace and an optional sign (`\s*(-?)\s*(\d+)`), the millisecond separator may be `,`, `.`, or `:`, and the arrow accepts any non-empty run of dashes/spaces before `>` (so `00:00:01,000-->00:00:02,000`, `00:00:01,000 -> 00:00:02,000`, and extra-spaced forms all match). The pattern is anchored at the start but not the end, so trailing content (e.g. coordinate annotations) is tolerated. Cue-level parsing and per-entry validation remain outside the current single-track model.

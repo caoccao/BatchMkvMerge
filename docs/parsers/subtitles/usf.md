@@ -1,6 +1,6 @@
 # USF Parser
 
-Implementation progress: 90%
+Implementation progress: 93%
 
 ## Purpose
 
@@ -13,7 +13,7 @@ The USF parser recognises Universal Subtitle Format XML files and reports one te
 - XML engine: `quick-xml` (`=0.39.2`), the event-based stand-in for upstream's pugixml
 - Upstream basis: `../mkvtoolnix/src/input/r_usf.cpp`, `../mkvtoolnix/src/input/r_usf.h`
 
-Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): the leading window must contain an `<?xml` or `<!--` marker, then the document is parsed with a real XML engine and the document (root) element name is validated to be `USFSubtitles`. The document read is bounded at **10 MiB**, matching upstream's `mtx::xml::load_file(..., 10 * 1024 * 1024)` cap (r_usf.cpp line 45).
+Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): only the leading **~1000-character** window is inspected for an `<?xml` or `<!--` marker (upstream's `while (content.length() < 1000) getline2(...)` accumulation), then the document is parsed with a real XML engine and the document (root) element's **fully-qualified** name is validated to be exactly `USFSubtitles`. The qualified-name check keeps any namespace prefix, so a namespaced root such as `<usf:USFSubtitles>` is rejected — matching pugixml's `document_element().name()`. The document read is bounded at **10 MiB**, matching upstream's `mtx::xml::load_file(..., 10 * 1024 * 1024)` cap (r_usf.cpp line 45).
 
 `read_headers` performs the same three-step walk as upstream:
 
@@ -43,8 +43,4 @@ flowchart TD
 
 ## Gaps and Handling
 
-The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. quick-xml's namespace-aware local names are compared, so namespaced documents are tolerated.
-
-## Open Issues
-
-- `PARSER-236`: USF probing uses a broader XML-marker window and namespace-stripped root comparison. mkvmerge only looks for `<?xml` or `<!--` in the first roughly 1000 characters and requires the document element name to be exactly `USFSubtitles`; native scans the full 10 MiB decoded document and accepts namespaced roots such as `<usf:USFSubtitles>`.
+The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice.

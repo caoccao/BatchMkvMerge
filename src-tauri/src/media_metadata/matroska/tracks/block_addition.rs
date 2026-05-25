@@ -20,10 +20,13 @@
 //! id_extra_data)` tuples per BlockAdditionMapping child of a TrackEntry.
 //!
 //! PARSER-186: the validated tuples are converted to the wire-format
-//! `BlockAdditionMapping { id_type, data_hex }` via [`BlockAdditionMapping::to_model`]
-//! and carried onto the video track, mirroring how `r_matroska.cpp:1465-1479`
-//! stores them on `track->block_addition_mappings`.  Dolby Vision / HDR10+
-//! configuration records ride through here verbatim.
+//! `BlockAdditionMapping { id_type, data_hex, id_name, id_value }` via
+//! [`BlockAdditionMapping::to_model`] and carried onto the video track,
+//! mirroring how `r_matroska.cpp:1465-1479` stores them on
+//! `track->block_addition_mappings`.  PARSER-228: the `BlockAddIDName` and
+//! `BlockAddIDValue` are now preserved on the model alongside the type and
+//! extra data.  Dolby Vision / HDR10+ configuration records ride through here
+//! verbatim.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -77,7 +80,15 @@ impl BlockAdditionMapping {
       .as_deref()
       .map(|bytes| bytes.iter().map(|b| format!("{:02x}", b)).collect())
       .unwrap_or_default();
-    crate::media_metadata::model::track_properties_video::BlockAdditionMapping { id_type, data_hex }
+    // PARSER-228: carry the BlockAddIDName / BlockAddIDValue through to the
+    // wire model so mappings keyed by value (or carrying a useful name) keep
+    // that information.
+    crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
+      id_type,
+      data_hex,
+      id_name: self.id_name.clone(),
+      id_value: self.id_value,
+    }
   }
 }
 
@@ -196,6 +207,22 @@ mod tests {
     let model = m.to_model();
     assert_eq!(model.id_type, "dvvC");
     assert_eq!(model.data_hex, "01004aff");
+    // PARSER-228: the name and (absent) value travel through to the model.
+    assert_eq!(model.id_name.as_deref(), Some("Dolby Vision configuration"));
+    assert_eq!(model.id_value, None);
+  }
+
+  #[test]
+  fn to_model_carries_name_and_value() {
+    let m = BlockAdditionMapping {
+      id_name: Some("HDR10+".to_owned()),
+      id_value: Some(4),
+      id_type: Some(7),
+      id_extra_data: None,
+    };
+    let model = m.to_model();
+    assert_eq!(model.id_name.as_deref(), Some("HDR10+"));
+    assert_eq!(model.id_value, Some(4));
   }
 
   #[test]

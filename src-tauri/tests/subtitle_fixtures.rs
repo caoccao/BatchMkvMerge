@@ -255,17 +255,39 @@ fn parses_microdvd_clip() {
 
 #[test]
 fn parses_vobsub_idx_with_per_language_entries() {
-  let blob = b"# VobSub index file, v7
+  // PARSER-232: a VobSub `.idx` requires the sibling `.sub` data file to exist.
+  let (idx_path, sub_path) = write_vobsub_pair(
+    b"# VobSub index file, v7
 id: en, index: 0
 timestamp: 00:00:01:000, filepos: 000000000
 id: ja, index: 1
 timestamp: 00:00:02:000, filepos: 000000100
-";
-  let path = write_tempfile(blob, "idx");
-  let m = parse(&path, ParseOptions::default()).unwrap();
-  let _ = std::fs::remove_file(&path);
+",
+  );
+  let m = parse(&idx_path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&idx_path);
+  let _ = std::fs::remove_file(&sub_path);
   assert_eq!(m.container.format, ContainerFormat::VobSub);
   assert_eq!(m.tracks.len(), 2);
+}
+
+/// Write a VobSub `.idx` (with `idx_body`) plus its sibling `.sub` data file,
+/// returning both paths.  PARSER-232 requires the `.sub` to exist.
+fn write_vobsub_pair(idx_body: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+  let dir = std::env::temp_dir();
+  let pid = std::process::id();
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_nanos();
+  static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+  let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+  let stem = dir.join(format!("bmm-vobsub-fixture-{pid}-{nanos}-{seq}"));
+  let idx_path = stem.with_extension("idx");
+  let sub_path = stem.with_extension("sub");
+  std::fs::write(&idx_path, idx_body).unwrap();
+  std::fs::write(&sub_path, [0u8; 32]).unwrap();
+  (idx_path, sub_path)
 }
 
 /// PARSER-210: dispatching a `.sub` input resolves to the sibling `.idx` and
@@ -314,7 +336,9 @@ fn vobsub_sub_resolution_does_not_steal_microdvd() {
 /// are stripped while `size:` / `palette:` survive.
 #[test]
 fn vobsub_codec_private_is_filtered_idx_data() {
-  let blob = b"# VobSub index file, v7
+  // PARSER-232: the sibling `.sub` must exist for the manifest to be read.
+  let (idx_path, sub_path) = write_vobsub_pair(
+    b"# VobSub index file, v7
 size: 720x576
 palette: 000000, ffffff
 langidx: 0
@@ -322,10 +346,11 @@ id: en, index: 0
 alt: english
 delay: 00:00:00:000
 timestamp: 00:00:01:000, filepos: 000000000
-";
-  let path = write_tempfile(blob, "idx");
-  let m = parse(&path, ParseOptions::default()).unwrap();
-  let _ = std::fs::remove_file(&path);
+",
+  );
+  let m = parse(&idx_path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&idx_path);
+  let _ = std::fs::remove_file(&sub_path);
   assert_eq!(m.container.format, ContainerFormat::VobSub);
   assert_eq!(m.tracks.len(), 1);
   let private = m.tracks[0].codec.codec_private.as_ref().unwrap();

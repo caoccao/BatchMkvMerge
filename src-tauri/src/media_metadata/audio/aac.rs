@@ -790,10 +790,43 @@ pub fn find_first_header_with_frames(bytes: &[u8], num_required_frames: usize) -
   None
 }
 
-/// First valid header at-or-after the consecutive-frame base offset. Returns
-/// the `(offset, header)` pair.
-fn find_first_valid_header(bytes: &[u8]) -> Option<(usize, AacHeader)> {
-  find_first_header_with_frames(bytes, MIN_CONFIRM_FRAMES)
+/// Drain frames starting at the first byte of `bytes` until one reports both a
+/// nonzero sample rate and a nonzero channel count, mirroring
+/// `aac_reader_c::read_headers`'s
+/// `while (frames_available()) { header = get_frame().header; if (sr>0 && ch>0) break; }`
+/// loop (PARSER-224, `../mkvtoolnix/src/input/r_aac.cpp:61-64`).  Returns the
+/// first usable frame, or the last decoded frame when none qualify (so a stream
+/// whose leading frame carries `channel_configuration == 0` without a PCE is
+/// reported from the first frame that actually carries the audio properties).
+fn drain_to_usable_header(bytes: &[u8]) -> Option<AacHeader> {
+  let multiplex = if decode_adts(bytes).is_some() {
+    MultiplexType::Adts
+  } else if decode_loas_latm(bytes).is_some() {
+    MultiplexType::LoasLatm
+  } else {
+    return None;
+  };
+
+  let mut position = 0usize;
+  let mut selected: Option<AacHeader> = None;
+  while position < bytes.len() {
+    let remaining = &bytes[position..];
+    let decoded = match multiplex {
+      MultiplexType::Adts => decode_adts(remaining).map(|h| (h, h.bytes.max(1))),
+      MultiplexType::LoasLatm => decode_loas_latm(remaining).map(|(h, len)| (h, len.max(1))),
+    };
+    match decoded {
+      Some((header, advance)) => {
+        selected = Some(header);
+        if header.sample_rate > 0 && header.channels > 0 {
+          break;
+        }
+        position += advance;
+      }
+      None => break,
+    }
+  }
+  selected
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -826,7 +859,10 @@ impl Reader for AacReader {
     let read = src.read_at_most(&mut probe)?;
     let (start, _end) = id3v2::payload_bounds(&probe[..read]);
     let bytes = &probe[start..read];
-    let (_offset, mut header) = find_first_valid_header(bytes).ok_or(ParseError::Unrecognised)?;
+    // PARSER-224: locate the confirmed base offset, then drain frames until one
+    // carries usable audio properties (mirrors aac_reader_c::read_headers).
+    let base = find_consecutive_frames(bytes, MIN_CONFIRM_FRAMES).ok_or(ParseError::Unrecognised)?;
+    let mut header = drain_to_usable_header(&bytes[base..]).ok_or(ParseError::Unrecognised)?;
 
     // PARSER-215: raw AAC identification promotes ADTS headers with sample
     // rates up to 24 kHz to the SBR profile before emitting metadata
@@ -1210,6 +1246,41 @@ mod tests {
     assert_eq!(out.tracks[0].codec.name.as_deref(), Some("AAC SBR"));
     // The core sampling frequency is still reported as-is.
     assert_eq!(audio.sampling_frequency, Some(16_000.0));
+  }
+
+  #[test]
+  fn read_headers_drains_to_first_frame_with_channels() {
+    // PARSER-224: the first confirmed frame has channel_configuration 0 and no
+    // PCE (channels == 0); the reader must advance to the first frame that
+    // reports both a nonzero sample rate and channel count.
+    let mut bytes = build_adts_frame(1, 3, 0); // 48 kHz, channels 0 (no PCE)
+    bytes.extend(build_adts_stream(8, 1, 3, 2)); // 8 stereo frames
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.aac", 0);
+    AacReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.channels, Some(2));
+    assert_eq!(audio.sampling_frequency, Some(48_000.0));
+  }
+
+  #[test]
+  fn drain_to_usable_header_skips_zero_channel_leading_frame() {
+    let mut bytes = build_adts_frame(1, 3, 0); // channels 0
+    bytes.extend(build_adts_stream(2, 1, 3, 2)); // stereo
+    let header = drain_to_usable_header(&bytes).unwrap();
+    assert_eq!(header.channels, 2);
+    assert_eq!(header.sample_rate, 48_000);
+  }
+
+  #[test]
+  fn drain_to_usable_header_keeps_last_when_none_usable() {
+    // Every frame has channels == 0 → the last decoded frame is returned
+    // (matching mkvmerge keeping the final header from the drain loop).
+    let bytes = build_adts_stream(3, 1, 3, 0);
+    let header = drain_to_usable_header(&bytes).unwrap();
+    assert_eq!(header.channels, 0);
   }
 
   // ---- PARSER-007: LOAS/LATM -----------------------------------------

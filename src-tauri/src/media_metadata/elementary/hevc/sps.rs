@@ -42,11 +42,67 @@ pub struct HevcSps {
   pub separate_colour_plane: bool,
   pub coded_width: u32,
   pub coded_height: u32,
+  /// Cropped luma dimensions (mkvtoolnix's `get_width()` / `get_height()`).
   pub display_width: u32,
   pub display_height: u32,
   pub bit_depth_luma: u8,
   pub bit_depth_chroma: u8,
+  /// Sample aspect ratio from the VUI (`0/0` when none was signalled).
+  pub par_num: u32,
+  pub par_den: u32,
   pub default_duration_ns: Option<u64>,
+}
+
+impl HevcSps {
+  /// Apply the VUI sample-aspect-ratio to the cropped luma dimensions, a port
+  /// of `es_parser_c::get_display_dimensions` (PAR ≥ 1 stretches width, PAR < 1
+  /// stretches height).  Returns the cropped dimensions unchanged when no
+  /// usable PAR was found (PARSER-240).
+  pub fn display_dimensions(&self) -> (u32, u32) {
+    if self.par_num == 0 || self.par_den == 0 {
+      return (self.display_width, self.display_height);
+    }
+    let (num, den) = (self.par_num as u64, self.par_den as u64);
+    if num >= den {
+      let width = (self.display_width as u64 * num + den / 2) / den;
+      (width as u32, self.display_height)
+    } else {
+      let height = (self.display_height as u64 * den + num / 2) / num;
+      (self.display_width, height as u32)
+    }
+  }
+}
+
+/// Predefined sample-aspect-ratio table (`s_predefined_pars`,
+/// `../mkvtoolnix/src/common/hevc/util.cpp`).  Index 0 (unspecified) and any
+/// out-of-range `aspect_ratio_idc` yield no PAR.
+const SAR_PREDEFINED: [(u32, u32); 17] = [
+  (0, 0),
+  (1, 1),
+  (12, 11),
+  (10, 11),
+  (16, 11),
+  (40, 33),
+  (24, 11),
+  (20, 11),
+  (32, 11),
+  (80, 33),
+  (18, 11),
+  (15, 11),
+  (64, 33),
+  (160, 99),
+  (4, 3),
+  (3, 2),
+  (2, 1),
+];
+const EXTENDED_SAR: u64 = 255;
+
+/// Decoded SPS-tail fields the parser needs: sample aspect ratio and timing.
+#[derive(Debug, Default, Clone, Copy)]
+struct HevcTailInfo {
+  par_num: u32,
+  par_den: u32,
+  default_duration_ns: Option<u64>,
 }
 
 pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
@@ -83,7 +139,11 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
   };
   let bit_depth_luma = (reader.read_ue()? + 8) as u8;
   let bit_depth_chroma = (reader.read_ue()? + 8) as u8;
-  let default_duration_ns = parse_sps_tail_timing(&mut reader, sps_max_sub_layers_minus1).unwrap_or(None);
+  // PARSER-239: consume scaling_list_data / short_term_ref_pic_set /
+  // long_term_ref_pics so the VUI (and its timing + PAR) is reached on ordinary
+  // streams.  A malformed tail degrades to no PAR / no timing rather than
+  // failing the dimensions extraction.
+  let tail = parse_sps_tail(&mut reader, sps_max_sub_layers_minus1).unwrap_or_default();
 
   let (sub_w, sub_h) = chroma_subsampling_factors(chroma_format_idc);
   let display_width = pic_width_in_luma_samples.saturating_sub((crop_left + crop_right) * sub_w);
@@ -101,15 +161,18 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
     display_height,
     bit_depth_luma,
     bit_depth_chroma,
-    default_duration_ns,
+    par_num: tail.par_num,
+    par_den: tail.par_den,
+    default_duration_ns: tail.default_duration_ns,
   })
 }
 
-fn parse_sps_tail_timing(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32) -> Result<Option<u64>, ParseError> {
-  if reader.remaining_bits() < 16 {
-    return Ok(None);
-  }
-  let _log2_max_pic_order_cnt_lsb_minus4 = reader.read_ue()?;
+/// Walk the SPS body from `log2_max_pic_order_cnt_lsb_minus4` through to the
+/// VUI, consuming the scaling-list, short-term reference-picture-set, and
+/// long-term reference structures along the way
+/// (`../mkvtoolnix/src/common/hevc/util.cpp:642-695`).
+fn parse_sps_tail(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32) -> Result<HevcTailInfo, ParseError> {
+  let log2_max_pic_order_cnt_lsb = reader.read_ue()? + 4; // ...minus4 + 4
   let sub_layer_ordering_info_present = reader.read_bit()?;
   let start = if sub_layer_ordering_info_present {
     0
@@ -127,11 +190,11 @@ fn parse_sps_tail_timing(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32)
   let _ = reader.read_ue()?; // log2_diff_max_min_luma_transform_block_size
   let _ = reader.read_ue()?; // max_transform_hierarchy_depth_inter
   let _ = reader.read_ue()?; // max_transform_hierarchy_depth_intra
-  let scaling_list_enabled = reader.read_bit()?;
-  if scaling_list_enabled {
-    let scaling_list_data_present = reader.read_bit()?;
-    if scaling_list_data_present {
-      return Ok(None);
+  if reader.read_bit()? {
+    // scaling_list_enabled_flag
+    if reader.read_bit()? {
+      // sps_scaling_list_data_present_flag
+      parse_scaling_list_data(reader)?;
     }
   }
   reader.skip_bits(2)?; // amp_enabled_flag + sample_adaptive_offset_enabled_flag
@@ -143,69 +206,167 @@ fn parse_sps_tail_timing(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32)
     reader.skip_bits(1)?; // pcm_loop_filter_disabled_flag
   }
   let num_short_term_ref_pic_sets = reader.read_ue()?;
-  if num_short_term_ref_pic_sets != 0 {
-    return Ok(None);
+  if num_short_term_ref_pic_sets > 64 {
+    return Err(malformed("num_short_term_ref_pic_sets out of range"));
+  }
+  // `num_pics` per set is needed by the inter-prediction path of later sets.
+  let mut num_pics_per_set = [0u32; 65];
+  for idx in 0..num_short_term_ref_pic_sets {
+    parse_short_term_ref_pic_set(reader, &mut num_pics_per_set, idx, num_short_term_ref_pic_sets)?;
   }
   let long_term_ref_pics_present = reader.read_bit()?;
   if long_term_ref_pics_present {
-    return Ok(None);
+    let num_long_term_ref_pic_sets = reader.read_ue()?;
+    for _ in 0..num_long_term_ref_pic_sets {
+      reader.skip_bits(log2_max_pic_order_cnt_lsb as u64)?; // lt_ref_pic_poc_lsb_sps
+      reader.skip_bits(1)?; // used_by_curr_pic_lt_sps_flag
+    }
   }
   reader.skip_bits(2)?; // sps_temporal_mvp_enabled_flag + strong_intra_smoothing_enabled_flag
   let vui_parameters_present = reader.read_bit()?;
   if !vui_parameters_present {
-    return Ok(None);
+    return Ok(HevcTailInfo::default());
   }
-  parse_vui_timing(reader)
+  parse_vui(reader)
 }
 
-fn parse_vui_timing(reader: &mut BitReader<'_>) -> Result<Option<u64>, ParseError> {
-  let aspect_ratio_info_present = reader.read_bit()?;
-  if aspect_ratio_info_present {
-    let aspect_ratio_idc = reader.read_bits(8)?;
-    if aspect_ratio_idc == 255 {
-      reader.skip_bits(32)?;
+/// Port of `scaling_list_data_copy` (`util.cpp:188-209`).
+fn parse_scaling_list_data(reader: &mut BitReader<'_>) -> Result<(), ParseError> {
+  for size_id in 0u32..4 {
+    let matrix_count = if size_id == 3 { 2 } else { 6 };
+    for _ in 0..matrix_count {
+      // scaling_list_pred_mode_flag
+      if !reader.read_bit()? {
+        let _ = reader.read_ue()?; // scaling_list_pred_matrix_id_delta
+      } else {
+        let coef_num = std::cmp::min(64u32, 1u32 << (4 + (size_id << 1)));
+        if size_id > 1 {
+          let _ = reader.read_se()?; // scaling_list_dc_coef_minus8
+        }
+        for _ in 0..coef_num {
+          let _ = reader.read_se()?; // scaling_list_delta_coef
+        }
+      }
     }
   }
-  let overscan_info_present = reader.read_bit()?;
-  if overscan_info_present {
-    reader.skip_bits(1)?;
+  Ok(())
+}
+
+/// Port of `short_term_ref_pic_set_copy` (`util.cpp:212-345`).  Only the bit
+/// positions and per-set `num_pics` (needed by the inter-prediction path of
+/// later sets) are tracked — the decoded POC values are not needed for
+/// identification.
+fn parse_short_term_ref_pic_set(
+  reader: &mut BitReader<'_>,
+  num_pics_per_set: &mut [u32; 65],
+  idx_rps: u32,
+  num_short_term_ref_pic_sets: u32,
+) -> Result<(), ParseError> {
+  let inter_rps_pred_flag = if idx_rps > 0 { reader.read_bit()? } else { false };
+
+  if inter_rps_pred_flag {
+    let mut code = 0u32;
+    if idx_rps == num_short_term_ref_pic_sets {
+      code = reader.read_ue()?; // delta_idx_minus1
+    }
+    let ref_idx = idx_rps as i64 - 1 - code as i64;
+    if ref_idx < 0 || ref_idx >= 64 {
+      return Err(malformed("short_term_ref_pic_set ref_idx out of range"));
+    }
+    let _delta_rps_sign = reader.read_bit()?;
+    let _abs_delta_rps_minus1 = reader.read_ue()?;
+    let ref_num_pics = num_pics_per_set[ref_idx as usize];
+    let mut num_pics = 0u32;
+    for _ in 0..=ref_num_pics {
+      let used_by_curr_pic = reader.read_bit()?;
+      let mut use_delta = false;
+      if !used_by_curr_pic {
+        use_delta = reader.read_bit()?;
+      }
+      if used_by_curr_pic || use_delta {
+        num_pics += 1;
+      }
+    }
+    num_pics_per_set[idx_rps as usize] = num_pics;
+  } else {
+    let num_negative_pics = reader.read_ue()?;
+    let num_positive_pics = reader.read_ue()?;
+    if num_negative_pics > 16 || num_positive_pics > 16 || num_negative_pics + num_positive_pics > 16 {
+      return Err(malformed("short_term_ref_pic_set picture count out of range"));
+    }
+    for _ in 0..num_negative_pics {
+      let _ = reader.read_ue()?; // delta_poc_s0_minus1
+      reader.skip_bits(1)?; // used_by_curr_pic_s0_flag
+    }
+    for _ in 0..num_positive_pics {
+      let _ = reader.read_ue()?; // delta_poc_s1_minus1
+      reader.skip_bits(1)?; // used_by_curr_pic_s1_flag
+    }
+    num_pics_per_set[idx_rps as usize] = num_negative_pics + num_positive_pics;
   }
-  let video_signal_type_present = reader.read_bit()?;
-  if video_signal_type_present {
-    reader.skip_bits(4)?;
-    let colour_description_present = reader.read_bit()?;
-    if colour_description_present {
+  Ok(())
+}
+
+fn malformed(reason: &'static str) -> ParseError {
+  ParseError::Malformed {
+    format: "hevc",
+    offset: 0,
+    reason: reason.to_string(),
+  }
+}
+
+/// Decode the VUI parameters mkvtoolnix consumes, capturing the sample aspect
+/// ratio (PARSER-240) and frame timing (`vui_parameters_copy`, `util.cpp:346-417`).
+fn parse_vui(reader: &mut BitReader<'_>) -> Result<HevcTailInfo, ParseError> {
+  let mut info = HevcTailInfo::default();
+  // aspect_ratio_info_present_flag
+  if reader.read_bit()? {
+    let aspect_ratio_idc = reader.read_bits(8)?;
+    if aspect_ratio_idc == EXTENDED_SAR {
+      info.par_num = reader.read_bits(16)? as u32;
+      info.par_den = reader.read_bits(16)? as u32;
+    } else if (aspect_ratio_idc as usize) < SAR_PREDEFINED.len() {
+      let (num, den) = SAR_PREDEFINED[aspect_ratio_idc as usize];
+      info.par_num = num;
+      info.par_den = den;
+    }
+  }
+  // overscan_info_present_flag
+  if reader.read_bit()? {
+    reader.skip_bits(1)?; // overscan_appropriate_flag
+  }
+  // video_signal_type_present_flag
+  if reader.read_bit()? {
+    reader.skip_bits(4)?; // video_format(3) + video_full_range_flag(1)
+    if reader.read_bit()? {
+      // colour_description_present_flag
       reader.skip_bits(24)?;
     }
   }
-  let chroma_loc_info_present = reader.read_bit()?;
-  if chroma_loc_info_present {
-    let _ = reader.read_ue()?;
-    let _ = reader.read_ue()?;
-  }
-  reader.skip_bits(3)?; // neutral_chroma, field_seq, frame_field_info
-  let default_display_window = reader.read_bit()?;
-  if default_display_window {
-    let _ = reader.read_ue()?;
-    let _ = reader.read_ue()?;
-    let _ = reader.read_ue()?;
-    let _ = reader.read_ue()?;
-  }
-  let timing_info_present = reader.read_bit()?;
-  if !timing_info_present {
-    return Ok(None);
-  }
-  let num_units_in_tick = reader.read_bits(32)?;
-  let time_scale = reader.read_bits(32)?;
+  // chroma_loc_info_present_flag
   if reader.read_bit()? {
     let _ = reader.read_ue()?;
+    let _ = reader.read_ue()?;
   }
-  if num_units_in_tick == 0 || time_scale == 0 {
-    return Ok(None);
+  reader.skip_bits(3)?; // neutral_chroma + field_seq + frame_field_info
+  // default_display_window_flag
+  if reader.read_bit()? {
+    let _ = reader.read_ue()?;
+    let _ = reader.read_ue()?;
+    let _ = reader.read_ue()?;
+    let _ = reader.read_ue()?;
   }
-  Ok(Some(
-    (num_units_in_tick as u128 * 1_000_000_000u128 / time_scale as u128) as u64,
-  ))
+  // vui_timing_info_present_flag
+  if reader.read_bit()? {
+    let num_units_in_tick = reader.read_bits(32)?;
+    let time_scale = reader.read_bits(32)?;
+    if num_units_in_tick != 0 && time_scale != 0 {
+      // `sps_info_t::default_duration()` = num_units_in_tick * 1e9 / time_scale.
+      info.default_duration_ns =
+        Some((num_units_in_tick as u128 * 1_000_000_000u128 / time_scale as u128) as u64);
+    }
+  }
+  Ok(info)
 }
 
 fn parse_profile_tier_level(
@@ -370,6 +531,88 @@ mod tests {
     w.into_bytes()
   }
 
+  /// Write an SPS tail that carries scaling-list data, one short-term ref pic
+  /// set, and a long-term ref set before the VUI — exercising the structures
+  /// the parser must consume to reach the VUI (PARSER-239).  The VUI carries
+  /// the given aspect-ratio idc / explicit PAR plus 30 fps timing.
+  fn write_complex_tail(w: &mut BitWriter, aspect_idc: u8, par: Option<(u16, u16)>) {
+    w.write_ue(4); // log2_max_pic_order_cnt_lsb_minus4 → lsb width 8
+    w.write_bit(false); // sps_sub_layer_ordering_info_present_flag
+    w.write_ue(0); // sps_max_dec_pic_buffering_minus1
+    w.write_ue(0); // sps_max_num_reorder_pics
+    w.write_ue(0); // sps_max_latency_increase_plus1
+    w.write_ue(0); // log2_min_luma_coding_block_size_minus3
+    w.write_ue(0); // log2_diff_max_min_luma_coding_block_size
+    w.write_ue(0); // log2_min_luma_transform_block_size_minus2
+    w.write_ue(0); // log2_diff_max_min_luma_transform_block_size
+    w.write_ue(0); // max_transform_hierarchy_depth_inter
+    w.write_ue(0); // max_transform_hierarchy_depth_intra
+    w.write_bit(true); // scaling_list_enabled_flag
+    w.write_bit(true); // sps_scaling_list_data_present_flag
+    // scaling_list_data: every entry uses prediction-from-reference (mode 0).
+    for size_id in 0..4 {
+      let matrix_count = if size_id == 3 { 2 } else { 6 };
+      for _ in 0..matrix_count {
+        w.write_bit(false); // scaling_list_pred_mode_flag = 0
+        w.write_ue(0); // scaling_list_pred_matrix_id_delta
+      }
+    }
+    w.write_bit(false); // amp_enabled_flag
+    w.write_bit(false); // sample_adaptive_offset_enabled_flag
+    w.write_bit(false); // pcm_enabled_flag
+    w.write_ue(1); // num_short_term_ref_pic_sets
+    // short_term_ref_pic_set(0): explicit, 1 negative pic.
+    w.write_ue(1); // num_negative_pics
+    w.write_ue(0); // num_positive_pics
+    w.write_ue(0); // delta_poc_s0_minus1
+    w.write_bit(true); // used_by_curr_pic_s0_flag
+    w.write_bit(true); // long_term_ref_pics_present_flag
+    w.write_ue(1); // num_long_term_ref_pic_sets
+    w.write_bits(0, 8); // lt_ref_pic_poc_lsb_sps (log2_max_pic_order_cnt_lsb = 8)
+    w.write_bit(false); // used_by_curr_pic_lt_sps_flag
+    w.write_bit(false); // sps_temporal_mvp_enabled_flag
+    w.write_bit(false); // strong_intra_smoothing_enabled_flag
+    w.write_bit(true); // vui_parameters_present_flag
+    w.write_bit(true); // aspect_ratio_info_present_flag
+    w.write_bits(aspect_idc as u64, 8);
+    if let Some((num, den)) = par {
+      w.write_bits(num as u64, 16);
+      w.write_bits(den as u64, 16);
+    }
+    w.write_bit(false); // overscan_info_present_flag
+    w.write_bit(false); // video_signal_type_present_flag
+    w.write_bit(false); // chroma_loc_info_present_flag
+    w.write_bit(false); // neutral_chroma_indication_flag
+    w.write_bit(false); // field_seq_flag
+    w.write_bit(false); // frame_field_info_present_flag
+    w.write_bit(false); // default_display_window_flag
+    w.write_bit(true); // vui_timing_info_present_flag
+    w.write_bits(1, 32); // vui_num_units_in_tick
+    w.write_bits(30, 32); // vui_time_scale
+  }
+
+  fn build_main10_1080p_sps_with_structures(aspect_idc: u8, par: Option<(u16, u16)>) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4);
+    w.write_bits(0, 3);
+    w.write_bit(true);
+    w.write_bits(0, 2);
+    w.write_bit(false);
+    w.write_bits(2, 5);
+    w.write_bits(0, 32);
+    w.write_bits(0, 48);
+    w.write_bits(120, 8);
+    w.write_ue(0);
+    w.write_ue(1);
+    w.write_ue(1920);
+    w.write_ue(1080);
+    w.write_bit(false);
+    w.write_ue(2);
+    w.write_ue(2);
+    write_complex_tail(&mut w, aspect_idc, par);
+    w.into_bytes()
+  }
+
   struct BitWriter {
     buf: Vec<u8>,
     bit_index: u8,
@@ -433,6 +676,45 @@ mod tests {
     let rbsp = build_main10_1080p_sps_with_timing();
     let sps = parse(&rbsp).unwrap();
     assert_eq!(sps.default_duration_ns, Some(33_333_333));
+  }
+
+  // ---- PARSER-239: reach the VUI past scaling-list / ref-pic-set blocks --
+
+  #[test]
+  fn reaches_vui_timing_past_scaling_list_and_ref_pic_sets() {
+    let rbsp = build_main10_1080p_sps_with_structures(1, None);
+    let sps = parse(&rbsp).unwrap();
+    // 1 / 30 → 33.33 ms; reached only by consuming the intervening structures.
+    assert_eq!(sps.default_duration_ns, Some(33_333_333));
+  }
+
+  // ---- PARSER-240: VUI sample aspect ratio → display dimensions ---------
+
+  #[test]
+  fn extracts_par_and_display_dimensions() {
+    // aspect_ratio_idc 14 → 4:3 PAR → display 2560×1080.
+    let rbsp = build_main10_1080p_sps_with_structures(14, None);
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!((sps.par_num, sps.par_den), (4, 3));
+    assert_eq!(sps.display_dimensions(), (2560, 1080));
+    assert_eq!(sps.default_duration_ns, Some(33_333_333));
+  }
+
+  #[test]
+  fn extended_par_extracts_explicit_ratio() {
+    let rbsp = build_main10_1080p_sps_with_structures(255, Some((1, 2)));
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!((sps.par_num, sps.par_den), (1, 2));
+    // PAR < 1 stretches height: 1080 × 2 = 2160.
+    assert_eq!(sps.display_dimensions(), (1920, 2160));
+  }
+
+  #[test]
+  fn no_par_leaves_display_equal_to_cropped() {
+    let rbsp = build_main10_1080p_sps_with_timing();
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.par_num, 0);
+    assert_eq!(sps.display_dimensions(), (1920, 1080));
   }
 
   #[test]

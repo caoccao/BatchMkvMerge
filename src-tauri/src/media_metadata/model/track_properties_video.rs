@@ -64,11 +64,21 @@ pub struct VideoTrackProperties {
 /// One block-addition mapping (`block_addition_mapping_t` in mkvtoolnix).  The
 /// `id_type` is the source FOURCC (e.g. `dvcC`); `data_hex` is the raw
 /// box payload, hex-encoded.  PARSER-179.
+///
+/// PARSER-228: `id_name` (`BlockAddIDName`) and `id_value` (`BlockAddIDValue`)
+/// are carried alongside `id_type`/`data_hex`, mirroring the full
+/// `block_addition_mapping_t` mkvtoolnix keeps — mappings that rely on the
+/// value or a descriptive name no longer lose that information.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockAdditionMapping {
   pub id_type: String,
   pub data_hex: String,
+  /// `BlockAddIDName`, when present.
+  pub id_name: Option<String>,
+  /// `BlockAddIDValue`, when present.
+  #[specta(type = Option<Number>)]
+  pub id_value: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
@@ -440,10 +450,14 @@ mod tests {
     let mapping = BlockAdditionMapping {
       id_type: "dvcC".to_owned(),
       data_hex: "01000403".to_owned(),
+      id_name: Some("Dolby Vision configuration".to_owned()),
+      id_value: Some(4),
     };
     let s = serde_json::to_string(&mapping).unwrap();
     assert!(s.contains("\"idType\":\"dvcC\""));
     assert!(s.contains("\"dataHex\":\"01000403\""));
+    assert!(s.contains("\"idName\":\"Dolby Vision configuration\""));
+    assert!(s.contains("\"idValue\":4"));
     let back: BlockAdditionMapping = serde_json::from_str(&s).unwrap();
     assert_eq!(back, mapping);
   }

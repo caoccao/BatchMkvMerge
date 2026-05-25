@@ -29,8 +29,10 @@
 //! ...
 //! ```
 //!
-//! We probe for any `HH:MM:SS,mmm --> HH:MM:SS,mmm` (or `.mmm`) line within
-//! the first 16 KB.
+//! We probe for an `HH:MM:SS,mmm --> HH:MM:SS,mmm` (or `.mmm` / `:mmm`) line
+//! within the first 16 KB.  The arrow and numeric fields follow mkvtoolnix's
+//! flexible regex, so forms like `00:00:01,000-->00:00:02,000` and
+//! `00:00:01,000 -> 00:00:02,000` are accepted too.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -102,63 +104,96 @@ fn is_srt_index(line: &str) -> bool {
   !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Port of mkvtoolnix's `SRT_RE_TIMESTAMP_LINE`
+/// (`../mkvtoolnix/src/input/subtitles.cpp:99-101`):
+///
+/// ```text
+/// VALUE     := \s*(-?)\s*(\d+)
+/// TIMESTAMP := VALUE ":" VALUE ":" VALUE (?:[,\.:] VALUE)?
+/// LINE      := ^ TIMESTAMP \s*[\-\s]+>\s* TIMESTAMP \s*
+/// ```
+///
+/// The pattern is anchored at the start but not the end, so trailing content
+/// after the second timestamp is tolerated (mirrors upstream's
+/// `QString::contains` with the `^`-anchored regex).  The arrow accepts any
+/// non-empty run of dashes/spaces before `>`, so `-->`, `->`, `>` (with at
+/// least one leading space) and zero-spaced forms all match.
 fn looks_like_srt_timecode(line: &str) -> bool {
-  // `HH:MM:SS,mmm --> HH:MM:SS,mmm` — accept both `,` and `.` as the
-  // millisecond separator (mkvtoolnix's r_srt.cpp accepts both forms).
-  let arrow_idx = match line.find(" --> ") {
-    Some(i) => i,
+  let bytes = line.as_bytes();
+  let pos = match parse_srt_timestamp(bytes, 0) {
+    Some(p) => p,
     None => return false,
   };
-  let lhs = &line[..arrow_idx];
-  let rhs = &line[arrow_idx + 5..];
-  is_timestamp(lhs) && is_timestamp(rhs)
+  let pos = match parse_srt_arrow(bytes, pos) {
+    Some(p) => p,
+    None => return false,
+  };
+  parse_srt_timestamp(bytes, pos).is_some()
 }
 
-fn is_timestamp(s: &str) -> bool {
-  // Allow optional milliseconds; tolerate up to 4-digit hours for very long
-  // movies (some authoring tools emit `100:00:00,000`).
-  let bytes = s.as_bytes();
-  if bytes.len() < 8 {
-    return false;
+/// Port of `SRT_RE_VALUE` = `\s*(-?)\s*(\d+)` — leading whitespace, an
+/// optional single sign, more optional whitespace, then one or more digits.
+fn parse_srt_value(bytes: &[u8], mut pos: usize) -> Option<usize> {
+  while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+    pos += 1;
   }
-  let mut chars = s.chars();
-  let mut digits_before_colon = 0;
-  let mut colon_count = 0;
-  let mut ms_separator_seen = false;
-  let mut milliseconds_digits = 0;
-  for c in chars.by_ref() {
-    if c.is_ascii_digit() {
-      if ms_separator_seen {
-        milliseconds_digits += 1;
-      } else {
-        digits_before_colon += 1;
-      }
-    } else if c == ':' {
-      // After the two `HH:MM:SS` colons, a third colon may legitimately
-      // act as the milliseconds separator (mkvtoolnix's r_srt.cpp
-      // regex accepts `:` alongside `,` and `.`).
-      if !ms_separator_seen && colon_count == 2 && digits_before_colon > 0 {
-        ms_separator_seen = true;
-        continue;
-      }
-      if digits_before_colon == 0 || digits_before_colon > 4 {
-        return false;
-      }
-      colon_count += 1;
-      digits_before_colon = 0;
-      if colon_count > 2 {
-        return false;
-      }
-    } else if c == ',' || c == '.' {
-      if ms_separator_seen || colon_count != 2 {
-        return false;
-      }
-      ms_separator_seen = true;
-    } else {
-      return false;
+  if pos < bytes.len() && bytes[pos] == b'-' {
+    pos += 1;
+  }
+  while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+    pos += 1;
+  }
+  let start = pos;
+  while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+    pos += 1;
+  }
+  if pos == start { None } else { Some(pos) }
+}
+
+/// Port of `TIMESTAMP` = `VALUE : VALUE : VALUE (?:[,\.:] VALUE)?`.
+fn parse_srt_timestamp(bytes: &[u8], pos: usize) -> Option<usize> {
+  let pos = parse_srt_value(bytes, pos)?;
+  let pos = expect_srt_byte(bytes, pos, b':')?;
+  let pos = parse_srt_value(bytes, pos)?;
+  let pos = expect_srt_byte(bytes, pos, b':')?;
+  let pos = parse_srt_value(bytes, pos)?;
+  // Optional milliseconds: `[,\.:]` then a value.  If the value does not
+  // parse the optional group simply matches the empty string (upstream).
+  if pos < bytes.len() && matches!(bytes[pos], b',' | b'.' | b':') {
+    if let Some(after) = parse_srt_value(bytes, pos + 1) {
+      return Some(after);
     }
   }
-  colon_count == 2 && digits_before_colon > 0 && (!ms_separator_seen || (1..=4).contains(&milliseconds_digits))
+  Some(pos)
+}
+
+/// Port of `\s*[\-\s]+>\s*`.  Since `\s` is a subset of `[\-\s]`, the leading
+/// `\s*` collapses into the mandatory run, so this is "≥1 dash/space, then
+/// `>`, then optional whitespace".
+fn parse_srt_arrow(bytes: &[u8], mut pos: usize) -> Option<usize> {
+  let start = pos;
+  while pos < bytes.len() && (bytes[pos] == b'-' || bytes[pos].is_ascii_whitespace()) {
+    pos += 1;
+  }
+  if pos == start {
+    return None;
+  }
+  if pos >= bytes.len() || bytes[pos] != b'>' {
+    return None;
+  }
+  pos += 1;
+  while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+    pos += 1;
+  }
+  Some(pos)
+}
+
+fn expect_srt_byte(bytes: &[u8], pos: usize, b: u8) -> Option<usize> {
+  if pos < bytes.len() && bytes[pos] == b {
+    Some(pos + 1)
+  } else {
+    None
+  }
 }
 
 /// Populate `out` with an empty SRT track.  Used by the dispatch
@@ -289,18 +324,55 @@ mod tests {
   }
 
   #[test]
-  fn timestamp_helper_tolerates_long_hours() {
-    assert!(is_timestamp("100:00:00,000"));
+  fn timecode_tolerates_long_hours() {
+    assert!(looks_like_srt_timecode("100:00:00,000 --> 101:00:00,000"));
   }
 
   #[test]
-  fn timestamp_helper_rejects_too_many_colons() {
-    assert!(!is_timestamp("00:00:00:00,000"));
+  fn timecode_rejects_missing_colons() {
+    assert!(!looks_like_srt_timecode("123456 --> 234567"));
+  }
+
+  // ---- PARSER-235: flexible arrow / numeric-field grammar --------------
+
+  #[test]
+  fn timecode_accepts_zero_spaced_arrow() {
+    assert!(looks_like_srt_timecode("00:00:01,000-->00:00:02,000"));
   }
 
   #[test]
-  fn timestamp_helper_rejects_no_colons() {
-    assert!(!is_timestamp("123456"));
+  fn timecode_accepts_single_dash_arrow() {
+    assert!(looks_like_srt_timecode("00:00:01,000 -> 00:00:02,000"));
+  }
+
+  #[test]
+  fn timecode_accepts_extra_dashes_and_spaces() {
+    assert!(looks_like_srt_timecode("00:00:01,000  --->  00:00:02,000"));
+    assert!(looks_like_srt_timecode("00:00:01,000 - > 00:00:02,000"));
+  }
+
+  #[test]
+  fn timecode_accepts_whitespace_inside_fields() {
+    // SRT_RE_VALUE allows `\s*(-?)\s*` before each number.
+    assert!(looks_like_srt_timecode("00:00: 1, 000 --> 00:00: 2, 000"));
+  }
+
+  #[test]
+  fn timecode_rejects_arrow_without_gt() {
+    assert!(!looks_like_srt_timecode("00:00:01,000 -- 00:00:02,000"));
+  }
+
+  #[test]
+  fn timecode_accepts_optional_milliseconds() {
+    assert!(looks_like_srt_timecode("00:00:01 --> 00:00:02"));
+  }
+
+  #[test]
+  fn timecode_tolerates_trailing_content() {
+    // Anchored at start, not end — trailing coordinates etc. are ignored.
+    assert!(looks_like_srt_timecode(
+      "00:00:01,000 --> 00:00:02,000 X1:200 Y2:100"
+    ));
   }
 
   #[test]

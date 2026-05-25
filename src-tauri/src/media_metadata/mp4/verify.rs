@@ -123,6 +123,34 @@ fn verify_audio(src: &mut FileSource, deadline: &Deadline, builder: &mut TrackBu
     }
   }
 
+  // PARSER-230 / PARSER-231: FLAC / Vorbis / Opus verification
+  // (r_qtmp4.cpp:3672-3681).  These return EARLY in mkvtoolnix, bypassing the
+  // generic channels/rate gate below.
+  if is_flac(&codec) {
+    // `verify_audio_parameters`: exactly one private blob (the dfLa metadata).
+    if codec_private_len(builder) == 0 {
+      builder.probe_failed = true;
+    }
+    return Ok(());
+  }
+  if is_vorbis(&codec) {
+    // `derive_track_params_from_vorbis_private_data`: unlace the esds
+    // DecoderSpecificInfo into exactly three Xiph headers and read the
+    // identification header for channels / sample rate.  Invalid → drop.
+    if !derive_vorbis_params(builder) {
+      builder.probe_failed = true;
+    }
+    return Ok(());
+  }
+  if is_opus(&codec) {
+    // `derive_track_params_from_opus_private_data`: the OpusHead private blob
+    // must be at least 19 bytes.
+    if codec_private_len(builder) < 19 {
+      builder.probe_failed = true;
+    }
+    return Ok(());
+  }
+
   // AUDIO general (r_qtmp4.cpp:3687-3690): zero channels or zero/absent
   // sampling frequency → broken header → drop.
   let channels = builder.audio.as_ref().and_then(|a| a.channels).unwrap_or(0);
@@ -487,6 +515,100 @@ fn is_ac3(codec: &str) -> bool {
 /// Apple Lossless — the `alac` FOURCC (and its Matroska id).
 fn is_alac(codec: &str) -> bool {
   matches!(codec, "alac" | "A_ALAC")
+}
+
+/// Opus — the `Opus` sample-entry FOURCC (any case) or its Matroska id.
+fn is_opus(codec: &str) -> bool {
+  codec.eq_ignore_ascii_case("opus") || codec == "A_OPUS"
+}
+
+/// FLAC — the `fLaC` sample-entry FOURCC (any case) or its Matroska id.
+fn is_flac(codec: &str) -> bool {
+  codec.eq_ignore_ascii_case("flac") || codec == "A_FLAC"
+}
+
+/// Vorbis — recognised via the esds objectTypeIndication 0xDD → `A_VORBIS`.
+fn is_vorbis(codec: &str) -> bool {
+  codec == "A_VORBIS"
+}
+
+/// Byte length of the audio codec-private blob (mkvtoolnix's `priv[0]->get_size()`).
+fn codec_private_len(builder: &TrackBuilder) -> usize {
+  builder.codec_private_hex.as_deref().map(|h| h.len() / 2).unwrap_or(0)
+}
+
+/// Port of `derive_track_params_from_vorbis_private_data` (r_qtmp4.cpp:3585-3623).
+/// Unlace the esds DecoderSpecificInfo into the three Xiph-laced Vorbis headers
+/// and read channels / sample rate from the identification header.  Returns
+/// `false` (track invalid) unless exactly three packets are present and the
+/// first parses as a Vorbis identification header (PARSER-230).
+fn derive_vorbis_params(builder: &mut TrackBuilder) -> bool {
+  let Some(data) = builder.esds_decoder_specific_data.clone() else {
+    return false;
+  };
+  let Some(packets) = unlace_xiph(&data) else {
+    return false;
+  };
+  if packets.len() != 3 {
+    return false;
+  }
+  let Some(meta) = crate::media_metadata::ogg::codecs::vorbis::sniff(packets[0]) else {
+    return false;
+  };
+  let Some(audio_info) = meta.audio else {
+    return false;
+  };
+  let audio = builder
+    .audio
+    .get_or_insert_with(crate::media_metadata::model::track_properties_audio::AudioTrackProperties::default);
+  if let Some(channels) = audio_info.channels {
+    audio.channels = Some(channels);
+  }
+  if let Some(rate) = audio_info.sampling_frequency {
+    audio.sampling_frequency = Some(rate);
+  }
+  true
+}
+
+/// Port of `unlace_memory_xiph` (`../mkvtoolnix/src/common/memory.cpp:95-135`).
+/// Splits a Xiph-laced buffer (first byte = packet_count − 1, then per-packet
+/// sizes as 255-summed bytes, then the packet payloads) into its packets.
+/// Returns `None` on any structural inconsistency.
+fn unlace_xiph(data: &[u8]) -> Option<Vec<&[u8]>> {
+  if data.is_empty() {
+    return None;
+  }
+  let num_blocks = data[0] as usize + 1;
+  let mut pos = 1usize;
+  let mut sizes: Vec<usize> = Vec::with_capacity(num_blocks);
+  let mut last_size = data.len();
+  for _ in 0..num_blocks.saturating_sub(1) {
+    let mut size = 0usize;
+    while pos < data.len() && data[pos] == 255 {
+      size += 255;
+      pos += 1;
+    }
+    if pos >= data.len() {
+      return None;
+    }
+    size += data[pos] as usize;
+    pos += 1;
+    sizes.push(size);
+    last_size = last_size.checked_sub(size)?;
+  }
+  // The final packet runs to the end of the buffer.
+  sizes.push(last_size.checked_sub(pos)?);
+
+  let mut blocks: Vec<&[u8]> = Vec::with_capacity(num_blocks);
+  for size in sizes {
+    let end = pos.checked_add(size)?;
+    if end > data.len() {
+      return None;
+    }
+    blocks.push(&data[pos..end]);
+    pos = end;
+  }
+  Some(blocks)
 }
 
 #[cfg(test)]
@@ -979,5 +1101,105 @@ mod tests {
   /// amode 6 = 3 channels, sfreq idx 13 = 48000 Hz.
   fn build_dts_frame() -> Vec<u8> {
     crate::media_metadata::audio::dts::build_dts_core_frame(6, 13)
+  }
+
+  // ---- PARSER-230 / PARSER-231: Opus / FLAC / Vorbis verification -------
+
+  /// Xiph-lace `packets` (the inverse of [`unlace_xiph`]).
+  fn lace_xiph(packets: &[&[u8]]) -> Vec<u8> {
+    let mut out = vec![(packets.len() - 1) as u8];
+    for p in &packets[..packets.len() - 1] {
+      let mut size = p.len();
+      while size >= 255 {
+        out.push(255);
+        size -= 255;
+      }
+      out.push(size as u8);
+    }
+    for p in packets {
+      out.extend_from_slice(p);
+    }
+    out
+  }
+
+  #[test]
+  fn unlace_xiph_splits_three_packets_with_255_run() {
+    let p0 = vec![1u8; 300]; // > 255 → exercises the 255-sum path
+    let p1 = vec![2u8; 10];
+    let p2 = vec![3u8; 50];
+    let laced = lace_xiph(&[&p0, &p1, &p2]);
+    let blocks = unlace_xiph(&laced).unwrap();
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(blocks[0].len(), 300);
+    assert_eq!(blocks[1].len(), 10);
+    assert_eq!(blocks[2].len(), 50);
+  }
+
+  #[test]
+  fn vorbis_three_headers_derive_channels_and_rate() {
+    let id = crate::media_metadata::ogg::codecs::vorbis::build_identification_packet(2, 44_100);
+    let comment = b"\x03vorbis".to_vec();
+    let setup = b"\x05vorbis".to_vec();
+    let laced = lace_xiph(&[&id, &comment, &setup]);
+    let mut b = audio_builder("mp4a", 0, 0.0); // channels / rate unset
+    b.esds_object_type = Some(0xDD); // Vorbis OTI
+    b.esds_decoder_specific_data = Some(laced);
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    let a = b.audio.unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
+  }
+
+  #[test]
+  fn vorbis_wrong_packet_count_dropped() {
+    let id = crate::media_metadata::ogg::codecs::vorbis::build_identification_packet(2, 44_100);
+    let laced = lace_xiph(&[&id, &id]); // only two packets
+    let mut b = audio_builder("mp4a", 0, 0.0);
+    b.esds_object_type = Some(0xDD);
+    b.esds_decoder_specific_data = Some(laced);
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  #[test]
+  fn vorbis_without_private_data_dropped() {
+    let mut b = audio_builder("mp4a", 2, 44_100.0);
+    b.esds_object_type = Some(0xDD);
+    // No esds_decoder_specific_data.
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  #[test]
+  fn opus_with_19_byte_private_kept() {
+    let mut b = audio_builder("Opus", 2, 48_000.0);
+    b.codec_private_hex = Some("00".repeat(19)); // exactly 19 bytes
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+  }
+
+  #[test]
+  fn opus_with_short_private_dropped() {
+    let mut b = audio_builder("Opus", 2, 48_000.0);
+    b.codec_private_hex = Some("00".repeat(18)); // 18 bytes < 19
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
+  }
+
+  #[test]
+  fn flac_with_private_kept() {
+    let mut b = audio_builder("fLaC", 2, 44_100.0);
+    b.codec_private_hex = Some("664c6143".to_string()); // "fLaC"
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+  }
+
+  #[test]
+  fn flac_without_private_dropped() {
+    let mut b = audio_builder("fLaC", 2, 44_100.0);
+    // No codec_private_hex → no dfLa blob.
+    verify_audio(&mut source(vec![]), &dl(), &mut b).unwrap();
+    assert!(b.probe_failed);
   }
 }
