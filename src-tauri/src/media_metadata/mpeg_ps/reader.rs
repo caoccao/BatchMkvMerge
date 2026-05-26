@@ -292,7 +292,7 @@ mod tests {
     match stream_id {
       0xC0..=0xDF => audio_payload(),
       0xE0..=0xEF => video_payload(),
-      0xFD => vc1::build_sequence_header(1280, 720),
+      0xFD => vc1::build_terminated_sequence_header(1280, 720),
       _ => vec![0u8; 8],
     }
   }
@@ -410,7 +410,7 @@ mod tests {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    bytes.extend_from_slice(&pes_packet(0xFD, &vc1::build_sequence_header(1280, 720)));
+    bytes.extend_from_slice(&pes_packet(0xFD, &vc1::build_terminated_sequence_header(1280, 720)));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.mpg", 0);
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();

@@ -34,6 +34,8 @@ use crate::media_metadata::model::track_properties_video::{
 use crate::media_metadata::matroska::ebml::{self, ChildAction, ElementHeader};
 use crate::media_metadata::matroska::ids;
 
+const VIDEO_BINARY_CAP: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug, Default)]
 pub struct VideoBuilder {
   pub pixel_width: Option<u32>,
@@ -211,10 +213,10 @@ pub fn parse(
       }
       ids::VIDEO_COLOR_SPACE => {
         // PARSER-068: raw colour-space identifier (FOURCC for
-        // uncompressed video).  Cap the read at 16 bytes — the
-        // spec describes a 4-byte FOURCC; anything larger is
-        // certainly malformed.
-        let bytes = ebml::read_binary(src, child, 16)?;
+        // uncompressed video).  PARSER-319: mkvtoolnix clones the whole
+        // element payload, so use only the shared video binary safety cap
+        // instead of a local 16-byte cap.
+        let bytes = ebml::read_binary(src, child, VIDEO_BINARY_CAP)?;
         builder.color_space = Some(bytes);
         Ok(ChildAction::Consumed)
       }
@@ -278,13 +280,15 @@ fn parse_colour(
         colour.chroma_siting = Some(s);
       }
       ids::VIDEO_COLOUR_RANGE => {
-        colour.range = Some(match ebml::read_uint(src, child)? {
-          0 => ColorRange::Unspecified,
-          1 => ColorRange::Broadcast,
-          2 => ColorRange::Full,
-          3 => ColorRange::MatrixDerived,
-          _ => ColorRange::Unspecified,
-        });
+        let raw = ebml::read_uint(src, child)? as u32;
+        colour.range_raw = Some(raw);
+        colour.range = match raw {
+          0 => Some(ColorRange::Unspecified),
+          1 => Some(ColorRange::Broadcast),
+          2 => Some(ColorRange::Full),
+          3 => Some(ColorRange::MatrixDerived),
+          _ => None,
+        };
       }
       ids::VIDEO_COLOUR_TRANSFER_CHARACTER => {
         colour.transfer_characteristics = Some(ebml::read_uint(src, child)? as u32);
@@ -393,13 +397,15 @@ fn parse_projection(
   ebml::walk_children(src, parent, "matroska::projection", deadline, |src, child| {
     match child.id {
       ids::VIDEO_PROJECTION_TYPE => {
-        p.kind = Some(match ebml::read_uint(src, child)? {
-          0 => ProjectionType::Rectangular,
-          1 => ProjectionType::Equirectangular,
-          2 => ProjectionType::Cubemap,
-          3 => ProjectionType::Mesh,
-          _ => ProjectionType::Rectangular,
-        });
+        let raw = ebml::read_uint(src, child)? as u32;
+        p.kind_raw = Some(raw);
+        p.kind = match raw {
+          0 => Some(ProjectionType::Rectangular),
+          1 => Some(ProjectionType::Equirectangular),
+          2 => Some(ProjectionType::Cubemap),
+          3 => Some(ProjectionType::Mesh),
+          _ => None,
+        };
       }
       ids::VIDEO_PROJECTION_POSE_YAW => {
         pose.yaw = ebml::read_float(src, child)?;
@@ -414,7 +420,7 @@ fn parse_projection(
         have_pose = true;
       }
       ids::VIDEO_PROJECTION_PRIVATE => {
-        let bytes = ebml::read_binary(src, child, 4 * 1024)?;
+        let bytes = ebml::read_binary(src, child, VIDEO_BINARY_CAP)?;
         p.private_hex = Some(hex_encode(&bytes));
       }
       _ => return Ok(ChildAction::Skip),
@@ -865,18 +871,20 @@ mod tests {
   #[test]
   fn colour_range_variants_decoded() {
     for (raw, expected) in [
-      (0u64, ColorRange::Unspecified),
-      (1, ColorRange::Broadcast),
-      (2, ColorRange::Full),
-      (3, ColorRange::MatrixDerived),
-      (99, ColorRange::Unspecified), // fallback
+      (0u64, Some(ColorRange::Unspecified)),
+      (1, Some(ColorRange::Broadcast)),
+      (2, Some(ColorRange::Full)),
+      (3, Some(ColorRange::MatrixDerived)),
+      (99, None),
     ] {
       let payload = encode_element_uint(ids::VIDEO_COLOUR_RANGE, 2, raw);
       let colour = encode_element(ids::VIDEO_COLOUR, 2, &payload);
       let (_b, h, mut s) = build_video(colour);
       let mut builder = VideoBuilder::default();
       parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
-      assert_eq!(builder.build().color.unwrap().range, Some(expected));
+      let color = builder.build().color.unwrap();
+      assert_eq!(color.range, expected);
+      assert_eq!(color.range_raw, Some(raw as u32));
     }
   }
 
@@ -908,11 +916,11 @@ mod tests {
   #[test]
   fn projection_types_and_pose_full_set() {
     for (raw, expected) in [
-      (0u64, ProjectionType::Rectangular),
-      (1, ProjectionType::Equirectangular),
-      (2, ProjectionType::Cubemap),
-      (3, ProjectionType::Mesh),
-      (99, ProjectionType::Rectangular), // fallback
+      (0u64, Some(ProjectionType::Rectangular)),
+      (1, Some(ProjectionType::Equirectangular)),
+      (2, Some(ProjectionType::Cubemap)),
+      (3, Some(ProjectionType::Mesh)),
+      (99, None),
     ] {
       let mut p = Vec::new();
       p.extend(encode_element_uint(ids::VIDEO_PROJECTION_TYPE, 2, raw));
@@ -924,7 +932,8 @@ mod tests {
       let mut builder = VideoBuilder::default();
       parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
       let p = builder.build().projection.unwrap();
-      assert_eq!(p.kind, Some(expected));
+      assert_eq!(p.kind, expected);
+      assert_eq!(p.kind_raw, Some(raw as u32));
       assert!(p.pose.is_some());
       assert_eq!(p.private_hex.as_deref(), Some("aabb"));
     }
@@ -1015,6 +1024,26 @@ mod tests {
     let mut builder = VideoBuilder::default();
     parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
     assert_eq!(builder.build().color_space_hex.as_deref(), Some("59563132"));
+  }
+
+  #[test]
+  fn colour_space_uses_shared_video_binary_cap() {
+    let payload = encode_element(ids::VIDEO_COLOR_SPACE, 3, &[0xAB; 32]);
+    let (_b, h, mut s) = build_video(payload);
+    let mut builder = VideoBuilder::default();
+    parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+    assert_eq!(builder.build().color_space_hex.as_ref().unwrap().len(), 64);
+  }
+
+  #[test]
+  fn projection_private_uses_shared_video_binary_cap() {
+    let large_private = vec![0xCD; 4 * 1024 + 1];
+    let private = encode_element(ids::VIDEO_PROJECTION_PRIVATE, 2, &large_private);
+    let proj = encode_element(ids::VIDEO_PROJECTION, 2, &private);
+    let (_b, h, mut s) = build_video(proj);
+    let mut builder = VideoBuilder::default();
+    parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
+    assert_eq!(builder.build().projection.unwrap().private_hex.unwrap().len(), large_private.len() * 2);
   }
 
   #[test]

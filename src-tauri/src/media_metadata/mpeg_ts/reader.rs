@@ -644,10 +644,10 @@ fn handle_pmt(
   stream_pids: &mut std::collections::HashSet<u16>,
 ) {
   let Ok(pmt) = pmt::parse(section) else { return };
-  let program_descriptors: DescriptorSummary = super::descriptors::walk(&pmt.program_descriptors);
+  let stream_only_descriptors = DescriptorSummary::default();
   for entry in pmt.streams {
     stream_pids.insert(entry.elementary_pid);
-    let new_rows = stream_table::build_rows(entry.elementary_pid, program_number, &entry, &program_descriptors);
+    let new_rows = stream_table::build_rows(entry.elementary_pid, program_number, &entry, &stream_only_descriptors);
     rows.extend(new_rows);
   }
   let _ = (pmt.program_number, pmt.pcr_pid);
@@ -1043,7 +1043,7 @@ mod tests {
     assert_eq!(enrich_for_codec("V_MPEG2", 0x02, &es).unwrap().pixel_dimensions, Some((1280, 720)));
 
     // VC-1 → pixel dimensions.
-    let es = vc1::build_sequence_header(1920, 1080);
+    let es = vc1::build_terminated_sequence_header(1920, 1080);
     assert_eq!(enrich_for_codec("V_VC1", 0xEA, &es).unwrap().pixel_dimensions, Some((1920, 1080)));
 
     // MP3 → channels + sampling frequency + Layer III codec override.

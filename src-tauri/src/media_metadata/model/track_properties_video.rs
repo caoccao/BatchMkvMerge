@@ -116,6 +116,9 @@ pub struct ColorMetadata {
   pub transfer_characteristics: Option<u32>,
   pub primaries: Option<u32>,
   pub range: Option<ColorRange>,
+  /// Raw Matroska `VideoColourRange` value when the source carried one.  This
+  /// preserves reserved/future values that do not map to [`ColorRange`].
+  pub range_raw: Option<u32>,
   pub bits_per_channel: Option<u32>,
   pub chroma_subsampling: Option<ChromaSubsampling>,
   pub cb_subsampling: Option<ChromaSubsampling>,
@@ -173,6 +176,9 @@ pub struct MasterMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectionMetadata {
   pub kind: Option<ProjectionType>,
+  /// Raw Matroska `VideoProjectionType` value when present.  This preserves
+  /// reserved/future values that do not map to [`ProjectionType`].
+  pub kind_raw: Option<u32>,
   pub pose: Option<ProjectionPose>,
   /// Codec-private projection bytes, hex-encoded.
   pub private_hex: Option<String>,
@@ -327,6 +333,7 @@ mod tests {
       transfer_characteristics: Some(16),
       primaries: Some(9),
       range: Some(ColorRange::Full),
+      range_raw: Some(2),
       bits_per_channel: Some(10),
       chroma_subsampling: Some(ChromaSubsampling {
         horizontal: 2,
@@ -348,6 +355,7 @@ mod tests {
     let s = serde_json::to_string(&color).unwrap();
     assert!(s.contains("\"matrixCoefficients\":9"));
     assert!(s.contains("\"range\":\"full\""));
+    assert!(s.contains("\"rangeRaw\":2"));
     assert!(s.contains("\"chromaSubsampling\":{\"horizontal\":2,\"vertical\":2}"));
     assert!(s.contains("\"master\":{"));
     let back: ColorMetadata = serde_json::from_str(&s).unwrap();
@@ -358,6 +366,7 @@ mod tests {
   fn projection_round_trip() {
     let p = ProjectionMetadata {
       kind: Some(ProjectionType::Equirectangular),
+      kind_raw: Some(1),
       pose: Some(ProjectionPose {
         yaw: -90.0,
         pitch: 0.0,
@@ -367,6 +376,7 @@ mod tests {
     };
     let s = serde_json::to_string(&p).unwrap();
     assert!(s.contains("\"kind\":\"equirectangular\""));
+    assert!(s.contains("\"kindRaw\":1"));
     let back: ProjectionMetadata = serde_json::from_str(&s).unwrap();
     assert_eq!(back, p);
   }

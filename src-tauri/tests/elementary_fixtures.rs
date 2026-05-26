@@ -212,6 +212,7 @@ fn parses_vc1_advanced_profile() {
   let mut bytes = vec![0x00, 0x00, 0x01, 0x0F];
   bytes.extend(w.into_bytes());
   bytes.extend_from_slice(&[0u8; 8]); // pad so 8-byte safety read succeeds
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x0D]); // delimit the sequence-header unit
   let path = write_tempfile(&bytes, "vc1");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

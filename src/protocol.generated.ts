@@ -158,6 +158,11 @@ export type ColorMetadata = {
 	transferCharacteristics: number | null,
 	primaries: number | null,
 	range: ColorRange | null,
+	/**
+	 *  Raw Matroska `VideoColourRange` value when the source carried one.  This
+	 *  preserves reserved/future values that do not map to [`ColorRange`].
+	 */
+	rangeRaw: number | null,
 	bitsPerChannel: number | null,
 	chromaSubsampling: ChromaSubsampling | null,
 	cbSubsampling: ChromaSubsampling | null,
@@ -450,6 +455,11 @@ export type Program = {
 
 export type ProjectionMetadata = {
 	kind: ProjectionType | null,
+	/**
+	 *  Raw Matroska `VideoProjectionType` value when present.  This preserves
+	 *  reserved/future values that do not map to [`ProjectionType`].
+	 */
+	kindRaw: number | null,
 	pose: ProjectionPose | null,
 	/**  Codec-private projection bytes, hex-encoded. */
 	privateHex: string | null,

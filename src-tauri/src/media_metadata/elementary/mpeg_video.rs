@@ -209,7 +209,7 @@ fn apply_sequence_extension(bytes: &[u8], sequence_pos: usize, header: &mut Sequ
     return;
   };
   let ext_pos = sequence_pos + 4 + ext_rel;
-  let Some(body) = bytes.get(ext_pos + 4..ext_pos + 4 + 10) else {
+  let Some(body) = bytes.get(ext_pos + 4..) else {
     return;
   };
   let mut br = BitReader::new(body);
@@ -222,21 +222,6 @@ fn apply_sequence_extension(bytes: &[u8], sequence_pos: usize, header: &mut Sequ
   header.version = 2;
   let _ = br.read_bits(8);
   let progressive = br.read_bit().ok();
-  let _ = br.read_bits(2);
-  let horizontal_ext = br.read_bits(2).unwrap_or(0) as u32;
-  let vertical_ext = br.read_bits(2).unwrap_or(0) as u32;
-  header.horizontal_size |= horizontal_ext << 12;
-  header.vertical_size |= vertical_ext << 12;
-  let _ = br.read_bits(12);
-  let _ = br.read_bit();
-  let _ = br.read_bits(8);
-  let _ = br.read_bit();
-  let frame_rate_ext_n = br.read_bits(2).unwrap_or(0) as u32;
-  let frame_rate_ext_d = br.read_bits(5).unwrap_or(0) as u32;
-  if header.frame_rate_num != 0 {
-    header.frame_rate_num = header.frame_rate_num.saturating_mul(frame_rate_ext_n + 1);
-    header.frame_rate_den = header.frame_rate_den.saturating_mul(frame_rate_ext_d + 1);
-  }
   header.progressive = progressive;
 }
 
@@ -377,19 +362,30 @@ fn build_es(width: u32, height: u32, frame_rate_code: u8) -> Vec<u8> {
 
 #[cfg(test)]
 fn sequence_extension(progressive: bool) -> Vec<u8> {
+  sequence_extension_with_ignored_size_and_frame_rate(progressive, 0, 0, 0, 0)
+}
+
+#[cfg(test)]
+fn sequence_extension_with_ignored_size_and_frame_rate(
+  progressive: bool,
+  horizontal_ext: u64,
+  vertical_ext: u64,
+  frame_rate_ext_n: u64,
+  frame_rate_ext_d: u64,
+) -> Vec<u8> {
   let mut w = BitWriter::new();
   w.write_bits(1, 4);
   w.write_bits(0, 8);
   w.write_bit(progressive);
   w.write_bits(1, 2);
-  w.write_bits(0, 2);
-  w.write_bits(0, 2);
+  w.write_bits(horizontal_ext, 2);
+  w.write_bits(vertical_ext, 2);
   w.write_bits(0, 12);
   w.write_bit(true);
   w.write_bits(0, 8);
   w.write_bit(false);
-  w.write_bits(0, 2);
-  w.write_bits(0, 5);
+  w.write_bits(frame_rate_ext_n, 2);
+  w.write_bits(frame_rate_ext_d, 5);
   let mut bytes = EXTENSION_START_CODE.to_vec();
   bytes.extend(w.into_bytes());
   bytes
@@ -556,6 +552,19 @@ mod tests {
         height: 576
       })
     );
+  }
+
+  #[test]
+  fn sequence_extension_size_and_frame_rate_factors_are_ignored() {
+    let mut bytes = build_sequence_header(720, 576, 3);
+    bytes.extend(sequence_extension_with_ignored_size_and_frame_rate(true, 3, 2, 2, 4));
+    let h = decode_sequence_header(&bytes).unwrap();
+    assert_eq!(h.version, 2);
+    assert_eq!(h.progressive, Some(true));
+    assert_eq!(h.horizontal_size, 720);
+    assert_eq!(h.vertical_size, 576);
+    assert_eq!(h.frame_rate_num, 25);
+    assert_eq!(h.frame_rate_den, 1);
   }
 
   #[test]

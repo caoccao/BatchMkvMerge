@@ -75,14 +75,19 @@ pub struct SequenceHeader {
 /// Find the next `00 00 01` start-code prefix at or after `from`, or the end of
 /// the buffer when none follows.
 fn next_start_code(bytes: &[u8], from: usize) -> usize {
+  find_next_start_code(bytes, from).unwrap_or(bytes.len())
+}
+
+/// Find the next `00 00 01` start-code prefix at or after `from`.
+fn find_next_start_code(bytes: &[u8], from: usize) -> Option<usize> {
   let mut i = from;
   while i + 3 <= bytes.len() {
     if bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 1 {
-      return i;
+      return Some(i);
     }
     i += 1;
   }
-  bytes.len()
+  None
 }
 
 /// Extract the raw bit-stream unit (start code through the byte before the next
@@ -102,8 +107,10 @@ fn raw_unit(bytes: &[u8], start_code: [u8; 4]) -> Option<Vec<u8>> {
 pub fn decode_sequence_header(bytes: &[u8]) -> Option<SequenceHeader> {
   let pos = bytes.windows(4).position(|w| w == SEQUENCE_HEADER_CODE)?;
   // Parse the whole sequence-header unit (up to the next start code) so the
-  // display-info / frame-rate fields are reachable.
-  let end = next_start_code(bytes, pos + 4);
+  // display-info / frame-rate fields are reachable.  PARSER-317: mkvtoolnix's
+  // ES parser only promotes a packet after a following marker has delimited it,
+  // so an unterminated final sequence-header unit is not accepted.
+  let end = find_next_start_code(bytes, pos + 4)?;
   let body = &bytes[pos + 4..end];
   let mut r = BitReader::from_rbsp(body);
 
@@ -172,6 +179,13 @@ pub fn decode_sequence_header(bytes: &[u8]) -> Option<SequenceHeader> {
       let _transfer_char = r.read_bits(8).ok()?;
       let _matrix_coef = r.read_bits(8).ok()?;
     }
+  }
+
+  let hrd_param_flag = r.read_bit().ok()?;
+  if hrd_param_flag {
+    let hrd_num_leaky_buckets = r.read_bits(5).ok()?;
+    r.skip_bits(8).ok()?;
+    r.skip_bits(hrd_num_leaky_buckets * 32).ok()?;
   }
 
   Some(SequenceHeader {
@@ -295,8 +309,16 @@ pub(crate) fn build_sequence_header(max_coded_width: u32, max_coded_height: u32)
   w.write_bit(false); // reserved
   w.write_bit(false); // psf_mode
   w.write_bit(false); // display_info_flag = 0
+  w.write_bit(false); // hrd_param_flag = 0
   let mut bytes = SEQUENCE_HEADER_CODE.to_vec();
   bytes.extend(w.into_bytes());
+  bytes
+}
+
+#[cfg(test)]
+pub(crate) fn build_terminated_sequence_header(max_coded_width: u32, max_coded_height: u32) -> Vec<u8> {
+  let mut bytes = build_sequence_header(max_coded_width, max_coded_height);
+  bytes.extend_from_slice(&FRAME_START_CODE);
   bytes
 }
 
@@ -395,7 +417,7 @@ mod tests {
 
   #[test]
   fn decodes_advanced_profile_1080p() {
-    let bytes = build_sequence_header(1920, 1080);
+    let bytes = build_terminated_sequence_header(1920, 1080);
     let h = decode_sequence_header(&bytes).unwrap();
     assert_eq!(h.profile, 3);
     assert_eq!(h.level, 4);
@@ -405,13 +427,14 @@ mod tests {
 
   #[test]
   fn probe_accepts_initial_vc1_markers_when_sequence_header_is_present() {
-    let bytes = build_sequence_header(1920, 1080);
+    let bytes = build_terminated_sequence_header(1920, 1080);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(Vc1Reader.probe(&mut s).unwrap());
 
     let mut entrypoint_first = ENTRYPOINT_START_CODE.to_vec();
     entrypoint_first.extend_from_slice(&[0u8; 8]);
     entrypoint_first.extend(build_sequence_header(1920, 1080));
+    entrypoint_first.extend_from_slice(&FRAME_START_CODE);
     let mut s = FileSource::from_reader_for_test(Cursor::new(entrypoint_first));
     assert!(Vc1Reader.probe(&mut s).unwrap());
 
@@ -428,7 +451,7 @@ mod tests {
 
   #[test]
   fn read_headers_emits_vc1_track() {
-    let bytes = build_sequence_header(1280, 720);
+    let bytes = build_terminated_sequence_header(1280, 720);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.vc1", 0);
     Vc1Reader
@@ -453,7 +476,16 @@ mod tests {
 
   #[test]
   fn non_advanced_profile_is_rejected() {
-    let bytes = build_simple_profile_header();
+    let mut bytes = build_simple_profile_header();
+    bytes.extend_from_slice(&FRAME_START_CODE);
+    assert!(decode_sequence_header(&bytes).is_none());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!Vc1Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn unterminated_sequence_header_is_rejected() {
+    let bytes = build_sequence_header(1280, 720);
     assert!(decode_sequence_header(&bytes).is_none());
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!Vc1Reader.probe(&mut s).unwrap());
@@ -464,7 +496,8 @@ mod tests {
   #[test]
   fn display_info_drives_display_dimensions_and_default_duration() {
     // Coded 1920x1088, display 1920x1080, 25 fps → 40 ms default duration.
-    let bytes = build_sequence_header_with_display(1920, 1088, 1920, 1080);
+    let mut bytes = build_sequence_header_with_display(1920, 1088, 1920, 1080);
+    bytes.extend_from_slice(&FRAME_START_CODE);
     let h = decode_sequence_header(&bytes).unwrap();
     assert_eq!(h.max_coded_width, 1920);
     assert_eq!(h.max_coded_height, 1088);
@@ -492,6 +525,7 @@ mod tests {
     entrypoint.extend_from_slice(&[0x12, 0x34, 0x56]);
     let mut bytes = seq.clone();
     bytes.extend_from_slice(&entrypoint);
+    bytes.extend_from_slice(&FRAME_START_CODE);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.vc1", 0);
     Vc1Reader

@@ -285,12 +285,6 @@ fn handle_page(
   }
 }
 
-/// Upper bound on header packets collected for variable-length-header codecs
-/// (FLAC / Kate).  mkvtoolnix has no fixed cap because it follows the FLAC
-/// metadata "last" flag / Kate high-bit run; this keeps the bounded,
-/// header-only contract for pathological streams.
-const MAX_HEADER_PACKETS: usize = 64;
-
 fn remember_header_packet(idx: usize, packet: &[u8], states: &mut [BitstreamState]) {
   let state = &mut states[idx];
   let Some(metadata) = state.metadata.as_ref() else {
@@ -305,7 +299,7 @@ fn remember_header_packet(idx: usize, packet: &[u8], states: &mut [BitstreamStat
     // the header run.
     "S_KATE" => {
       let is_header = packet.first().map(|b| b & 0x80 != 0).unwrap_or(false);
-      if is_header && state.header_packets.len() < MAX_HEADER_PACKETS {
+      if is_header {
         state.header_packets.push(packet.to_vec());
       } else {
         state.headers_complete = true;
@@ -316,13 +310,9 @@ fn remember_header_packet(idx: usize, packet: &[u8], states: &mut [BitstreamStat
     "A_FLAC" => {
       let is_first = state.header_packets.is_empty();
       let post_1_1_1 = metadata.flac_post_1_1_1.unwrap_or(false);
-      if state.header_packets.len() < MAX_HEADER_PACKETS {
-        let last = codecs::flac::is_last_metadata_block(packet, is_first, post_1_1_1).unwrap_or(true);
-        state.header_packets.push(packet.to_vec());
-        if last {
-          state.headers_complete = true;
-        }
-      } else {
+      let last = codecs::flac::is_last_metadata_block(packet, is_first, post_1_1_1).unwrap_or(true);
+      state.header_packets.push(packet.to_vec());
+      if last {
         state.headers_complete = true;
       }
     }
@@ -1030,6 +1020,29 @@ mod tests {
   }
 
   #[test]
+  fn read_headers_keeps_flac_header_runs_past_sixty_four_packets() {
+    let other_headers = 70u16;
+    let bos = flac::build_identification_packet_ex(48000, 2, 24, 0, true, other_headers, false);
+    let mut blocks = Vec::new();
+    for i in 0..other_headers {
+      blocks.push(flac::build_metadata_block_packet(1, i + 1 == other_headers, &[i as u8]));
+    }
+    let packet_refs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &packet_refs));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    let private = out.tracks[0].codec.codec_private.as_ref().unwrap();
+    let mut expected = bos[9..].to_vec();
+    for block in &blocks {
+      expected.extend_from_slice(block);
+    }
+    assert_eq!(private.length, expected.len() as u64);
+  }
+
+  #[test]
   fn read_headers_xiph_laces_multi_packet_kate_codec_private() {
     // PARSER-205: Kate keeps reading header packets while the high bit is set
     // and Xiph-laces all of them into codec private.  A high-bit-clear packet
@@ -1056,6 +1069,32 @@ mod tests {
     let total_payload = ident.len() + comment.len() + regions.len();
     assert!(private.length as usize > total_payload); // includes lace header
     assert!(private.hex.starts_with("02")); // 3 packets → count-1 = 2
+  }
+
+  #[test]
+  fn read_headers_keeps_kate_header_runs_past_sixty_four_packets() {
+    let ident = kate::build_identification_packet("en");
+    let headers: Vec<Vec<u8>> = (0..70)
+      .map(|i| {
+        let mut packet = vec![0x80 | (i as u8 & 0x0f)];
+        packet.extend_from_slice(b"kate\0\0\0");
+        packet.push(i as u8);
+        packet
+      })
+      .collect();
+    let data_pkt = vec![0x00, 0x01, 0x02];
+    let mut packet_refs: Vec<&[u8]> = headers.iter().map(Vec::as_slice).collect();
+    packet_refs.push(data_pkt.as_slice());
+
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&ident]);
+    bytes.extend(build_page(0, 0, 1, 1, &packet_refs));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+
+    let private = out.tracks[0].codec.codec_private.as_ref().unwrap();
+    assert!(private.length as usize > ident.len() + headers.iter().map(Vec::len).sum::<usize>());
+    assert!(private.hex.starts_with("46")); // 71 header packets → count-1 = 70.
   }
 
   #[test]

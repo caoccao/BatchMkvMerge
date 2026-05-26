@@ -85,14 +85,12 @@ pub fn build_rows(
   pid: u16,
   program_number: u16,
   entry: &PmtStreamEntry,
-  program_descriptors: &DescriptorSummary,
+  _program_descriptors: &DescriptorSummary,
 ) -> Vec<StreamRow> {
   let stream_desc = super::descriptors::walk(&entry.descriptors);
   let stream_language = stream_desc.language_iso_639_2.clone();
-  let language = stream_language
-    .clone()
-    .or_else(|| program_descriptors.language_iso_639_2.clone());
-  let service_name = program_descriptors.service_name.clone();
+  let language = stream_language.clone();
+  let service_name: Option<String> = None;
 
   let from_table = mpegts_stream_types::lookup(entry.stream_type);
   let mut codec_id = canonical_codec_id(entry.stream_type)
@@ -560,15 +558,23 @@ mod tests {
   }
 
   #[test]
-  fn program_level_language_used_when_stream_lacks_one() {
+  fn program_level_language_is_not_used_when_stream_lacks_one() {
     let mut prog = DescriptorSummary::default();
     prog.language_iso_639_2 = Some("jpn".to_string());
     let row = build_row(0x1234, 1, &entry(0x0F, vec![]), &prog);
-    assert_eq!(row.language.as_deref(), Some("jpn"));
+    assert!(row.language.is_none());
   }
 
   #[test]
-  fn stream_level_language_takes_precedence_over_program_level() {
+  fn program_level_service_name_is_not_copied_to_stream() {
+    let mut prog = DescriptorSummary::default();
+    prog.service_name = Some("Program Service".to_string());
+    let row = build_row(0x1234, 1, &entry(0x0F, vec![]), &prog);
+    assert!(row.service_name.is_none());
+  }
+
+  #[test]
+  fn stream_level_language_is_used() {
     let mut prog = DescriptorSummary::default();
     prog.language_iso_639_2 = Some("jpn".to_string());
     let descs = build_descriptor(TAG_ISO_639_LANGUAGE, b"fra\x00");
