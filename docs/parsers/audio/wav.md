@@ -33,3 +33,9 @@ Important structures are `WavType`, `WaveFormat`, `WavMetadata`, and internal ch
 ## Gaps and Handling
 
 The byte total now accumulates all data chunks like upstream, so duration is correct for multi-`data`-chunk files, and the >4 GiB data-length repair matches `scan_chunks_wave`. Unsupported format tags are reported through the structured model rather than matching mkvmerge's exact text output.
+
+## Open Issues
+
+- `PARSER-301` — RIFF chunk scanning applies word-alignment padding that mkvtoolnix does not apply. Odd-length chunks advance by `len + 1` in Rust, while `scan_chunks_wave` seeks by exactly `len`, so Rust can recover following chunks from padded files that upstream mis-parses or rejects.
+- `PARSER-302` — The primary `data` chunk lookup allows zero-length chunks. Upstream calls `find_chunk("data", 0, false)`, where `false` means empty chunks are not accepted, but Rust passes `false` to a `require_non_empty` parameter. An empty `data` chunk can therefore still produce a supported WAV track in Rust.
+- `PARSER-303` — AC-3/DTS WAV support is decided by the format tag instead of the upstream demuxer probes. Rust marks `0x2000` and `0x2001` supported even when the data payload does not contain enough consecutive AC-3/DTS frames; mkvtoolnix only keeps those demuxers after their `probe()` methods validate real headers.

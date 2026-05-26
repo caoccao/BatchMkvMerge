@@ -42,3 +42,7 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, and per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers.
+
+## Open Issues
+
+- `PARSER-304` — The packet loop does not resynchronise after a missing sync byte. It keeps reading fixed-size chunks and discards packets whose expected sync position is not `0x47`; mkvtoolnix calls `resync`, scans byte-by-byte, verifies the next packet stride, and resumes from the recovered packet. A single inserted, dropped, or corrupt byte can make Rust miss all following PAT/PMT/PES data.

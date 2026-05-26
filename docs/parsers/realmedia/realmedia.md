@@ -36,3 +36,7 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 ## Gaps and Handling
 
 Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or scan deeply into DATA chunks. Late RealVideo and `dnet` refinements can therefore be missed. The parser records the reliable header metadata and bounded first-packet improvements only.
+
+## Open Issues
+
+- `PARSER-297` — The reader does not enforce librmff's strict header loop. It marks the container recognised immediately after `.RMF`, skips unknown chunks, breaks silently on short or invalid chunk headers, and still emits collected `MDPR` tracks even when mandatory `PROP` or `DATA` chunks were never accepted. `rmff_read_headers` rejects unknown headers and only succeeds after both `PROP` and `DATA`, so malformed files can be repaired or identified by Rust even though mkvtoolnix drops them.
