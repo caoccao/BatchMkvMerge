@@ -185,7 +185,7 @@ fn parse_entry(
       is_subtitle = false;
       bytes_consumed += parse_audio_sample_entry(src, entry, builder, payload, bytes_consumed)?;
     }
-    Some(h) if matches!(&h, b"subt" | b"sbtl" | b"text" | b"subp") => {
+    Some(h) if matches!(&h, b"sbtl" | b"text" | b"subp") => {
       // Subtitle sample entries have no extra fixed struct beyond the 8-byte
       // header — the remaining bytes after it are the private data.
       is_video = false;

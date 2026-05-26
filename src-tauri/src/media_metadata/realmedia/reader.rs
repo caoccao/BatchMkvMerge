@@ -18,7 +18,7 @@
 //! RealMediaReader — walks the top-level chunk hierarchy and populates the
 //! MediaMetadata model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::media_metadata::audio::{aac, ac3};
 use crate::media_metadata::deadline::Deadline;
@@ -40,7 +40,7 @@ use super::chunks::{
 use super::stream_props::{AudioProps, VideoProps};
 
 const PROBE_BYTES: usize = 4;
-const DATA_PACKET_SCAN_CAP: usize = 1024 * 1024;
+const DATA_PACKET_CAPTURE_CAP: usize = 64 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealMediaReader;
@@ -127,7 +127,7 @@ impl Reader for RealMediaReader {
         })?;
         tracks.push(m);
       } else if chunk.id == ID_DATA {
-        break read_first_data_packets(src, payload_len, tracks.len().max(1))?;
+        break read_first_data_packets(src, payload_len, &tracks, deadline)?;
       } else {
         return Err(ParseError::Malformed {
           format: "realmedia",
@@ -173,7 +173,8 @@ fn read_payload(src: &mut FileSource, len: usize) -> Result<Vec<u8>, ParseError>
 fn read_first_data_packets(
   src: &mut FileSource,
   payload_len: usize,
-  target_streams: usize,
+  tracks: &[MdprChunk],
+  deadline: &Deadline,
 ) -> Result<HashMap<u16, Vec<u8>>, ParseError> {
   if payload_len < 8 {
     return Err(ParseError::Malformed {
@@ -182,27 +183,69 @@ fn read_first_data_packets(
       reason: format!("DATA chunk payload {payload_len} is shorter than its packet header"),
     });
   }
-  let to_read = payload_len.min(DATA_PACKET_SCAN_CAP);
-  let mut buf = vec![0u8; to_read];
-  src.read_exact(&mut buf)?;
+  let dnet_streams = dnet_stream_numbers(tracks);
+  let target_streams = tracks.len();
   let mut packets = HashMap::new();
-  if buf.len() < 8 {
-    return Ok(packets);
-  }
 
-  let mut pos = 8usize; // num_packets + next_data_offset
-  while pos + 12 <= buf.len() && packets.len() < target_streams {
-    let length = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]) as usize;
-    if length < 12 || pos + length > buf.len() {
+  // DATA starts with num_packets + next_data_offset. The following packet walk
+  // mirrors librmff's frame loop closely enough for identification, but stores
+  // only a small prefix of each first packet instead of buffering the chunk.
+  src.skip(8)?;
+  let mut remaining = payload_len - 8;
+  while remaining >= 12 {
+    deadline.check("realmedia-data")?;
+    let mut header = [0u8; 12];
+    src.read_exact(&mut header)?;
+    let length = u16::from_be_bytes([header[2], header[3]]) as usize;
+    if length < 12 || length > remaining {
       break;
     }
-    let stream_number = u16::from_be_bytes([buf[pos + 4], buf[pos + 5]]);
-    packets
-      .entry(stream_number)
-      .or_insert_with(|| buf[pos + 12..pos + length].to_vec());
-    pos += length;
+    let stream_number = u16::from_be_bytes([header[4], header[5]]);
+    let payload_size = length - 12;
+    let capture_len = payload_size.min(DATA_PACKET_CAPTURE_CAP);
+    let mut data = vec![0u8; capture_len];
+    if capture_len > 0 {
+      src.read_exact(&mut data)?;
+    }
+    if payload_size > capture_len {
+      src.skip((payload_size - capture_len) as u64)?;
+    }
+
+    if dnet_streams.contains(&stream_number) {
+      if dnet_packet_has_bsid(&data) {
+        packets.insert(stream_number, data);
+      } else {
+        packets.entry(stream_number).or_insert(data);
+      }
+    } else {
+      packets.entry(stream_number).or_insert(data);
+    }
+
+    remaining -= length;
+    if packets.len() >= target_streams && dnet_streams.iter().all(|id| packets.get(id).is_some_and(|p| dnet_packet_has_bsid(p))) {
+      break;
+    }
   }
   Ok(packets)
+}
+
+fn dnet_stream_numbers(tracks: &[MdprChunk]) -> HashSet<u16> {
+  tracks
+    .iter()
+    .filter_map(|track| {
+      if track.mime_type == "audio/x-pn-realaudio" {
+        let props = AudioProps::parse(&track.type_specific_data)?;
+        if fourcc_string(&props.fourcc).eq_ignore_ascii_case("dnet") {
+          return Some(track.stream_number);
+        }
+      }
+      None
+    })
+    .collect()
+}
+
+fn dnet_packet_has_bsid(packet: &[u8]) -> bool {
+  packet.get(4).is_some()
 }
 
 fn apply_content_metadata(out: &mut MediaMetadata, c: &ContChunk) {
@@ -986,6 +1029,39 @@ mod tests {
       .unwrap();
     assert_eq!(cfg.profile_name.as_deref(), Some("BSID 11"));
     assert!(cfg.raw_hex.as_deref().unwrap().starts_with("0b77"));
+  }
+
+  #[test]
+  fn read_headers_keeps_scanning_until_dnet_bsid_is_found() {
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    let dnet_props = build_audio_v4(48_000, 2, 16, b"dnet");
+    let video_props = build_video_props(b"RV40", 320, 240, 25.0);
+    blob.extend(build_mdpr(3, "audio/x-pn-realaudio", &dnet_props));
+    blob.extend(build_mdpr(4, "video/x-pn-realvideo", &video_props));
+    let frame = crate::media_metadata::audio::ac3::build_ac3_frame_full(0, 8, 11, 2, false);
+    blob.extend(build_data_chunk_with_packets(&[
+      (3, vec![0, 1, 2, 3]),
+      (4, build_real_video_packet_dims(5, 5)),
+      (3, frame),
+    ]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let audio = out.tracks.iter().find(|t| t.id == 3).unwrap();
+    assert_eq!(audio.codec.id, "A_EAC3");
+    let cfg = audio
+      .properties
+      .audio
+      .as_ref()
+      .unwrap()
+      .codec_config
+      .as_ref()
+      .unwrap();
+    assert_eq!(cfg.profile_name.as_deref(), Some("BSID 11"));
   }
 
   #[test]

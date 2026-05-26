@@ -162,6 +162,16 @@ fn starts_with_mpeg_ts_sync(buf: &[u8]) -> bool {
   buf.first() == Some(&0x47)
 }
 
+pub(crate) fn codec_private_from_annex_b(buf: &[u8]) -> Option<(Vec<u8>, sps::HevcSps)> {
+  let units = nal::split_nal_units(buf);
+  let headers = extract_headers(&units)?;
+  let sps_unit = headers.sps?;
+  let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
+  let sps = sps::parse(&rbsp).ok()?;
+  let codec_private = headers.codec_private(&sps);
+  Some((codec_private, sps))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct HevcHeaders<'a> {
   vps: Option<nal::HevcNalUnit<'a>>,
@@ -268,6 +278,97 @@ fn map_chroma(idc: u8) -> ChromaFormat {
     3 => ChromaFormat::Yuv444,
     _ => ChromaFormat::Other,
   }
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_main10_stream() -> Vec<u8> {
+  struct BitWriter {
+    buf: Vec<u8>,
+    bit_index: u8,
+  }
+  impl BitWriter {
+    fn new() -> Self {
+      Self {
+        buf: Vec::new(),
+        bit_index: 0,
+      }
+    }
+    fn write_bit(&mut self, b: bool) {
+      if self.bit_index == 0 {
+        self.buf.push(0);
+      }
+      if b {
+        let last = self.buf.len() - 1;
+        self.buf[last] |= 1 << (7 - self.bit_index);
+      }
+      self.bit_index = (self.bit_index + 1) % 8;
+    }
+    fn write_bits(&mut self, value: u64, n: u32) {
+      for i in 0..n {
+        self.write_bit((value >> (n - 1 - i)) & 1 != 0);
+      }
+    }
+    fn write_ue(&mut self, value: u32) {
+      let codeword = value as u64 + 1;
+      let nb = 64 - codeword.leading_zeros();
+      for _ in 0..(nb - 1) {
+        self.write_bit(false);
+      }
+      self.write_bits(codeword, nb);
+    }
+    fn into_bytes(mut self) -> Vec<u8> {
+      self.write_bit(true);
+      while self.bit_index != 0 {
+        self.write_bit(false);
+      }
+      self.buf
+    }
+  }
+
+  fn write_simple_tail(w: &mut BitWriter) {
+    w.write_ue(4);
+    w.write_bit(false);
+    for _ in 0..9 {
+      w.write_ue(0);
+    }
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_ue(0);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+  }
+
+  let mut w = BitWriter::new();
+  w.write_bits(0, 4);
+  w.write_bits(0, 3);
+  w.write_bit(true);
+  w.write_bits(0, 2);
+  w.write_bit(false);
+  w.write_bits(2, 5);
+  w.write_bits(0, 32);
+  w.write_bits(0, 48);
+  w.write_bits(120, 8);
+  w.write_ue(0);
+  w.write_ue(1);
+  w.write_ue(1920);
+  w.write_ue(1080);
+  w.write_bit(false);
+  w.write_ue(2);
+  w.write_ue(2);
+  write_simple_tail(&mut w);
+  let sps = w.into_bytes();
+
+  let mut bytes = Vec::new();
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x40, 0x01]);
+  bytes.extend_from_slice(&[0b0000_1100, 0b0000_0100, 0x80]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x42, 0x01]);
+  bytes.extend(sps);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
+  bytes
 }
 
 #[cfg(test)]

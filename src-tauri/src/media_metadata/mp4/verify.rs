@@ -25,14 +25,17 @@
 //! `read_headers` (it needs the `FileSource` for bounded first-sample reads,
 //! which `identify::finalise` has no access to).
 //!
-//! All reads are bounded (≤ 16 KiB per track) and deadline-checked — we only
-//! locate and read the first indexed samples, never demux.
+//! All reads are bounded (≤ 16 KiB for audio probes, ≤ 1 MiB for HEVC Annex B
+//! salvage) and deadline-checked — we only locate and read the first indexed
+//! samples, never demux.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::track::TrackType;
-use crate::media_metadata::model::track_properties_video::{Dimensions2D, VideoCodecConfig};
+use crate::media_metadata::model::track_properties_video::{
+  ChromaFormat, Dimensions2D, HevcTier as ModelHevcTier, VideoCodecConfig,
+};
 
 use super::codec_specific::hex_encode;
 use super::identify;
@@ -40,9 +43,11 @@ use super::moov::MoovBuilder;
 use super::moov::hdlr::Handler;
 use super::moov::trak::TrackBuilder;
 
-/// Hard cap on any single first-sample read.  Mirrors the largest buffer the
-/// C++ verification path requests (`read_first_bytes(16384)`).
+/// Hard cap for the audio first-sample probes.
 const MAX_FIRST_BYTES: u64 = 16384;
+const MIN_HEVC_ANNEX_B_BYTES: u64 = 128 * 1024;
+/// HEVC Annex B fallback doubles its probe up to 1 MiB in mkvtoolnix.
+const MAX_HEVC_ANNEX_B_BYTES: u64 = 1024 * 1024;
 
 /// Run the verification pass over every track in `moov`, setting
 /// `builder.probe_failed = true` for tracks mkvtoolnix would reject.
@@ -264,10 +269,13 @@ fn verify_video(src: &mut FileSource, deadline: &Deadline, builder: &mut TrackBu
     return Ok(());
   }
 
-  // HEVC (r_qtmp4.cpp:3808-3816): require an hvcC (config ≥ 23 bytes); no
-  // bitstream derivation.
+  // HEVC: mkvtoolnix first checks whether the indexed media sample is Annex B
+  // and, if so, scans up to 1 MiB to derive an hvcC before applying the normal
+  // config-size gate.
   if is_hevc(&codec) {
-    if !has_decoder_config(builder, 23) {
+    if has_decoder_config(builder, 23) || derive_hevc_from_bitstream(src, deadline, builder)? {
+      return Ok(());
+    } else {
       builder.probe_failed = true;
     }
     return Ok(());
@@ -366,6 +374,76 @@ fn derive_avc_from_bitstream(
   Ok(true)
 }
 
+fn derive_hevc_from_bitstream(
+  src: &mut FileSource,
+  deadline: &Deadline,
+  builder: &mut TrackBuilder,
+) -> Result<bool, ParseError> {
+  let Some(prefix) = read_first_bytes(src, deadline, builder, 4)? else {
+    return Ok(false);
+  };
+  if prefix.as_slice() != [0x00, 0x00, 0x00, 0x01] {
+    return Ok(false);
+  }
+  let mut probe_size = MIN_HEVC_ANNEX_B_BYTES;
+  let (hvcc, sps) = loop {
+    let Some(buf) = read_first_bytes(src, deadline, builder, probe_size)? else {
+      return Ok(false);
+    };
+    if let Some(parsed) = crate::media_metadata::elementary::hevc::reader::codec_private_from_annex_b(&buf) {
+      break parsed;
+    }
+    probe_size *= 2;
+    if probe_size > MAX_HEVC_ANNEX_B_BYTES {
+      return Ok(false);
+    }
+  };
+
+  let raw_hex = hex_encode(&hvcc);
+  let (display_width, display_height) = sps.display_dimensions();
+  let cfg = VideoCodecConfig {
+    profile_idc: Some(sps.profile_idc as u32),
+    profile_name: Some(crate::media_metadata::elementary::hevc::sps::format_profile(sps.profile_idc).to_string()),
+    level_idc: Some(sps.level_idc as u32),
+    level_name: Some(crate::media_metadata::elementary::hevc::sps::format_level(sps.level_idc)),
+    tier: Some(match sps.tier {
+      crate::media_metadata::elementary::hevc::sps::HevcTier::Main => ModelHevcTier::Main,
+      crate::media_metadata::elementary::hevc::sps::HevcTier::High => ModelHevcTier::High,
+    }),
+    chroma_format: Some(match sps.chroma_format_idc {
+      0 => ChromaFormat::Monochrome,
+      1 => ChromaFormat::Yuv420,
+      2 => ChromaFormat::Yuv422,
+      3 => ChromaFormat::Yuv444,
+      _ => ChromaFormat::Other,
+    }),
+    bit_depth_luma: Some(sps.bit_depth_luma as u32),
+    bit_depth_chroma: Some(sps.bit_depth_chroma as u32),
+    coded_dimensions: Some(Dimensions2D {
+      width: sps.coded_width,
+      height: sps.coded_height,
+    }),
+    raw_hex: Some(raw_hex.clone()),
+    is_elementary_stream: Some(false),
+    ..VideoCodecConfig::default()
+  };
+  builder.codec_private_hex = Some(raw_hex);
+  builder.video_codec_config = Some(cfg.clone());
+  if let Some(video) = builder.video.as_mut() {
+    let pixel = Dimensions2D {
+      width: sps.display_width,
+      height: sps.display_height,
+    };
+    video.pixel_dimensions = Some(pixel);
+    video.display_dimensions = Some(Dimensions2D {
+      width: display_width,
+      height: display_height,
+    });
+    video.codec_config = Some(cfg);
+  }
+  Ok(true)
+}
+
 /// Assemble an `avcC` configuration record from a decoded SPS and the raw
 /// SPS/PPS NAL bytes.  `lengthSizeMinusOne` defaults to 3 (4-byte NAL length).
 fn build_avcc(
@@ -408,15 +486,18 @@ fn nal_bytes(unit: crate::media_metadata::elementary::avc::nal::NalUnit<'_>) -> 
 
 // ----- subtitles ----------------------------------------------------------
 
-/// r_qtmp4.cpp:3835-3853.  VobSub requires an esds decoder config ≥ 64 bytes;
-/// tx3g/text always verify.  Image / unknown subtitle codecs whose private
-/// data we preserved (PARSER-178) are kept — mkvtoolnix only has explicit
-/// gates for S_VOBSUB and S_TX3G, and our `build_track` already emits the
-/// remaining types as image subtitles.
+/// r_qtmp4.cpp:3835-3853. VobSub requires an esds decoder config ≥ 64 bytes;
+/// TX3G is the only other subtitle codec accepted by mkvtoolnix's MP4 reader.
 fn verify_subtitles(builder: &mut TrackBuilder) {
   let codec = identify::effective_codec_id(builder);
-  if codec == "S_VOBSUB" && builder.esds_decoder_specific_len.unwrap_or(0) < 64 {
-    builder.probe_failed = true;
+  match codec.as_str() {
+    "S_VOBSUB" => {
+      if builder.esds_decoder_specific_len.unwrap_or(0) < 64 {
+        builder.probe_failed = true;
+      }
+    }
+    "S_TX3G" | "tx3g" | "text" => {}
+    _ => builder.probe_failed = true,
   }
 }
 
@@ -425,7 +506,8 @@ fn verify_subtitles(builder: &mut TrackBuilder) {
 /// Port of `qtmp4_demuxer_c::read_first_bytes(num_bytes)`
 /// (`r_qtmp4.cpp:2881-2906`): iterate the (bounded) sample index, seeking to
 /// EACH sample's file offset and reading `min(remaining, sample.size)` bytes,
-/// until `num_bytes` is collected.  `max` is clamped to [`MAX_FIRST_BYTES`].
+/// until `num_bytes` is collected. `max` is clamped to the largest HEVC Annex B
+/// salvage window mkvtoolnix uses.
 /// Returns `None` when no indexed samples can provide the full requested
 /// window or any media read comes up short.
 ///
@@ -439,7 +521,7 @@ fn read_first_bytes(
   max: u64,
 ) -> Result<Option<Vec<u8>>, ParseError> {
   deadline.check("mp4::read_first_bytes")?;
-  let want_total = max.min(MAX_FIRST_BYTES);
+  let want_total = max.min(MAX_HEVC_ANNEX_B_BYTES);
   if want_total == 0 {
     return Ok(None);
   }
@@ -730,13 +812,29 @@ mod tests {
     assert!(b.probe_failed);
   }
 
-  // r_qtmp4.cpp:3810: hev1 without an hvcC is skipped.
+  // r_qtmp4.cpp:3810: hev1 without an hvcC or Annex B headers is skipped.
   #[test]
   fn hevc_without_hvcc_dropped() {
     let mut b = video_builder("hev1", 3840, 2160);
     let mut src = source(vec![]);
     verify_video(&mut src, &dl(), &mut b).unwrap();
     assert!(b.probe_failed);
+  }
+
+  #[test]
+  fn hevc_without_hvcc_salvaged_from_annex_b_bitstream() {
+    let mut b = video_builder("hev1", 3840, 2160);
+    let mut es = crate::media_metadata::elementary::hevc::reader::build_test_main10_stream();
+    es.resize(MIN_HEVC_ANNEX_B_BYTES as usize, 0);
+    set_single_sample(&mut b, es.len() as u64);
+    let mut src = source(es);
+    verify_video(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    assert!(b.codec_private_hex.as_ref().is_some_and(|hex| hex.len() / 2 >= 23));
+    let cfg = b.video_codec_config.as_ref().unwrap();
+    assert_eq!(cfg.profile_idc, Some(2));
+    assert_eq!(cfg.bit_depth_luma, Some(10));
+    assert_eq!(cfg.is_elementary_stream, Some(false));
   }
 
   #[test]
@@ -833,13 +931,13 @@ mod tests {
 
   // ---- PARSER-184: MP2/MP3 + AC-3 first-frame parameter recovery -----------
 
-  /// An mp4a entry whose esds objectTypeIndication is MP3 (0x6B) but whose
+  /// An mp4a entry whose esds objectTypeIndication is MP3 (0x69) but whose
   /// sample entry left channels/rate at zero — mkvtoolnix recovers them from
   /// the first frame (r_qtmp4.cpp:3552-3565) instead of dropping the track.
   #[test]
   fn mp3_params_recovered_from_first_frame() {
     let mut b = audio_builder("mp4a", 0, 0.0);
-    b.esds_object_type = Some(0x6B); // → A_MPEG/L3
+    b.esds_object_type = Some(0x69); // → A_MPEG/L3
     let frame = crate::media_metadata::audio::mp3::build_mp3_frame_v1(128, 44_100, false);
     set_single_sample(&mut b, frame.len() as u64);
     let mut src = source(frame);
@@ -854,7 +952,7 @@ mod tests {
   #[test]
   fn mp3_without_frame_dropped_by_generic_gate() {
     let mut b = audio_builder("mp4a", 0, 0.0);
-    b.esds_object_type = Some(0x6B);
+    b.esds_object_type = Some(0x69);
     set_single_sample(&mut b, 64);
     let mut src = source(vec![0x00u8; 64]);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
@@ -1009,6 +1107,17 @@ mod tests {
     b.codec_id_str = Some("tx3g".to_string());
     verify_subtitles(&mut b);
     assert!(!b.probe_failed);
+  }
+
+  #[test]
+  fn unsupported_subtitle_sample_entries_dropped() {
+    for codec in ["wvtt", "stpp", "image"] {
+      let mut b = TrackBuilder::default();
+      b.handler_type = Some(*b"sbtl");
+      b.codec_id_str = Some(codec.to_string());
+      verify_subtitles(&mut b);
+      assert!(b.probe_failed, "{codec} should be rejected");
+    }
   }
 
   // read_first_bytes returns None when no chunk offset was recorded.

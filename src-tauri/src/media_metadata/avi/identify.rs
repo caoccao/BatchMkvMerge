@@ -188,16 +188,19 @@ fn make_audio_track(id: i64, builder: StreamBuilder) -> Option<Track> {
     return None;
   };
   // WAVE_FORMAT_EXTENSIBLE (0xFFFE) carries the real format tag in the
-  // SubFormat GUID's data1 field (PARSER-059): the 18-byte WAVEFORMATEX is
-  // followed by wValidBitsPerSample(2) + dwChannelMask(4) + GUID, so data1
-  // sits at extra offset 6.
-  let effective_tag = if wf.format_tag == 0xFFFE && wf.extra.len() >= 10 {
-    u16::from_le_bytes([wf.extra[6], wf.extra[7]])
+  // SubFormat GUID's 32-bit data1 field. mkvtoolnix only unwraps when the
+  // declared extension is a complete alWAVEFORMATEXTENSION (22 bytes).
+  let effective_tag = if wf.format_tag == 0xFFFE && wf.extra.len() >= 22 {
+    u32::from_le_bytes([wf.extra[6], wf.extra[7], wf.extra[8], wf.extra[9]])
   } else {
-    wf.format_tag
+    wf.format_tag as u32
   };
-  let codec_id = format!("0x{:04X}", effective_tag);
-  let codec_name = name_from_wave_tag(effective_tag);
+  let codec_id = if effective_tag <= u16::MAX as u32 {
+    format!("0x{:04X}", effective_tag)
+  } else {
+    format!("0x{:08X}", effective_tag)
+  };
+  let codec_name = u16::try_from(effective_tag).ok().and_then(name_from_wave_tag);
   let private = if wf.extra.is_empty() {
     None
   } else {
@@ -322,6 +325,9 @@ fn display_dimensions_from_aspect(pixel: Dimensions2D, vprp: &VideoPropertiesHea
 /// 40+N-byte blob (PARSER-085).  Mirrors mkvtoolnix's
 /// `r_avi.cpp:188-206` codec_private layout.
 fn bmih_codec_private(bmih: &BitmapInfoHeader) -> Vec<u8> {
+  if bmih.raw.len() >= 40 {
+    return bmih.raw.clone();
+  }
   let mut bytes = Vec::with_capacity(40 + bmih.extra.len());
   bytes.extend_from_slice(&bmih.size.to_le_bytes());
   bytes.extend_from_slice(&bmih.width.to_le_bytes());
@@ -330,9 +336,6 @@ fn bmih_codec_private(bmih: &BitmapInfoHeader) -> Vec<u8> {
   bytes.extend_from_slice(&bmih.bit_count.to_le_bytes());
   bytes.extend_from_slice(&bmih.compression);
   bytes.extend_from_slice(&bmih.image_size.to_le_bytes());
-  // The remaining 16 bytes of the standard BITMAPINFOHEADER (x/y ppm,
-  // colors used/important) are stored as zeros — we never decode them and
-  // mkvtoolnix's packetizers don't depend on the values.
   bytes.extend_from_slice(&[0u8; 16]);
   bytes.extend_from_slice(&bmih.extra);
   bytes
@@ -447,6 +450,7 @@ mod tests {
         bit_count: 24,
         compression: *b"H264",
         image_size: 0,
+        raw: Vec::new(),
         extra: Vec::new(),
       })),
       name: None,
@@ -497,6 +501,7 @@ mod tests {
       bit_count: 24,
       compression: *b"H264",
       image_size: 0,
+      raw: Vec::new(),
       extra: Vec::new(),
     };
     let builder = StreamBuilder {
@@ -533,6 +538,7 @@ mod tests {
       bit_count: 24,
       compression: *b"H264",
       image_size: 0,
+      raw: Vec::new(),
       extra: Vec::new(),
     };
     let builder = StreamBuilder {
@@ -568,6 +574,7 @@ mod tests {
       bit_count: 24,
       compression: *b"H264",
       image_size: 0,
+      raw: Vec::new(),
       extra: Vec::new(),
     };
     let builder = StreamBuilder {
@@ -605,6 +612,7 @@ mod tests {
       bit_count: 24,
       compression: *b"XVID",
       image_size: 0,
+      raw: Vec::new(),
       extra: vec![0x01, 0x02, 0x03, 0x04],
     };
     let builder = StreamBuilder {
@@ -624,6 +632,42 @@ mod tests {
   }
 
   #[test]
+  fn video_codec_private_preserves_original_bitmap_header_bytes() {
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&40u32.to_le_bytes());
+    raw.extend_from_slice(&1920i32.to_le_bytes());
+    raw.extend_from_slice(&1080i32.to_le_bytes());
+    raw.extend_from_slice(&1u16.to_le_bytes());
+    raw.extend_from_slice(&24u16.to_le_bytes());
+    raw.extend_from_slice(b"XVID");
+    raw.extend_from_slice(&0u32.to_le_bytes());
+    raw.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    raw.extend_from_slice(&[0xaa, 0xbb]);
+    let bmih = BitmapInfoHeader {
+      size: 40,
+      width: 1920,
+      height: 1080,
+      planes: 1,
+      bit_count: 24,
+      compression: *b"XVID",
+      image_size: 0,
+      raw: raw.clone(),
+      extra: vec![0xaa, 0xbb],
+    };
+    let builder = StreamBuilder {
+      header: Some(dummy_video_header()),
+      format: Some(StreamFormat::Video(bmih)),
+      name: None,
+      private: None,
+      vprp: None,
+    };
+    let track = make_video_track(0, builder, None).unwrap();
+    let private = track.codec.codec_private.unwrap();
+    assert_eq!(private.length, raw.len() as u64);
+    assert_eq!(private.hex, raw.iter().map(|b| format!("{b:02x}")).collect::<String>());
+  }
+
+  #[test]
   fn negative_height_top_down_dib_is_flipped_positive() {
     let bmih = BitmapInfoHeader {
       size: 40,
@@ -633,6 +677,7 @@ mod tests {
       bit_count: 24,
       compression: *b"H264",
       image_size: 0,
+      raw: Vec::new(),
       extra: Vec::new(),
     };
     let builder = StreamBuilder {
@@ -746,6 +791,60 @@ mod tests {
     let track = make_audio_track(1, builder).unwrap();
     assert_eq!(track.codec.id, "0x0001");
     assert_eq!(track.codec.name.as_deref(), Some("PCM"));
+  }
+
+  #[test]
+  fn extensible_audio_requires_complete_extension_before_unwrap() {
+    let mut extra = Vec::new();
+    extra.extend_from_slice(&16u16.to_le_bytes());
+    extra.extend_from_slice(&3u32.to_le_bytes());
+    extra.extend_from_slice(&1u32.to_le_bytes());
+    let wf = WaveFormatEx {
+      format_tag: 0xFFFE,
+      channels: 2,
+      samples_per_sec: 48000,
+      avg_bytes_per_sec: 192000,
+      block_align: 4,
+      bits_per_sample: 16,
+      extra,
+    };
+    let builder = StreamBuilder {
+      header: Some(dummy_audio_header()),
+      format: Some(StreamFormat::Audio(wf)),
+      name: None,
+      private: None,
+      vprp: None,
+    };
+    let track = make_audio_track(1, builder).unwrap();
+    assert_eq!(track.codec.id, "0xFFFE");
+  }
+
+  #[test]
+  fn extensible_audio_reads_full_guid_data1() {
+    let mut extra = Vec::new();
+    extra.extend_from_slice(&16u16.to_le_bytes());
+    extra.extend_from_slice(&3u32.to_le_bytes());
+    extra.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+    extra.extend_from_slice(&[0u8; 12]);
+    let wf = WaveFormatEx {
+      format_tag: 0xFFFE,
+      channels: 2,
+      samples_per_sec: 48000,
+      avg_bytes_per_sec: 192000,
+      block_align: 4,
+      bits_per_sample: 16,
+      extra,
+    };
+    let builder = StreamBuilder {
+      header: Some(dummy_audio_header()),
+      format: Some(StreamFormat::Audio(wf)),
+      name: None,
+      private: None,
+      vprp: None,
+    };
+    let track = make_audio_track(1, builder).unwrap();
+    assert_eq!(track.codec.id, "0x12345678");
+    assert!(track.codec.name.is_none());
   }
 
   #[test]

@@ -27,7 +27,7 @@
 //! The `handler_type` is the discriminator we map to our `TrackType`:
 //! - `vide` → Video
 //! - `soun` → Audio
-//! - `subt` / `sbtl` → Subtitles
+//! - `sbtl` → Subtitles
 //! - `text` → Subtitles (QuickTime tx3g)
 //! - `subp` → Subtitles
 //! - `meta` / `mdir` → metadata handler (skipped, not a track)
@@ -51,7 +51,7 @@ impl Handler {
     match &self.handler_type {
       b"vide" => TrackType::Video,
       b"soun" => TrackType::Audio,
-      b"subt" | b"sbtl" | b"text" | b"subp" => TrackType::Subtitles,
+      b"sbtl" | b"text" | b"subp" => TrackType::Subtitles,
       _ => TrackType::Unknown,
     }
   }
@@ -136,10 +136,15 @@ mod tests {
   }
 
   #[test]
-  fn subt_and_sbtl_classified_as_subtitles() {
-    assert_eq!(parsed(b"subt", "").classify(), TrackType::Subtitles);
+  fn sbtl_text_and_subp_classified_as_subtitles() {
     assert_eq!(parsed(b"sbtl", "").classify(), TrackType::Subtitles);
     assert_eq!(parsed(b"text", "").classify(), TrackType::Subtitles);
+    assert_eq!(parsed(b"subp", "").classify(), TrackType::Subtitles);
+  }
+
+  #[test]
+  fn subt_handler_is_unknown() {
+    assert_eq!(parsed(b"subt", "").classify(), TrackType::Unknown);
   }
 
   #[test]

@@ -126,8 +126,8 @@ fn build_track(
   };
 
   // PARSER-043: a generic MPEG-4 system sample entry (mp4a / mp4v / mp4s) is
-  // refined to the real codec from the esds objectTypeIndication so MP3, AC-3,
-  // DTS, AAC, AVC, etc. are not all reported as "mp4a"/"mp4v".
+  // refined to the real codec from mkvtoolnix's supported
+  // esds objectTypeIndication table.
   let mut codec_name = builder.codec_name.clone();
   let is_mp4_system_entry = matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ");
   if is_mp4_system_entry {
@@ -312,21 +312,20 @@ pub fn effective_codec_id(builder: &super::moov::TrackBuilder) -> String {
   codec_id
 }
 
-/// Map an MPEG-4 `objectTypeIndication` to a (codec_id, name) pair. Mirrors the
-/// audio/video branches of `r_qtmp4.cpp::determine_codec`.
+/// Map an MPEG-4 `objectTypeIndication` to a (codec_id, name) pair. Mirrors
+/// `codec_c::look_up_object_type_id`, which `r_qtmp4.cpp::determine_codec`
+/// uses before falling back to the sample-entry FOURCC.
 fn codec_from_object_type(object_type: u8) -> Option<(&'static str, &'static str)> {
   Some(match object_type {
     0x40 | 0x66 | 0x67 | 0x68 => ("A_AAC", "AAC"),
-    0x69 | 0x6B => ("A_MPEG/L3", "MP3"),
-    0x6A => ("A_MPEG/L2", "MP2"),
-    0xA5 => ("A_AC3", "AC-3"),
-    0xA6 => ("A_EAC3", "E-AC-3"),
-    0xA9 | 0xAA | 0xAB => ("A_DTS", "DTS"),
+    0x69 => ("A_MPEG/L3", "MP3"),
+    0x6B => ("A_MPEG/L2", "MP2"),
+    0xA9 => ("A_DTS", "DTS"),
     0xDD => ("A_VORBIS", "Vorbis"),
+    0x60 | 0x61 | 0x62 | 0x63 | 0x64 | 0x65 => ("V_MPEG2", "MPEG-2 Video"),
+    0x6A => ("V_MPEG1", "MPEG-1 Video"),
     0x20 => ("V_MPEG4/ISO/ASP", "MPEG-4 Visual"),
-    0x21 => ("V_MPEG4/ISO/AVC", "AVC/H.264"),
-    0x23 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265"),
-    0x6C => ("V_MJPEG", "JPEG"),
+    0xE0 => ("S_VOBSUB", "VobSub"),
     _ => return None,
   })
 }
@@ -449,7 +448,7 @@ mod tests {
     let mut b = super::super::moov::TrackBuilder::default();
     b.track_id = Some(track_id);
     b.codec_id_str = Some(codec.to_string());
-    b.handler_type = Some(*b"subt");
+    b.handler_type = Some(*b"text");
     b.media_timescale = Some(1000);
     b
   }
@@ -674,6 +673,20 @@ mod tests {
     finalise(moov, false, HashMap::new(), &mut m);
     assert_eq!(m.tracks.len(), 1);
     assert_eq!(m.tracks[0].codec.id, "A_AAC");
+  }
+
+  #[test]
+  fn esds_object_type_table_matches_mkvtoolnix_supported_set() {
+    assert_eq!(codec_from_object_type(0x40).unwrap().0, "A_AAC");
+    assert_eq!(codec_from_object_type(0x69).unwrap().0, "A_MPEG/L3");
+    assert_eq!(codec_from_object_type(0x6B).unwrap().0, "A_MPEG/L2");
+    assert_eq!(codec_from_object_type(0xA9).unwrap().0, "A_DTS");
+    assert_eq!(codec_from_object_type(0x20).unwrap().0, "V_MPEG4/ISO/ASP");
+    assert_eq!(codec_from_object_type(0xE0).unwrap().0, "S_VOBSUB");
+    assert!(codec_from_object_type(0xA5).is_none());
+    assert!(codec_from_object_type(0xA6).is_none());
+    assert!(codec_from_object_type(0x23).is_none());
+    assert!(codec_from_object_type(0x6C).is_none());
   }
 
   // ---- PARSER-265: QuickTime PCM sample-entry mapping ------------------

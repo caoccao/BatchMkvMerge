@@ -1,6 +1,6 @@
 # AVI Parser
 
-Implementation progress: 90%
+Implementation progress: 93%
 
 ## Purpose
 
@@ -20,6 +20,10 @@ GAB2 text chunks are classified as SRT or SSA/ASS; for SSA/ASS the embedded payl
 
 The video track passes the same gate `avi_reader_c::verify_video_track` applies before identify (`r_avi.cpp:112-114`): the `BITMAPINFOHEADER` must be at least `sizeof(alBITMAPINFOHEADER)` (40 bytes) and both the sign-stripped width and height must be nonzero. A stream that fails any check is suppressed instead of emitting a false-positive video track (PARSER-273). Mirroring avilib, the first `vids` stream is bound as the single video track and consumes the video slot even when it fails verification, so a later video stream is never promoted in its place.
 
+`WAVE_FORMAT_EXTENSIBLE` audio is unwrapped only when the parsed extension is a complete 22-byte `alWAVEFORMATEXTENSION`, and the effective codec tag is read from the full 32-bit SubFormat GUID `data1`, matching mkvtoolnix's `get_uint32_le(&ext->extension.guid.data1)` path. Truncated or nonstandard extensible headers therefore remain `0xFFFE` instead of being repaired from partial GUID bytes (PARSER-311).
+
+Video codec-private data preserves the exact original `BITMAPINFOHEADER` bytes plus trailing extradata from `strf`. The parser still decodes the key fields into `BitmapInfoHeader` for identification, but the emitted private blob no longer reconstructs bytes 24..40 as zeroes, matching mkvtoolnix's clone of the avilib-owned header buffer (PARSER-312).
+
 ## Data Structures
 
 ```mermaid
@@ -38,9 +42,4 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 
 ## Gaps and Handling
 
-Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix.
-
-## Open Issues
-
-- PARSER-311: `WAVE_FORMAT_EXTENSIBLE` audio is resolved from partial, truncated extension data. `parse_waveformatex` clamps `cbSize` to the available bytes and `make_audio_track` unwraps the SubFormat GUID when only ten extra bytes are present, reading only the low 16 bits of GUID `data1`. mkvtoolnix only unwraps `0xfffe` when the declared extension is at least `sizeof(alWAVEFORMATEXTENSION)`, then reads the full 32-bit GUID `data1`. Malformed or nonstandard extensible headers can therefore be repaired or truncated into the wrong codec tag.
-- PARSER-312: Video codec private data does not preserve the full original `BITMAPINFOHEADER`. `parse_bitmapinfoheader` discards bytes 24..40 and `bmih_codec_private` writes those fields back as zeroes, while mkvtoolnix clones the original 40-byte `alBITMAPINFOHEADER` plus extradata. Any AVI whose x/y pixels-per-meter or color-table fields are nonzero is mutated by the native parser instead of reported as-is.
+Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix, `WAVE_FORMAT_EXTENSIBLE` unwrapping requires a full extension, and video codec-private bytes preserve the original bitmap header.

@@ -146,6 +146,9 @@ pub struct BitmapInfoHeader {
   pub bit_count: u16,
   pub compression: [u8; 4],
   pub image_size: u32,
+  /// Original `strf` bytes, including the standard 40-byte
+  /// BITMAPINFOHEADER and any trailing extradata.
+  pub raw: Vec<u8>,
   /// Codec-specific extradata that trails the 40-byte standard
   /// BITMAPINFOHEADER.  Mirrors mkvtoolnix's
   /// `BITMAPINFOHEADER + extradata` codec_private blob (PARSER-085).
@@ -217,6 +220,7 @@ fn parse_bitmapinfoheader(bytes: &[u8], offset: u64) -> Result<StreamFormat, Par
     bit_count,
     compression,
     image_size,
+    raw: bytes.to_vec(),
     extra,
   }))
 }
@@ -531,6 +535,25 @@ mod tests {
   }
 
   #[test]
+  fn bitmapinfoheader_preserves_original_private_header_bytes() {
+    let strh = encode_chunk(b"strh", &build_strh_payload(b"vids", b"XVID", 1, 30, 0, 0));
+    let mut bmih = build_bitmapinfoheader(640, 360, 24, b"XVID");
+    bmih[24..40].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    bmih.extend_from_slice(&[0xaa, 0xbb, 0xcc]);
+    let strf = encode_chunk(b"strf", &bmih);
+    let mut payload = strh;
+    payload.extend(strf);
+    let b = parse_strl_payload(payload);
+    match b.format.unwrap() {
+      StreamFormat::Video(parsed) => {
+        assert_eq!(parsed.raw, bmih);
+        assert_eq!(parsed.extra, vec![0xaa, 0xbb, 0xcc]);
+      }
+      _ => panic!("expected video format"),
+    }
+  }
+
+  #[test]
   fn strl_with_audio_waveformatex() {
     let strh = encode_chunk(b"strh", &build_strh_payload(b"auds", b"\0\0\0\0", 1, 48000, 0, 4));
     let strf = encode_chunk(b"strf", &build_waveformatex(0x00FF, 2, 48000, 16000, 4, 16, &[]));
@@ -623,6 +646,7 @@ mod tests {
       bit_count: 24,
       compression: [0; 4],
       image_size: 0,
+      raw: Vec::new(),
       extra: Vec::new(),
     };
     assert!(bmih.is_uncompressed());

@@ -1,6 +1,6 @@
 # RealMedia Parser
 
-Implementation progress: 86%
+Implementation progress: 90%
 
 ## Purpose
 
@@ -15,6 +15,8 @@ The RealMedia parser recognises `.RMF` files, reads RealMedia chunks, and report
 The reader manually parses `.RMF`, `PROP`, `CONT`, `MDPR`, and `DATA` chunks. It follows librmff's strict header loop for top-level chunks: unknown chunk IDs, truncated known chunks, and common headers with impossible sizes are malformed, and the container is only marked recognised after mandatory `PROP` and `DATA` chunks have been accepted (PARSER-297). It decodes video properties, RealAudio v3/v4/v5 headers, AAC wrapper data, `dnet` AC-3 byte-order hints, and RV40-style dimensions from first data packets when available. RealAudio AAC (`raac`/`racp`) and Cook (`cook`) FourCC classification is ASCII-case-insensitive, matching the upstream `strcasecmp` paths while preserving the original private header bytes.
 
 For RealAudio v5 (`real_audio_v5_props_t`), the per-track extra data begins **four bytes past** the 70-byte props struct, matching mkvtoolnix's `extra_data = ts_data + 4 + sizeof(real_audio_v5_props_t)` guarded by `(sizeof(...) + 4) < ts_size` (`r_real.cpp:216-217`). Those four skipped bytes are never folded into the extra data, so the RAAC/RACP AAC wrapper's big-endian length prefix is read from the correct offset and `apply_real_aac_config` recovers the `AudioSpecificConfig` (PARSER-269).
+
+The DATA reader walks RealMedia packet headers directly instead of buffering a fixed-size prefix. It retains only a bounded packet prefix for each stream, but keeps scanning under the parser deadline until every `dnet` stream has a packet with the BSID byte that mkvtoolnix reads in `get_information_from_data` (`frame->data[4] >> 3`). If an early `dnet` packet is too short or uninformative, a later packet for the same stream can replace it before track construction (PARSER-316).
 
 ## Data Structures
 
@@ -35,8 +37,4 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 
 ## Gaps and Handling
 
-Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or scan deeply into DATA chunks. Late RealVideo and `dnet` refinements can therefore be missed. The parser records the reliable header metadata and bounded first-packet improvements only.
-
-## Open Issues
-
-- PARSER-316: `dnet` packet-derived information can be missed before mkvtoolnix would stop scanning. The native reader reads at most the first 1 MiB of the first `DATA` chunk, stores only the first packet per stream, and stops once it has one packet for each MDPR stream. mkvtoolnix's `get_information_from_data` keeps reading RealMedia frames until every `DNET` demuxer has a BSID. Files whose first `dnet` frame appears later than the cap, or after earlier packets from other streams, can keep a generic AC-3 profile in Rust while mkvtoolnix records the packet-derived BSID.
+Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or perform packet output. RV40 dimensions and `dnet` BSID hints are recovered from a deadline-checked DATA packet walk, but other late packet-derived refinements remain out of scope. The parser records reliable header metadata and the bounded packet-prefix improvements needed for identification.
