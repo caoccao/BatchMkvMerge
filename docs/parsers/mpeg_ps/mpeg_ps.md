@@ -37,3 +37,9 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. PES depacketising now handles both MPEG-1 and MPEG-2 optional-header layouts, so MPEG-1 program-stream payloads are no longer misaligned.
+
+## Open Issues
+
+- `PARSER-306` - Codec-specific header probe failures do not block tracks. The native finalisation emits MPEG-PS video and audio tracks even when the bounded payload never validates the required MPEG video, AVC, VC-1, MPEG audio, AC-3, DTS, TrueHD, or LPCM header. mkvtoolnix's `new_stream_*` probes throw and mark such stream IDs blocked, so the current parser can report false-positive/default tracks from stream IDs alone.
+
+- `PARSER-307` - Track IDs and output order follow packet discovery order. mkvtoolnix sorts MPEG-PS tracks before identification by type bucket (`video`, then `audio`, then subtitles/other) and encoded stream ID. Files whose audio packet appears before video, or whose private substreams arrive out of numeric order, can therefore produce different track IDs and listing order.

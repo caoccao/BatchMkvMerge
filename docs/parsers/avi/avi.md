@@ -39,3 +39,7 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 ## Gaps and Handling
 
 Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks.
+
+## Open Issues
+
+- `PARSER-308` - AVI RIFF/Form magic checks are case-sensitive. mkvtoolnix lowercases the first 12 bytes before checking `riff` and `avi `, so mixed-case or lowercase `RIFF`/`AVI ` signatures are accepted upstream but are rejected by the native probe/read path.

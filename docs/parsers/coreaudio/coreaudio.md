@@ -34,3 +34,7 @@ Key structures are `Chunk`, `AudioDescription`, `CafMetadata`, and `AlacConfig`.
 ## Gaps and Handling
 
 Packet tables are used for header-derived duration and validation but are not retained for packet delivery. Codec naming follows the app model rather than mkvmerge's exact codec lookup display strings.
+
+## Open Issues
+
+- `PARSER-305` - A CAF chunk whose declared size field is `0` is converted to "remaining bytes to EOF" during scanning. mkvtoolnix instead stores raw zero as a file-size-sized chunk and then fails required chunk reads because the declared body cannot be read from the post-header data position. The native parser therefore repairs malformed required chunks such as `desc` or `pakt` that mkvtoolnix rejects, which violates pure-parser parity.

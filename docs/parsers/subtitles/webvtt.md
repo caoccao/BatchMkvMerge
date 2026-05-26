@@ -31,3 +31,7 @@ WebVTT uses helper functions rather than custom structs beyond shared metadata t
 ## Gaps and Handling
 
 The Rust probe is intentionally stricter than upstream's `WEBVTT` prefix check. Codec-private extraction is bounded and does not implement the complete upstream global-block parser behavior. The result is safer for false positives but can reject files mkvmerge accepts.
+
+## Open Issues
+
+- `PARSER-310` - WebVTT identification reports the detected source encoding. mkvtoolnix always identifies WebVTT subtitle tracks with `encoding=UTF-8`, because its WebVTT parser normalises text before packetisation. UTF-16-BOM or charset-hinted inputs can therefore produce a different metadata listing in the native parser.
