@@ -44,3 +44,11 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers, and in-stream sync loss is recovered with a bounded resync scan.
+
+## Open Issues
+
+### PARSER-321: PMT program descriptors are applied to every stream
+
+The PMT parser stores `program_descriptors`, `handle_pmt` walks them, and `stream_table::build_rows` uses program-level ISO-639 descriptors as a fallback language for every elementary stream. It also carries a program-level service descriptor into `StreamRow.service_name`, which can become the container program's service name. mkvtoolnix skips PMT program descriptors for stream metadata: after validating `program_info_length`, `parse_pmt` starts the descriptor reader at `program_info_end`, and `parse_pmt_pid_info` only sees per-elementary-stream descriptors. Service provider/name information is populated separately from SDT.
+
+Impact: a PMT program descriptor can invent languages or service names on tracks/programs that mkvtoolnix would leave unset. This is a parser-purity issue because program-level data is being rewritten as per-stream metadata.

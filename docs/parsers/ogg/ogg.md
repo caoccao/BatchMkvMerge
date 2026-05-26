@@ -42,3 +42,11 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets), and damaged capture patterns are resynchronised to later `OggS` pages. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+### PARSER-320: Variable-length FLAC and Kate header runs are truncated at 64 packets
+
+`remember_header_packet` stops collecting `A_FLAC` and `S_KATE` headers once `MAX_HEADER_PACKETS` is reached, and marks the stream's headers complete. mkvtoolnix has no fixed packet-count cap for these header runs: Ogg FLAC uses the FLAC decoder to count metadata packets until audio decoding begins, then `process_header_page` waits for that discovered count; Kate treats packets with the high bit set as header packets and continues until the first high-bit-clear packet.
+
+Impact: a large but valid FLAC metadata run or Kate header run can be truncated at packet 64. Codec private data, tags, language information, or later header metadata can be lost, and the parser can advance as if the stream were complete before the actual header terminator appears.

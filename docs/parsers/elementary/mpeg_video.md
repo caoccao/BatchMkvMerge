@@ -31,3 +31,11 @@ flowchart TD
 ## Gaps and Handling
 
 Upstream uses the full `M2VParser` state machine while reading actual frames. Rust mirrors the probe predicates and validates the first frame-like structure, but it still does not retain parser state for muxing-grade packet validation. The metadata it reports is therefore header-accurate, while full frame delivery remains outside this parser.
+
+## Open Issues
+
+### PARSER-322: Sequence-extension dimensions and frame-rate factors diverge from mkvtoolnix
+
+The native parser applies MPEG-2 sequence-extension `horizontal_size_extension`, `vertical_size_extension`, `frame_rate_extension_n`, and `frame_rate_extension_d` fields to the reported dimensions and default duration. mkvtoolnix's `MPEGVideoBuffer::ParseSequenceHeader` reads width, height, aspect ratio, and frame rate from the base sequence header, then scans the sequence extension only for `profileLevelIndication` and `progressiveSequence`; it does not apply the size-extension or frame-rate-extension fields in the identify path.
+
+Impact: MPEG-2 streams with nonzero extension size bits or frame-rate factors can be reported differently from mkvtoolnix. For a parity parser, either the native output should match mkvtoolnix's sequence-header interpretation or this deliberate divergence needs to be modeled separately.
