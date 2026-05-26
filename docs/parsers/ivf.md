@@ -35,3 +35,12 @@ Key structures are `FileHeader`, `IvfCodec`, and the internal Dolby Vision confi
 ## Gaps and Handling
 
 Upstream frame payload handling and keyframe logic are muxing concerns and are not implemented. For identify metadata, the parser is otherwise close to upstream and adds a bounded AV1 Dolby Vision extraction path.
+
+## Open Issues
+
+### PARSER-267: AV1 Dolby Vision config records use defaults instead of the parsed RPU/header fields
+
+- Native evidence: IVF detects an AV1 Dolby Vision RPU in the first frame and calls `build_av1_dovi_config_record(level, 0)`, so the compatibility id is always zero and the RPU header itself is never decoded.
+- Upstream evidence: `ivf_reader_c::parse_first_av1_frame` obtains `parser.get_dovi_rpu_header()` and `parser.get_color_config()`, then calls `create_av1_dovi_configuration_record`, which derives the compatibility id from the actual RPU profile and AV1 color metadata.
+- Impact: IVF AV1 Dolby Vision tracks can carry a `dvvC` block-addition mapping that has the right level but wrong compatibility bits compared with mkvmerge.
+- Suggested fix: port the bounded AV1 T.35 RPU conversion/header parse enough to feed the same fields into `create_av1_dovi_configuration_record`.

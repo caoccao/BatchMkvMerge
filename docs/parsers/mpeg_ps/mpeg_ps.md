@@ -33,3 +33,12 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic.
+
+## Open Issues
+
+### PARSER-266: Program Stream Map accepts stream types mkvmerge ignores
+
+- Native evidence: `mpeg_ps/identify.rs::codec_from_stream_type` maps PSM stream types `0x24`, `0x82`, `0x83`, `0x84`, and `0x87` to HEVC, DTS, TrueHD, and E-AC-3.
+- Upstream evidence: `mpeg_ps_reader_c::found_new_stream` only handles PSM `es_type` values `0x01`, `0x02`, `0x03`, `0x04`, `0x0f`, `0x10`, `0x11`, `0x1b`, `0x80`, and `0x81`; DTS/TrueHD/LPCM handling is driven by private-stream-1 substream ids instead.
+- Impact: native metadata can emit tracks for Program Stream Map entries that mkvmerge leaves unknown and drops, causing false positives and track-count mismatches.
+- Suggested fix: restrict PSM stream-type classification to the upstream switch and keep the broader codec handling on the private-substream path.

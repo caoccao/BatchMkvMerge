@@ -53,3 +53,33 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
+
+## Open Issues
+
+### PARSER-262: AAC `mp4a` tracks without DecoderSpecificInfo are dropped instead of synthesising a default AudioSpecificConfig
+
+- Native evidence: `mp4/codec_specific/esds.rs` records `DecoderSpecificInfo` only when tag `0x05` is present, and `mp4/identify.rs` drops `A_AAC` tracks when `audio_codec_config.aac_object_type` is absent.
+- Upstream evidence: `qtmp4_demuxer_c::parse_aac_esds_decoder_config` creates a default AAC AudioSpecificConfig from the sample-entry channel count and sample rate when `esds.decoder_config` is absent or shorter than two bytes.
+- Impact: valid QuickTime/MP4 AAC tracks that mkvmerge keeps are missing from native metadata.
+- Suggested fix: generate the same default ASC before the AAC verification/drop gate, using the sample-entry audio fields and preserving bounded header-only behavior.
+
+### PARSER-263: MP4 AAC ignores AudioSpecificConfig-derived sample rate and channel metadata
+
+- Native evidence: `mp4/codec_specific/esds.rs::parse_audio_specific_config` reads `sample_rate_index` and `channel_config` but discards them, so `TrackProperties.audio` keeps the sample-entry placeholders.
+- Upstream evidence: after parsing `esds.decoder_config`, `parse_aac_esds_decoder_config` assigns `a_channels` from the parsed AAC config and overwrites `a_samplerate` with the parsed sample rate.
+- Impact: AAC-in-MP4 tracks with placeholder `stsd` channels/rate, PCE channel layouts, or SBR output-rate signalling can report different audio properties from mkvmerge.
+- Suggested fix: parse the ASC through the shared AAC parser and apply its `channels`, `sample_rate`, and `output_sample_rate` to the MP4 audio properties.
+
+### PARSER-264: MP4 `esds` keeps a stale duplicate AAC AudioSpecificConfig parser
+
+- Native evidence: `mp4/codec_specific/esds.rs` has a private `BitCursor` ASC decoder that only consumes a subset of GA/SBR/PS fields and silently reads zeros past the end of truncated payloads.
+- Upstream evidence: MP4 calls the same common `mtx::aac::parse_audio_specific_config` path as other AAC readers. The Rust common AAC path already has ELD, CELP, ER error-protection, PCE, and failure semantics that the MP4 copy lacks.
+- Impact: MP4 AAC `AudioCodecConfig` can diverge from raw AAC, RealMedia, FLV, and mkvmerge for less common object types or malformed ASC payloads.
+- Suggested fix: remove the MP4-local ASC parser and reuse `audio::aac::parse_audio_specific_config_bytes` plus `codec_config_from_header`.
+
+### PARSER-265: QuickTime PCM sample entries are not treated as mkvmerge PCM
+
+- Native evidence: the FOURCC catalogue recognises `PCM `, `raw `, `sowt`, and `twos`, but not QuickTime `lpcm` or `in24`; `stsd` also skips the `lpcm` `formatSpecificFlags` and `verify.rs` has no `in24` 24-bit correction.
+- Upstream evidence: `codec.cpp` maps `twos|sowt|raw.|lpcm|in24` to PCM, `verify_audio_parameters` forces `in24` bit depth to 24, and `determine_codec` derives the `lpcm` integer/float/endian packetizer format from `a_flags`.
+- Impact: QuickTime PCM tracks can lose their codec name/PCM classification, keep the wrong bit depth, or miss float/big-endian signalling even though the needed data is in the sample entry.
+- Suggested fix: add `lpcm`/`in24` to the MP4/FOURCC PCM handling, parse `formatSpecificFlags`, and mirror the `in24` bit-depth override.

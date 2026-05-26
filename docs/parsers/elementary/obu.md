@@ -38,3 +38,12 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 ## Gaps and Handling
 
 Rust scans a smaller prefix than upstream. The decoder fully consumes the DV RPU payload only as far as is needed to confirm its presence and pick the DV level; the per-RPU header fields (used by upstream for the exact configuration record) are not decoded, so the `dvvC` record carries the level-derived defaults rather than the bitstream's RPU header values. Operating-point filtering and packet muxing remain mkvmerge's concern.
+
+## Open Issues
+
+### PARSER-267: AV1 Dolby Vision config records use defaults instead of the parsed RPU/header fields
+
+- Native evidence: raw AV1 OBU detection only checks that a kept ITU-T T.35 metadata OBU starts with the Dolby Vision RPU payload header, then calls `build_av1_dovi_config_record(level, 0)`.
+- Upstream evidence: `obu_reader_c::probe_file` obtains `parser.get_dovi_rpu_header()` and `parser.get_color_config()`, then passes both to `create_av1_dovi_configuration_record`, which derives the compatibility id from the actual RPU profile and AV1 color metadata.
+- Impact: raw AV1 Dolby Vision streams can emit a `dvvC` block-addition mapping that differs from mkvmerge even though the RPU header is present inside the bounded metadata OBU.
+- Suggested fix: parse the T.35 RPU payload into the same Dolby Vision RPU header fields and derive the configuration record from that header plus AV1 color config.
