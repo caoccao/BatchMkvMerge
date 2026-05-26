@@ -56,3 +56,11 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
+
+## Open Issues
+
+### PARSER-293: Truncated `esds` DecoderSpecificInfo can satisfy MP4V/VobSub gates
+
+The `esds` descriptor walker clamps descriptor bodies with `body_end = min(cursor.pos + len, data.len())`. For tag `0x05`, it records `decoder_specific_len = Some(len)` before verifying that all declared bytes are present; if the declared payload is short, `decoder_specific_data` stays absent but the length still looks nonzero. `verify.rs` then keeps MP4V when `esds_object_type` is present and the recorded length is nonzero, and keeps VobSub when the recorded length is at least 64.
+
+mkvtoolnix's `parse_esds_atom` allocates the declared DecoderSpecificInfo length and throws a header parsing error if that many bytes cannot be read. Rust can therefore accept malformed MP4V/VobSub sample entries by trusting a declared descriptor length that has no matching bytes.

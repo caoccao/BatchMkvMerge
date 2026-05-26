@@ -35,3 +35,23 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Upstream uses a fuller elementary-stream parser with slice/access-unit state and `might_be_xyzvc` guards. Rust now uses the same bounded chunk horizon for header discovery but still focuses on SPS/PPS metadata rather than access-unit validation. The PAR and VUI default-duration are derived to match mkvmerge; what remains out of scope is the muxing-time "most often used duration" heuristic (which corrects field/frame-rate conventions from actual frame timestamps) — header-only identification reports the SPS-declared value directly.
+
+## Open Issues
+
+### PARSER-290: Over-cropping can produce accepted zero pixel dimensions
+
+`sps.rs` computes cropped dimensions with `saturating_sub`, and `reader.rs` accepts any parsed SPS/PPS without checking that `display_width` and `display_height` are positive. A stream whose crop offsets erase the coded size can therefore be emitted as a zero-width or zero-height AVC track.
+
+mkvtoolnix rejects raw AVC in `probe_file` after `headers_parsed()` if the parser's width or height is `<= 0`. The Rust parser should reject zero cropped dimensions instead of reporting a track with impossible dimensions.
+
+### PARSER-291: Malformed SPS VUI tails are accepted by dropping the tail
+
+When `vui_parameters_present_flag` is set, `sps.rs` calls `parse_vui(...).unwrap_or_default()`. If the VUI is truncated or malformed, the SPS parse still succeeds and the raw AVC reader can accept the stream with no PAR or timing metadata.
+
+Upstream `parse_sps` wraps the whole SPS parse in one exception boundary; a short read in VUI handling returns an empty parsed SPS, so the elementary-stream parser does not treat that SPS as valid. The Rust reader should not repair malformed SPS tails by silently defaulting optional VUI fields.
+
+### PARSER-292: Raw AVC probing misses mkvtoolnix's MPEG-TS first-byte guard
+
+mkvtoolnix's raw AVC probe rejects the file immediately when the first byte of the first probe buffer is `0x47`, because MPEG-TS packets start with that sync byte. The Rust `AvcReader` scans the prefix for Annex B SPS/PPS units without this guard.
+
+Normal dispatch tries MPEG-TS before raw AVC, but extension hints or direct reader use can still let raw AVC claim a TS-like file that upstream's raw AVC reader refuses.

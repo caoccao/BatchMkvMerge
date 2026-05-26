@@ -34,3 +34,11 @@ Key structures are `Chunk`, `AudioDescription`, `CafMetadata`, and `AlacConfig`.
 ## Gaps and Handling
 
 Packet tables are used for header-derived duration and validation but are not retained for packet delivery. Codec naming follows the app model rather than mkvmerge's exact codec lookup display strings.
+
+## Open Issues
+
+### PARSER-289: CAF chunk bodies are clamped and short-read instead of validated exactly
+
+`reader.rs::scan_chunks` clamps each nonzero CAF chunk size to the bytes remaining in the file, and `read_chunk_body` uses a best-effort read capped by `MAX_CHUNK_READ`. That means a `desc`, `pakt`, or `kuki` chunk whose declared size extends past EOF can still be parsed from the bytes that happen to be present.
+
+mkvtoolnix keeps the declared chunk size for validation and `read_chunk` rejects zero-sized required chunks or any body that cannot be read exactly. The Rust reader is therefore repairing malformed CAF headers instead of acting as a pure parser, and it can identify files that mkvtoolnix rejects during header parsing.

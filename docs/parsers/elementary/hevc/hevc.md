@@ -37,3 +37,23 @@ Key structures are `HevcNalUnit`, `HevcSps`, `HevcTier`, `VpsSummary`, and the i
 ## Gaps and Handling
 
 The Rust parser now uses mkvtoolnix's bounded chunk horizon for header discovery, but it does not fully cross-check SPS/VPS IDs and does not require a first access unit. The VUI timing and sample aspect ratio are extracted (with the scaling-list / reference-picture-set structures consumed to reach them), and a malformed tail degrades gracefully to no PAR / no timing rather than failing the dimensions extraction. The configuration record matches the hvcC byte layout (profile constraints, chroma/bit-depth offsets, reserved high bits), and the `default_display_window` invalid-window workaround is mirrored. Dolby Vision/RPU/enhancement-layer handling is still out of scope; `min_spatial_segmentation_idc` / `parallelism_type` are emitted as 0 (with the reserved high bits set) rather than recovered from the VUI, since they are not needed for identification. The parser emits stable base-layer metadata and treats uncertain streams as unrecognised rather than fabricating advanced fields.
+
+## Open Issues
+
+### PARSER-290: Over-cropping can produce accepted zero pixel dimensions
+
+`sps.rs` computes conformance-window dimensions with `saturating_sub`, and `reader.rs` accepts any parsed VPS/SPS/PPS without checking that `display_width` and `display_height` are positive. A stream whose conformance window erases the coded luma size can therefore be emitted as a zero-width or zero-height HEVC track.
+
+mkvtoolnix clamps an overlarge conformance window to zero and then rejects raw HEVC in `probe_file` if the parser's width or height is `<= 0`. The Rust parser should reject zero cropped dimensions instead of reporting a track with impossible dimensions.
+
+### PARSER-291: Malformed SPS tails are accepted by dropping scaling/RPS/VUI data
+
+`sps.rs` calls `parse_sps_tail(...).unwrap_or_default()` after the bit-depth fields. If scaling-list, reference-picture-set, long-term-reference, or VUI data is truncated or malformed, the SPS parse still succeeds and the raw HEVC reader can accept the stream with defaulted tail metadata.
+
+Upstream `parse_sps` wraps the full SPS parse in one exception boundary; failures while consuming the tail return an empty parsed SPS, so the elementary-stream parser does not count that SPS as valid. The Rust reader should not repair malformed SPS tails by silently defaulting optional fields.
+
+### PARSER-292: Raw HEVC probing misses mkvtoolnix's MPEG-TS first-byte guard
+
+mkvtoolnix's raw HEVC probe rejects the file immediately when the first byte of the first probe buffer is `0x47`, because MPEG-TS packets start with that sync byte. The Rust `HevcReader` scans the prefix for Annex B VPS/SPS/PPS units without this guard.
+
+Normal dispatch tries MPEG-TS before raw HEVC, but extension hints or direct reader use can still let raw HEVC claim a TS-like file that upstream's raw HEVC reader refuses.

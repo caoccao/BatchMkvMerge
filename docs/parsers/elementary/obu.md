@@ -38,3 +38,11 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 ## Gaps and Handling
 
 The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation, operating-point filtering, and packet muxing remain mkvmerge's concern.
+
+## Open Issues
+
+### PARSER-288: Redundant frame headers satisfy the raw OBU frame requirement
+
+`scan_obus` currently marks `OBU_TYPE_REDUNDANT_FRAME_HEADER` as `frame_found`, and `probe` / `read_headers` accept a stream once a sequence header plus that flag are present. Upstream `parser_c::parse_obu` sets `frame_found` only for `OBU_FRAME` and `OBU_FRAME_HEADER`; redundant frame headers are skipped together with padding and do not satisfy `headers_parsed()`.
+
+This can false-positive a raw OBU stream that contains a sequence header and only redundant frame headers, and it can stop pre-frame metadata retention too early because metadata OBUs are kept only while `frame_found` is false.
