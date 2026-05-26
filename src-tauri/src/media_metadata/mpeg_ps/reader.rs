@@ -74,6 +74,37 @@ fn next_packet_layer(bytes: &[u8], from: usize) -> usize {
   }
 }
 
+fn bounded_packet_end(bytes: &[u8], pos: usize) -> usize {
+  if pos + 6 > bytes.len() {
+    return bytes.len();
+  }
+  let len = u16::from_be_bytes([bytes[pos + 4], bytes[pos + 5]]) as usize;
+  (pos + 6 + len).min(bytes.len())
+}
+
+fn program_stream_map_end(bytes: &[u8], pos: usize) -> usize {
+  if pos + 6 > bytes.len() {
+    return bytes.len();
+  }
+  let len = u16::from_be_bytes([bytes[pos + 4], bytes[pos + 5]]) as usize;
+  (pos + 6 + len).min(bytes.len())
+}
+
+fn pack_header_end(bytes: &[u8], pos: usize) -> usize {
+  if pos + 5 > bytes.len() {
+    return bytes.len();
+  }
+  if (bytes[pos + 4] & 0xC0) == 0x40 {
+    if pos + 14 > bytes.len() {
+      return bytes.len();
+    }
+    let stuffing = (bytes[pos + 13] & 0x07) as usize;
+    (pos + 14 + stuffing).min(bytes.len())
+  } else {
+    (pos + 12).min(bytes.len())
+  }
+}
+
 #[derive(Default)]
 struct StreamAcc {
   payload: Vec<u8>,
@@ -144,12 +175,13 @@ impl Reader for MpegPsReader {
       }
       match StartCode::from_byte(sid) {
         StartCode::ProgramStreamMap => {
-          if let Ok(psm) = stream_map::parse(&bytes[pos + 4..]) {
+          let psm_end = program_stream_map_end(bytes, pos);
+          if let Ok(psm) = stream_map::parse(&bytes[pos + 4..psm_end]) {
             for e in psm.entries {
               psm_types.entry(e.elementary_stream_id).or_insert(e.stream_type);
             }
           }
-          offset = pos + 4;
+          offset = psm_end.max(pos + 4);
         }
         StartCode::Audio(_) | StartCode::Video(_) | StartCode::PrivateStream1 => {
           let pkt = &bytes[pos..];
@@ -203,7 +235,12 @@ impl Reader for MpegPsReader {
         }
         _ => {
           // PackHeader / SystemHeader / Padding / PrivateStream2 / ...
-          offset = pos + 4;
+          offset = match StartCode::from_byte(sid) {
+            StartCode::PackHeader => pack_header_end(bytes, pos),
+            StartCode::ProgramEnd => pos + 4,
+            _ => bounded_packet_end(bytes, pos),
+          }
+          .max(pos + 4);
         }
       }
     }
@@ -440,25 +477,34 @@ mod tests {
 
   // ---- PARSER-051: Program Stream Map ----------------------------------
 
+  fn psm_packet(entries: &[(u8, u8)]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&start_code(super::super::packet::PROGRAM_STREAM_MAP));
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.push(0x80); // current_next + version
+    body.push(0x01); // marker
+    body.extend_from_slice(&0u16.to_be_bytes()); // program_stream_info_length
+    body.extend_from_slice(&((entries.len() * 4) as u16).to_be_bytes());
+    for (stream_type, stream_id) in entries {
+      body.push(*stream_type);
+      body.push(*stream_id);
+      body.extend_from_slice(&0u16.to_be_bytes());
+    }
+    body.extend_from_slice(&0u32.to_be_bytes()); // CRC
+    let len = (body.len() - 2) as u16;
+    body[..2].copy_from_slice(&len.to_be_bytes());
+    payload.extend_from_slice(&body);
+    payload
+  }
+
   #[test]
   fn program_stream_map_overrides_classification() {
     // PSM mapping stream id 0xE0 → stream_type 0x1B (AVC).
-    let mut psm_payload = Vec::new();
-    psm_payload.extend_from_slice(&0u16.to_be_bytes()); // map length (unused)
-    psm_payload.push(0x80); // current_next + version
-    psm_payload.push(0x01); // marker
-    psm_payload.extend_from_slice(&0u16.to_be_bytes()); // program_stream_info_length
-    psm_payload.extend_from_slice(&4u16.to_be_bytes()); // elementary_stream_map_length
-    psm_payload.push(0x1B); // stream_type AVC
-    psm_payload.push(0xE0); // elementary_stream_id
-    psm_payload.extend_from_slice(&0u16.to_be_bytes()); // es_info_length
-    psm_payload.extend_from_slice(&0u32.to_be_bytes()); // CRC
-
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    bytes.extend_from_slice(&start_code(super::super::packet::PROGRAM_STREAM_MAP));
-    bytes.extend_from_slice(&psm_payload);
+    bytes.extend_from_slice(&psm_packet(&[(0x1B, 0xE0)]));
     // A video PES on 0xE0.
     bytes.extend_from_slice(&start_code(0xE0));
     bytes.extend_from_slice(&8u16.to_be_bytes());
@@ -468,5 +514,47 @@ mod tests {
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 1);
     assert_eq!(out.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
+  }
+
+  // ---- PARSER-276: packet-body skipping and PSM declared length --------
+
+  #[test]
+  fn padding_payload_start_code_is_not_collected() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(PACK_HEADER));
+    bytes.extend_from_slice(&[0u8; 10]);
+    bytes.extend_from_slice(&start_code(super::super::packet::PADDING));
+    bytes.extend_from_slice(&8u16.to_be_bytes());
+    bytes.extend_from_slice(&start_code(0xE0)); // fake packet start inside padding
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.extend_from_slice(&start_code(0xC0)); // real audio packet after padding
+    bytes.extend_from_slice(&8u16.to_be_bytes());
+    bytes.extend_from_slice(&[0u8; 8]);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("padding.mpg", 0);
+    MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].track_type, TrackType::Audio);
+  }
+
+  #[test]
+  fn psm_ignores_entries_after_declared_length() {
+    let mut psm = psm_packet(&[]);
+    psm.extend_from_slice(&[0x1B, 0xE0, 0x00, 0x00]); // fake trailing entry
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(PACK_HEADER));
+    bytes.extend_from_slice(&[0u8; 10]);
+    bytes.extend_from_slice(&psm);
+    bytes.extend_from_slice(&start_code(0xE0));
+    bytes.extend_from_slice(&8u16.to_be_bytes());
+    bytes.extend_from_slice(&[0u8; 8]);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("psm-trailing.mpg", 0);
+    MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_ne!(out.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
   }
 }

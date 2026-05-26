@@ -195,6 +195,7 @@ impl Reader for MatroskaReader {
 
     // Process deferred elements in mkvmerge order: Info, Tracks,
     // Attachments, Tags, Chapters, Cues.
+    let mut attachment_id = 0u32;
     for kind in [
       DeferredL1::Info,
       DeferredL1::Tracks,
@@ -208,7 +209,7 @@ impl Reader for MatroskaReader {
           continue;
         }
         deferred.mark_handled(kind, pos);
-        process_deferred(src, kind, pos, deadline, out, &mut deferred)?;
+        process_deferred(src, kind, pos, deadline, out, &mut deferred, &mut attachment_id)?;
       }
     }
 
@@ -375,6 +376,7 @@ fn process_deferred(
   deadline: &Deadline,
   out: &mut MediaMetadata,
   deferred: &mut DeferredL1Positions,
+  attachment_id: &mut u32,
 ) -> Result<(), ParseError> {
   src.seek_to(pos)?;
   let header = ebml::read_element_header(src)?;
@@ -389,7 +391,7 @@ fn process_deferred(
       tracks::parse(src, &header, deadline, out)?;
     }
     DeferredL1::Attachments => {
-      attachments::parse(src, &header, deadline, out)?;
+      attachments::parse(src, &header, deadline, out, attachment_id)?;
     }
     DeferredL1::Chapters => {
       chapters::parse(src, &header, deadline, out)?;

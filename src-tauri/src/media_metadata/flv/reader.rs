@@ -15,8 +15,8 @@
  *   limitations under the License.
  */
 
-//! FlvReader — walks tags until each declared stream has identification
-//! state filled in (or until the 1 MiB detection window is exhausted).
+//! FlvReader — walks tags in mkvmerge's bounded detection window and creates
+//! tracks from actual audio/video/script tags instead of trusting header flags.
 
 use crate::media_metadata::audio::aac;
 use crate::media_metadata::deadline::Deadline;
@@ -180,13 +180,6 @@ impl Reader for FlvReader {
       }
       // Always seek to the byte just past this tag's payload.
       src.seek_to(payload_pos + tag.data_size as u64)?;
-      // Stop early once declared streams have enough header data to be
-      // muxer-valid. AVC/HEVC/AAC need their sequence headers.
-      let video_done = !header.has_video() || video.is_valid();
-      let audio_done = !header.has_audio() || audio.is_valid();
-      if video_done && audio_done && (video_seen || audio_seen) {
-        break;
-      }
     }
 
     // Emit tracks in discovery order, skipping any that mkvtoolnix would
@@ -392,7 +385,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
             state.height = Some(dim.height);
           }
           state.sps_default_duration_ns = parsed.default_duration_ns;
-          state.headers_read = parsed.complete;
+          state.headers_read = true;
         }
       }
       VideoCodecId::H265 => {
@@ -406,7 +399,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
             state.height = Some(dim.height);
           }
           state.sps_default_duration_ns = parsed.default_duration_ns;
-          state.headers_read = parsed.complete;
+          state.headers_read = true;
         }
       }
       VideoCodecId::SorensonH263 => {
@@ -430,7 +423,6 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
 struct ParsedVideoConfig {
   dimensions: Option<Dimensions2D>,
   config: Option<VideoCodecConfig>,
-  complete: bool,
   /// Per-frame duration in ns derived from SPS VUI timing, when present.
   default_duration_ns: Option<u64>,
 }
@@ -453,7 +445,6 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
   let num_sps = payload[5] & 0x1f;
   let mut offset = 6usize;
   let mut sps_info: Option<avc_sps::AvcSps> = None;
-  let mut saw_sps = false;
   for _ in 0..num_sps {
     if offset + 2 > payload.len() {
       break;
@@ -466,7 +457,6 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
     let nal = &payload[offset..offset + len];
     offset += len;
     if nal.first().map(|b| b & 0x1f) == Some(avc_nal::NAL_UNIT_TYPE_SPS) && nal.len() > 1 {
-      saw_sps = true;
       let rbsp = avc_nal::strip_emulation_prevention(&nal[1..]);
       if let Ok(parsed) = avc_sps::parse(&rbsp) {
         sps_info = Some(parsed);
@@ -474,7 +464,6 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
     }
   }
 
-  let mut saw_pps = false;
   if offset < payload.len() {
     let num_pps = payload[offset];
     offset += 1;
@@ -487,11 +476,7 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
       if offset + len > payload.len() {
         break;
       }
-      let nal = &payload[offset..offset + len];
       offset += len;
-      if nal.first().map(|b| b & 0x1f) == Some(avc_nal::NAL_UNIT_TYPE_PPS) {
-        saw_pps = true;
-      }
     }
   }
 
@@ -524,7 +509,6 @@ fn parse_avcc(payload: &[u8]) -> ParsedVideoConfig {
   ParsedVideoConfig {
     dimensions,
     config: Some(config),
-    complete: saw_sps && saw_pps,
     default_duration_ns,
   }
 }
@@ -566,9 +550,6 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
 
   let mut dimensions = None;
   let mut default_duration_ns = None;
-  let mut saw_vps = false;
-  let mut saw_sps = false;
-  let mut saw_pps = false;
   let mut offset = 23usize;
   let num_arrays = payload[22] as usize;
   for _ in 0..num_arrays {
@@ -589,12 +570,7 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
       }
       let nal = &payload[offset..offset + len];
       offset += len;
-      if nal_type == hevc_nal::NAL_UNIT_TYPE_VPS {
-        saw_vps = true;
-      } else if nal_type == hevc_nal::NAL_UNIT_TYPE_PPS {
-        saw_pps = true;
-      } else if nal_type == hevc_nal::NAL_UNIT_TYPE_SPS && nal.len() > 2 {
-        saw_sps = true;
+      if nal_type == hevc_nal::NAL_UNIT_TYPE_SPS && nal.len() > 2 {
         let rbsp = hevc_nal::strip_emulation_prevention(&nal[2..]);
         if let Ok(sps) = hevc_sps::parse(&rbsp) {
           dimensions = Some(Dimensions2D {
@@ -625,7 +601,6 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
   ParsedVideoConfig {
     dimensions,
     config: Some(config),
-    complete: saw_vps && saw_sps && saw_pps,
     default_duration_ns,
   }
 }
@@ -866,6 +841,77 @@ mod tests {
     assert_eq!(ap.sampling_frequency, Some(44_100.0));
     assert_eq!(ap.channels, Some(2));
     assert_eq!(ap.codec_config.as_ref().unwrap().aac_object_type, Some(2));
+  }
+
+  #[test]
+  fn read_headers_ignores_stale_type_flags() {
+    // PARSER-274: mkvmerge discovers streams from actual tags, not the FLV
+    // header's stale audio/video flags.  This file advertises video only, but
+    // still carries an AAC tag inside the bounded detection window.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    video_payload.extend(minimal_avcc());
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0, 0x12, 0x10]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("stale-flags.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 2);
+    assert!(out.tracks.iter().any(|t| t.codec.id == "V_MPEG4/ISO/AVC"));
+    assert!(out.tracks.iter().any(|t| t.codec.id == "A_AAC"));
+  }
+
+  #[test]
+  fn incomplete_avc_config_still_emits_track() {
+    // PARSER-275: a sequence-header tag establishes the AVC track even if its
+    // avcC is too short to expose SPS/PPS-derived dimensions.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    video_payload.extend_from_slice(&[1, 66, 0]);
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("short-avcc.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 1);
+    let v = &out.tracks[0];
+    assert_eq!(v.codec.id, "V_MPEG4/ISO/AVC");
+    assert_eq!(v.codec.codec_private.as_ref().unwrap().hex, "014200");
+    let vp = v.properties.video.as_ref().unwrap();
+    assert_eq!(vp.pixel_dimensions, None);
+    assert_eq!(vp.default_duration_ns, Some(40_000_000));
+  }
+
+  #[test]
+  fn incomplete_hevc_config_still_emits_track() {
+    // PARSER-275 mirror for HEVC: keep the track and private bytes even when
+    // the hvcC record is too short to contain VPS/SPS/PPS arrays.
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let mut video_payload = vec![(1 << 4) | 12, 0, 0, 0, 0];
+    video_payload.extend_from_slice(&[1, 1, 0, 0]);
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("short-hvcc.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 1);
+    let v = &out.tracks[0];
+    assert_eq!(v.codec.id, "V_MPEGH/ISO/HEVC");
+    assert_eq!(v.codec.codec_private.as_ref().unwrap().hex, "01010000");
+    let vp = v.properties.video.as_ref().unwrap();
+    assert_eq!(vp.pixel_dimensions, None);
+    assert_eq!(vp.default_duration_ns, Some(40_000_000));
   }
 
   #[test]

@@ -41,19 +41,19 @@ pub fn parse(
   parent: &ElementHeader,
   deadline: &Deadline,
   out: &mut MediaMetadata,
+  attachment_id: &mut u32,
 ) -> Result<(), ParseError> {
   // PARSER-140: mkvtoolnix increments `m_attachment_id` for *every*
   // AttachedFile element it encounters — including ones it later skips — and
   // only assigns that id after the filtering test passes
   // (r_matroska.cpp:914-934). Mirror that so emitted ids keep their original
   // 1-based positions even when intervening attachments are dropped.
-  let mut attachment_id: u32 = out.attachments.len() as u32;
   ebml::walk_children(src, parent, "matroska::attachments", deadline, |src, child| {
     if child.id != ids::ATTACHED_FILE {
       return Ok(ChildAction::Skip);
     }
-    attachment_id += 1;
-    if let Some(att) = read_one(src, child, deadline, attachment_id)? {
+    *attachment_id += 1;
+    if let Some(att) = read_one(src, child, deadline, *attachment_id)? {
       out.attachments.push(att);
     }
     Ok(ChildAction::Consumed)
@@ -149,8 +149,16 @@ mod tests {
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let header = ebml::read_element_header(&mut s).unwrap();
     let mut out = MediaMetadata::new("clip.mkv", 0);
-    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    let mut attachment_id = 0;
+    parse(&mut s, &header, &no_deadline(), &mut out, &mut attachment_id).unwrap();
     out.attachments
+  }
+
+  fn parse_attachments_into(parent_payload: Vec<u8>, out: &mut MediaMetadata, attachment_id: &mut u32) {
+    let bytes = encode_element(ids::ATTACHMENTS, 4, &parent_payload);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let header = ebml::read_element_header(&mut s).unwrap();
+    parse(&mut s, &header, &no_deadline(), out, attachment_id).unwrap();
   }
 
   fn build_attached_file(name: &str, mime: &str, uid: u64, data: &[u8]) -> Vec<u8> {
@@ -239,6 +247,28 @@ mod tests {
     assert_eq!(v.len(), 1);
     assert_eq!(v[0].file_name, "real.bin");
     assert_eq!(v[0].id, 2);
+  }
+
+  #[test]
+  fn skipped_attachment_consumes_id_across_attachment_elements() {
+    // PARSER-277: `m_attachment_id` is reader-level in mkvtoolnix.  A skipped
+    // attachment in one Attachments element must still consume an id before a
+    // later Attachments element is parsed.
+    let mut out = MediaMetadata::new("clip.mkv", 0);
+    let mut attachment_id = 0;
+    parse_attachments_into(
+      build_attached_file("empty.bin", "application/octet-stream", 1, &[]),
+      &mut out,
+      &mut attachment_id,
+    );
+    parse_attachments_into(
+      build_attached_file("real.bin", "application/octet-stream", 2, &[0u8; 8]),
+      &mut out,
+      &mut attachment_id,
+    );
+    assert_eq!(out.attachments.len(), 1);
+    assert_eq!(out.attachments[0].file_name, "real.bin");
+    assert_eq!(out.attachments[0].id, 2);
   }
 
   #[test]

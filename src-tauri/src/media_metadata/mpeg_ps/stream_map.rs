@@ -49,17 +49,34 @@ pub struct ProgramStreamMap {
 }
 
 pub fn parse(payload: &[u8]) -> Result<ProgramStreamMap, ParseError> {
-  if payload.len() < 6 {
+  if payload.len() < 2 {
     return Err(ParseError::Malformed {
       format: "mpeg_ps",
       offset: 0,
       reason: format!("PSM payload {} bytes too small", payload.len()),
     });
   }
+  let psm_len = u16::from_be_bytes([payload[0], payload[1]]) as usize;
+  if psm_len == 0 || psm_len > 1018 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ps",
+      offset: 0,
+      reason: format!("invalid PSM length {psm_len}"),
+    });
+  }
+  let declared_end = 2 + psm_len;
+  if payload.len() < declared_end || psm_len < 8 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ps",
+      offset: 0,
+      reason: "PSM declared length overruns payload".to_string(),
+    });
+  }
+  let payload = &payload[..declared_end];
   // bytes[0..2] = program_stream_map_length, [2..4] = ver/marker bytes
   let psi_len = u16::from_be_bytes([payload[4], payload[5]]) as usize;
   let mut pos = 6 + psi_len;
-  if pos + 2 > payload.len() {
+  if pos + 2 > declared_end.saturating_sub(4) {
     return Err(ParseError::Malformed {
       format: "mpeg_ps",
       offset: 0,
@@ -69,7 +86,7 @@ pub fn parse(payload: &[u8]) -> Result<ProgramStreamMap, ParseError> {
   let esi_len = u16::from_be_bytes([payload[pos], payload[pos + 1]]) as usize;
   pos += 2;
   let map_end = pos + esi_len;
-  if map_end > payload.len() {
+  if map_end + 4 > declared_end {
     return Err(ParseError::Malformed {
       format: "mpeg_ps",
       offset: 0,
@@ -110,18 +127,16 @@ mod tests {
     }
     let esi_len = esi.len() as u16;
     let psi_len = 0u16;
-    let body = {
-      let mut v = Vec::new();
-      // program_stream_map_length placeholder (2)
-      v.extend_from_slice(&0u16.to_be_bytes());
-      v.push(0xC1); // current_next + version
-      v.push(0x01); // marker
-      v.extend_from_slice(&psi_len.to_be_bytes());
-      v.extend_from_slice(&esi_len.to_be_bytes());
-      v.extend(esi);
-      v.extend_from_slice(&0u32.to_be_bytes()); // CRC
-      v
-    };
+    let mut body = Vec::new();
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.push(0xC1); // current_next + version
+    body.push(0x01); // marker
+    body.extend_from_slice(&psi_len.to_be_bytes());
+    body.extend_from_slice(&esi_len.to_be_bytes());
+    body.extend(esi);
+    body.extend_from_slice(&0u32.to_be_bytes()); // CRC
+    let psm_len = (body.len() - 2) as u16;
+    body[..2].copy_from_slice(&psm_len.to_be_bytes());
     body
   }
 
@@ -137,6 +152,16 @@ mod tests {
   #[test]
   fn rejects_truncated_payload() {
     let err = parse(&[0u8; 4]).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn rejects_zero_or_overlarge_declared_length() {
+    let err = parse(&[0u8, 0, 0xC1, 0x01]).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+    let mut payload = build_psm(&[]);
+    payload[..2].copy_from_slice(&1019u16.to_be_bytes());
+    let err = parse(&payload).unwrap_err();
     assert!(matches!(err, ParseError::Malformed { .. }));
   }
 
@@ -167,5 +192,14 @@ mod tests {
     let payload = build_psm(&[(0x06, 0xBD, &descs)]);
     let psm = parse(&payload).unwrap();
     assert_eq!(psm.entries[0].descriptors, descs);
+  }
+
+  #[test]
+  fn ignores_bytes_after_declared_map() {
+    let mut payload = build_psm(&[(0x0F, 0xC0, &[])]);
+    payload.extend_from_slice(&[0x1B, 0xE0, 0x00, 0x00]);
+    let psm = parse(&payload).unwrap();
+    assert_eq!(psm.entries.len(), 1);
+    assert_eq!(psm.entries[0].elementary_stream_id, 0xC0);
   }
 }
