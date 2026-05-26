@@ -28,3 +28,9 @@ The reader is implemented through segment helper functions rather than long-live
 ## Gaps and Handling
 
 Rust does not model the two-byte frame-count boundary exactly like upstream. It also marks the subtitle text metadata as UTF-8 even though TextST character coding can vary and upstream does not expose it as simple UTF-8 text. The codec-private header path is the important parity point and is implemented.
+
+## Open Issues
+
+### PARSER-248: HDMV TextST is incorrectly labelled as UTF-8 text
+
+The native track metadata sets `subtitle.encoding = "UTF-8"` for `S_HDMV/TEXTST`. mkvmerge identifies this track as HDMV TextST and passes the Dialog Style segment as codec private; it does not expose the stream as simple UTF-8 text. TextST character coding is part of the Blu-ray TextST data model and can vary, so the native UTF-8 label is misleading and can make callers treat the stream as plain text.

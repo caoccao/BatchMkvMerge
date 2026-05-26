@@ -33,3 +33,9 @@ Key structures are `FileHeader`, `IvfCodec`, and the internal Dolby Vision confi
 ## Gaps and Handling
 
 Upstream frame payload handling and keyframe logic are muxing concerns and are not implemented. For identify metadata, the parser is otherwise close to upstream and adds a bounded AV1 Dolby Vision extraction path.
+
+## Open Issues
+
+### PARSER-247: IVF probe rejects container headers that mkvmerge still claims
+
+`FileHeader::is_valid` is used during probe and requires nonzero width, height, frame-rate numerator, and frame-rate denominator. mkvmerge's `ivf_reader_c::probe_file` only checks the `DKIF` magic and supported codec FourCC; `read_headers` later sets `m_ok` false for invalid dimensions/timing and identify reports the container without a track. Native currently returns unrecognised for the same malformed-but-claimed IVF headers instead of preserving container recognition and suppressing the unusable track.

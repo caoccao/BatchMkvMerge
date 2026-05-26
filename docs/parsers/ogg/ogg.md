@@ -38,3 +38,9 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment/chapter edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets); chapter parsing remains simpler. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+### PARSER-249: Ogg chapter comments are counted without mkvmerge's required name-pair grammar
+
+Native chapter extraction counts every `CHAPTER\d+=timestamp` comment whose timestamp parses, regardless of whether a matching `CHAPTER\d+NAME=` line exists or appears in the expected order. mkvmerge collects all `CHAPTER*` comments, feeds them to the simple chapter parser, and that parser alternates strictly between `CHAPTERxx=...` and `CHAPTERxxNAME=...`; an unmatched timestamp at EOF does not create a chapter. Native can therefore over-report chapter counts for malformed Ogg/OGM comments that mkvmerge rejects or ignores.

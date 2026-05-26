@@ -35,3 +35,9 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 ## Gaps and Handling
 
 Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes or extract MPEG-4 pixel aspect ratio from frames. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope.
+
+## Open Issues
+
+### PARSER-241: MPEG-4 Part 2 frame PAR is not used for identify display dimensions
+
+The native AVI path derives display dimensions from `vprp` when present, but it never reads the first MPEG-4 Part 2 video frame to extract the VOL pixel aspect ratio. mkvmerge's AVI identify path calls `extended_identify_mpeg4_l2`, reads frame 0, runs `mtx::mpeg4_p2::extract_par`, and reports adjusted display dimensions from that bitstream PAR. As a result, an AVI with DivX/Xvid PAR in the first frame and no `vprp` still reports square-pixel display dimensions natively while mkvmerge reports the anamorphic display size.

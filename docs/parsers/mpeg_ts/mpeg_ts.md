@@ -34,3 +34,13 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks.
+
+## Open Issues
+
+### PARSER-250: MPEG-TS MPEG audio keeps the table default instead of the probed layer
+
+For stream types `0x03`/`0x04`, native initially labels the row as `A_MPEG/L3` and enrichment only copies channels and sample rate from the first MPEG audio header. mkvmerge's `new_stream_a_mpeg` decodes that header and replaces the codec with `header.get_codec()`, preserving Layer I, II, or III specialization. Native will mislabel common Layer II transport-stream audio as MP3.
+
+### PARSER-251: Private HEVC descriptor path emits noncanonical `V_HEVC`
+
+When a private PES stream is promoted by the HEVC descriptor, `stream_table.rs` sets `codec_id = "V_HEVC"`. The rest of the project, Matroska, MP4, MPEG-PS, and mkvmerge's HEVC codec mapping use `V_MPEGH/ISO/HEVC`. This path can leak a noncanonical codec id into public metadata and also differs from mkvmerge's PMT descriptor handling, which only promotes private streams through supported registration/subtitle/audio descriptors.
