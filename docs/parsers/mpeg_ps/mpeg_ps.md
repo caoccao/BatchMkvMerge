@@ -35,3 +35,13 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic.
+
+## Open Issues
+
+### PARSER-272: MPEG-1 PES optional headers are skipped with the MPEG-2-only layout
+
+`pes_payload_offset` always assumes the MPEG-2 PES optional header shape and returns `9 + bytes[8]`. The MPEG-PS reader uses that offset for bare audio/video streams and private-stream-1 payloads before codec probing.
+
+mkvtoolnix's MPEG-PS reader supports the older MPEG-1 PES layout as well: after the 6-byte packet prefix it skips stuffing bytes, optional STD buffer bytes, MPEG-1 PTS/DTS encodings, the MPEG-2 optional header when present, or the `0x0f` marker before exposing elementary payload (`r_mpeg_ps.cpp:347-466`). MPEG-1 program streams do not have `PES_header_data_length` at byte 8.
+
+For MPEG-1 PES packets, Rust can interpret stuffing, PTS/DTS, or elementary payload bytes as the MPEG-2 header length and skip into or past the real stream data. That can hide MPEG video, MPEG audio, AC-3/DTS/LPCM, or private-stream headers that mkvtoolnix would see. Fix by porting the MPEG-1/MPEG-2 PES depacketizing logic before applying private-stream substream skips and codec probes.
