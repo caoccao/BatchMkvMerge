@@ -37,3 +37,17 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. PES depacketising now handles both MPEG-1 and MPEG-2 optional-header layouts, so MPEG-1 program-stream payloads are no longer misaligned.
+
+## Open Issues
+
+### PARSER-276: Packet scanning searches inside non-PES bodies and ignores the declared PSM length
+
+`src-tauri/src/media_metadata/mpeg_ps/reader.rs:145-153` parses a Program Stream Map from all remaining bytes after the start code, then advances only to `pos + 4`. The generic non-PES branch for pack headers, system headers, padding, private-stream-2, and other packet-layer codes also advances only to `pos + 4` (`reader.rs:204-207`). As a result, the next `find_start_code` search can run through packet bodies and descriptor payloads instead of resuming after those structures.
+
+`src-tauri/src/media_metadata/mpeg_ps/stream_map.rs:51-97` also ignores `program_stream_map_length`: it reads program/elementary map lengths against the full remaining slice, accepts zero or overlarge PSM lengths, and can parse stream entries from bytes outside the declared map.
+
+mkvtoolnix skips pack header stuffing and system-header descriptors before reading the next header (`../mkvtoolnix/src/input/r_mpeg_ps.cpp:103-135`). Its PSM parser reads the declared length, rejects zero or `> 1018`, clamps the ES map to that declared body, and then seeks away from the PSM before resyncing (`../mkvtoolnix/src/input/r_mpeg_ps.cpp:271-305`, `1136-1139`).
+
+Impact: Rust can treat `00 00 01 xx` byte patterns inside pack/system/PSM/padding payloads as real stream packets, producing false observations or feeding codec probes with descriptor bytes. It can also accept PSM stream-type mappings mkvtoolnix would never read.
+
+Suggested fix: implement packet-specific skipping for pack headers, system headers, padding/private-stream-2/other bounded packet bodies, and Program Stream Maps. Pass only the declared PSM body to `stream_map::parse`, enforce the upstream length limits and clamping, and advance the scanner past the skipped structure before searching for the next packet-layer start code.
