@@ -51,3 +51,17 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification.
+
+## Open Issues
+
+### PARSER-258 - MP4 hvcC parser reads HEVC chroma and bit depths from the wrong offsets
+
+`src-tauri/src/media_metadata/mp4/codec_specific/hvcc.rs::parse` decodes `chroma_idc` from payload byte 18, luma bit depth from byte 19, and chroma bit depth from byte 20. In the hvcC layout used by `../mkvtoolnix/src/common/hevc/hevcc.cpp`, byte 16 carries chroma format, byte 17 carries luma bit depth, byte 18 carries chroma bit depth, and bytes 19-20 are the following 16-bit avg-frame-rate/reserved field.
+
+For a normal MP4 `hvcC` box, Rust can therefore report chroma from the chroma-bit-depth byte and bit depths from the average-frame-rate bytes. The preserved `raw_hex` still contains the original hvcC payload, but `VideoCodecConfig.chroma_format`, `bit_depth_luma`, and `bit_depth_chroma` can disagree with mkvmerge's parsed metadata.
+
+### PARSER-259 - MP4 AVC first-sample avcC derivation drops the SPS profile-compatibility byte
+
+When an AVC sample entry lacks a usable `avcC`, `src-tauri/src/media_metadata/mp4/verify.rs::derive_avc_from_bitstream` reads bounded first-sample Annex B data and builds a replacement avcC with `build_avcc`. That builder writes the AVCDecoderConfigurationRecord profile-compatibility byte as `0`.
+
+The mkvmerge salvage path uses the AVC SPS parser/configuration-record logic that preserves `sps.profile_compat`. MP4 files that rely on first-sample AVC header recovery therefore get a `codec_private_hex` / `raw_hex` record with missing constraint-set flags in Rust, even though the same bits were present in the recovered SPS.

@@ -36,3 +36,11 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details. The Rust parser does not fully mirror ER AAC ELD/CELP paths. The first-usable-frame search now matches upstream (`drain_to_usable_header`), so a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+### PARSER-260 - AudioSpecificConfig omits ELD, CELP, and ER error-protection branches
+
+`src-tauri/src/media_metadata/audio/aac.rs::parse_audio_specific_config` only consumes the GA-specific config branch for AAC Main/LC/SSR/LTP/Scalable/TwinVQ and ER AAC LC/LTP/Scalable/TwinVQ/BSAC/LD. Non-GA object types fall through without object-specific parsing, and ER `ep_config` / error-protection data is not consumed after GA parsing.
+
+`../mkvtoolnix/src/common/aac.cpp::parse_audio_specific_config` additionally dispatches to `read_eld_specific_config`, `read_er_celp_specific_config`, and `read_error_protection_specific_config`, and its GA parser consumes ER extension flags such as BSAC sub-frame length and resilience flags. Rust can leave the bit cursor at a different position before the SBR sync-extension search, accept ELD configurations mkvmerge rejects, or report incomplete `samples_per_frame` / channel metadata for ER AAC ASC payloads in ADTS, LOAS/LATM, and container-provided sequence headers.

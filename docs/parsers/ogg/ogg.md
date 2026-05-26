@@ -40,3 +40,11 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets). The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+### PARSER-261 - Truncated VorbisComment lists are accepted with partial metadata
+
+`src-tauri/src/media_metadata/ogg/comments.rs::parse` validates the vendor string, then loops over the declared comment count. If a later comment length or body is truncated, it breaks out of the loop and still returns `Some(VorbisComments { ... })` containing the entries parsed before the truncation.
+
+`../mkvtoolnix/src/common/tags/vorbis.cpp::parse` reads every declared comment inside a try block; any short read or malformed length throws and returns an invalid/empty Vorbis comment object. Rust can therefore surface partial tags, language/title hints, chapter counts, or cover-art attachments from an Ogg comment packet that mkvmerge treats as invalid and ignores.

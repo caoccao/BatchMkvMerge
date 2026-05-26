@@ -29,4 +29,12 @@ Core structures are `WavpackHeader` and `WavpackMeta`.
 
 ## Gaps and Handling
 
-Upstream scans farther to resynchronise before the first header and can pair correction `.wvc` files for muxing. The Rust parser focuses on the primary `.wv` metadata path and does not retain correction-stream state, which is not surfaced in the UI.
+Upstream can pair correction `.wvc` files for muxing. The Rust parser focuses on the primary `.wv` metadata path and does not retain correction-stream state, which is not surfaced in the UI.
+
+## Open Issues
+
+### PARSER-253 - Block parsing does not resynchronise between WavPack blocks
+
+`src-tauri/src/media_metadata/audio/wavpack.rs::parse_frame` advances to `ck_size + 8` and expects the next WavPack block to begin exactly there. If the header at that exact offset is invalid, the Rust parser stops with the metadata accumulated so far.
+
+`../mkvtoolnix/src/common/wavpack.cpp::parse_frame` calls `read_next_header` for every block in the first segment. That helper scans forward for the next valid `wvpk` header and only gives up after more than 1 MiB has been skipped. A recoverable gap, padding region, or junk bytes before a later initial/final block can therefore make Rust under-count channels or miss the sample-rate / bit-depth block that mkvmerge still finds.

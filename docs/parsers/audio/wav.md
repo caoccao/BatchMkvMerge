@@ -32,4 +32,12 @@ Important structures are `WavType`, `WaveFormat`, `WavMetadata`, and internal ch
 
 ## Gaps and Handling
 
-The byte total now accumulates all data chunks like upstream, so duration is correct for multi-`data`-chunk files. Upstream additionally has a >4 GB repair path that recalculates a single huge data chunk's length from the file size when a non-data chunk follows it (`scan_chunks_wave`'s `file_size > 0x100000000` branch); this header-only port relies on the file-size-bounded chunk walk instead, which is sufficient for identification. Unsupported format tags are reported through the structured model rather than matching mkvmerge's exact text output.
+The byte total now accumulates all data chunks like upstream, so duration is correct for multi-`data`-chunk files. Unsupported format tags are reported through the structured model rather than matching mkvmerge's exact text output.
+
+## Open Issues
+
+### PARSER-254 - Classic RIFF WAV misses mkvmerge's >4 GiB data-length repair
+
+`src-tauri/src/media_metadata/audio/wav.rs::scan_chunks_riff` trusts each 32-bit chunk length, records the chunk, and stops when the next calculated offset would leave the file. For a classic RIFF/WAVE file larger than 4 GiB whose `data` chunk length wrapped or was written incorrectly, `data_bytes` remains the truncated 32-bit value.
+
+`../mkvtoolnix/src/input/r_wav.cpp::scan_chunks_wave` has a specific repair branch: when a non-`data` chunk follows a `data` chunk and the file is larger than 4 GiB, it recalculates the previous `data` chunk's length from `file_size - previous_chunk.pos` and updates `m_bytes_in_data_chunks`. Rust therefore reports too short a duration for huge malformed-but-recoverable WAV files that mkvmerge identifies with the repaired data length.

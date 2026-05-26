@@ -35,3 +35,11 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Upstream can scan much farther and uses a fuller elementary-stream parser with slice/access-unit state and `might_be_xyzvc` guards. Rust scans the first 64 KiB and focuses on SPS/PPS metadata. The PAR and VUI default-duration are now derived to match mkvmerge; what remains out of scope is the muxing-time "most often used duration" heuristic (which corrects field/frame-rate conventions from actual frame timestamps) — header-only identification reports the SPS-declared value directly.
+
+## Open Issues
+
+### PARSER-257 - Elementary AVC avcC codec private drops the SPS profile-compatibility byte
+
+`src-tauri/src/media_metadata/elementary/avc/sps.rs::parse` reads the SPS constraint/profile-compatibility byte into `_constraints` and discards it. `src-tauri/src/media_metadata/elementary/avc/reader.rs::AvcHeaders::codec_private` then writes AVCDecoderConfigurationRecord byte 2 as `0`.
+
+`../mkvtoolnix/src/common/avc/util.cpp` stores that byte as `sps.profile_compat`, and `../mkvtoolnix/src/common/avc/avcc.cpp::pack` writes it into the generated avcC record when no container override exists. Rust therefore loses constraint-set / compatibility flags from raw Annex B AVC streams in both `codec_private` and `raw_hex`.
