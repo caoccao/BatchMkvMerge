@@ -204,9 +204,48 @@ fn get_dsd_rate_shifter(buffer: &[u8]) -> u32 {
   0
 }
 
+/// Port of `read_next_header` (`../mkvtoolnix/src/common/wavpack.cpp:54-90`):
+/// scan forward from `start` for a valid 32-byte WavPack block header, skipping
+/// junk byte-by-byte and giving up only after more than 1 MiB has been skipped.
+/// On success returns `(header_start, header)` and leaves the cursor positioned
+/// immediately after the located 32-byte header (so a payload read can follow);
+/// returns `Ok(None)` when no header is found within the skip budget or EOF is
+/// reached (mirrors the `-1` return).
+fn read_next_header(src: &mut FileSource, start: u64) -> Result<Option<(u64, WavpackHeader)>, ParseError> {
+  const MAX_SKIP: u64 = 1 << 20;
+  let mut scan = start;
+  let mut skipped = 0u64;
+  loop {
+    src.seek_to(scan)?;
+    let mut hdr = [0u8; HEADER_SIZE];
+    let n = src.read_at_most(&mut hdr)?;
+    if n < HEADER_SIZE {
+      return Ok(None);
+    }
+    if &hdr[..4] == b"wvpk" {
+      if let Some(h) = parse_header(&hdr) {
+        if is_valid_header(&h) {
+          // Reposition to right after the header for any subsequent payload read.
+          src.seek_to(scan + HEADER_SIZE as u64)?;
+          return Ok(Some((scan, h)));
+        }
+      }
+    }
+    // Advance to the next 'w' in this window (mkvtoolnix scans byte-by-byte for
+    // the next sync), or past the whole window if none is present.
+    let next_w = hdr[1..].iter().position(|&b| b == b'w').map(|i| i + 1).unwrap_or(HEADER_SIZE);
+    skipped += next_w as u64;
+    if skipped > MAX_SKIP {
+      return Ok(None);
+    }
+    scan += next_w as u64;
+  }
+}
+
 /// Port of `parse_frame` for identification: walk the consecutive blocks of the
 /// first segment, accumulating channels and decoding format fields from the
-/// initial block.
+/// initial block.  Block boundaries are located with `read_next_header`, which
+/// resynchronises across padding / junk gaps between blocks (PARSER-253).
 fn parse_frame(src: &mut FileSource) -> Result<Option<WavpackMeta>, ParseError> {
   let mut meta = WavpackMeta::default();
   let mut pos = 0u64;
@@ -219,23 +258,17 @@ fn parse_frame(src: &mut FileSource) -> Result<Option<WavpackMeta>, ParseError> 
     if blocks > MAX_BLOCKS {
       break;
     }
-    src.seek_to(pos)?;
-    let mut hdr = [0u8; HEADER_SIZE];
-    let n = src.read_at_most(&mut hdr)?;
-    if n < HEADER_SIZE {
-      return Ok(None);
-    }
-    let Some(h) = parse_header(&hdr) else {
-      return Ok(None);
+    let (header_start, h) = match read_next_header(src, pos)? {
+      Some(found) => found,
+      None => {
+        // No valid header within the skip budget. For the first block this is
+        // an unrecognised file; afterwards, stop with what we already have.
+        if first {
+          return Ok(None);
+        }
+        break;
+      }
     };
-    if first && !is_valid_header(&h) {
-      return Ok(None);
-    }
-    if !is_valid_header(&h) {
-      // Could not resync to a valid block boundary; stop with what we
-      // have rather than fabricating bogus channels.
-      break;
-    }
     first = false;
     if meta.version == 0 {
       meta.version = h.version;
@@ -293,8 +326,9 @@ fn parse_frame(src: &mut FileSource) -> Result<Option<WavpackMeta>, ParseError> 
     }
 
     if !can_leave {
-      // Advance to the next block: full frame size is ck_size + 8.
-      pos = pos.saturating_add(h.ck_size as u64 + 8);
+      // Advance to the next block: full frame size is ck_size + 8, measured
+      // from where this header actually started (post-resync).
+      pos = header_start.saturating_add(h.ck_size as u64 + 8);
     }
   }
 
@@ -509,6 +543,32 @@ mod tests {
     let meta = parse_frame(&mut s).unwrap().unwrap();
     assert_eq!(meta.channel_count, 6);
     assert_eq!(meta.sample_rate, 44_100);
+  }
+
+  // ---- PARSER-253: resynchronise across junk/padding between blocks -----
+
+  #[test]
+  fn resync_skips_junk_between_blocks() {
+    // initial stereo (non-final) + junk gap + final stereo. The old exact-offset
+    // walk stopped at the junk and reported 2 channels; resync recovers all 4.
+    let mut bytes = build_block(9, 1, false, true, false, 88_200, 1024, &[0u8; 8]);
+    bytes.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]); // junk, no 'w' byte
+    bytes.extend(build_block(9, 1, false, false, true, 88_200, 1024, &[0u8; 8]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let meta = parse_frame(&mut s).unwrap().unwrap();
+    assert_eq!(meta.channel_count, 4);
+    assert_eq!(meta.sample_rate, 44_100);
+  }
+
+  #[test]
+  fn resync_gives_up_when_no_following_block() {
+    // initial non-final stereo block followed by bytes that never resync to a
+    // 'wvpk' header → stop with the channels gathered so far (no fabrication).
+    let mut bytes = build_block(9, 1, false, true, false, 88_200, 1024, &[0u8; 8]);
+    bytes.extend_from_slice(&[0x00u8; 64]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let meta = parse_frame(&mut s).unwrap().unwrap();
+    assert_eq!(meta.channel_count, 2);
   }
 
   #[test]

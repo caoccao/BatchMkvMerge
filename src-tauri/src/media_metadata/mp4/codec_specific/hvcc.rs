@@ -73,9 +73,13 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
   let profile_idc = (byte1 & 0x1F) as u32;
   let level_idc = payload[12] as u32;
 
-  let chroma_idc = payload[18] & 0x03;
-  let bd_luma = (payload[19] & 0x07) as u32 + 8;
-  let bd_chroma = (payload[20] & 0x07) as u32 + 8;
+  // PARSER-258: per the HEVCDecoderConfigurationRecord layout (and
+  // `../mkvtoolnix/src/common/hevc/hevcc.cpp:326-336`), chromaFormat is byte 16,
+  // bitDepthLumaMinus8 byte 17, bitDepthChromaMinus8 byte 18.  Bytes 19-20 are
+  // the avgFrameRate/reserved field and must not be read for bit depth.
+  let chroma_idc = payload[16] & 0x03;
+  let bd_luma = (payload[17] & 0x07) as u32 + 8;
+  let bd_chroma = (payload[18] & 0x07) as u32 + 8;
 
   let cfg = VideoCodecConfig {
     profile_idc: Some(profile_idc),
@@ -147,9 +151,9 @@ pub(crate) fn build_hvcc_payload(
   p[0] = 1; // configuration version
   p[1] = (if tier_high { 1u8 << 5 } else { 0 }) | (profile_idc & 0x1F);
   p[12] = level_idc;
-  p[18] = 0xFC | (chroma_idc & 0x03);
-  p[19] = 0xF8 | (bd_luma_m8 & 0x07);
-  p[20] = 0xF8 | (bd_chroma_m8 & 0x07);
+  p[16] = 0xFC | (chroma_idc & 0x03); // reserved(6) | chromaFormat(2)
+  p[17] = 0xF8 | (bd_luma_m8 & 0x07); // reserved(5) | bitDepthLumaMinus8(3)
+  p[18] = 0xF8 | (bd_chroma_m8 & 0x07); // reserved(5) | bitDepthChromaMinus8(3)
   p[22] = 0; // num arrays
   p
 }
@@ -193,6 +197,27 @@ mod tests {
     assert_eq!(cfg.profile_name.as_deref(), Some("Main"));
     assert_eq!(cfg.tier, Some(HevcTier::Main));
     assert_eq!(cfg.level_name.as_deref(), Some("4.0"));
+  }
+
+  // PARSER-258: chroma/bit-depth come from bytes 16/17/18; the avgFrameRate
+  // bytes 19/20 must be ignored.  Distinct values at each position make a
+  // regression to the old (18/19/20) offsets observable.
+  #[test]
+  fn reads_chroma_and_bit_depth_from_offsets_16_17_18() {
+    let mut p = vec![0u8; HEADER_BYTES];
+    p[0] = 1;
+    p[1] = 2; // profile_idc 2
+    p[12] = 120;
+    p[16] = 0xFC | 0x02; // chromaFormat = 4:2:2
+    p[17] = 0xF8 | 0x02; // bitDepthLumaMinus8 = 2 → 10-bit
+    p[18] = 0xF8 | 0x04; // bitDepthChromaMinus8 = 4 → 12-bit
+    p[19] = 0xFF; // avgFrameRate high byte — must be ignored
+    p[20] = 0xFF; // avgFrameRate low byte — must be ignored
+    let b = run(p);
+    let cfg = b.video_codec_config.unwrap();
+    assert_eq!(cfg.chroma_format, Some(ChromaFormat::Yuv422));
+    assert_eq!(cfg.bit_depth_luma, Some(10));
+    assert_eq!(cfg.bit_depth_chroma, Some(12));
   }
 
   #[test]

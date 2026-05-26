@@ -21,8 +21,10 @@
 //! fixed 16 KiB window (PARSER-022), and `WAVE_FORMAT_EXTENSIBLE` (0xFFFE) is
 //! unwrapped to the subformat GUID's `data1` codec tag (PARSER-021). The
 //! payload byte total sums the lengths of *all* `data` chunks (PARSER-227),
-//! matching `scan_chunks_wave`'s `m_bytes_in_data_chunks` accumulation, while
-//! the AC-3/DTS payload classification still probes the first data chunk.
+//! matching `scan_chunks_wave`'s `m_bytes_in_data_chunks` accumulation, and a
+//! huge `data` chunk whose 32-bit length wrapped is repaired from the file size
+//! when another chunk follows it in a >4 GiB file (PARSER-254), while the
+//! AC-3/DTS payload classification still probes the first data chunk.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -128,7 +130,7 @@ fn determine_type(head: &[u8]) -> Option<WavType> {
 /// Walk the RIFF chunk list (`scan_chunks_wave`). RIFF chunks are word-aligned
 /// (odd payloads carry a trailing pad byte).
 fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
-  let mut chunks = Vec::new();
+  let mut chunks: Vec<Chunk> = Vec::new();
   let mut pos = 12u64; // after RIFF id + size + WAVE id
   while chunks.len() < MAX_CHUNKS {
     src.seek_to(pos)?;
@@ -140,6 +142,21 @@ fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, 
     id.copy_from_slice(&hdr[0..4]);
     let len = get_u32_le(&hdr[4..]) as u64;
     let data_pos = pos + 8;
+
+    // PARSER-254: repair a huge `data` chunk whose 32-bit length wrapped or was
+    // written incorrectly.  Mirroring `scan_chunks_wave`
+    // (`../mkvtoolnix/src/input/r_wav.cpp`), when a non-`data` chunk follows a
+    // `data` chunk and the file is larger than 4 GiB, recompute the previous
+    // `data` chunk's length from `file_size - previous.pos` and stop scanning.
+    if !id_eq(&id, b"data") && file_size > 0x1_0000_0000 {
+      if let Some(prev) = chunks.last_mut() {
+        if id_eq(&prev.id, b"data") {
+          prev.len = file_size.saturating_sub(prev.pos);
+          break;
+        }
+      }
+    }
+
     chunks.push(Chunk { id, pos: data_pos, len });
     // Advance past the payload, padding odd lengths to a word boundary.
     let advance = if len & 1 != 0 { len + 1 } else { len };
@@ -656,6 +673,43 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     assert_eq!(out.container.properties.duration.unwrap().ns, 1_000_000_000);
+  }
+
+  // ---- PARSER-254: >4 GiB data-length repair ---------------------------
+
+  #[test]
+  fn scan_chunks_repairs_huge_data_length() {
+    // RIFF/WAVE with fmt, a (deliberately short) data chunk, then a trailing
+    // non-data chunk. With file_size > 4 GiB the data chunk length is recomputed
+    // from the file size; the scan then stops. Driven via scan_chunks_riff so
+    // the >4 GiB size can be supplied without allocating a huge buffer.
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", vec![0u8; 8]),
+      (b"fact", vec![0u8; 4]),
+    ]);
+    let file_size = 0x1_0000_0000u64 + 1_000_000;
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let chunks = scan_chunks_riff(&mut s, file_size).unwrap();
+    let data = chunks.iter().find(|c| id_eq(&c.id, b"data")).unwrap();
+    assert_eq!(data.len, file_size - data.pos);
+    // The repair breaks the scan, so the trailing chunk is never recorded.
+    assert!(chunks.iter().all(|c| !id_eq(&c.id, b"fact")));
+  }
+
+  #[test]
+  fn scan_chunks_does_not_repair_small_files() {
+    // The same layout under 4 GiB keeps every chunk's declared length.
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", vec![0u8; 8]),
+      (b"fact", vec![0u8; 4]),
+    ]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    let chunks = scan_chunks_riff(&mut s, bytes.len() as u64).unwrap();
+    let data = chunks.iter().find(|c| id_eq(&c.id, b"data")).unwrap();
+    assert_eq!(data.len, 8);
+    assert!(chunks.iter().any(|c| id_eq(&c.id, b"fact")));
   }
 
   #[test]

@@ -33,6 +33,11 @@ use crate::media_metadata::io::bit_reader::BitReader;
 #[derive(Debug, Clone)]
 pub struct AvcSps {
   pub profile_idc: u8,
+  /// The 8-bit constraint-set / profile-compatibility byte
+  /// (`sps.profile_compat = w.copy_bits(8, r)`,
+  /// `../mkvtoolnix/src/common/avc/util.cpp:235`).  Written verbatim into byte
+  /// 2 of the AVCDecoderConfigurationRecord (PARSER-257).
+  pub profile_compat: u8,
   pub level_idc: u8,
   pub chroma_format_idc: u8,
   pub separate_colour_plane: bool,
@@ -120,7 +125,7 @@ pub fn parse(rbsp: &[u8]) -> Result<AvcSps, ParseError> {
     });
   }
   let profile_idc = rbsp[0];
-  let _constraints = rbsp[1];
+  let profile_compat = rbsp[1];
   let level_idc = rbsp[2];
   let mut reader = BitReader::from_rbsp(&rbsp[3..]);
   let _seq_parameter_set_id = reader.read_ue()?;
@@ -206,6 +211,7 @@ pub fn parse(rbsp: &[u8]) -> Result<AvcSps, ParseError> {
 
   Ok(AvcSps {
     profile_idc,
+    profile_compat,
     level_idc,
     chroma_format_idc: chroma_format_idc as u8,
     separate_colour_plane,
@@ -473,6 +479,15 @@ mod tests {
     assert_eq!(sps.display_width, 1920);
     assert_eq!(sps.chroma_format_idc, 1);
     assert_eq!(sps.bit_depth_luma, 8);
+  }
+
+  #[test]
+  fn captures_profile_compat_byte() {
+    // PARSER-257: rbsp[1] is the constraint-set / profile-compatibility byte.
+    let mut rbsp = vec![66u8, 0xC0, 40u8];
+    rbsp.extend(encode_sps_tail_baseline(119, 67, 4));
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.profile_compat, 0xC0);
   }
 
   #[test]

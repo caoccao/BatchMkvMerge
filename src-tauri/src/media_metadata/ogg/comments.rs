@@ -62,13 +62,19 @@ pub fn parse(bytes: &[u8]) -> Option<VorbisComments> {
 
   let mut entries = Vec::with_capacity(comments_count.min(1024));
   for _ in 0..comments_count {
+    // PARSER-261: mkvtoolnix reads every declared comment inside a try block
+    // (`parse_vorbis_comments_from_packet`, `../mkvtoolnix/src/common/tags/vorbis.cpp:221-279`);
+    // a short read throws and the whole comment object is discarded.  A
+    // truncated count/length/body must therefore yield `None`, not a partial
+    // list, so we don't surface tags / language / chapters / cover art that
+    // mkvmerge treats as invalid and ignores.
     if pos + 4 > bytes.len() {
-      break;
+      return None;
     }
     let len = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
     pos += 4;
     if pos + len > bytes.len() {
-      break;
+      return None;
     }
     let entry_str = std::str::from_utf8(&bytes[pos..pos + len]).ok()?;
     pos += len;
@@ -253,12 +259,35 @@ mod tests {
   }
 
   #[test]
-  fn stops_at_partial_entry_without_returning_none() {
+  fn truncated_entry_body_is_rejected() {
+    // PARSER-261: a comment whose declared length runs past the buffer makes
+    // the whole block invalid (mkvtoolnix discards it), so we return None
+    // rather than a partial entry list.
     let mut bytes = build_block("v", &[("TITLE", "x")]);
-    bytes.truncate(bytes.len() - 1); // chop the last byte of value
-    // Should return Some with whatever could be parsed, or None on UTF-8
-    // failure depending on truncation.  Either way: must not panic.
-    let _ = parse(&bytes);
+    bytes.truncate(bytes.len() - 1); // chop the last byte of the value
+    assert!(parse(&bytes).is_none());
+  }
+
+  #[test]
+  fn truncated_later_entry_discards_earlier_entries() {
+    // First entry is complete; the second's length runs past the buffer. The
+    // earlier (valid) entry must NOT survive — mkvmerge ignores the lot.
+    let mut bytes = build_block("v", &[("TITLE", "Track"), ("ARTIST", "Hans")]);
+    bytes.truncate(bytes.len() - 2); // chop into the second entry's body
+    assert!(parse(&bytes).is_none());
+  }
+
+  #[test]
+  fn comment_count_larger_than_payload_is_rejected() {
+    // A count of 3 with only one entry present → the missing entries' length
+    // prefix runs off the end → None.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // empty vendor
+    bytes.extend_from_slice(&3u32.to_le_bytes()); // claims three comments
+    let entry = "TITLE=x";
+    bytes.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(entry.as_bytes());
+    assert!(parse(&bytes).is_none());
   }
 
   #[test]

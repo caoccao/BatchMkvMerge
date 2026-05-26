@@ -140,7 +140,10 @@ impl<'a> AvcHeaders<'a> {
     let mut out = Vec::new();
     out.push(1);
     out.push(sps.profile_idc);
-    out.push(0);
+    // PARSER-257: byte 2 carries the SPS constraint-set / profile-compatibility
+    // flags (`buffer[2] = sps.profile_compat`,
+    // `../mkvtoolnix/src/common/avc/avcc.cpp:134`), not a hard-coded zero.
+    out.push(sps.profile_compat);
     out.push(sps.level_idc);
     out.push(0xff);
     out.push(0xe1);

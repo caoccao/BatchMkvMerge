@@ -51,6 +51,17 @@ pub struct HevcSps {
   pub par_num: u32,
   pub par_den: u32,
   pub default_duration_ns: Option<u64>,
+  // ----- profile_tier_level fields the HEVCDecoderConfigurationRecord needs
+  // (PARSER-255).  Ported from `profile_tier_copy`,
+  // `../mkvtoolnix/src/common/hevc/util.cpp:62-103`.
+  pub profile_space: u8,
+  pub profile_compatibility_flag: u32,
+  pub progressive_source_flag: bool,
+  pub interlaced_source_flag: bool,
+  pub non_packed_constraint_flag: bool,
+  pub frame_only_constraint_flag: bool,
+  pub max_sub_layers_minus1: u32,
+  pub temporal_id_nesting_flag: bool,
 }
 
 impl HevcSps {
@@ -116,8 +127,11 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
   let mut reader = BitReader::from_rbsp(rbsp);
   let _sps_video_parameter_set_id = reader.read_bits(4)?;
   let sps_max_sub_layers_minus1 = reader.read_bits(3)? as u32;
-  let _sps_temporal_id_nesting_flag = reader.read_bit()?;
-  let (profile_idc, tier, level_idc) = parse_profile_tier_level(&mut reader, sps_max_sub_layers_minus1)?;
+  let sps_temporal_id_nesting_flag = reader.read_bit()?;
+  let ptl = parse_profile_tier_level(&mut reader, sps_max_sub_layers_minus1)?;
+  let profile_idc = ptl.profile_idc;
+  let tier = if ptl.tier_flag { HevcTier::High } else { HevcTier::Main };
+  let level_idc = ptl.level_idc;
   let _sps_seq_parameter_set_id = reader.read_ue()?;
   let chroma_format_idc = reader.read_ue()? as u8;
   let mut separate_colour_plane = false;
@@ -164,6 +178,14 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
     par_num: tail.par_num,
     par_den: tail.par_den,
     default_duration_ns: tail.default_duration_ns,
+    profile_space: ptl.profile_space,
+    profile_compatibility_flag: ptl.profile_compatibility_flag,
+    progressive_source_flag: ptl.progressive_source_flag,
+    interlaced_source_flag: ptl.interlaced_source_flag,
+    non_packed_constraint_flag: ptl.non_packed_constraint_flag,
+    frame_only_constraint_flag: ptl.frame_only_constraint_flag,
+    max_sub_layers_minus1: sps_max_sub_layers_minus1,
+    temporal_id_nesting_flag: sps_temporal_id_nesting_flag,
   })
 }
 
@@ -307,6 +329,14 @@ fn parse_short_term_ref_pic_set(
   Ok(())
 }
 
+/// Read `n` bits without advancing the cursor (mkvtoolnix's `r.peek_bits`).
+fn peek_bits(reader: &mut BitReader<'_>, n: u32) -> Result<u64, ParseError> {
+  let pos = reader.position_bits();
+  let value = reader.read_bits(n)?;
+  reader.set_bit_position(pos);
+  Ok(value)
+}
+
 fn malformed(reason: &'static str) -> ParseError {
   ParseError::Malformed {
     format: "hevc",
@@ -349,8 +379,14 @@ fn parse_vui(reader: &mut BitReader<'_>) -> Result<HevcTailInfo, ParseError> {
     let _ = reader.read_ue()?;
   }
   reader.skip_bits(3)?; // neutral_chroma + field_seq + frame_field_info
-  // default_display_window_flag
-  if reader.read_bit()? {
+  // PARSER-256: mkvtoolnix special-cases a known-invalid default-display-window
+  // bit pattern (`r.get_remaining_bits() >= 68 && r.peek_bits(21) == 0x100000`)
+  // by signalling default_display_window_flag = 0 WITHOUT consuming the flag bit
+  // or four bogus offsets, so it can still reach the timing info on broken
+  // streams (`vui_parameters_copy`, util.cpp:386-393).
+  let bogus_ddw = reader.remaining_bits() >= 68 && peek_bits(reader, 21)? == 0x100000;
+  if !bogus_ddw && reader.read_bit()? {
+    // default_display_window_flag
     let _ = reader.read_ue()?;
     let _ = reader.read_ue()?;
     let _ = reader.read_ue()?;
@@ -369,21 +405,40 @@ fn parse_vui(reader: &mut BitReader<'_>) -> Result<HevcTailInfo, ParseError> {
   Ok(info)
 }
 
+/// The general profile/tier/level fields the configuration record carries
+/// (PARSER-255).
+#[derive(Debug, Default, Clone, Copy)]
+struct ProfileTierLevel {
+  profile_space: u8,
+  tier_flag: bool,
+  profile_idc: u8,
+  profile_compatibility_flag: u32,
+  progressive_source_flag: bool,
+  interlaced_source_flag: bool,
+  non_packed_constraint_flag: bool,
+  frame_only_constraint_flag: bool,
+  level_idc: u8,
+}
+
 fn parse_profile_tier_level(
   reader: &mut BitReader<'_>,
   max_sub_layers_minus1: u32,
-) -> Result<(u8, HevcTier, u8), ParseError> {
+) -> Result<ProfileTierLevel, ParseError> {
+  let mut ptl = ProfileTierLevel::default();
   // profile_space (2) | tier_flag (1) | profile_idc (5)
-  let _profile_space = reader.read_bits(2)?;
-  let tier_flag = reader.read_bit()?;
-  let profile_idc = reader.read_bits(5)? as u8;
-  // profile_compatibility_flag[0..32] = 32 bits
-  reader.skip_bits(32)?;
-  // progressive_source_flag, interlaced_source_flag, non_packed_constraint_flag,
-  // frame_only_constraint_flag = 4 bits + reserved 43 bits + general_inbld_flag = 1 bit
-  // (Together 48 bits for the constraint indicator block.)
-  reader.skip_bits(48)?;
-  let level_idc = reader.read_bits(8)? as u8;
+  ptl.profile_space = reader.read_bits(2)? as u8;
+  ptl.tier_flag = reader.read_bit()?;
+  ptl.profile_idc = reader.read_bits(5)? as u8;
+  // general_profile_compatibility_flag[0..32] = 32 bits
+  ptl.profile_compatibility_flag = reader.read_bits(32)? as u32;
+  // general_{progressive,interlaced,non_packed,frame_only} constraint flags,
+  // then 44 reserved bits (`profile_tier_copy`, util.cpp:74-78).
+  ptl.progressive_source_flag = reader.read_bit()?;
+  ptl.interlaced_source_flag = reader.read_bit()?;
+  ptl.non_packed_constraint_flag = reader.read_bit()?;
+  ptl.frame_only_constraint_flag = reader.read_bit()?;
+  reader.skip_bits(44)?; // general_reserved_zero_44bits
+  ptl.level_idc = reader.read_bits(8)? as u8;
 
   // sub-layer profile/level structures
   let mut sub_layer_profile = vec![false; max_sub_layers_minus1 as usize];
@@ -399,14 +454,13 @@ fn parse_profile_tier_level(
   }
   for i in 0..max_sub_layers_minus1 {
     if sub_layer_profile[i as usize] {
-      reader.skip_bits(2 + 1 + 5 + 32 + 48)?; // same shape as top
+      reader.skip_bits(2 + 1 + 5 + 32 + 4 + 44)?; // same shape as top
     }
     if sub_layer_level[i as usize] {
       reader.skip_bits(8)?;
     }
   }
-  let tier = if tier_flag { HevcTier::High } else { HevcTier::Main };
-  Ok((profile_idc, tier, level_idc))
+  Ok(ptl)
 }
 
 fn chroma_subsampling_factors(chroma_format_idc: u8) -> (u32, u32) {
@@ -654,6 +708,120 @@ mod tests {
       }
       self.buf
     }
+  }
+
+  /// Build a Main-tier SPS with explicit profile_tier_level fields so the
+  /// PARSER-255 capture path can be verified.
+  fn build_sps_with_ptl(profile_space: u8, compat: u32, progressive: bool) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4); // sps_vps_id
+    w.write_bits(0, 3); // sps_max_sub_layers_minus1
+    w.write_bit(true); // sps_temporal_id_nesting_flag
+    w.write_bits(profile_space as u64, 2);
+    w.write_bit(false); // tier_flag
+    w.write_bits(2, 5); // profile_idc
+    w.write_bits(compat as u64, 32); // general_profile_compatibility_flag
+    w.write_bit(progressive); // progressive_source_flag
+    w.write_bit(false); // interlaced_source_flag
+    w.write_bit(false); // non_packed_constraint_flag
+    w.write_bit(false); // frame_only_constraint_flag
+    w.write_bits(0, 44); // general_reserved_zero_44bits
+    w.write_bits(120, 8); // level_idc
+    w.write_ue(0); // sps_seq_parameter_set_id
+    w.write_ue(1); // chroma_format_idc
+    w.write_ue(1920);
+    w.write_ue(1080);
+    w.write_bit(false); // conformance_window_flag
+    w.write_ue(2);
+    w.write_ue(2);
+    w.into_bytes()
+  }
+
+  /// Build an SPS whose VUI carries the known-invalid default-display-window
+  /// pattern (`peek_bits(21) == 0x100000`) immediately followed by valid timing.
+  /// mkvtoolnix's workaround must reinterpret that 1-bit as
+  /// vui_timing_info_present_flag and recover the 30 fps timing (PARSER-256).
+  fn build_sps_bogus_ddw() -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4);
+    w.write_bits(0, 3);
+    w.write_bit(true);
+    w.write_bits(0, 2);
+    w.write_bit(false);
+    w.write_bits(2, 5);
+    w.write_bits(0, 32);
+    w.write_bits(0, 48);
+    w.write_bits(120, 8);
+    w.write_ue(0);
+    w.write_ue(1);
+    w.write_ue(1920);
+    w.write_ue(1080);
+    w.write_bit(false);
+    w.write_ue(2);
+    w.write_ue(2);
+    // tail up to the VUI (no scaling list / ref-pic sets)
+    w.write_ue(4); // log2_max_pic_order_cnt_lsb_minus4
+    w.write_bit(false); // sps_sub_layer_ordering_info_present_flag
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(false); // scaling_list_enabled_flag
+    w.write_bit(false); // amp_enabled_flag
+    w.write_bit(false); // sample_adaptive_offset_enabled_flag
+    w.write_bit(false); // pcm_enabled_flag
+    w.write_ue(0); // num_short_term_ref_pic_sets
+    w.write_bit(false); // long_term_ref_pics_present_flag
+    w.write_bit(false); // sps_temporal_mvp_enabled_flag
+    w.write_bit(false); // strong_intra_smoothing_enabled_flag
+    w.write_bit(true); // vui_parameters_present_flag
+    w.write_bit(false); // aspect_ratio_info_present_flag
+    w.write_bit(false); // overscan_info_present_flag
+    w.write_bit(false); // video_signal_type_present_flag
+    w.write_bit(false); // chroma_loc_info_present_flag
+    w.write_bit(false); // neutral_chroma_indication_flag
+    w.write_bit(false); // field_seq_flag
+    w.write_bit(false); // frame_field_info_present_flag
+    // The next 21 bits = 0x100000: a `1` that the buggy reader saw as
+    // default_display_window_flag, then the top 20 zero bits of num_units.
+    w.write_bit(true); // really vui_timing_info_present_flag
+    w.write_bits(0, 20); // num_units_in_tick high 20 bits
+    w.write_bits(1, 12); // num_units_in_tick low 12 bits → 1
+    w.write_bits(30, 32); // vui_time_scale → 30
+    w.write_bit(false); // vui_poc_proportional_to_timing_flag
+    w.write_bit(false); // vui_hrd_parameters_present_flag
+    w.write_bits(0, 8); // padding so remaining_bits at the peek point ≥ 68
+    w.into_bytes()
+  }
+
+  #[test]
+  fn captures_profile_tier_level_fields() {
+    let rbsp = build_sps_with_ptl(1, 0xABCD_0000, true);
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.profile_space, 1);
+    assert_eq!(sps.profile_compatibility_flag, 0xABCD_0000);
+    assert!(sps.progressive_source_flag);
+    assert!(!sps.interlaced_source_flag);
+    assert!(!sps.non_packed_constraint_flag);
+    assert!(!sps.frame_only_constraint_flag);
+    assert_eq!(sps.max_sub_layers_minus1, 0);
+    assert!(sps.temporal_id_nesting_flag);
+    // profile_idc / dims still resolve with the new field capture in place.
+    assert_eq!(sps.profile_idc, 2);
+    assert_eq!(sps.coded_width, 1920);
+  }
+
+  #[test]
+  fn bogus_default_display_window_preserves_timing() {
+    let rbsp = build_sps_bogus_ddw();
+    let sps = parse(&rbsp).unwrap();
+    // The workaround recovers the 30 fps timing instead of degrading to none.
+    assert_eq!(sps.default_duration_ns, Some(33_333_333));
   }
 
   #[test]

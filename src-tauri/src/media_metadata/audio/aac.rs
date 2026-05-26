@@ -92,6 +92,12 @@ const AOT_ER_AAC_SCALABLE: u32 = 0x14;
 const AOT_ER_TWINVQ: u32 = 0x15;
 const AOT_ER_BSAC: u32 = 0x16;
 const AOT_ER_AAC_LD: u32 = 0x17;
+/// Last Error-Resilient object type whose tail carries an `ep_config`
+/// (`AUDIO_OBJECT_TYPE_ER_PARAM`, `../mkvtoolnix/src/common/mp4.h:66`).
+const AOT_ER_PARAM: u32 = 0x1b;
+/// Error-Resilient Enhanced Low Delay (`AUDIO_OBJECT_TYPE_ER_AAC_ELD`,
+/// `../mkvtoolnix/src/common/mp4.h:77`).
+const AOT_ER_AAC_ELD: u32 = 0x27;
 
 /// `PROFILE_SBR` (`../mkvtoolnix/src/common/aac.h:37`).  Raw AAC identification
 /// promotes low-sample-rate ADTS streams to this profile (PARSER-215).
@@ -423,21 +429,30 @@ fn parse_audio_specific_config(bc: &mut Bits, look_for_sync_extension: bool) -> 
       | AOT_ER_AAC_LD
   );
 
+  // PARSER-260: dispatch object-type-specific config exactly as
+  // `header_c::parse_audio_specific_config` (`../mkvtoolnix/src/common/aac.cpp:1232-1256`).
   if is_ga_object {
-    // GASpecificConfig: frame_length_flag (1), depends_on_core_coder (1)
-    // [+ core_coder_delay 14], extension_flag (1).
-    let frame_length_flag = bc.get_bit()?;
-    if bc.get_bit()? {
-      bc.skip_bits(14)?; // core_coder_delay
+    let (spf, ch) = read_ga_specific_config(bc, object_type, header.samples_per_frame, channels)?;
+    header.samples_per_frame = spf;
+    channels = ch;
+  } else if object_type == AOT_ER_AAC_ELD {
+    read_eld_specific_config(bc)?;
+  } else {
+    // Upstream's `else if (AUDIO_OBJECT_TYPE_ER_CELP)` tests a non-zero
+    // constant, so it is always taken and the `throw unsupported` branch is
+    // dead — every remaining object type runs the ER-CELP config path.  Mirror
+    // that so the bit cursor lands in the same place.
+    read_er_celp_specific_config(bc)?;
+  }
+
+  // ER ep_config / error-protection tail (`aac.cpp:1248-1252`).
+  if object_type == AOT_ER_AAC_LC || (AOT_ER_AAC_LTP <= object_type && object_type <= AOT_ER_PARAM) {
+    let ep_config = bc.get_bits(2)?;
+    if ep_config == 2 || ep_config == 3 {
+      read_error_protection_specific_config(bc)?;
     }
-    let _extension_flag = bc.get_bit()?;
-    if object_type != AOT_SBR && object_type != AOT_ER_AAC_LD {
-      header.samples_per_frame = if frame_length_flag { 960 } else { 1024 };
-    } else if object_type == AOT_ER_AAC_LD {
-      header.samples_per_frame = if frame_length_flag { 480 } else { 512 };
-    }
-    if channels == 0 {
-      channels = read_program_config_element(bc).unwrap_or(0);
+    if ep_config == 3 {
+      bc.skip_bits(1)?; // direct_mapping
     }
   }
 
@@ -472,6 +487,143 @@ fn parse_audio_specific_config(bc: &mut Bits, look_for_sync_extension: bool) -> 
   header.ps = ps;
   header.is_valid = true;
   Some(header)
+}
+
+/// Port of `header_c::read_ga_specific_config` (`../mkvtoolnix/src/common/aac.cpp:1059-1104`).
+/// Reads the GASpecificConfig — frame length, optional core-coder delay, the
+/// PCE (when `channel_config` was 0), the scalable layer number, and the
+/// extension-flag block carrying the ER resilience flags.  Returns the updated
+/// `(samples_per_frame, channels)` or `None` on a read failure.
+fn read_ga_specific_config(
+  bc: &mut Bits,
+  object_type: u32,
+  mut samples_per_frame: u32,
+  mut channels: u32,
+) -> Option<(u32, u32)> {
+  let frame_length_flag = bc.get_bit()?;
+  if bc.get_bit()? {
+    bc.skip_bits(14)?; // core_coder_delay
+  }
+  let extension_flag = bc.get_bit()?;
+  if object_type != AOT_SBR && object_type != AOT_ER_AAC_LD {
+    samples_per_frame = if frame_length_flag { 960 } else { 1024 };
+  } else if object_type == AOT_ER_AAC_LD {
+    samples_per_frame = if frame_length_flag { 480 } else { 512 };
+  }
+  if channels == 0 {
+    channels = read_program_config_element(bc).unwrap_or(0);
+  }
+  if object_type == AOT_AAC_SCALABLE || object_type == AOT_ER_AAC_SCALABLE {
+    bc.skip_bits(3)?; // layer_nr
+  }
+  if extension_flag {
+    if object_type == AOT_ER_BSAC {
+      bc.skip_bits(5 + 11)?; // num_of_sub_frame, layer_length
+    }
+    if object_type == AOT_ER_AAC_LC
+      || object_type == AOT_ER_AAC_LTP
+      || object_type == AOT_ER_AAC_SCALABLE
+      || object_type == AOT_ER_AAC_LD
+    {
+      // aac_section_data / scalefactor_data / spectral_data resilience flags.
+      bc.skip_bits(1 + 1 + 1)?;
+    }
+    bc.skip_bits(1)?; // extension_flag3
+  }
+  Some((samples_per_frame, channels))
+}
+
+/// Port of `header_c::read_eld_specific_config` (`aac.cpp:1032-1057`).  Returns
+/// `None` (config rejected, exactly as upstream's `throw false`) for the
+/// configurations mkvtoolnix refuses to accept.
+fn read_eld_specific_config(bc: &mut Bits) -> Option<()> {
+  if bc.get_bit()? {
+    return None; // frame_length_flag
+  }
+  if bc.get_bits(3)? != 0 {
+    return None; // resilience_flags
+  }
+  if bc.get_bit()? {
+    return None; // low_delay_sbr_present_flag
+  }
+  while bc.get_bits(4)? != 0 {
+    let mut length = bc.get_bits(4)?;
+    if length == 15 {
+      length += bc.get_bits(8)?;
+    }
+    if length == 15 + 255 {
+      length += bc.get_bits(16)?;
+    }
+    bc.skip_bits(length)?;
+  }
+  if bc.get_bits(2)? != 0 {
+    return None; // ep_config
+  }
+  Some(())
+}
+
+/// Port of `header_c::read_er_celp_specific_config` (`aac.cpp:1106-1122`).
+fn read_er_celp_specific_config(bc: &mut Bits) -> Option<()> {
+  if bc.get_bit()? {
+    // is_base_layer
+    let excitation_mode = bc.get_bits(1)?;
+    bc.skip_bits(3)?; // sample_rate_mode, fine_rate_control, silence_compression
+    if excitation_mode == 1 {
+      bc.skip_bits(3)?; // rpe_configuration
+    } else {
+      bc.skip_bits(5 + 2 + 1)?; // mpe_configuration, num_enh_layers, bandwidth_scalability_mode
+    }
+  } else {
+    bc.get_bit()?; // is_bws_layer
+    bc.skip_bits(2)?; // bws_configuration / celp_brs_id
+  }
+  Some(())
+}
+
+/// Port of `header_c::read_error_protection_specific_config` (`aac.cpp:1124-1175`).
+fn read_error_protection_specific_config(bc: &mut Bits) -> Option<()> {
+  let number_of_predefined_set = bc.get_bits(8)?;
+  let interleave_type = bc.get_bits(2)?;
+  bc.skip_bits(3)?; // bit_stuffing
+  let number_of_concatenated_frame = bc.get_bits(3)?;
+
+  for _ in 0..number_of_predefined_set {
+    let number_of_class_i = bc.get_bits(6)?;
+    for _ in 0..number_of_class_i {
+      let length_escape = bc.get_bit()?;
+      let rate_escape = bc.get_bit()?;
+      let crclen_escape = bc.get_bit()?;
+      if number_of_concatenated_frame != 1 {
+        bc.skip_bits(1)?; // concatenate_flag
+      }
+      let fec_type = bc.get_bits(2)?;
+      if fec_type == 0 {
+        bc.skip_bits(1)?; // termination_flag
+      }
+      if interleave_type == 2 {
+        bc.skip_bits(2)?; // interleave_switch
+      }
+      bc.skip_bits(1)?; // class_optional
+      if length_escape {
+        bc.skip_bits(4)?; // number_of_bits_for_length
+      } else {
+        bc.skip_bits(16)?; // class_length
+      }
+      if rate_escape {
+        bc.skip_bits(if fec_type != 0 { 7 } else { 5 })?; // class_rate
+      }
+      if !crclen_escape {
+        bc.skip_bits(5)?; // class_crclen
+      }
+    }
+    if bc.get_bit()? {
+      bc.skip_bits(number_of_class_i * 6)?; // class_output_order
+    }
+  }
+  if bc.get_bit()? {
+    bc.skip_bits(5 + 5)?; // header_rate, header_crclen
+  }
+  Some(())
 }
 
 /// Decode a bare MPEG-4 AudioSpecificConfig payload.  Container readers that
@@ -1560,6 +1712,121 @@ mod tests {
   fn asc_rejects_object_type_zero() {
     let asc = [0x00u8, 0x00];
     assert!(parse_asc(&asc, false).is_none());
+  }
+
+  // ---- PARSER-260: ELD / CELP / ER object-specific config -------------
+
+  fn build_eld_asc(sr_index: u8, channel_config: u8, frame_length_flag: u8) -> Vec<u8> {
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, 31); // object_type escape
+    w.put_bits(6, (AOT_ER_AAC_ELD - 32) as u64); // -> object_type 39 (ER AAC ELD)
+    w.put_bits(4, sr_index as u64);
+    w.put_bits(4, channel_config as u64);
+    // ELDSpecificConfig
+    w.put_bits(1, frame_length_flag as u64); // frame_length_flag
+    w.put_bits(3, 0); // resilience_flags
+    w.put_bits(1, 0); // low_delay_sbr_present_flag
+    w.put_bits(4, 0); // sbr-config length loop terminator
+    w.put_bits(2, 0); // ep_config
+    w.byte_align();
+    w.into_bytes()
+  }
+
+  #[test]
+  fn asc_eld_object_type_parses() {
+    let asc = build_eld_asc(3, 2, 0);
+    let h = parse_asc(&asc, false).unwrap();
+    assert!(h.is_valid);
+    assert_eq!(h.channels, 2);
+    assert_eq!(h.sample_rate, 48_000);
+    assert_eq!(h.profile, AOT_ER_AAC_ELD - 1);
+  }
+
+  #[test]
+  fn asc_eld_rejected_when_frame_length_flag_set() {
+    // mkvtoolnix `throw false`s on a set frame_length_flag → invalid config.
+    let asc = build_eld_asc(3, 2, 1);
+    assert!(parse_asc(&asc, false).is_none());
+  }
+
+  fn build_celp_asc(is_base_layer: u8, excitation_mode: u8) -> Vec<u8> {
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, 31); // escape
+    w.put_bits(6, 0); // -> object_type 32 (Layer 1): non-GA / non-ELD → CELP path
+    w.put_bits(4, 3); // 48 kHz
+    w.put_bits(4, 2); // stereo
+    w.put_bits(1, is_base_layer as u64);
+    if is_base_layer == 1 {
+      w.put_bits(1, excitation_mode as u64);
+      w.put_bits(3, 0); // sample_rate_mode, fine_rate_control, silence_compression
+      if excitation_mode == 1 {
+        w.put_bits(3, 0); // rpe_configuration
+      } else {
+        w.put_bits(5 + 2 + 1, 0); // mpe_configuration, num_enh_layers, bandwidth_scalability_mode
+      }
+    } else {
+      w.put_bits(1, 0); // is_bws_layer
+      w.put_bits(2, 0); // bws_configuration
+    }
+    w.byte_align();
+    w.into_bytes()
+  }
+
+  #[test]
+  fn asc_celp_base_layer_rpe_and_mpe() {
+    for mode in [0u8, 1u8] {
+      let asc = build_celp_asc(1, mode);
+      let h = parse_asc(&asc, false).unwrap();
+      assert!(h.is_valid, "CELP excitation mode {mode}");
+      assert_eq!(h.channels, 2);
+    }
+  }
+
+  #[test]
+  fn asc_er_aac_lc_reads_error_protection_config() {
+    // ER AAC LC (GA) with ep_config = 2 → read_error_protection_specific_config.
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, AOT_ER_AAC_LC as u64); // 0x11
+    w.put_bits(4, 3); // 48 kHz
+    w.put_bits(4, 2); // stereo
+    w.put_bits(1, 0); // frame_length_flag
+    w.put_bits(1, 0); // depends_on_core_coder
+    w.put_bits(1, 0); // extension_flag
+    w.put_bits(2, 2); // ep_config = 2 → error-protection config follows
+    // ErrorProtectionSpecificConfig (minimal: no predefined sets, no header prot)
+    w.put_bits(8, 0); // number_of_predefined_set
+    w.put_bits(2, 0); // interleave_type
+    w.put_bits(3, 0); // bit_stuffing
+    w.put_bits(3, 0); // number_of_concatenated_frame
+    w.put_bits(1, 0); // header_protection
+    w.byte_align();
+    let asc = w.into_bytes();
+    let h = parse_asc(&asc, false).unwrap();
+    assert!(h.is_valid);
+    assert_eq!(h.channels, 2);
+    assert_eq!(h.profile, AOT_ER_AAC_LC - 1);
+  }
+
+  #[test]
+  fn asc_er_scalable_consumes_extension_flag_block() {
+    // ER AAC Scalable (GA) with extension_flag set exercises the layer_nr skip
+    // and the ER resilience-flag block in read_ga_specific_config.
+    let mut w = TestBitWriter::new();
+    w.put_bits(5, AOT_ER_AAC_SCALABLE as u64); // 0x14
+    w.put_bits(4, 3); // 48 kHz
+    w.put_bits(4, 2); // stereo
+    w.put_bits(1, 0); // frame_length_flag
+    w.put_bits(1, 0); // depends_on_core_coder
+    w.put_bits(1, 1); // extension_flag = 1
+    w.put_bits(3, 0); // layer_nr (scalable)
+    w.put_bits(3, 0); // aac_*_resilience_flag ×3
+    w.put_bits(1, 0); // extension_flag3
+    w.put_bits(2, 0); // ep_config = 0 (object_type in ER range)
+    w.byte_align();
+    let asc = w.into_bytes();
+    let h = parse_asc(&asc, false).unwrap();
+    assert!(h.is_valid);
+    assert_eq!(h.channels, 2);
   }
 
   // ---- extra coverage: LATM stream-mux-config branches ---------------

@@ -1,6 +1,6 @@
 # Ogg / OGM Parser
 
-Implementation progress: 96%
+Implementation progress: 98%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The Ogg parser recognises Ogg and legacy OGM containers, reconstructs header pac
 - Related modules: `src-tauri/src/media_metadata/ogg/page.rs`, `identify.rs`, `comments.rs`, `codecs/`
 - Upstream basis: `../mkvtoolnix/src/input/r_ogm.cpp`, `../mkvtoolnix/src/input/r_ogm.h`, `../mkvtoolnix/src/input/r_ogm_flac.cpp`, `../mkvtoolnix/src/input/r_ogm_flac.h`
 
-The reader parses Ogg page headers, lacing segment tables, and packet boundaries. Beginning-of-stream packets are dispatched to Vorbis, Opus, Theora, VP8-in-Ogg, FLAC-in-Ogg, Speex, Kate, and OGM sniffers. Comment packets populate track tags, language/title hints, muxing app, chapter count, and cover-art attachments.
+The reader parses Ogg page headers, lacing segment tables, and packet boundaries. Beginning-of-stream packets are dispatched to Vorbis, Opus, Theora, VP8-in-Ogg, FLAC-in-Ogg, Speex, Kate, and OGM sniffers. Comment packets populate track tags, language/title hints, muxing app, chapter count, and cover-art attachments. The VorbisComment decoder (`comments.rs`) rejects a truncated block outright — if the declared comment count, any comment length, or any comment body runs past the buffer it returns `None` rather than a partial list, mirroring `parse_vorbis_comments_from_packet`'s try/catch that discards the whole comment object on any short read (`../mkvtoolnix/src/common/tags/vorbis.cpp:221-279`).
 
 Codec coverage and per-codec header handling:
 
@@ -40,11 +40,3 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets). The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
-
-## Open Issues
-
-### PARSER-261 - Truncated VorbisComment lists are accepted with partial metadata
-
-`src-tauri/src/media_metadata/ogg/comments.rs::parse` validates the vendor string, then loops over the declared comment count. If a later comment length or body is truncated, it breaks out of the loop and still returns `Some(VorbisComments { ... })` containing the entries parsed before the truncation.
-
-`../mkvtoolnix/src/common/tags/vorbis.cpp::parse` reads every declared comment inside a try block; any short read or malformed length throws and returns an invalid/empty Vorbis comment object. Rust can therefore surface partial tags, language/title hints, chapter counts, or cover-art attachments from an Ogg comment packet that mkvmerge treats as invalid and ignores.

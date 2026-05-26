@@ -368,7 +368,9 @@ fn build_avcc(sps: &crate::media_metadata::elementary::avc::sps::AvcSps, sps_uni
   let mut out = Vec::new();
   out.push(1); // configurationVersion
   out.push(sps.profile_idc);
-  out.push(0); // profile_compatibility
+  // PARSER-259: preserve the SPS constraint-set / profile-compatibility byte
+  // (`buffer[2] = sps.profile_compat`, `../mkvtoolnix/src/common/avc/avcc.cpp:134`).
+  out.push(sps.profile_compat);
   out.push(sps.level_idc);
   out.push(0xff); // 6 reserved bits + lengthSizeMinusOne = 3
   out.push(0xe1); // 3 reserved bits + numOfSequenceParameterSets = 1
@@ -689,6 +691,26 @@ mod tests {
     let cfg = b.video_codec_config.unwrap();
     assert_eq!(cfg.profile_idc, Some(66));
     assert!(b.codec_private_hex.is_some());
+  }
+
+  // PARSER-259: the derived avcC preserves the SPS constraint-set /
+  // profile-compatibility byte (avcC byte 2), not a hard-coded zero.
+  #[test]
+  fn avc_salvage_preserves_profile_compat_byte() {
+    let mut b = video_builder("avc1", 1920, 1080);
+    // SPS NAL with constraints byte 0xC0 (constraint_set0/1 flags set).
+    let mut es = vec![0x00, 0x00, 0x00, 0x01, 0x67, 66u8, 0xC0, 40u8];
+    es.extend(build_baseline_sps_tail());
+    es.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]); // PPS
+    es.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]); // AUD terminator
+    b.first_sample_file_offset = Some(0);
+    b.first_sample_size = Some(es.len() as u64);
+    let mut src = source(es);
+    verify_video(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    let hex = b.codec_private_hex.unwrap();
+    // "01" configurationVersion, "42" profile_idc(66), "c0" profile_compat.
+    assert!(hex.starts_with("0142c028"), "avcC prefix was {}", &hex[..8]);
   }
 
   // r_qtmp4.cpp:3804: avc1 with no avcC and junk first bytes is skipped.

@@ -144,18 +144,42 @@ impl<'a> HevcHeaders<'a> {
       (NAL_UNIT_TYPE_SPS, self.sps.expect("validated SPS")),
       (NAL_UNIT_TYPE_PPS, self.pps.expect("validated PPS")),
     ];
+    // HEVCDecoderConfigurationRecord byte layout — port of `hevcc_c::pack`
+    // (`../mkvtoolnix/src/common/hevc/hevcc.cpp:293-352`).  The reserved high
+    // bits MUST be filled (`0x0f`/`0x3f`/`0x1f`) and chroma precedes the
+    // bit-depth bytes (PARSER-255).
     let mut out = vec![0u8; 23];
-    out[0] = 1;
-    out[1] = if sps.tier == HevcTier::High {
-      0x20 | (sps.profile_idc & 0x1f)
-    } else {
-      sps.profile_idc & 0x1f
-    };
+    out[0] = 1; // configurationVersion
+    // byte 1: general_profile_space(2) | general_tier_flag(1) | profile_idc(5)
+    let tier_bit: u8 = if sps.tier == HevcTier::High { 1 } else { 0 };
+    out[1] = (sps.profile_space << 6) | (tier_bit << 5) | (sps.profile_idc & 0x1f);
+    // bytes 2-5: general_profile_compatibility_flag (32 bits)
+    out[2..6].copy_from_slice(&sps.profile_compatibility_flag.to_be_bytes());
+    // byte 6 (top nibble): progressive / interlaced / non-packed / frame-only
+    // constraint flags; the low nibble + bytes 7-11 are the 44 reserved bits.
+    out[6] = (u8::from(sps.progressive_source_flag) << 7)
+      | (u8::from(sps.interlaced_source_flag) << 6)
+      | (u8::from(sps.non_packed_constraint_flag) << 5)
+      | (u8::from(sps.frame_only_constraint_flag) << 4);
     out[12] = sps.level_idc;
-    out[18] = 0xfc | (sps.chroma_format_idc & 0x03);
-    out[19] = 0xf8 | sps.bit_depth_luma.saturating_sub(8);
-    out[20] = 0xf8 | sps.bit_depth_chroma.saturating_sub(8);
-    out[21] = 0x03;
+    // byte 13: reserved 4 bits (1111) | min_spatial_segmentation_idc high bits
+    // (we report 0, but the reserved nibble must still be set).
+    out[13] = 0xf0;
+    // byte 14: min_spatial_segmentation_idc low byte (0).
+    // byte 15: reserved 6 bits (111111) | parallelism_type(2) = 0.
+    out[15] = 0xfc;
+    // byte 16: reserved 6 bits (111111) | chroma_format_idc(2).
+    out[16] = 0xfc | (sps.chroma_format_idc & 0x03);
+    // byte 17: reserved 5 bits (11111) | bit_depth_luma_minus8(3).
+    out[17] = 0xf8 | sps.bit_depth_luma.saturating_sub(8);
+    // byte 18: reserved 5 bits (11111) | bit_depth_chroma_minus8(3).
+    out[18] = 0xf8 | sps.bit_depth_chroma.saturating_sub(8);
+    // bytes 19-20: avgFrameRate / reserved = 0.
+    // byte 21: reserved(2)=0 | numTemporalLayers(3) | temporalIdNested(1) |
+    //          lengthSizeMinusOne(2) = 3 (4-byte NAL length).
+    out[21] = (((sps.max_sub_layers_minus1 as u8).wrapping_add(1) & 0x07) << 3)
+      | (u8::from(sps.temporal_id_nesting_flag) << 2)
+      | 0x03;
     out[22] = arrays.len() as u8;
     for (nal_type, unit) in arrays {
       let bytes = nal_bytes(unit);
@@ -403,6 +427,33 @@ mod tests {
       .unwrap();
     let v = out.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(v.default_duration_ns, Some(33_333_333));
+  }
+
+  // PARSER-255: the configuration record places chroma at byte 16 and the two
+  // bit-depth bytes at 17/18 (not 18/19/20), and fills the reserved high bits.
+  #[test]
+  fn codec_private_uses_correct_hvcc_offsets() {
+    let bytes = build_main10_stream();
+    let units = nal::split_nal_units(&bytes);
+    let headers = extract_headers(&units).unwrap();
+    let sps_unit = headers.sps.unwrap();
+    let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
+    let sps = sps::parse(&rbsp).unwrap();
+    let cp = headers.codec_private(&sps);
+    assert_eq!(cp[0], 1); // configurationVersion
+    assert_eq!(cp[1], 0x02); // profile_space=0, tier=0, profile_idc=2
+    assert_eq!(cp[12], 120); // level_idc
+    assert_eq!(cp[13], 0xf0); // reserved nibble + min_spatial high bits
+    assert_eq!(cp[15], 0xfc); // reserved 6 bits + parallelism_type=0
+    assert_eq!(cp[16], 0xfd); // reserved 6 bits + chroma_format_idc=1 (4:2:0)
+    assert_eq!(cp[17], 0xfa); // reserved 5 bits + bit_depth_luma_minus8=2
+    assert_eq!(cp[18], 0xfa); // reserved 5 bits + bit_depth_chroma_minus8=2
+    // Bytes 19-20 are avgFrameRate/reserved — must NOT carry the bit depths.
+    assert_eq!(cp[19], 0x00);
+    assert_eq!(cp[20], 0x00);
+    // numTemporalLayers=1 << 3 | temporalIdNested=1 << 2 | lengthSizeMinusOne=3.
+    assert_eq!(cp[21], 0x0f);
+    assert_eq!(cp[22], 3); // num arrays (VPS+SPS+PPS)
   }
 
   #[test]
