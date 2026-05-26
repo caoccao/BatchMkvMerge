@@ -39,3 +39,8 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 ## Gaps and Handling
 
 Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix.
+
+## Open Issues
+
+- PARSER-311: `WAVE_FORMAT_EXTENSIBLE` audio is resolved from partial, truncated extension data. `parse_waveformatex` clamps `cbSize` to the available bytes and `make_audio_track` unwraps the SubFormat GUID when only ten extra bytes are present, reading only the low 16 bits of GUID `data1`. mkvtoolnix only unwraps `0xfffe` when the declared extension is at least `sizeof(alWAVEFORMATEXTENSION)`, then reads the full 32-bit GUID `data1`. Malformed or nonstandard extensible headers can therefore be repaired or truncated into the wrong codec tag.
+- PARSER-312: Video codec private data does not preserve the full original `BITMAPINFOHEADER`. `parse_bitmapinfoheader` discards bytes 24..40 and `bmih_codec_private` writes those fields back as zeroes, while mkvtoolnix clones the original 40-byte `alBITMAPINFOHEADER` plus extradata. Any AVI whose x/y pixels-per-meter or color-table fields are nonzero is mutated by the native parser instead of reported as-is.

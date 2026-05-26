@@ -36,3 +36,7 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 ## Gaps and Handling
 
 Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or scan deeply into DATA chunks. Late RealVideo and `dnet` refinements can therefore be missed. The parser records the reliable header metadata and bounded first-packet improvements only.
+
+## Open Issues
+
+- PARSER-316: `dnet` packet-derived information can be missed before mkvtoolnix would stop scanning. The native reader reads at most the first 1 MiB of the first `DATA` chunk, stores only the first packet per stream, and stops once it has one packet for each MDPR stream. mkvtoolnix's `get_information_from_data` keeps reading RealMedia frames until every `DNET` demuxer has a BSID. Files whose first `dnet` frame appears later than the cap, or after earlier packets from other streams, can keep a generic AC-3 profile in Rust while mkvtoolnix records the packet-derived BSID.
