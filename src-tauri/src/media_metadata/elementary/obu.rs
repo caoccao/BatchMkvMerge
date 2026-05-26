@@ -44,9 +44,9 @@ use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::io::file_source::FileSource;
+use crate::media_metadata::ivf::{av1_color_triplet, av1_dovi_config_record_from_metadata_body, hex_encode};
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
-use crate::media_metadata::ivf::{build_av1_dovi_config_record, calculate_dovi_level, hex_encode};
 use crate::media_metadata::model::track::{CodecInfo, CodecPrivate, Track, TrackProperties, TrackType};
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
 use crate::media_metadata::model::track_properties_video::{
@@ -64,9 +64,11 @@ const OBU_TYPE_FRAME: u8 = 6;
 const OBU_TYPE_REDUNDANT_FRAME_HEADER: u8 = 7;
 
 /// AV1 metadata_type for ITU-T T.35 (carries the Dolby Vision RPU).
+#[cfg(test)]
 const METADATA_TYPE_ITUT_T35: usize = 4;
 /// ITU-T T.35 Dolby Vision RPU payload header (`common/av1.cpp`
 /// `ITU_T_T35_DOVI_RPU_PAYLOAD_HEADER`).
+#[cfg(test)]
 const DOVI_T35_HEADER: [u8; 9] = [0x00, 0x3b, 0x00, 0x00, 0x08, 0x00, 0x37, 0xcd, 0x08];
 
 /// AV1 §6.4 / §6.8 unspecified sentinels for color description.
@@ -174,8 +176,12 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
         1
       };
       if num_units_in_display_tick != 0 && time_scale != 0 && num_ticks_per_picture != 0 {
-        default_duration_ns =
-          Some(1_000_000_000u64.saturating_mul(num_units_in_display_tick).saturating_mul(num_ticks_per_picture) / time_scale);
+        default_duration_ns = Some(
+          1_000_000_000u64
+            .saturating_mul(num_units_in_display_tick)
+            .saturating_mul(num_ticks_per_picture)
+            / time_scale,
+        );
         frame_duration_ns = Some(1_000_000_000u64.saturating_mul(num_units_in_display_tick) / time_scale);
       }
       decoder_model_info_present = reader.read_bit()?;
@@ -508,29 +514,6 @@ pub fn has_frame_obu(bytes: &[u8]) -> bool {
   scan_obus(bytes).frame_found
 }
 
-/// `true` when any kept metadata OBU body carries an ITU-T T.35 Dolby Vision
-/// RPU.  Mirrors `parse_metadata_type_itu_t_t35` (`av1.cpp:806-826`).
-fn metadata_body_has_dovi_rpu(body: &[u8]) -> bool {
-  let Some((metadata_type, consumed)) = read_leb128(body) else {
-    return false;
-  };
-  if metadata_type != METADATA_TYPE_ITUT_T35 {
-    return false;
-  }
-  let mut pos = consumed;
-  let Some(&country_code) = body.get(pos) else {
-    return false;
-  };
-  pos += 1;
-  if country_code == 0xff {
-    pos += 1;
-  }
-  match body.get(pos..) {
-    Some(rest) => rest.len() > DOVI_T35_HEADER.len() && rest.starts_with(&DOVI_T35_HEADER),
-    None => false,
-  }
-}
-
 fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
   let mut value = 0u64;
   let mut consumed = 0usize;
@@ -653,10 +636,19 @@ impl Reader for ObuReader {
     // `dvvC` block-addition mapping, mirroring `obu_reader_c::probe_file`
     // (`r_obu.cpp:48-69`).  The DV level uses `get_frame_duration` (without
     // the per-picture tick count), defaulting to 1/25 s.
-    if scan.metadata_bodies.iter().any(|b| metadata_body_has_dovi_rpu(b)) {
+    let (color_primaries, transfer_characteristics, matrix_coefficients) = av1_color_triplet(&seq);
+    if let Some(record) = scan.metadata_bodies.iter().find_map(|body| {
       let duration = seq.frame_duration_ns.filter(|d| *d >= 1_000_000).unwrap_or(40_000_000);
-      let level = calculate_dovi_level(seq.max_width, seq.max_height, duration);
-      let record = build_av1_dovi_config_record(level, 0);
+      av1_dovi_config_record_from_metadata_body(
+        body,
+        seq.max_width,
+        seq.max_height,
+        duration,
+        color_primaries,
+        transfer_characteristics,
+        matrix_coefficients,
+      )
+    }) {
       video.block_addition_mappings.push(BlockAdditionMapping {
         id_type: "dvvC".to_owned(),
         data_hex: hex_encode(&record),
@@ -1271,7 +1263,7 @@ mod tests {
     // metadata OBU (type 5): metadata_type=4 (T.35), country 0xB5, DV header.
     let mut meta = vec![METADATA_TYPE_ITUT_T35 as u8, 0xb5];
     meta.extend_from_slice(&DOVI_T35_HEADER);
-    meta.extend_from_slice(&[0x11, 0x22]);
+    meta.extend_from_slice(&[0x00, 0x60, 0x00, 0x00, 0x00]);
     bytes.push(0x2A); // OBU_METADATA (type 5), has_size_field = 1
     bytes.push(meta.len() as u8);
     bytes.extend_from_slice(&meta);
@@ -1287,5 +1279,6 @@ mod tests {
     assert_eq!(v.block_addition_mappings.len(), 1);
     assert_eq!(v.block_addition_mappings[0].id_type, "dvvC");
     assert_eq!(v.block_addition_mappings[0].data_hex.len(), 48);
+    assert_eq!(&v.block_addition_mappings[0].data_hex[8..10], "20");
   }
 }

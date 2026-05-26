@@ -25,8 +25,8 @@
 
 use crate::media_metadata::audio::{ac3, dts, mp3, truehd};
 use crate::media_metadata::codec::TrackKind;
-use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::elementary::{avc, mpeg_video};
+use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
@@ -90,11 +90,6 @@ fn codec_from_stream_type(stream_type: u8) -> Option<Codec> {
       id: "V_MPEG4/ISO/AVC",
       name: "AVC/H.264",
     },
-    0x24 => Codec {
-      kind: TrackKind::Video,
-      id: "V_MPEGH/ISO/HEVC",
-      name: "HEVC/H.265",
-    },
     0x80 => Codec {
       kind: TrackKind::Audio,
       id: "A_PCM/INT/BIG",
@@ -104,21 +99,6 @@ fn codec_from_stream_type(stream_type: u8) -> Option<Codec> {
       kind: TrackKind::Audio,
       id: "A_AC3",
       name: "AC-3",
-    },
-    0x82 => Codec {
-      kind: TrackKind::Audio,
-      id: "A_DTS",
-      name: "DTS",
-    },
-    0x83 => Codec {
-      kind: TrackKind::Audio,
-      id: "A_TRUEHD",
-      name: "TrueHD",
-    },
-    0x84 | 0x87 => Codec {
-      kind: TrackKind::Audio,
-      id: "A_EAC3",
-      name: "E-AC-3",
     },
     _ => return None,
   })
@@ -195,9 +175,7 @@ pub fn classify_stream_id(id: u8) -> Option<StreamObservation> {
 
 fn resolve_codec(obs: &StreamObservation) -> Option<Codec> {
   if let Some(st) = obs.psm_stream_type {
-    if let Some(c) = codec_from_stream_type(st) {
-      return Some(c);
-    }
+    return codec_from_stream_type(st);
   }
   if obs.stream_id == 0xBD {
     return obs.sub_id.and_then(codec_from_sub_id);
@@ -415,6 +393,12 @@ mod tests {
   }
 
   #[test]
+  fn unsupported_psm_stream_type_drops_instead_of_falling_back() {
+    assert!(resolve_codec(&obs(0xE0, None, Some(0x24))).is_none());
+    assert!(resolve_codec(&obs(0xC0, None, Some(0x82))).is_none());
+  }
+
+  #[test]
   fn finalise_emits_tracks_and_sets_container() {
     let mut m = MediaMetadata::new("clip.mpg", 0);
     finalise(vec![obs(0xE0, None, None), obs(0xC0, None, None)], &mut m);
@@ -465,10 +449,7 @@ mod tests {
   #[test]
   fn number_encodes_stream_and_sub_id() {
     let mut m = MediaMetadata::new("clip.vob", 0);
-    finalise(
-      vec![obs(0xE0, None, None), obs(0xBD, Some(0xA0), None)],
-      &mut m,
-    );
+    finalise(vec![obs(0xE0, None, None), obs(0xBD, Some(0xA0), None)], &mut m);
     // Bare video stream: sub_id defaults to 0 → number == stream_id.
     assert_eq!(m.tracks[0].properties.common.number, Some(0xE0));
     assert_eq!(m.tracks[0].id, 0);

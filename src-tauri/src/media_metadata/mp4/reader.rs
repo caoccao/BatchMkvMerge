@@ -51,7 +51,18 @@ impl Reader for Mp4Reader {
     let kind = &head[4..8];
     Ok(matches!(
       kind,
-      b"ftyp" | b"pdin" | b"moov" | b"moof" | b"mfra" | b"mdat" | b"pnot" | b"styp" | b"sidx" | b"free" | b"skip" | b"wide"
+      b"ftyp"
+        | b"pdin"
+        | b"moov"
+        | b"moof"
+        | b"mfra"
+        | b"mdat"
+        | b"pnot"
+        | b"styp"
+        | b"sidx"
+        | b"free"
+        | b"skip"
+        | b"wide"
     ))
   }
 
@@ -199,8 +210,8 @@ impl Reader for Mp4Reader {
 /// `pnot` / `sidx` / `styp` / `wide` are kept as additional valid box types
 /// our dispatch loop also handles.
 const RESYNC_KNOWN_ATOMS: &[&[u8; 4]] = &[
-  b"ftyp", b"pdin", b"moov", b"moof", b"mfra", b"mdat", b"free", b"skip", b"meta", b"wide", b"pnot", b"sidx",
-  b"styp", b"uuid",
+  b"ftyp", b"pdin", b"moov", b"moof", b"mfra", b"mdat", b"free", b"skip", b"meta", b"wide", b"pnot", b"sidx", b"styp",
+  b"uuid",
 ];
 
 /// Largest declared atom size accepted during resync when the stream length is
@@ -222,7 +233,11 @@ const RESYNC_MAX_ATOM_SIZE: u64 = 256 * 1024 * 1024;
 /// atom so the outer loop's next `read_box_header` succeeds.  The recovered
 /// position is always strictly past `start`, guaranteeing forward progress
 /// (a malformed atom at `start` can never re-lock onto itself).
-fn resync_to_top_level_atom(src: &mut FileSource, stream_end: Option<u64>, deadline: &Deadline) -> Result<bool, ParseError> {
+fn resync_to_top_level_atom(
+  src: &mut FileSource,
+  stream_end: Option<u64>,
+  deadline: &Deadline,
+) -> Result<bool, ParseError> {
   const CHUNK: usize = 64 * 1024;
   // Overlap so an 8-byte (size + fourcc) signature straddling a chunk boundary
   // is still tested in the following window.
@@ -259,7 +274,12 @@ fn resync_to_top_level_atom(src: &mut FileSource, stream_end: Option<u64>, deadl
         if atom_abs <= start {
           continue; // guarantee progress past the failing atom
         }
-        let size = u32::from_be_bytes([window[offset], window[offset + 1], window[offset + 2], window[offset + 3]]) as u64;
+        let size = u32::from_be_bytes([
+          window[offset],
+          window[offset + 1],
+          window[offset + 2],
+          window[offset + 3],
+        ]) as u64;
         if resync_size_plausible(size, atom_abs, stream_end) {
           src.seek_to(atom_abs)?;
           return Ok(true);
@@ -357,7 +377,7 @@ mod tests {
     // filtering, matching how real AAC-in-MP4 files are laid out.
     let esds = encode_box(
       b"esds",
-      &crate::media_metadata::mp4::codec_specific::esds::build_esds_payload(0x40, &[0x12, 0x10]),
+      &crate::media_metadata::mp4::codec_specific::esds::build_esds_payload(0x40, &[0x11, 0x90]),
     );
     let entry = build_audio_sample_entry_v0(codec, channels, 16, sample_rate, &esds);
     let stsd = encode_box(b"stsd", &build_stsd_payload(&[entry]));
@@ -906,7 +926,14 @@ mod tests {
     let mut out = MediaMetadata::new("clip.mp4", 0);
     Mp4Reader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 1);
-    let cfg = out.tracks[0].properties.video.as_ref().unwrap().codec_config.as_ref().unwrap();
+    let cfg = out.tracks[0]
+      .properties
+      .video
+      .as_ref()
+      .unwrap()
+      .codec_config
+      .as_ref()
+      .unwrap();
     assert_eq!(cfg.profile_idc, Some(66));
   }
 

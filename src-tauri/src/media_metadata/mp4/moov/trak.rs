@@ -83,6 +83,9 @@ pub struct TrackBuilder {
   pub video_codec_config: Option<crate::media_metadata::model::track_properties_video::VideoCodecConfig>,
   /// Decoded audio codec configuration (esds).
   pub audio_codec_config: Option<crate::media_metadata::model::track_properties_audio::AudioCodecConfig>,
+  /// QuickTime v2 audio `formatSpecificFlags` (used by `lpcm` to choose
+  /// integer/float and endian PCM packetization).
+  pub audio_format_flags: Option<u32>,
   /// `esds` objectTypeIndication — distinguishes AAC / MP3 / AC-3 / DTS for
   /// generic `mp4a` / `mp4v` sample entries (PARSER-043).
   pub esds_object_type: Option<u8>,

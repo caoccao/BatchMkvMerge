@@ -44,8 +44,11 @@ pub fn finalise(
   // as chapters and excluded from the track list.  A Nero `chpl` list, parsed
   // during the `moov` walk, takes precedence (mkvtoolnix's `read_chapter_track`
   // returns early when chapters already exist, `r_qtmp4.cpp:1172`).
-  let chapter_track_ids: std::collections::HashSet<u32> =
-    moov.tracks.iter().flat_map(|t| t.chapter_track_ids.iter().copied()).collect();
+  let chapter_track_ids: std::collections::HashSet<u32> = moov
+    .tracks
+    .iter()
+    .flat_map(|t| t.chapter_track_ids.iter().copied())
+    .collect();
   if out.chapters.num_entries == 0 {
     if let Some(count) = moov
       .tracks
@@ -135,6 +138,10 @@ fn build_track(
       }
     }
   }
+  if let Some((id, name)) = pcm_codec_from_sample_entry(&builder) {
+    codec_id = id.to_string();
+    codec_name = Some(name.to_string());
+  }
 
   // PARSER-150: mkvtoolnix drops `mp4a` tracks whose esds objectTypeIndication
   // is missing or unsupported (r_qtmp4.cpp:3733-3739) instead of emitting a
@@ -213,18 +220,19 @@ fn build_track(
   // hvcE) onto the video track.  Done before the per-type move of
   // `builder.video` so the bytes survive even when no other video config is
   // present.
-  let block_addition_mappings: Vec<crate::media_metadata::model::track_properties_video::BlockAdditionMapping> = builder
-    .block_additions
-    .iter()
-    .map(
-      |(fourcc, bytes)| crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
-        id_type: fourcc.clone(),
-        data_hex: super::codec_specific::hex_encode(bytes),
-        // MP4 Dolby Vision config boxes carry no BlockAddIDName / Value.
-        ..Default::default()
-      },
-    )
-    .collect();
+  let block_addition_mappings: Vec<crate::media_metadata::model::track_properties_video::BlockAdditionMapping> =
+    builder
+      .block_additions
+      .iter()
+      .map(
+        |(fourcc, bytes)| crate::media_metadata::model::track_properties_video::BlockAdditionMapping {
+          id_type: fourcc.clone(),
+          data_hex: super::codec_specific::hex_encode(bytes),
+          // MP4 Dolby Vision config boxes carry no BlockAddIDName / Value.
+          ..Default::default()
+        },
+      )
+      .collect();
 
   match track_type {
     TrackType::Video => {
@@ -245,11 +253,8 @@ fn build_track(
             let projection = video
               .projection
               .get_or_insert_with(crate::media_metadata::model::track_properties_video::ProjectionMetadata::default);
-            projection.pose = Some(crate::media_metadata::model::track_properties_video::ProjectionPose {
-              yaw,
-              pitch: 0.0,
-              roll,
-            });
+            projection.pose =
+              Some(crate::media_metadata::model::track_properties_video::ProjectionPose { yaw, pitch: 0.0, roll });
           }
         }
       }
@@ -301,6 +306,9 @@ pub fn effective_codec_id(builder: &super::moov::TrackBuilder) -> String {
       }
     }
   }
+  if let Some((id, _name)) = pcm_codec_from_sample_entry(builder) {
+    return id.to_string();
+  }
   codec_id
 }
 
@@ -321,6 +329,26 @@ fn codec_from_object_type(object_type: u8) -> Option<(&'static str, &'static str
     0x6C => ("V_MJPEG", "JPEG"),
     _ => return None,
   })
+}
+
+fn pcm_codec_from_sample_entry(builder: &super::moov::TrackBuilder) -> Option<(&'static str, &'static str)> {
+  let codec_id = builder.codec_id_str.as_deref()?;
+  let key = codec_id.to_ascii_lowercase();
+  match key.as_str() {
+    "twos" => Some(("A_PCM/INT/BIG", "PCM (signed integer, big-endian)")),
+    "sowt" | "raw " | "in24" | "pcm " => Some(("A_PCM/INT/LIT", "PCM (signed integer, little-endian)")),
+    "lpcm" => {
+      let flags = builder.audio_format_flags.unwrap_or(0);
+      if flags & 0x01 != 0 {
+        Some(("A_PCM/FLOAT/IEEE", "PCM (IEEE float)"))
+      } else if flags & 0x02 != 0 {
+        Some(("A_PCM/INT/BIG", "PCM (signed integer, big-endian)"))
+      } else {
+        Some(("A_PCM/INT/LIT", "PCM (signed integer, little-endian)"))
+      }
+    }
+    _ => None,
+  }
 }
 
 /// Combine the track and movie display matrices and derive `(yaw, roll)` in
@@ -409,12 +437,10 @@ mod tests {
     // survive PARSER-150's filtering; give it an AAC decoder config.
     if codec == "mp4a" {
       b.esds_object_type = Some(0x40);
-      b.audio_codec_config = Some(
-        crate::media_metadata::model::track_properties_audio::AudioCodecConfig {
-          aac_object_type: Some(2),
-          ..Default::default()
-        },
-      );
+      b.audio_codec_config = Some(crate::media_metadata::model::track_properties_audio::AudioCodecConfig {
+        aac_object_type: Some(2),
+        ..Default::default()
+      });
     }
     b
   }
@@ -648,6 +674,36 @@ mod tests {
     finalise(moov, false, HashMap::new(), &mut m);
     assert_eq!(m.tracks.len(), 1);
     assert_eq!(m.tracks[0].codec.id, "A_AAC");
+  }
+
+  // ---- PARSER-265: QuickTime PCM sample-entry mapping ------------------
+
+  #[test]
+  fn lpcm_flags_select_pcm_variant() {
+    let mut moov = MoovBuilder::default();
+    let mut b = audio_builder(2, "lpcm");
+    b.audio_format_flags = Some(0x01);
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks[0].codec.id, "A_PCM/FLOAT/IEEE");
+
+    let mut moov = MoovBuilder::default();
+    let mut b = audio_builder(2, "lpcm");
+    b.audio_format_flags = Some(0x02);
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks[0].codec.id, "A_PCM/INT/BIG");
+  }
+
+  #[test]
+  fn in24_maps_to_little_endian_pcm() {
+    let mut moov = MoovBuilder::default();
+    moov.tracks.push(audio_builder(2, "in24"));
+    let mut m = MediaMetadata::new("clip.mov", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks[0].codec.id, "A_PCM/INT/LIT");
   }
 
   // ---- PARSER-145: stsz sample count → num_index_entries ---------------

@@ -25,9 +25,11 @@
 //! - `streamType` / `bufferSizeDB` / `maxBitrate` / `avgBitrate`.
 //! - `DecoderSpecificInfo` (AudioSpecificConfig for AAC).
 //!
-//! AudioSpecificConfig is then bit-decoded to populate `AudioCodecConfig`
-//! (object type, sample-rate index, channel config, SBR/PS extension flags).
+//! AAC AudioSpecificConfig bytes are decoded through the shared AAC parser so
+//! MP4, raw AAC, FLV and RealMedia all agree on object type, sample rate,
+//! channel layout, SBR/PS flags and malformed-input semantics.
 
+use crate::media_metadata::audio::aac;
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::track_properties_audio::AudioCodecConfig;
@@ -62,6 +64,21 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
     &mut decoder_specific_len,
     &mut decoder_specific_data,
   );
+
+  if object_type.is_some_and(is_aac_object_type) {
+    let asc = decoder_specific_data
+      .as_ref()
+      .filter(|data| data.len() >= 2)
+      .cloned()
+      .unwrap_or_else(|| create_default_aac_audio_specific_config(builder));
+    if let Some(header) = aac::parse_audio_specific_config_bytes(&asc) {
+      apply_aac_header_to_builder(builder, &header);
+      cfg = aac::codec_config_from_header(&header, &asc);
+      decoder_specific_len = Some(asc.len());
+      decoder_specific_data = Some(asc);
+    }
+  }
+
   builder.audio_codec_config = Some(cfg);
   builder.esds_object_type = object_type;
   // PARSER-177: record the DecoderSpecificInfo length for the reader's
@@ -160,7 +177,13 @@ fn walk(
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out, decoder_specific_data_out);
+        walk(
+          &mut inner,
+          cfg,
+          object_type_out,
+          decoder_specific_len_out,
+          decoder_specific_data_out,
+        );
         cursor.pos = body_end;
       }
       TAG_DECODER_CONFIG => {
@@ -177,7 +200,13 @@ fn walk(
           data: &cursor.data[cursor.pos..body_end],
           pos: 0,
         };
-        walk(&mut inner, cfg, object_type_out, decoder_specific_len_out, decoder_specific_data_out);
+        walk(
+          &mut inner,
+          cfg,
+          object_type_out,
+          decoder_specific_len_out,
+          decoder_specific_data_out,
+        );
         cursor.pos = body_end;
       }
       TAG_DEC_SPECIFIC_INFO => {
@@ -186,7 +215,6 @@ fn walk(
         // VobSub tracks on its presence / size.
         *decoder_specific_len_out = Some(len);
         if let Some(slice) = cursor.slice(len) {
-          parse_audio_specific_config(slice, cfg);
           // PARSER-230: retain the raw bytes for Vorbis-in-MP4 unlacing.
           *decoder_specific_data_out = Some(slice.to_vec());
         }
@@ -199,120 +227,108 @@ fn walk(
   }
 }
 
-/// Port of `common/aac.cpp::parse_audio_specific_config` (the subset needed for
-/// identification): hierarchical SBR/PS signalling, the GASpecificConfig frame
-/// length flag, and the backward-compatible 0x2b7 sync-extension (PARSER-046).
-fn parse_audio_specific_config(bytes: &[u8], cfg: &mut AudioCodecConfig) {
-  if bytes.is_empty() {
-    return;
-  }
-  let mut r = BitCursor { data: bytes, pos: 0 };
-  let mut profile = read_audio_object_type(&mut r);
-  let sample_rate_index = r.read_bits(4) as u32;
-  if sample_rate_index == 0xF {
-    r.read_bits(24);
-  }
-  let channel_config = r.read_bits(4) as u32;
-
-  let mut sbr = false;
-  let mut ps = false;
-
-  // Explicit hierarchical SBR/PS signalling (AOT 5 = SBR, 29 = PS).
-  if profile == 5 || profile == 29 {
-    sbr = true;
-    if profile == 29 {
-      ps = true;
-    }
-    let ext_sr_index = r.read_bits(4) as u32;
-    if ext_sr_index == 0xF {
-      r.read_bits(24);
-    }
-    profile = read_audio_object_type(&mut r); // the real core object type
-    if profile == 22 {
-      r.read_bits(4); // ext channel configuration
-    }
-  }
-
-  // GASpecificConfig: frame length flag distinguishes 960 vs 1024 samples.
-  let mut frame_length = 1024u32;
-  if matches!(profile, 1 | 2 | 3 | 4 | 6 | 7 | 17 | 19 | 20 | 21 | 22 | 23) {
-    let frame_length_flag = r.read_bits(1);
-    frame_length = if frame_length_flag != 0 { 960 } else { 1024 };
-    if r.read_bits(1) != 0 {
-      r.read_bits(14); // coreCoderDelay
-    }
-    let _extension_flag = r.read_bits(1);
-  }
-
-  // Backward-compatible SBR signalling via the 0x2b7 sync extension.
-  if !sbr && r.remaining() >= 16 {
-    if r.read_bits(11) as u32 == 0x2b7 {
-      if read_audio_object_type(&mut r) == 5 {
-        let sbr_present = r.read_bits(1);
-        if sbr_present != 0 {
-          sbr = true;
-          let ext_sr_index = r.read_bits(4) as u32;
-          if ext_sr_index == 0xF {
-            r.read_bits(24);
-          }
-          // Optional PS signalling (0x548 sync extension).
-          if r.remaining() >= 12 && r.read_bits(11) as u32 == 0x548 {
-            if r.read_bits(1) != 0 {
-              ps = true;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  cfg.aac_object_type = Some(profile);
-  cfg.aac_frame_length = Some(frame_length);
-  cfg.aac_sbr_present = Some(sbr);
-  cfg.aac_ps_present = Some(ps);
-  let _ = (sample_rate_index, channel_config);
+fn is_aac_object_type(object_type: u8) -> bool {
+  matches!(object_type, 0x40 | 0x66 | 0x67 | 0x68)
 }
 
-fn read_audio_object_type(cursor: &mut BitCursor) -> u32 {
-  let mut aot = cursor.read_bits(5) as u32;
-  if aot == 31 {
-    aot = 32 + cursor.read_bits(6) as u32;
+fn apply_aac_header_to_builder(builder: &mut TrackBuilder, header: &aac::AacHeader) {
+  let audio = builder.audio.get_or_insert_with(Default::default);
+  let existing_channels = audio.channels.unwrap_or(0);
+  if existing_channels != 8 || header.channels != 7 {
+    audio.channels = if header.channels > 0 {
+      Some(header.channels)
+    } else {
+      None
+    };
   }
-  aot
+  audio.sampling_frequency = if header.sample_rate > 0 {
+    Some(header.sample_rate as f64)
+  } else {
+    None
+  };
+  audio.output_sampling_frequency = if header.output_sample_rate > 0 {
+    Some(header.output_sample_rate as f64)
+  } else {
+    None
+  };
 }
 
-struct BitCursor<'a> {
-  data: &'a [u8],
-  pos: usize,
+fn create_default_aac_audio_specific_config(builder: &TrackBuilder) -> Vec<u8> {
+  let sample_rate = builder
+    .audio
+    .as_ref()
+    .and_then(|a| a.sampling_frequency)
+    .filter(|r| *r >= 0.0 && *r <= u32::MAX as f64)
+    .map(|r| r.round() as u32)
+    .unwrap_or(0);
+  let channels = builder.audio.as_ref().and_then(|a| a.channels).unwrap_or(0);
+  build_audio_specific_config(/* profile = AAC Main */ 0, sample_rate, channels)
 }
 
-impl<'a> BitCursor<'a> {
-  fn remaining(&self) -> usize {
-    (self.data.len() * 8).saturating_sub(self.pos)
+fn build_audio_specific_config(profile: u32, sample_rate: u32, channels: u32) -> Vec<u8> {
+  let object_type = profile + 1;
+  let sample_rate_index = sampling_frequency_index(sample_rate);
+  let channel_config = channel_configuration(channels);
+  let mut w = BitWriter::default();
+  w.write_bits(object_type as u64, 5);
+  w.write_bits(sample_rate_index as u64, 4);
+  if sample_rate_index == 0x0f {
+    w.write_bits(sample_rate as u64, 24);
   }
-
-  fn read_bits(&mut self, n: u32) -> u64 {
-    let mut value: u64 = 0;
-    for _ in 0..n {
-      let byte_idx = self.pos / 8;
-      let bit_idx = 7 - (self.pos % 8) as u32;
-      let bit = if byte_idx < self.data.len() {
-        ((self.data[byte_idx] >> bit_idx) & 0x01) as u64
-      } else {
-        0
-      };
-      value = (value << 1) | bit;
-      self.pos += 1;
-    }
-    value
-  }
+  w.write_bits(channel_config as u64, 4);
+  w.into_bytes()
 }
 
-fn sample_rate_from_index(idx: u8) -> u64 {
-  const TABLE: [u32; 13] = [
-    96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+fn sampling_frequency_index(sample_rate: u32) -> u8 {
+  if sample_rate == 0 {
+    return 0;
+  }
+  const TABLE: [u32; 16] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350, 0, 0, 0,
   ];
-  TABLE.get(idx as usize).copied().unwrap_or(0) as u64
+  for (idx, rate) in TABLE.iter().copied().enumerate() {
+    if rate != 0 && sample_rate >= rate.saturating_sub(1000) {
+      return idx as u8;
+    }
+  }
+  0
+}
+
+fn channel_configuration(channels: u32) -> u8 {
+  const TABLE: [u32; 21] = [0, 1, 2, 3, 4, 5, 6, 8, 0, 3, 4, 7, 8, 24, 8, 12, 10, 12, 14, 12, 14];
+  TABLE.iter().position(|c| *c == channels).unwrap_or(0) as u8
+}
+
+#[derive(Default)]
+struct BitWriter {
+  buf: Vec<u8>,
+  bit_index: u8,
+}
+
+impl BitWriter {
+  fn write_bit(&mut self, bit: bool) {
+    if self.bit_index == 0 {
+      self.buf.push(0);
+    }
+    if bit {
+      let last = self.buf.len() - 1;
+      self.buf[last] |= 1 << (7 - self.bit_index);
+    }
+    self.bit_index = (self.bit_index + 1) % 8;
+  }
+
+  fn write_bits(&mut self, value: u64, bits: u32) {
+    for i in 0..bits {
+      self.write_bit(((value >> (bits - 1 - i)) & 1) != 0);
+    }
+  }
+
+  fn into_bytes(mut self) -> Vec<u8> {
+    while self.bit_index != 0 {
+      self.write_bit(false);
+    }
+    self.buf
+  }
 }
 
 fn format_object_type(idc: u8) -> &'static str {
@@ -381,11 +397,40 @@ mod tests {
     b
   }
 
+  fn run_with_audio(payload: Vec<u8>, channels: u32, sample_rate: f64) -> TrackBuilder {
+    let bytes = encode_box(b"esds", &payload);
+    let mut s = FileSource::from_reader_for_test(StdCursor::new(bytes));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut b = TrackBuilder::default();
+    b.audio = Some(
+      crate::media_metadata::model::track_properties_audio::AudioTrackProperties {
+        channels: Some(channels),
+        sampling_frequency: Some(sample_rate),
+        ..Default::default()
+      },
+    );
+    parse(&mut s, &h, &mut b).unwrap();
+    b
+  }
+
   fn aac_lc_specific_config(sample_rate_idx: u8, channels: u8) -> Vec<u8> {
     // 5 bits AOT (2 = AAC LC) + 4 bits sample_rate_idx + 4 bits channels
     let aot = 2u16;
     let value = (aot << 11) | ((sample_rate_idx as u16) << 7) | ((channels as u16) << 3);
     vec![(value >> 8) as u8, (value & 0xFF) as u8]
+  }
+
+  fn explicit_sbr_or_ps_config(aot: u32) -> Vec<u8> {
+    let mut writer = BitWriter::default();
+    writer.write_bits(u64::from(aot), 5);
+    writer.write_bits(4, 4); // 44.1 kHz core rate
+    writer.write_bits(2, 4); // stereo
+    writer.write_bits(3, 4); // 48 kHz extension rate
+    writer.write_bits(2, 5); // AAC LC extension object type
+    writer.write_bits(0, 1); // frame_length_flag
+    writer.write_bits(0, 1); // depends_on_core_coder
+    writer.write_bits(0, 1); // extension_flag
+    writer.into_bytes()
   }
 
   #[test]
@@ -396,14 +441,12 @@ mod tests {
     let cfg = b.audio_codec_config.unwrap();
     assert_eq!(cfg.aac_object_type, Some(2));
     assert_eq!(cfg.aac_frame_length, Some(1024));
-    assert_eq!(cfg.profile_name.as_deref(), Some("AAC"));
+    assert_eq!(cfg.profile_name.as_deref(), Some("AAC LC"));
   }
 
   #[test]
   fn aac_sbr_extension_detected() {
-    // AOT 5 = SBR
-    let value = (5u16 << 11) | (4u16 << 7) | (2u16 << 3);
-    let asc = vec![(value >> 8) as u8, (value & 0xFF) as u8];
+    let asc = explicit_sbr_or_ps_config(5);
     let payload = build_esds_payload(0x40, &asc);
     let b = run(payload);
     let cfg = b.audio_codec_config.unwrap();
@@ -413,9 +456,7 @@ mod tests {
 
   #[test]
   fn aac_ps_extension_detected() {
-    // AOT 29 = PS
-    let value = (29u16 << 11) | (4u16 << 7) | (2u16 << 3);
-    let asc = vec![(value >> 8) as u8, (value & 0xFF) as u8];
+    let asc = explicit_sbr_or_ps_config(29);
     let payload = build_esds_payload(0x40, &asc);
     let b = run(payload);
     let cfg = b.audio_codec_config.unwrap();
@@ -423,16 +464,39 @@ mod tests {
   }
 
   #[test]
-  fn raw_hex_round_trips() {
+  fn raw_hex_is_decoder_specific_info() {
     let asc = aac_lc_specific_config(4, 2);
     let payload = build_esds_payload(0x40, &asc);
-    let b = run(payload.clone());
+    let b = run(payload);
     let raw = b.audio_codec_config.unwrap().raw_hex.unwrap();
     let decoded: Vec<u8> = (0..raw.len())
       .step_by(2)
       .map(|i| u8::from_str_radix(&raw[i..i + 2], 16).unwrap())
       .collect();
-    assert_eq!(decoded, payload);
+    assert_eq!(decoded, asc);
+  }
+
+  #[test]
+  fn aac_config_updates_audio_fields_from_asc() {
+    let asc = aac_lc_specific_config(3, 6); // 48k, 5.1
+    let payload = build_esds_payload(0x40, &asc);
+    let b = run_with_audio(payload, 2, 44_100.0);
+    let audio = b.audio.unwrap();
+    assert_eq!(audio.channels, Some(6));
+    assert_eq!(audio.sampling_frequency, Some(48_000.0));
+  }
+
+  #[test]
+  fn aac_missing_decoder_specific_synthesizes_default_asc() {
+    let payload = build_esds_payload(0x40, &[]);
+    let b = run_with_audio(payload, 2, 44_100.0);
+    assert_eq!(b.esds_decoder_specific_len, Some(2));
+    assert_eq!(b.esds_decoder_specific_data.as_deref(), Some(&[0x0a, 0x10][..]));
+    let cfg = b.audio_codec_config.unwrap();
+    assert_eq!(cfg.aac_object_type, Some(1));
+    let audio = b.audio.unwrap();
+    assert_eq!(audio.channels, Some(2));
+    assert_eq!(audio.sampling_frequency, Some(44_100.0));
   }
 
   #[test]
@@ -456,14 +520,6 @@ mod tests {
       pos: 0,
     };
     assert_eq!(cur.read_ber_length(), Some(129));
-  }
-
-  #[test]
-  fn sample_rate_table_known_values() {
-    assert_eq!(sample_rate_from_index(0), 96000);
-    assert_eq!(sample_rate_from_index(3), 48000);
-    assert_eq!(sample_rate_from_index(12), 7350);
-    assert_eq!(sample_rate_from_index(15), 0); // out of range
   }
 
   #[test]

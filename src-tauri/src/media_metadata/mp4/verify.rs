@@ -121,6 +121,11 @@ fn verify_audio(src: &mut FileSource, deadline: &Deadline, builder: &mut TrackBu
     {
       recover_audio_params(builder, channels, sample_rate, bits);
     }
+  } else if is_pcm(&codec) && builder.codec_id_str.as_deref() == Some("in24") {
+    // QuickTime `in24` sample entries are always 24-bit PCM, regardless of the
+    // sample-size placeholder (`verify_audio_parameters`, r_qtmp4.cpp:3682-3684).
+    let audio = builder.audio.get_or_insert_with(Default::default);
+    audio.bit_depth = Some(24);
   }
 
   // PARSER-230 / PARSER-231: FLAC / Vorbis / Opus verification
@@ -363,7 +368,11 @@ fn derive_avc_from_bitstream(
 
 /// Assemble an `avcC` configuration record from a decoded SPS and the raw
 /// SPS/PPS NAL bytes.  `lengthSizeMinusOne` defaults to 3 (4-byte NAL length).
-fn build_avcc(sps: &crate::media_metadata::elementary::avc::sps::AvcSps, sps_unit: crate::media_metadata::elementary::avc::nal::NalUnit<'_>, pps_unit: Option<crate::media_metadata::elementary::avc::nal::NalUnit<'_>>) -> Vec<u8> {
+fn build_avcc(
+  sps: &crate::media_metadata::elementary::avc::sps::AvcSps,
+  sps_unit: crate::media_metadata::elementary::avc::nal::NalUnit<'_>,
+  pps_unit: Option<crate::media_metadata::elementary::avc::nal::NalUnit<'_>>,
+) -> Vec<u8> {
   let sps_bytes = nal_bytes(sps_unit);
   let mut out = Vec::new();
   out.push(1); // configurationVersion
@@ -532,6 +541,10 @@ fn is_flac(codec: &str) -> bool {
 /// Vorbis — recognised via the esds objectTypeIndication 0xDD → `A_VORBIS`.
 fn is_vorbis(codec: &str) -> bool {
   codec == "A_VORBIS"
+}
+
+fn is_pcm(codec: &str) -> bool {
+  matches!(codec, "A_PCM/INT/BIG" | "A_PCM/INT/LIT" | "A_PCM/FLOAT/IEEE")
 }
 
 /// Byte length of the audio codec-private blob (mkvtoolnix's `priv[0]->get_size()`).
@@ -816,6 +829,16 @@ mod tests {
     assert!(!b.probe_failed);
   }
 
+  #[test]
+  fn in24_pcm_forces_24_bit_depth() {
+    let mut b = audio_builder("in24", 2, 48_000.0);
+    b.audio.as_mut().unwrap().bit_depth = Some(16);
+    let mut src = source(vec![]);
+    verify_audio(&mut src, &dl(), &mut b).unwrap();
+    assert!(!b.probe_failed);
+    assert_eq!(b.audio.unwrap().bit_depth, Some(24));
+  }
+
   // ---- PARSER-184: MP2/MP3 + AC-3 first-frame parameter recovery -----------
 
   /// An mp4a entry whose esds objectTypeIndication is MP3 (0x6B) but whose
@@ -1047,6 +1070,7 @@ mod tests {
     assert!(is_alac("alac"));
     assert!(is_alac("A_ALAC"));
     assert!(!is_alac("mp4a"));
+    assert!(is_pcm("A_PCM/INT/LIT"));
   }
 
   // --- fixtures ---

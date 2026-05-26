@@ -308,7 +308,7 @@ fn video_trak(track_id: u32, codec: &[u8; 4], lang: &str, width: u16, height: u1
 fn audio_trak(track_id: u32, codec: &[u8; 4], lang: &str, sample_rate: u32, channels: u16) -> Vec<u8> {
   // mp4a entries carry an esds with an AAC AudioSpecificConfig, as real
   // AAC-in-MP4 files do (PARSER-150 drops mp4a tracks that lack one).
-  let entry = audio_sample_entry(codec, channels, sample_rate, &esds(0x40, &[0x12, 0x10]));
+  let entry = audio_sample_entry(codec, channels, sample_rate, &esds(0x40, &[0x11, 0x90]));
   let stbl_payload = stsd(vec![entry]);
   let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl_payload));
   let mut mdia = mdhd(sample_rate, 0, lang);
@@ -642,9 +642,8 @@ fn mp3_frame_mpeg1_l3_128_44100_stereo() -> Vec<u8> {
 fn mp3_in_mp4_params_recovered_from_first_bytes() {
   let frame = mp3_frame_mpeg1_l3_128_44100_stereo();
   let sizes = vec![frame.len() as u32];
-  let trak = move |chunk_offset: u32| {
-    audio_trak_with_table(1, b"mp4a", "eng", 0, 0, &esds(0x6B, &[]), &sizes, chunk_offset)
-  };
+  let trak =
+    move |chunk_offset: u32| audio_trak_with_table(1, b"mp4a", "eng", 0, 0, &esds(0x6B, &[]), &sizes, chunk_offset);
   let bytes = build_mp4_mdat_first(b"mp42", trak, &frame);
   let path = write_tempfile(&bytes, "mp4");
   let m = parse(&path, ParseOptions::default()).unwrap();
@@ -653,6 +652,30 @@ fn mp3_in_mp4_params_recovered_from_first_bytes() {
   let a = m.tracks[0].properties.audio.as_ref().unwrap();
   assert_eq!(a.channels, Some(2));
   assert_eq!(a.sampling_frequency, Some(44_100.0));
+}
+
+#[test]
+fn aac_mp4a_empty_decoder_specific_info_uses_sample_entry_defaults() {
+  let entry = audio_sample_entry(b"mp4a", 2, 44_100, &esds(0x40, &[]));
+  let stbl_payload = stsd(vec![entry]);
+  let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl_payload));
+  let mut mdia = mdhd(44_100, 0, "eng");
+  mdia.extend(hdlr(b"soun", "SoundHandler"));
+  mdia.extend(minf);
+  let mdia = encode_box(b"mdia", &mdia);
+  let mut trak = tkhd(1, 0, 0);
+  trak.extend(mdia);
+  let bytes = build_mp4(b"mp42", &[b"isom"], vec![encode_box(b"trak", &trak)]);
+  let path = write_tempfile(&bytes, "mp4");
+  let m = parse(&path, ParseOptions::default()).unwrap();
+  let _ = std::fs::remove_file(&path);
+  assert_eq!(m.tracks.len(), 1);
+  assert_eq!(m.tracks[0].codec.id, "A_AAC");
+  let a = m.tracks[0].properties.audio.as_ref().unwrap();
+  assert_eq!(a.channels, Some(2));
+  assert_eq!(a.sampling_frequency, Some(44_100.0));
+  let cfg = a.codec_config.as_ref().unwrap();
+  assert_eq!(cfg.aac_object_type, Some(1));
 }
 
 #[test]

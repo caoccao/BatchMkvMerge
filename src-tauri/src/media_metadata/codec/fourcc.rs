@@ -317,6 +317,16 @@ const TABLE: &[FourccEntry] = &[
     kind: TrackKind::Audio,
   },
   FourccEntry {
+    code: "LPCM",
+    name: "PCM",
+    kind: TrackKind::Audio,
+  },
+  FourccEntry {
+    code: "IN24",
+    name: "PCM (signed, 24-bit)",
+    kind: TrackKind::Audio,
+  },
+  FourccEntry {
     code: "RAW ",
     name: "Raw PCM",
     kind: TrackKind::Audio,

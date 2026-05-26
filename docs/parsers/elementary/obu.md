@@ -1,6 +1,6 @@
 # AV1 OBU Parser
 
-Implementation progress: 90%
+Implementation progress: 92%
 
 ## Purpose
 
@@ -19,7 +19,7 @@ The reader surfaces the metadata mkvmerge's AV1 packetizer would write (PARSER-2
 
 - **Default duration** — `timing_info` is decoded (`parse_timing_info`, `av1.cpp:219-231`) into the track `default_duration_ns = 1e9 * num_units_in_display_tick * num_ticks_per_picture / time_scale`.
 - **AV1C codec private** — `build_av1c` is a port of `parser_c::get_av1c` (`av1.cpp:554-596`): the 4-byte AV1 configuration record (marker/version, `seq_profile`, `seq_level_idx_0`, `seq_tier_0`, `high_bitdepth`, `twelve_bit`, `mono_chrome`, chroma subsampling + sample position) followed by the raw sequence-header OBU and the kept metadata OBUs (those before the first frame).
-- **Dolby Vision** — an ITU-T T.35 metadata OBU carrying the DV RPU payload header yields a `dvvC` block-addition mapping with `maxBlockAdditionId = 4`, mirroring `obu_reader_c::probe_file` (`r_obu.cpp:48-69`). The DV level is computed from the picture rate (`get_frame_duration`, defaulting to 1/25 s); the level/record helpers are shared with the IVF reader.
+- **Dolby Vision** — an ITU-T T.35 metadata OBU carrying the DV RPU payload header yields a `dvvC` block-addition mapping with `maxBlockAdditionId = 4`, mirroring `obu_reader_c::probe_file` (`r_obu.cpp:48-69`). The DV level is computed from the picture rate (`get_frame_duration`, defaulting to 1/25 s), the T.35 payload is converted into the regular RPU byte layout, and the shared IVF/OBU helper parses the RPU header subset needed to derive the profile and compatibility id from the AV1 color metadata.
 
 ## Data Structures
 
@@ -37,13 +37,4 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 
 ## Gaps and Handling
 
-Rust scans a smaller prefix than upstream. The decoder fully consumes the DV RPU payload only as far as is needed to confirm its presence and pick the DV level; the per-RPU header fields (used by upstream for the exact configuration record) are not decoded, so the `dvvC` record carries the level-derived defaults rather than the bitstream's RPU header values. Operating-point filtering and packet muxing remain mkvmerge's concern.
-
-## Open Issues
-
-### PARSER-267: AV1 Dolby Vision config records use defaults instead of the parsed RPU/header fields
-
-- Native evidence: raw AV1 OBU detection only checks that a kept ITU-T T.35 metadata OBU starts with the Dolby Vision RPU payload header, then calls `build_av1_dovi_config_record(level, 0)`.
-- Upstream evidence: `obu_reader_c::probe_file` obtains `parser.get_dovi_rpu_header()` and `parser.get_color_config()`, then passes both to `create_av1_dovi_configuration_record`, which derives the compatibility id from the actual RPU profile and AV1 color metadata.
-- Impact: raw AV1 Dolby Vision streams can emit a `dvvC` block-addition mapping that differs from mkvmerge even though the RPU header is present inside the bounded metadata OBU.
-- Suggested fix: parse the T.35 RPU payload into the same Dolby Vision RPU header fields and derive the configuration record from that header plus AV1 color config.
+Rust scans a smaller prefix than upstream. The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation, operating-point filtering, and packet muxing remain mkvmerge's concern.

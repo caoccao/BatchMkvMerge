@@ -63,13 +63,33 @@ pub fn count_segments(bytes: &[u8]) -> Option<usize> {
   }
   let mut pos = MAGIC.len();
   let mut count = 0usize;
+  let first_len = u16::from_be_bytes([bytes[pos + 1], bytes[pos + 2]]) as usize;
+  let first_end = pos.checked_add(SEGMENT_HEADER_LEN)?.checked_add(first_len)?;
+  if first_end > bytes.len() {
+    return None;
+  }
+  count += 1;
+  pos = first_end;
+  // Between the Dialog Style segment and presentation segments, TextST stores
+  // a two-byte frame count. Probe only requires the first segment, so tolerate
+  // files whose bounded probe window ends here, but do not walk those bytes as
+  // a segment descriptor.
+  if pos + 2 <= bytes.len() {
+    pos += 2;
+  } else {
+    return Some(count);
+  }
   while pos + SEGMENT_HEADER_LEN <= bytes.len() {
     let seg_type = bytes[pos];
     if !is_valid_segment_type(seg_type) {
       break;
     }
     let seg_len = u16::from_be_bytes([bytes[pos + 1], bytes[pos + 2]]) as usize;
-    pos += SEGMENT_HEADER_LEN + seg_len;
+    let next = pos.checked_add(SEGMENT_HEADER_LEN)?.checked_add(seg_len)?;
+    if next > bytes.len() {
+      break;
+    }
+    pos = next;
     count += 1;
   }
   if count == 0 { None } else { Some(count) }
@@ -175,12 +195,20 @@ mod tests {
 
   #[test]
   fn count_segments_accepts_magic_then_style_then_presentation() {
-    let blob = build_clip(vec![
-      build_segment(SEG_DIALOG_STYLE, &[0u8; 8]),
-      build_segment(SEG_DIALOG_PRESENTATION, &[0u8; 16]),
-      build_segment(SEG_END, &[]),
-    ]);
+    let mut blob = build_clip(vec![build_segment(SEG_DIALOG_STYLE, &[0u8; 8])]);
+    blob.extend_from_slice(&2u16.to_be_bytes()); // number of frames
+    blob.extend(build_segment(SEG_DIALOG_PRESENTATION, &[0u8; 16]));
+    blob.extend(build_segment(SEG_END, &[]));
     assert_eq!(count_segments(&blob), Some(3));
+  }
+
+  #[test]
+  fn count_segments_rejects_truncated_style_payload() {
+    let mut blob = MAGIC.to_vec();
+    blob.push(SEG_DIALOG_STYLE);
+    blob.extend_from_slice(&8u16.to_be_bytes());
+    blob.extend_from_slice(&[0u8; 2]);
+    assert!(count_segments(&blob).is_none());
   }
 
   #[test]
@@ -206,6 +234,16 @@ mod tests {
     let blob = build_clip(vec![build_segment(SEG_DIALOG_STYLE, &[0u8; 8])]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(HdmvTextStReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_truncated_style_segment() {
+    let mut blob = MAGIC.to_vec();
+    blob.push(SEG_DIALOG_STYLE);
+    blob.extend_from_slice(&8u16.to_be_bytes());
+    blob.extend_from_slice(&[0u8; 2]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    assert!(!HdmvTextStReader.probe(&mut s).unwrap());
   }
 
   #[test]

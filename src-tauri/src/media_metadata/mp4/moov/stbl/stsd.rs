@@ -119,6 +119,7 @@ fn reset_sample_entry_state(builder: &mut TrackBuilder) {
   builder.codec_private_hex = None;
   builder.video_codec_config = None;
   builder.audio_codec_config = None;
+  builder.audio_format_flags = None;
   builder.esds_object_type = None;
   builder.esds_decoder_specific_len = None;
   builder.block_additions.clear();
@@ -337,9 +338,11 @@ fn parse_audio_sample_entry(
     channels = src.read_u32_be()?; // numAudioChannels
     src.skip(4)?; // always7F000000
     sample_size = src.read_u32_be()?; // constBitsPerChannel
-    // formatSpecificFlags(4) constBytesPerAudioPacket(4)
-    // constLPCMFramesPerAudioPacket(4) = 12 bytes
-    src.skip(12)?;
+    // `lpcm` uses formatSpecificFlags to distinguish float / big-endian /
+    // little-endian PCM, matching qtmp4_demuxer_c::determine_codec.
+    builder.audio_format_flags = Some(src.read_u32_be()?);
+    // constBytesPerAudioPacket(4) + constLPCMFramesPerAudioPacket(4)
+    src.skip(8)?;
     bytes = AUDIO_PREAMBLE_BYTES + 48;
   } else {
     channels = src.read_u16_be()? as u32;
@@ -636,6 +639,18 @@ pub(crate) fn build_audio_sample_entry_v2(
   sample_rate_hz: f64,
   children: &[u8],
 ) -> Vec<u8> {
+  build_audio_sample_entry_v2_with_flags(fourcc_kind, channels, bits, sample_rate_hz, 0, children)
+}
+
+#[cfg(test)]
+pub(crate) fn build_audio_sample_entry_v2_with_flags(
+  fourcc_kind: &[u8; 4],
+  channels: u32,
+  bits: u32,
+  sample_rate_hz: f64,
+  format_specific_flags: u32,
+  children: &[u8],
+) -> Vec<u8> {
   let mut p = Vec::new();
   p.extend_from_slice(&[0u8; 6]); // reserved
   p.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
@@ -652,7 +667,7 @@ pub(crate) fn build_audio_sample_entry_v2(
   p.extend_from_slice(&channels.to_be_bytes());
   p.extend_from_slice(&0x7F00_0000u32.to_be_bytes());
   p.extend_from_slice(&bits.to_be_bytes());
-  p.extend_from_slice(&0u32.to_be_bytes()); // formatSpecificFlags
+  p.extend_from_slice(&format_specific_flags.to_be_bytes()); // formatSpecificFlags
   p.extend_from_slice(&0u32.to_be_bytes()); // constBytesPerAudioPacket
   p.extend_from_slice(&0u32.to_be_bytes()); // constLPCMFramesPerAudioPacket
   p.extend_from_slice(children);
@@ -820,6 +835,14 @@ mod tests {
     assert_eq!(a.channels, Some(8));
     assert_eq!(a.sampling_frequency, Some(96_000.0));
     assert_eq!(a.bit_depth, Some(24));
+  }
+
+  #[test]
+  fn v2_audio_entry_keeps_lpcm_format_flags() {
+    let entry = build_audio_sample_entry_v2_with_flags(b"lpcm", 2, 32, 48_000.0, 0x01, &[]);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"soun");
+    assert_eq!(b.audio_format_flags, Some(0x01));
   }
 
   // ---- PARSER-044: wave container recursion ----------------------------

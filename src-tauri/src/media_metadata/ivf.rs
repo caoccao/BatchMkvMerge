@@ -39,6 +39,7 @@
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::elementary::obu;
 use crate::media_metadata::error::ParseError;
+use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
@@ -248,7 +249,6 @@ impl Reader for IvfReader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoviConfig {
-  level: u8,
   raw_config: Vec<u8>,
 }
 
@@ -275,36 +275,24 @@ fn av1_dovi_config_from_frame(
   height: u32,
   default_duration_ns: Option<u64>,
 ) -> Option<DoviConfig> {
-  if obu::find_sequence_header(frame).is_none() || !frame_has_dovi_rpu(frame) {
-    return None;
-  }
+  let seq = obu::find_sequence_header(frame).and_then(|body| obu::decode_sequence_header(body).ok())?;
   let duration = default_duration_ns.filter(|d| *d >= 1_000_000).unwrap_or(40_000_000);
-  let level = calculate_dovi_level(width, height, duration);
-  Some(DoviConfig {
-    level,
-    raw_config: build_av1_dovi_config_record(level, 0),
-  })
-}
-
-fn frame_has_dovi_rpu(frame: &[u8]) -> bool {
-  walk_av1_obus(frame, |obu_type, payload| {
+  let (color_primaries, transfer_characteristics, matrix_coefficients) = av1_color_triplet(&seq);
+  let raw_config = walk_av1_obus(frame, |obu_type, payload| {
     if obu_type != OBU_TYPE_METADATA {
       return None;
     }
-    let (metadata_type, consumed) = read_leb128(payload)?;
-    if metadata_type != METADATA_TYPE_ITUT_T35 {
-      return None;
-    }
-    let mut pos = consumed;
-    let country_code = *payload.get(pos)?;
-    pos += 1;
-    if country_code == 0xff {
-      pos += 1;
-    }
-    let rest = payload.get(pos..)?;
-    (rest.len() > DOVI_T35_HEADER.len() && rest.starts_with(&DOVI_T35_HEADER)).then_some(())
-  })
-  .is_some()
+    av1_dovi_config_record_from_metadata_body(
+      payload,
+      width,
+      height,
+      duration,
+      color_primaries,
+      transfer_characteristics,
+      matrix_coefficients,
+    )
+  })?;
+  Some(DoviConfig { raw_config })
 }
 
 fn walk_av1_obus<'a, T, F>(bytes: &'a [u8], mut visit: F) -> Option<T>
@@ -350,6 +338,199 @@ fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
     }
   }
   None
+}
+
+pub(crate) fn av1_color_triplet(seq: &obu::SequenceHeader) -> (u8, u8, u8) {
+  let desc = seq.color_description;
+  (
+    desc.map(|c| c.color_primaries).unwrap_or(2),
+    desc.map(|c| c.transfer_characteristics).unwrap_or(2),
+    desc.map(|c| c.matrix_coefficients).unwrap_or(2),
+  )
+}
+
+pub(crate) fn av1_dovi_config_record_from_metadata_body(
+  body: &[u8],
+  width: u32,
+  height: u32,
+  duration_ns: u64,
+  color_primaries: u8,
+  transfer_characteristics: u8,
+  matrix_coefficients: u8,
+) -> Option<Vec<u8>> {
+  let rpu_payload = av1_dovi_rpu_payload(body)?;
+  let header = parse_av1_t35_dovi_rpu_header(rpu_payload)?;
+  let dv_profile = guess_dovi_rpu_profile(&header);
+  let compatibility_id = dovi_bl_signal_compatibility_id(
+    dv_profile,
+    color_primaries,
+    matrix_coefficients,
+    transfer_characteristics,
+  );
+  let level = calculate_dovi_level(width, height, duration_ns);
+  Some(build_av1_dovi_config_record(level, compatibility_id))
+}
+
+fn av1_dovi_rpu_payload(body: &[u8]) -> Option<&[u8]> {
+  let (metadata_type, consumed) = read_leb128(body)?;
+  if metadata_type != METADATA_TYPE_ITUT_T35 {
+    return None;
+  }
+  let mut pos = consumed;
+  let country_code = *body.get(pos)?;
+  pos += 1;
+  if country_code == 0xff {
+    pos += 1;
+  }
+  let rest = body.get(pos..)?;
+  if rest.len() <= DOVI_T35_HEADER.len() || !rest.starts_with(&DOVI_T35_HEADER) {
+    return None;
+  }
+  rest.get(DOVI_T35_HEADER.len()..)
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct DoviRpuHeader {
+  rpu_nal_prefix: u32,
+  rpu_type: u32,
+  rpu_format: u32,
+  vdr_rpu_profile: u32,
+  bl_video_full_range_flag: bool,
+  vdr_bit_depth_minus_8: u64,
+  el_spatial_resampling_filter_flag: bool,
+  disable_residual_flag: bool,
+}
+
+fn parse_av1_t35_dovi_rpu_header(payload: &[u8]) -> Option<DoviRpuHeader> {
+  if payload.len() < 3 {
+    return None;
+  }
+  let mut buffer = payload.to_vec();
+  let rpu_size = if buffer[1] & 0x10 != 0 {
+    if buffer.get(2)? & 0x08 != 0 {
+      return None;
+    }
+    let size = 0x100usize | (((buffer[1] & 0x0f) as usize) << 4) | (((buffer[2] >> 4) & 0x0f) as usize);
+    if size + 2 >= buffer.len() {
+      return None;
+    }
+    for i in 0..size {
+      buffer[i + 1] = ((buffer[i + 2] & 0x07) << 5) | ((buffer[i + 3] >> 3) & 0x1f);
+    }
+    size
+  } else {
+    let size = (((buffer[0] & 0x1f) as usize) << 3) | (((buffer[1] >> 5) & 0x07) as usize);
+    if size + 1 >= buffer.len() {
+      return None;
+    }
+    for i in 0..size {
+      buffer[i + 1] = ((buffer[i + 1] & 0x0f) << 4) | ((buffer[i + 2] >> 4) & 0x0f);
+    }
+    size
+  };
+  buffer[0] = 0x19;
+  parse_dovi_rpu_header(&buffer[..rpu_size + 1])
+}
+
+fn parse_dovi_rpu_header(bytes: &[u8]) -> Option<DoviRpuHeader> {
+  let mut reader = BitReader::new(bytes);
+  let mut header = DoviRpuHeader {
+    rpu_nal_prefix: reader.read_bits(8).ok()? as u32,
+    ..Default::default()
+  };
+  if header.rpu_nal_prefix != 25 {
+    return None;
+  }
+  header.rpu_type = reader.read_bits(6).ok()? as u32;
+  header.rpu_format = reader.read_bits(11).ok()? as u32;
+
+  if header.rpu_type == 2 {
+    header.vdr_rpu_profile = reader.read_bits(4).ok()? as u32;
+    let _vdr_rpu_level = reader.read_bits(4).ok()?;
+    let vdr_seq_info_present = reader.read_bit().ok()?;
+    if vdr_seq_info_present {
+      let _chroma_resampling_explicit_filter_flag = reader.read_bit().ok()?;
+      let coefficient_data_type = reader.read_bits(2).ok()?;
+      if coefficient_data_type == 0 {
+        let _coefficient_log2_denom = reader.read_ue().ok()?;
+      }
+      let _vdr_rpu_normalized_idc = reader.read_bits(2).ok()?;
+      header.bl_video_full_range_flag = reader.read_bit().ok()?;
+      if (header.rpu_format & 0x700) == 0 {
+        let _bl_bit_depth_minus8 = reader.read_ue().ok()?;
+        let _el_bit_depth_minus8 = reader.read_ue().ok()?;
+        header.vdr_bit_depth_minus_8 = reader.read_ue().ok()? as u64;
+        let _spatial_resampling_filter_flag = reader.read_bit().ok()?;
+        let _reserved_zero_3bits = reader.read_bits(3).ok()?;
+        header.el_spatial_resampling_filter_flag = reader.read_bit().ok()?;
+        header.disable_residual_flag = reader.read_bit().ok()?;
+      }
+    }
+
+    let _vdr_dm_metadata_present_flag = reader.read_bit().ok()?;
+    let use_prev_vdr_rpu_flag = reader.read_bit().ok()?;
+    if use_prev_vdr_rpu_flag {
+      let _prev_vdr_rpu_id = reader.read_ue().ok()?;
+    } else {
+      let _vdr_rpu_id = reader.read_ue().ok()?;
+      let _mapping_color_space = reader.read_ue().ok()?;
+      let _mapping_chroma_format_idc = reader.read_ue().ok()?;
+      for _ in 0..3 {
+        let num_pivots_minus2 = reader.read_ue().ok()? as u64;
+        for _ in 0..(num_pivots_minus2 + 2) {
+          reader.skip_bits(header.vdr_bit_depth_minus_8 + 8).ok()?;
+        }
+      }
+      if (header.rpu_format & 0x700) != 0 && !header.disable_residual_flag {
+        reader.skip_bits(3).ok()?;
+      }
+      let _num_x_partitions_minus1 = reader.read_ue().ok()?;
+      let _num_y_partitions_minus1 = reader.read_ue().ok()?;
+    }
+  }
+
+  Some(header)
+}
+
+fn guess_dovi_rpu_profile(header: &DoviRpuHeader) -> u8 {
+  let has_el = header.el_spatial_resampling_filter_flag && !header.disable_residual_flag;
+  if header.rpu_nal_prefix != 25 {
+    return 0;
+  }
+  if header.vdr_rpu_profile == 0 && header.bl_video_full_range_flag {
+    return 5;
+  }
+  if has_el {
+    if header.vdr_bit_depth_minus_8 == 4 { 7 } else { 4 }
+  } else {
+    8
+  }
+}
+
+fn dovi_bl_signal_compatibility_id(
+  dv_profile: u8,
+  color_primaries: u8,
+  matrix_coefficients: u8,
+  transfer_characteristics: u8,
+) -> u8 {
+  match dv_profile {
+    4 => 2,
+    5 => 0,
+    7 => 6,
+    8 => {
+      if color_primaries == 9 && matrix_coefficients == 9 {
+        match transfer_characteristics {
+          16 => 1,
+          14 | 18 => 4,
+          _ => 0,
+        }
+      } else {
+        2
+      }
+    }
+    9 => 2,
+    _ => 0,
+  }
 }
 
 /// AV1 Dolby Vision level from the picture rate (`common/dovi_meta.cpp`).
@@ -579,10 +760,17 @@ mod tests {
     frame.extend(obu_packet(1, &build_reduced_sequence_header(1920, 1080)));
     let mut metadata = vec![METADATA_TYPE_ITUT_T35 as u8, 0xb5];
     metadata.extend_from_slice(&DOVI_T35_HEADER);
-    metadata.extend_from_slice(&[0x11, 0x22]);
+    metadata.extend_from_slice(&valid_av1_dovi_rpu_payload());
     frame.extend(obu_packet(OBU_TYPE_METADATA, &metadata));
     frame.extend(obu_packet(6, &[0]));
     frame
+  }
+
+  fn valid_av1_dovi_rpu_payload() -> Vec<u8> {
+    // Short AV1 T.35 RPU coding. After conversion this yields a regular RPU
+    // header starting with 0x19 and rpu_type 0, enough for mkvtoolnix to infer
+    // DV profile 8 and derive the base-layer compatibility id from AV1 color.
+    vec![0x00, 0x60, 0x00, 0x00, 0x00]
   }
 
   fn build_ivf_with_first_frame(frame: &[u8]) -> Vec<u8> {
@@ -614,6 +802,9 @@ mod tests {
     assert_eq!(mapping.data_hex.len(), 48);
     // The encoded config record carries DV profile 10 in its third byte.
     assert!(mapping.data_hex.starts_with("0100"));
+    // Unspecified AV1 color with an RPU-inferred profile 8 maps to BL
+    // compatibility id 2, encoded in the high nibble of byte 4.
+    assert_eq!(&mapping.data_hex[8..10], "20");
   }
 
   #[test]
