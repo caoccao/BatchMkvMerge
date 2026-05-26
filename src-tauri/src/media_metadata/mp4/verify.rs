@@ -26,7 +26,7 @@
 //! which `identify::finalise` has no access to).
 //!
 //! All reads are bounded (≤ 16 KiB per track) and deadline-checked — we only
-//! locate and read the FIRST sample, never demux.
+//! locate and read the first indexed samples, never demux.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -426,13 +426,12 @@ fn verify_subtitles(builder: &mut TrackBuilder) {
 /// (`r_qtmp4.cpp:2881-2906`): iterate the (bounded) sample index, seeking to
 /// EACH sample's file offset and reading `min(remaining, sample.size)` bytes,
 /// until `num_bytes` is collected.  `max` is clamped to [`MAX_FIRST_BYTES`].
-/// Returns `None` when no samples can be located or a read comes up short.
+/// Returns `None` when no indexed samples can provide the full requested
+/// window or any media read comes up short.
 ///
 /// PARSER-183: this now spans MULTIPLE samples — not just sample 0 — so AVC
 /// salvage / DTS probing / first-frame derivation can collect the full window
-/// across an index of small samples, exactly like mkvtoolnix.  When the
-/// reconstructed index is empty we fall back to the single-sample fields so
-/// older fixtures (and tracks with only `stco` + `stsz`) still resolve.
+/// across an index of small samples, exactly like mkvtoolnix.
 fn read_first_bytes(
   src: &mut FileSource,
   deadline: &Deadline,
@@ -445,53 +444,42 @@ fn read_first_bytes(
     return Ok(None);
   }
 
-  // Prefer the reconstructed multi-sample index; fall back to sample 0.
-  let index: Vec<(u64, u64)> = if !builder.first_samples.is_empty() {
-    builder.first_samples.clone()
-  } else {
-    match builder.first_sample_file_offset {
-      Some(off) => vec![(off, builder.first_sample_size.unwrap_or(0))],
-      None => return Ok(None),
-    }
-  };
+  if builder.first_samples.is_empty() {
+    return Ok(None);
+  }
 
   let len = src.length();
   let mut buf: Vec<u8> = Vec::with_capacity(want_total as usize);
-  for (offset, size) in index {
+  for &(offset, size) in &builder.first_samples {
     let remaining = want_total - buf.len() as u64;
     if remaining == 0 {
       break;
     }
     deadline.check("mp4::read_first_bytes")?;
-    // mkvtoolnix reads min(remaining, sample.size); a zero size means the size
-    // table ran short — read up to `remaining` to mirror the unbounded buffer.
-    let mut want = remaining;
-    if size > 0 {
-      want = want.min(size);
+    let want = remaining.min(size);
+    if want == 0 {
+      continue;
     }
     if let Some(file_len) = len {
-      if offset >= file_len {
-        break;
+      if offset.checked_add(want).is_none_or(|end| end > file_len) {
+        return Ok(None);
       }
-      want = want.min(file_len - offset);
-    }
-    if want == 0 {
-      break;
     }
     src.seek_to(offset)?;
     let mut chunk = vec![0u8; want as usize];
-    let read = src.read_at_most(&mut chunk)?;
-    chunk.truncate(read);
-    if chunk.is_empty() {
-      break;
+    match src.read_exact(&mut chunk) {
+      Ok(()) => {}
+      Err(ParseError::UnexpectedEof { .. }) => return Ok(None),
+      Err(e) => return Err(e),
     }
     buf.extend_from_slice(&chunk);
   }
 
-  if buf.is_empty() {
-    return Ok(None);
+  if buf.len() as u64 == want_total {
+    Ok(Some(buf))
+  } else {
+    Ok(None)
   }
-  Ok(Some(buf))
 }
 
 // ----- codec-family predicates --------------------------------------------
@@ -664,6 +652,12 @@ mod tests {
     b
   }
 
+  fn set_single_sample(builder: &mut TrackBuilder, size: u64) {
+    builder.first_sample_file_offset = Some(0);
+    builder.first_sample_size = Some(size);
+    builder.first_samples = vec![(0, size)];
+  }
+
   fn avcc_raw_hex() -> String {
     // Minimal avcC ≥ 4 bytes.
     hex_encode(&crate::media_metadata::mp4::codec_specific::avcc::build_avcc_payload(
@@ -695,9 +689,9 @@ mod tests {
   fn avc_without_avcc_salvaged_from_bitstream() {
     let mut b = video_builder("avc1", 1920, 1080);
     // mdat = an Annex B SPS + PPS the AVC SPS parser can decode.
-    let es = build_avc_annex_b();
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(es.len() as u64);
+    let mut es = build_avc_annex_b();
+    es.resize(10_000, 0);
+    set_single_sample(&mut b, es.len() as u64);
     let mut src = source(es);
     verify_video(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
@@ -716,8 +710,8 @@ mod tests {
     es.extend(build_baseline_sps_tail());
     es.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]); // PPS
     es.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]); // AUD terminator
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(es.len() as u64);
+    es.resize(10_000, 0);
+    set_single_sample(&mut b, es.len() as u64);
     let mut src = source(es);
     verify_video(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
@@ -730,9 +724,8 @@ mod tests {
   #[test]
   fn avc_without_avcc_and_junk_dropped() {
     let mut b = video_builder("avc1", 1920, 1080);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(64);
-    let mut src = source(vec![0xAAu8; 64]);
+    set_single_sample(&mut b, 10_000);
+    let mut src = source(vec![0xAAu8; 10_000]);
     verify_video(&mut src, &dl(), &mut b).unwrap();
     assert!(b.probe_failed);
   }
@@ -791,9 +784,9 @@ mod tests {
   #[test]
   fn dts_with_header_kept_and_specialised() {
     let mut b = audio_builder("A_DTS", 0, 0.0);
-    let frame = build_dts_frame();
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(frame.len() as u64);
+    let mut frame = build_dts_frame();
+    frame.resize(MAX_FIRST_BYTES as usize, 0);
+    set_single_sample(&mut b, frame.len() as u64);
     let mut src = source(frame);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
@@ -805,9 +798,8 @@ mod tests {
   #[test]
   fn dts_without_header_dropped() {
     let mut b = audio_builder("A_DTS", 0, 0.0);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(64);
-    let mut src = source(vec![0u8; 64]);
+    set_single_sample(&mut b, MAX_FIRST_BYTES);
+    let mut src = source(vec![0u8; MAX_FIRST_BYTES as usize]);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(b.probe_failed);
   }
@@ -849,8 +841,7 @@ mod tests {
     let mut b = audio_builder("mp4a", 0, 0.0);
     b.esds_object_type = Some(0x6B); // → A_MPEG/L3
     let frame = crate::media_metadata::audio::mp3::build_mp3_frame_v1(128, 44_100, false);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(frame.len() as u64);
+    set_single_sample(&mut b, frame.len() as u64);
     let mut src = source(frame);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
@@ -864,8 +855,7 @@ mod tests {
   fn mp3_without_frame_dropped_by_generic_gate() {
     let mut b = audio_builder("mp4a", 0, 0.0);
     b.esds_object_type = Some(0x6B);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(64);
+    set_single_sample(&mut b, 64);
     let mut src = source(vec![0x00u8; 64]);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(b.probe_failed);
@@ -876,8 +866,7 @@ mod tests {
   fn ac3_params_recovered_from_first_frame() {
     let mut b = audio_builder("ac-3", 0, 0.0);
     let frame = crate::media_metadata::audio::ac3::build_ac3_frame(0, 8); // fscod0=48k, acmod2=2ch
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(frame.len() as u64);
+    set_single_sample(&mut b, frame.len() as u64);
     let mut src = source(frame);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(!b.probe_failed);
@@ -889,8 +878,7 @@ mod tests {
   #[test]
   fn ac3_without_frame_dropped_by_generic_gate() {
     let mut b = audio_builder("ac-3", 0, 0.0);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(64);
+    set_single_sample(&mut b, 64);
     let mut src = source(vec![0x00u8; 64]);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     assert!(b.probe_failed);
@@ -901,8 +889,7 @@ mod tests {
   fn recovery_does_not_override_existing_params() {
     let mut b = audio_builder("ac-3", 6, 44_100.0);
     let frame = crate::media_metadata::audio::ac3::build_ac3_frame(0, 8); // would say 2ch/48k
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(frame.len() as u64);
+    set_single_sample(&mut b, frame.len() as u64);
     let mut src = source(frame);
     verify_audio(&mut src, &dl(), &mut b).unwrap();
     let a = b.audio.unwrap();
@@ -966,7 +953,9 @@ mod tests {
     let mut b = audio_builder("A_DTS", 0, 0.0);
     b.first_samples = vec![(off_a, a.len() as u64), (off_b, c.len() as u64)];
     let mut src = source(data);
-    let got = read_first_bytes(&mut src, &dl(), &b, MAX_FIRST_BYTES).unwrap().unwrap();
+    let got = read_first_bytes(&mut src, &dl(), &b, frame.len() as u64)
+      .unwrap()
+      .unwrap();
     assert_eq!(got, frame);
   }
 
@@ -981,15 +970,15 @@ mod tests {
     assert_eq!(got, vec![1, 2, 3, 4, 5, 6]);
   }
 
-  // Falls back to the single-sample fields when no index was reconstructed.
+  // A missing reconstructed sample index yields no data; stco/stsz alone are
+  // not enough to fabricate an extent.
   #[test]
-  fn read_first_bytes_falls_back_to_single_sample() {
+  fn read_first_bytes_none_without_reconstructed_index() {
     let mut b = video_builder("avc1", 100, 100);
     b.first_sample_file_offset = Some(2);
     b.first_sample_size = Some(3);
     let mut src = source(vec![9, 8, 7, 6, 5]);
-    let got = read_first_bytes(&mut src, &dl(), &b, 16).unwrap().unwrap();
-    assert_eq!(got, vec![7, 6, 5]);
+    assert!(read_first_bytes(&mut src, &dl(), &b, 3).unwrap().is_none());
   }
 
   // r_qtmp4.cpp:3845-3853: S_VOBSUB needs an esds decoder config ≥ 64 bytes.
@@ -1033,11 +1022,19 @@ mod tests {
   #[test]
   fn read_first_bytes_clamps_to_sample_size_and_eof() {
     let mut b = video_builder("avc1", 100, 100);
-    b.first_sample_file_offset = Some(0);
-    b.first_sample_size = Some(3);
+    b.first_samples = vec![(0, 3)];
     let mut src = source(vec![9, 8, 7, 6, 5]);
-    let got = read_first_bytes(&mut src, &dl(), &b, 16).unwrap().unwrap();
+    let got = read_first_bytes(&mut src, &dl(), &b, 3).unwrap().unwrap();
     assert_eq!(got, vec![9, 8, 7]);
+    assert!(read_first_bytes(&mut src, &dl(), &b, 4).unwrap().is_none());
+  }
+
+  #[test]
+  fn read_first_bytes_rejects_truncated_media_read() {
+    let mut b = video_builder("avc1", 100, 100);
+    b.first_samples = vec![(3, 4)];
+    let mut src = source(vec![1, 2, 3, 4, 5]);
+    assert!(read_first_bytes(&mut src, &dl(), &b, 4).unwrap().is_none());
   }
 
   #[test]

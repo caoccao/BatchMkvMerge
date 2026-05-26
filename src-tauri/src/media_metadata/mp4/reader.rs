@@ -758,6 +758,15 @@ mod tests {
     encode_box(b"stsz", &p)
   }
 
+  fn build_stsc(samples_per_chunk: u32) -> Vec<u8> {
+    let mut p = vec![0u8; 4]; // version + flags
+    p.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+    p.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
+    p.extend_from_slice(&samples_per_chunk.to_be_bytes());
+    p.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index
+    encode_box(b"stsc", &p)
+  }
+
   /// Build a video trak with an explicit sample-entry child blob plus
   /// stco/stsz so the first-sample verification pass can locate sample 0.
   fn build_video_trak_with_sample_table(
@@ -777,6 +786,7 @@ mod tests {
     let mut stbl = stsd;
     stbl.extend(build_stsz(first_sample_size));
     stbl.extend(build_stco(chunk_offset));
+    stbl.extend(build_stsc(1));
     let stbl = encode_box(b"stbl", &stbl);
     let minf = encode_box(b"minf", &stbl);
     let mut mdia = mdhd;
@@ -804,6 +814,7 @@ mod tests {
     let mut stbl = stsd;
     stbl.extend(build_stsz(first_sample_size));
     stbl.extend(build_stco(chunk_offset));
+    stbl.extend(build_stsc(1));
     let stbl = encode_box(b"stbl", &stbl);
     let minf = encode_box(b"minf", &stbl);
     let mut mdia = mdhd;
@@ -917,7 +928,8 @@ mod tests {
   // avcC but a decodable SPS in the first sample is salvaged and kept.
   #[test]
   fn verify_avc1_without_avcc_salvaged_from_mdat() {
-    let es = avc_annex_b_sps_pps();
+    let mut es = avc_annex_b_sps_pps();
+    es.resize(10_000, 0);
     let sample_len = es.len() as u32;
     let bytes = build_mp4_mdat_first(
       |chunk_offset| build_video_trak_with_sample_table(1, b"avc1", 1920, 1080, &[], chunk_offset, sample_len),
@@ -941,9 +953,9 @@ mod tests {
   // (c) r_qtmp4.cpp:3804: avc1 with no avcC and junk first bytes is dropped.
   #[test]
   fn verify_avc1_without_avcc_and_junk_dropped() {
-    let junk = vec![0xAAu8; 128];
+    let junk = vec![0xAAu8; 10_000];
     let bytes = build_mp4_mdat_first(
-      |chunk_offset| build_video_trak_with_sample_table(1, b"avc1", 1920, 1080, &[], chunk_offset, 128),
+      |chunk_offset| build_video_trak_with_sample_table(1, b"avc1", 1920, 1080, &[], chunk_offset, 10_000),
       &junk,
     );
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
@@ -967,7 +979,8 @@ mod tests {
   // kept with channels/rate; without a header it is dropped.
   #[test]
   fn verify_dts_with_header_kept() {
-    let frame = crate::media_metadata::audio::dts::build_dts_core_frame(6, 13);
+    let mut frame = crate::media_metadata::audio::dts::build_dts_core_frame(6, 13);
+    frame.resize(16_384, 0);
     let sample_len = frame.len() as u32;
     let bytes = build_mp4_mdat_first(
       |chunk_offset| build_audio_trak_with_sample_table(1, b"dtsc", 6, 48_000, chunk_offset, sample_len),
@@ -984,9 +997,9 @@ mod tests {
 
   #[test]
   fn verify_dts_without_header_dropped() {
-    let junk = vec![0u8; 128];
+    let junk = vec![0u8; 16_384];
     let bytes = build_mp4_mdat_first(
-      |chunk_offset| build_audio_trak_with_sample_table(1, b"dtsc", 6, 48_000, chunk_offset, 128),
+      |chunk_offset| build_audio_trak_with_sample_table(1, b"dtsc", 6, 48_000, chunk_offset, 16_384),
       &junk,
     );
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));

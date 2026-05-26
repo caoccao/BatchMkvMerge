@@ -1,6 +1,6 @@
 # MPEG Transport Stream Parser
 
-Implementation progress: 90%
+Implementation progress: 92%
 
 ## Purpose
 
@@ -13,6 +13,8 @@ The MPEG-TS parser recognises transport streams, detects packet size, builds pro
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ts.cpp`, `../mkvtoolnix/src/input/r_mpeg_ts.h`
 
 The parser supports 188-byte TS, 192-byte M2TS, and 204-byte FEC packet sizes. It reassembles PAT, PMT, and SDT sections, builds stream rows from stream types and descriptors, extracts language/service data, accumulates bounded PES payloads, and enriches AVC, HEVC, MPEG video, VC-1, AC-3, E-AC-3, AAC, MP3, DTS, TrueHD, LPCM, PGS, DVB subtitles, teletext, TextST, and Dolby Vision pairings.
+
+After packet-size detection has locked onto the stream, the packet loop resynchronises if an expected sync byte is missing. It scans byte-by-byte from the failed packet position and accepts a candidate only when both that packet's sync byte and the next packet-stride sync byte are present, then resumes normal PAT/PMT/PES processing from the recovered packet (PARSER-304). A single inserted, dropped, or corrupt byte therefore no longer discards all later table and payload data.
 
 PAT and PMT sections are validated against the PSI header flags mkvtoolnix treats as mandatory (`r_mpeg_ts.cpp:1755-1786`, `1928-1964`): `section_syntax_indicator == 1`, `current_next_indicator != 0`, `section_number == 0`, `last_section_number == 0`, and `13 <= section_length <= 1021` (PARSER-270). Inactive next-version sections and unsupported multi-section tables are rejected, so programs and stream rows are never built from a table mkvtoolnix would ignore. CRC32 is intentionally not enforced: mkvtoolnix starts with CRC validation on but disables it on its retry pass whenever a CRC failure would otherwise leave the PAT/PMT unfound (`r_mpeg_ts.cpp:1388-1394`); a header-only single-pass parser is always in that position, so tolerating a stale CRC matches the observable end-state.
 
@@ -41,8 +43,4 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 
 ## Gaps and Handling
 
-The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, and per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers.
-
-## Open Issues
-
-- `PARSER-304` — The packet loop does not resynchronise after a missing sync byte. It keeps reading fixed-size chunks and discards packets whose expected sync position is not `0x47`; mkvtoolnix calls `resync`, scans byte-by-byte, verifies the next packet stride, and resumes from the recovered packet. A single inserted, dropped, or corrupt byte can make Rust miss all following PAT/PMT/PES data.
+The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers, and in-stream sync loss is recovered with a bounded resync scan.

@@ -1,6 +1,6 @@
 # MP4 / QuickTime Parser
 
-Implementation progress: 97%
+Implementation progress: 99%
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The MP4 parser recognises ISO BMFF, MP4, M4V, MOV, and QuickTime-style files. It
 
 The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxes, parses `ftyp`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `hdlr`, `stbl`, `stsd`, `stts`, `stsc`, `edts/elst`, `mvex/trex`, `moof/traf/tfhd/trun`, and `udta/meta/ilst`. Codec-specific parsers cover AVC, HEVC, AV1, AAC, ALAC, Opus, FLAC, QuickTime PCM, color, pixel aspect ratio, and Dolby Vision block-addition records.
 
-Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it. The child-box-vs-opaque-private decision also uses that retained first FourCC, so later differing entries overwrite sample data without changing the private-data parser branch.
+Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it. The child-box-vs-opaque-private decision also uses that retained first FourCC, so later differing entries overwrite sample data without changing the private-data parser branch. The loop now iterates exactly the advertised `entry_count` and treats a count that extends past the `stsd` payload as malformed, matching upstream instead of keeping earlier parsed entries from a truncated atom (PARSER-300).
 
 Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers. Descriptor bodies inside `esds` are validated exactly before their lengths or payloads are recorded, so malformed DecoderSpecificInfo descriptors cannot satisfy later codec verification gates:
 
@@ -34,6 +34,8 @@ These three return before the generic "channels or sample rate is zero" gate, ex
 QuickTime PCM sample entries (`twos`, `sowt`, `raw `, `pcm `, `lpcm`, and `in24`) are canonicalised to the Matroska PCM codec ids mkvmerge would choose. Version 2 `lpcm` sample entries keep `formatSpecificFlags`, allowing `verify.rs` / `identify.rs` to distinguish little-endian integer, big-endian integer, and IEEE float PCM; `in24` forces a 24-bit sample depth as upstream does.
 
 When an AVC sample entry lacks a usable `avcC`, `derive_avc_from_bitstream` reads bounded first-sample Annex B data and rebuilds an avcC via `build_avcc`. The rebuilt record preserves the SPS constraint-set / profile-compatibility byte in AVCDecoderConfigurationRecord byte 2 (`buffer[2] = sps.profile_compat`, `../mkvtoolnix/src/common/avc/avcc.cpp:134`) rather than writing zero.
+
+First-sample verification reconstructs only the sample extents covered by `stsc` + `stco`/`co64` + `stsz`/`stz2`. Missing `stsc` coverage produces no synthetic one-sample chunks, and zero or missing sample sizes remain zero-sized index entries (PARSER-299). `read_first_bytes` then mirrors `qtmp4_demuxer_c::read_first_bytes`: it reads `min(remaining, sample.size)` from each indexed sample and returns no buffer unless the full requested window (64, 10000, or 16384 bytes, depending on the probe) is collected with exact media reads (PARSER-298). Truncated `mdat` data, short indexed windows, and zero-sized samples therefore cannot satisfy MP3/AC-3/DTS parameter recovery or AVC bitstream salvage.
 
 ## Data Structures
 
@@ -56,9 +58,3 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
-
-## Open Issues
-
-- `PARSER-298` — `read_first_bytes` accepts partial media reads. It clamps sample reads to EOF, uses `read_at_most`, and returns a non-empty short buffer; mkvtoolnix returns no buffer unless the full requested 64, 10000, or 16384 bytes are read from the sample index. Truncated `mdat` data or short samples can therefore satisfy AC-3/DTS/MP3 probes or AVC salvage in Rust.
-- `PARSER-299` — First-sample index reconstruction fabricates extents for malformed tables. Missing `stsc` coverage becomes one sample per chunk, missing per-sample sizes become zero, and zero sizes are later treated as "read the remaining requested bytes". Upstream leaves such chunk/sample sizes at zero and `read_first_bytes` fails to collect data, so Rust can recover tracks from broken sample tables that mkvtoolnix drops.
-- `PARSER-300` — `stsd` entry counts are allowed to exceed the actual payload. The Rust loop stops successfully once the parent atom end is reached, even if `entry_count` advertised more sample-description entries; mkvtoolnix iterates exactly `count` entries and errors when the next entry size or description bytes cannot be read. A truncated `stsd` can therefore retain the earlier parsed sample entry in Rust while upstream aborts the malformed track/file.

@@ -185,27 +185,18 @@ fn build_first_samples(tables: &SampleTables) -> Vec<(u64, u64)> {
 }
 
 /// Samples in chunk `chunk_idx` (0-based) per the `stsc` map.  The covering run
-/// is the last entry whose 1-based `first_chunk` is `<= chunk_idx + 1`.  An
-/// empty / absent map defaults to one sample per chunk (mirrors mkvtoolnix's
-/// `chunk.size == 0` chunks contributing nothing only when no run covers them;
-/// real files always carry a chunk-map, and a one-sample default keeps the
-/// bounded read non-empty for malformed inputs).
+/// is the last entry whose 1-based `first_chunk` is `<= chunk_idx + 1`.  Chunks
+/// not covered by an `stsc` run contribute no readable samples, matching the
+/// zero-sized chunk entries mkvtoolnix leaves behind for malformed tables.
 fn samples_per_chunk(chunk_map: &[stsc::StscEntry], chunk_idx: usize) -> u64 {
   let chunk_number = (chunk_idx as u64) + 1; // 1-based
   let mut samples = 0u64;
-  let mut covered = false;
   for entry in chunk_map {
     if (entry.first_chunk as u64) <= chunk_number {
       samples = entry.samples_per_chunk as u64;
-      covered = true;
     } else {
       break;
     }
-  }
-  if !covered {
-    // No chunk-map run covers this chunk → fall back to one sample/chunk so a
-    // missing or malformed `stsc` still yields a usable first-bytes read.
-    return 1;
   }
   samples
 }
@@ -557,12 +548,21 @@ mod tests {
   }
 
   #[test]
-  fn first_samples_default_one_per_chunk_without_stsc() {
-    // No stsc → fall back to one sample per chunk.
+  fn first_samples_empty_without_stsc() {
+    // No stsc coverage → no sample extents are fabricated.
     let mut children = stsz_per_sample(&[100, 200]);
     children.extend(stco(&[2000, 8000]));
     let b = run_stbl(children);
-    assert_eq!(b.first_samples, vec![(2000, 100), (8000, 200)]);
+    assert!(b.first_samples.is_empty());
+  }
+
+  #[test]
+  fn first_samples_skip_chunks_before_first_stsc_run() {
+    let mut children = stsz_per_sample(&[100, 200]);
+    children.extend(stco(&[2000, 8000]));
+    children.extend(stsc_box(&[(2, 1, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples, vec![(8000, 100)]);
   }
 
   #[test]

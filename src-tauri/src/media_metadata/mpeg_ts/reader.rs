@@ -55,6 +55,7 @@ const NULL_PID: u16 = 0x1FFF;
 /// the first audio frame header — across at most this many PIDs.
 const PES_PAYLOAD_CAP: usize = 64 * 1024;
 const MAX_PES_PIDS: usize = 32;
+const RESYNC_SCAN_CAP: u64 = 1024 * 1024;
 /// Packet budget scanned (after all PMTs are seen) before stopping, so the
 /// per-PID PES buffers have a chance to fill for the header probe.
 ///
@@ -165,15 +166,22 @@ impl Reader for MpegTsReader {
       if packet_count >= MAX_PACKETS {
         break;
       }
+      let packet_start = src.position();
       let read = src.read_at_most(&mut packet_buf)?;
       if read < packet_size {
         break;
       }
-      packet_count += 1;
       let pkt = &packet_buf[header_offset..];
       if pkt.len() < 4 || pkt[0] != packet::TS_SYNC_BYTE {
-        continue;
+        match resync(src, packet_size, header_offset, packet_start + 1, deadline)? {
+          Some(recovered) => {
+            src.seek_to(recovered)?;
+            continue;
+          }
+          None => break,
+        }
       }
+      packet_count += 1;
       let header = match packet::decode_header(pkt) {
         Ok(h) => h,
         Err(_) => continue,
@@ -277,6 +285,44 @@ impl Reader for MpegTsReader {
     identify::finalise_with_probes(rows, &sdt_map, &probes, out);
     Ok(())
   }
+}
+
+/// Recover from an out-of-phase read after a missing/corrupt sync byte.  The
+/// candidate packet start is accepted only when its own sync byte and the next
+/// packet-stride sync byte line up, mirroring mkvtoolnix's byte-granular
+/// resync check while keeping the scan bounded.
+fn resync(
+  src: &mut FileSource,
+  packet_size: usize,
+  header_offset: usize,
+  search_start: u64,
+  deadline: &Deadline,
+) -> Result<Option<u64>, ParseError> {
+  let limit = src
+    .length()
+    .map(|len| len.saturating_sub(header_offset as u64))
+    .unwrap_or(search_start.saturating_add(RESYNC_SCAN_CAP))
+    .min(search_start.saturating_add(RESYNC_SCAN_CAP));
+  let mut pos = search_start;
+  while pos < limit {
+    deadline.check("mpeg_ts::resync")?;
+    if sync_byte_at(src, pos + header_offset as u64)? && sync_byte_at(src, pos + packet_size as u64 + header_offset as u64)? {
+      return Ok(Some(pos));
+    }
+    pos += 1;
+  }
+  Ok(None)
+}
+
+fn sync_byte_at(src: &mut FileSource, offset: u64) -> Result<bool, ParseError> {
+  if let Some(len) = src.length() {
+    if offset >= len {
+      return Ok(false);
+    }
+  }
+  src.seek_to(offset)?;
+  let mut b = [0u8; 1];
+  Ok(src.read_at_most(&mut b)? == 1 && b[0] == packet::TS_SYNC_BYTE)
 }
 
 /// PARSER-158: strip the PES packet header so codec probes see the elementary
@@ -773,6 +819,23 @@ mod tests {
     let lang = out.tracks[0].properties.common.language.as_ref().unwrap();
     assert_eq!(lang.iso639_2, "eng");
     assert_eq!(out.container.properties.programs.len(), 1);
+  }
+
+  #[test]
+  fn read_headers_resyncs_after_inserted_byte() {
+    let mut bytes = Vec::new();
+    for _ in 0..5 {
+      bytes.extend(padding());
+    }
+    let insert_at = bytes.len();
+    bytes.extend(assemble_ts(0x100));
+    bytes.splice(insert_at..insert_at, [0x00u8]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 2);
+    assert_eq!(out.tracks[0].codec.id, "V_MPEG2");
+    assert_eq!(out.tracks[1].codec.id, "A_AAC");
   }
 
   #[test]

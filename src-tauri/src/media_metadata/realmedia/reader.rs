@@ -66,60 +66,91 @@ impl Reader for RealMediaReader {
     if header.id != RMF_MAGIC {
       return Err(ParseError::Unrecognised);
     }
+    let rmf_size = header.size as usize;
+    if rmf_size < COMMON_HEADER_LEN + 8 {
+      return Err(ParseError::Malformed {
+        format: "realmedia",
+        offset: 0,
+        reason: format!(".RMF chunk size {rmf_size} is too small"),
+      });
+    }
     // format_version + num_headers (8 bytes); we don't need them but the
-    // .RMF body is part of the chunk, so seek past them.
-    src.skip(8)?;
-
-    out.container.format = ContainerFormat::RealMedia;
-    out.container.recognized = true;
-    out.container.supported = true;
+    // .RMF body is part of the chunk, so seek past the whole file header
+    // object before walking top-level chunks.
+    src.seek_to(header.size as u64)?;
 
     let mut prop: Option<PropChunk> = None;
     let mut tracks: Vec<MdprChunk> = Vec::new();
-    let mut first_packets: HashMap<u16, Vec<u8>> = HashMap::new();
 
     // Walk top-level chunks until DATA (or EOF).  We only inspect the
     // first bounded DATA packet per stream for header-derived refinements;
     // payload scanning still stays out of the hot path.
-    loop {
+    let first_packets = loop {
       deadline.check("realmedia-chunk")?;
       let mut hdr = [0u8; COMMON_HEADER_LEN];
-      if src.read_at_most(&mut hdr)? < COMMON_HEADER_LEN {
-        break;
-      }
-      let chunk = match ChunkHeader::parse(&hdr) {
-        Some(c) => c,
-        None => break,
-      };
+      src.read_exact(&mut hdr)?;
+      let chunk = ChunkHeader::parse(&hdr).ok_or(ParseError::Malformed {
+        format: "realmedia",
+        offset: src.position().saturating_sub(COMMON_HEADER_LEN as u64),
+        reason: "chunk header is shorter than the common header".to_string(),
+      })?;
       if (chunk.size as usize) < COMMON_HEADER_LEN {
-        break;
+        return Err(ParseError::Malformed {
+          format: "realmedia",
+          offset: src.position().saturating_sub(COMMON_HEADER_LEN as u64),
+          reason: format!("chunk {:?} size {} is smaller than its header", chunk.id, chunk.size),
+        });
       }
       let payload_len = chunk.size as usize - COMMON_HEADER_LEN;
       let next_pos = src.position() + payload_len as u64;
       if chunk.id == ID_PROP {
         let payload = read_payload(src, payload_len)?;
-        prop = PropChunk::parse(&payload);
+        prop = Some(PropChunk::parse(&payload).ok_or(ParseError::Malformed {
+          format: "realmedia",
+          offset: next_pos.saturating_sub(payload_len as u64),
+          reason: "PROP chunk is truncated".to_string(),
+        })?);
       } else if chunk.id == ID_CONT {
         let payload = read_payload(src, payload_len)?;
-        if let Some(c) = ContChunk::parse(&payload) {
-          apply_content_metadata(out, &c);
-        }
+        let c = ContChunk::parse(&payload).ok_or(ParseError::Malformed {
+          format: "realmedia",
+          offset: next_pos.saturating_sub(payload_len as u64),
+          reason: "CONT chunk is truncated".to_string(),
+        })?;
+        apply_content_metadata(out, &c);
       } else if chunk.id == ID_MDPR {
         let payload = read_payload(src, payload_len)?;
-        if let Some(m) = MdprChunk::parse(&payload) {
-          tracks.push(m);
-        }
+        let m = MdprChunk::parse(&payload).ok_or(ParseError::Malformed {
+          format: "realmedia",
+          offset: next_pos.saturating_sub(payload_len as u64),
+          reason: "MDPR chunk is truncated".to_string(),
+        })?;
+        tracks.push(m);
       } else if chunk.id == ID_DATA {
-        first_packets = read_first_data_packets(src, payload_len, tracks.len().max(1))?;
-        break;
+        break read_first_data_packets(src, payload_len, tracks.len().max(1))?;
+      } else {
+        return Err(ParseError::Malformed {
+          format: "realmedia",
+          offset: src.position().saturating_sub(COMMON_HEADER_LEN as u64),
+          reason: format!("unknown RealMedia chunk {}", String::from_utf8_lossy(&chunk.id)),
+        });
       }
       src.seek_to(next_pos)?;
-    }
+    };
 
-    if let Some(p) = &prop {
-      out.container.properties.duration = Some(DurationValue::from_ns(p.duration_ms as u64 * 1_000_000));
-      out.container.properties.bitrate_bps = Some(p.avg_bit_rate as u64);
-    }
+    let Some(p) = &prop else {
+      return Err(ParseError::Malformed {
+        format: "realmedia",
+        offset: src.position(),
+        reason: "mandatory PROP chunk was not found before DATA".to_string(),
+      });
+    };
+
+    out.container.format = ContainerFormat::RealMedia;
+    out.container.recognized = true;
+    out.container.supported = true;
+    out.container.properties.duration = Some(DurationValue::from_ns(p.duration_ms as u64 * 1_000_000));
+    out.container.properties.bitrate_bps = Some(p.avg_bit_rate as u64);
 
     for track in &tracks {
       push_track(
@@ -144,6 +175,13 @@ fn read_first_data_packets(
   payload_len: usize,
   target_streams: usize,
 ) -> Result<HashMap<u16, Vec<u8>>, ParseError> {
+  if payload_len < 8 {
+    return Err(ParseError::Malformed {
+      format: "realmedia",
+      offset: src.position(),
+      reason: format!("DATA chunk payload {payload_len} is shorter than its packet header"),
+    });
+  }
   let to_read = payload_len.min(DATA_PACKET_SCAN_CAP);
   let mut buf = vec![0u8; to_read];
   src.read_exact(&mut buf)?;
@@ -870,6 +908,57 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     assert_eq!(out.tracks.len(), 1);
+  }
+
+  #[test]
+  fn read_headers_rejects_unknown_top_level_chunk() {
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    blob.extend(build_chunk(*b"JUNK", 0, &[0u8; 4]));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    let err = RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+    assert!(!out.container.recognized);
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_requires_prop_before_data() {
+    let mut blob = build_rmf_header();
+    let v_props = build_video_props(b"RV40", 320, 240, 25.0);
+    blob.extend(build_mdpr(0, "video/x-pn-realvideo", &v_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    let err = RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+    assert!(!out.container.recognized);
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_requires_data_chunk() {
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    let v_props = build_video_props(b"RV40", 320, 240, 25.0);
+    blob.extend(build_mdpr(0, "video/x-pn-realvideo", &v_props));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    let err = RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::UnexpectedEof { .. }));
+    assert!(!out.container.recognized);
+    assert!(out.tracks.is_empty());
   }
 
   #[test]

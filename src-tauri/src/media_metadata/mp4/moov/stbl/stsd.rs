@@ -90,7 +90,18 @@ pub fn parse(
     let pos = src.position();
     if let Some(end) = stop_at {
       if pos >= end {
-        break;
+        return Err(ParseError::Malformed {
+          format: "mp4",
+          offset: parent.start,
+          reason: format!("stsd declares {entry_count} entries but only {entry_idx} fit in the payload"),
+        });
+      }
+      if end - pos < 8 {
+        return Err(ParseError::Malformed {
+          format: "mp4",
+          offset: pos,
+          reason: format!("stsd entry {entry_idx} is missing its 8-byte sample-entry header"),
+        });
       }
     }
     deadline.check("mp4::stsd")?;
@@ -762,6 +773,20 @@ mod tests {
   #[test]
   fn truncated_payload_rejected() {
     let payload = vec![0u8; 4]; // missing entry_count
+    let stsd = encode_box(b"stsd", &payload);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(stsd));
+    let parent = atom::read_box_header(&mut s).unwrap();
+    let mut b = TrackBuilder::default();
+    b.handler_type = Some(*b"vide");
+    let err = parse(&mut s, &parent, &dl(), &mut b).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn entry_count_over_payload_is_rejected() {
+    let entry = build_video_sample_entry(b"avc1", 1920, 1080, 24, &[]);
+    let mut payload = build_stsd_payload(&[entry]);
+    payload[4..8].copy_from_slice(&2u32.to_be_bytes());
     let stsd = encode_box(b"stsd", &payload);
     let mut s = FileSource::from_reader_for_test(Cursor::new(stsd));
     let parent = atom::read_box_header(&mut s).unwrap();

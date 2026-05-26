@@ -23,8 +23,9 @@
 //! payload byte total sums the lengths of *all* `data` chunks (PARSER-227),
 //! matching `scan_chunks_wave`'s `m_bytes_in_data_chunks` accumulation, and a
 //! huge `data` chunk whose 32-bit length wrapped is repaired from the file size
-//! when another chunk follows it in a >4 GiB file (PARSER-254), while the
-//! AC-3/DTS payload classification still probes the first data chunk.
+//! when another chunk follows it in a >4 GiB file (PARSER-254).  AC-3/DTS
+//! payload classification probes the first non-empty data chunk with the same
+//! consecutive-frame gates their elementary readers use.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -38,6 +39,8 @@ use crate::media_metadata::model::track_properties_audio::AudioTrackProperties;
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
 use crate::media_metadata::reader::Reader;
 
+use super::{ac3, dts};
+
 const WAVE_FORMAT_PCM: u32 = 0x0001;
 const WAVE_FORMAT_IEEE_FLOAT: u32 = 0x0003;
 const WAVE_FORMAT_DTS: u32 = 0x2001;
@@ -48,6 +51,7 @@ const WAVEFORMATEXTENSIBLE_SIZE: usize = 40;
 const SUBFORMAT_DATA1_OFFSET: usize = 24;
 const MAX_CHUNKS: usize = 4096;
 const FMT_READ_CAP: u64 = 4096;
+const PAYLOAD_PROBE_CAP: u64 = 128 * 1024;
 
 /// Wave64 RIFF GUID (`mtx::w64::g_guid_riff`).
 const W64_GUID_RIFF: [u8; 16] = [
@@ -127,8 +131,9 @@ fn determine_type(head: &[u8]) -> Option<WavType> {
   None
 }
 
-/// Walk the RIFF chunk list (`scan_chunks_wave`). RIFF chunks are word-aligned
-/// (odd payloads carry a trailing pad byte).
+/// Walk the RIFF chunk list (`scan_chunks_wave`). mkvtoolnix's WAV scanner
+/// advances by the declared chunk length only; it does not consume a RIFF
+/// word-alignment pad byte after odd-sized chunks.
 fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
   let mut chunks: Vec<Chunk> = Vec::new();
   let mut pos = 12u64; // after RIFF id + size + WAVE id
@@ -158,9 +163,7 @@ fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, 
     }
 
     chunks.push(Chunk { id, pos: data_pos, len });
-    // Advance past the payload, padding odd lengths to a word boundary.
-    let advance = if len & 1 != 0 { len + 1 } else { len };
-    let next = data_pos.saturating_add(advance);
+    let next = data_pos.saturating_add(len);
     if next <= pos || next > file_size.max(data_pos) {
       break;
     }
@@ -299,7 +302,7 @@ fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError>
     return Ok(None);
   };
 
-  let first_data_chunk = find_chunk(&chunks, b"data", false).cloned();
+  let first_data_chunk = find_chunk(&chunks, b"data", true).cloned();
   let Some(first_data_chunk) = first_data_chunk else {
     return Ok(None);
   };
@@ -318,15 +321,22 @@ fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError>
       .map(|c| c.len)
       .sum(),
   };
-  let mut probe = [0u8; 16];
+  let mut probe = vec![0u8; first_data_chunk.len.min(PAYLOAD_PROBE_CAP) as usize];
   src.seek_to(first_data_chunk.pos)?;
   let probe_len = src.read_at_most(&mut probe)?;
-  if is_ac3_payload(&probe[..probe_len]) {
+  probe.truncate(probe_len);
+  let ac3_probe_ok = ac3::find_frame_sync(&probe).is_some();
+  let dts_probe_ok = dts::find_consecutive_headers(&probe, 5).is_some() || dts::detect(&probe).is_some();
+  if ac3_probe_ok {
     format.format_tag = 0x2000;
-  } else if is_dts_payload(&probe[..probe_len]) {
+  } else if dts_probe_ok {
     format.format_tag = WAVE_FORMAT_DTS;
   }
-  let supported = is_supported_format(format.format_tag);
+  let supported = match format.format_tag {
+    0x2000 => ac3_probe_ok,
+    WAVE_FORMAT_DTS => dts_probe_ok,
+    _ => is_supported_format(format.format_tag),
+  };
 
   Ok(Some(WavMetadata {
     wav_type,
@@ -362,17 +372,6 @@ fn is_supported_format(format_tag: u32) -> bool {
     format_tag,
     WAVE_FORMAT_PCM | WAVE_FORMAT_IEEE_FLOAT | 0x2000 | WAVE_FORMAT_DTS
   )
-}
-
-fn is_ac3_payload(bytes: &[u8]) -> bool {
-  bytes.len() >= 2 && bytes[0] == 0x0b && bytes[1] == 0x77
-}
-
-fn is_dts_payload(bytes: &[u8]) -> bool {
-  bytes.starts_with(&[0x7f, 0xfe, 0x80, 0x01])
-    || bytes.starts_with(&[0xfe, 0x7f, 0x01, 0x80])
-    || bytes.starts_with(&[0x1f, 0xff, 0xe8, 0x00])
-    || bytes.starts_with(&[0xff, 0x1f, 0x00, 0xe8])
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -609,16 +608,17 @@ mod tests {
   }
 
   #[test]
-  fn handles_odd_length_chunk_padding() {
-    // Odd-length JUNK (3 bytes) must be word-padded so fmt is found.
+  fn odd_length_riff_chunk_padding_is_not_consumed() {
+    // mkvtoolnix's `scan_chunks_wave` advances by exactly `len`; it does not
+    // skip the RIFF pad byte after an odd-sized chunk, so this padded file loses
+    // alignment before `fmt `.
     let bytes = riff_wrap(vec![
       (b"JUNK", vec![1, 2, 3]),
       (b"fmt ", fmt_pcm(48_000, 1, 16)),
       (b"data", vec![0u8; 100]),
     ]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
-    let m = parse_source(&mut s).unwrap().unwrap();
-    assert_eq!(m.format.channels, 1);
+    assert!(parse_source(&mut s).unwrap().is_none());
   }
 
   #[test]
@@ -758,15 +758,67 @@ mod tests {
 
   #[test]
   fn read_headers_probes_ac3_payload() {
-    let mut bytes = build_wav(48_000, 2, 16, 16);
-    let data_id_pos = bytes.windows(4).position(|w| w == b"data").unwrap();
-    bytes[data_id_pos + 8..data_id_pos + 10].copy_from_slice(&[0x0b, 0x77]);
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", crate::media_metadata::audio::ac3::build_ac3_stream(8, 0, 8)),
+    ]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("ac3.wav", 0);
     WavReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     assert_eq!(out.tracks[0].codec.id, "A_AC3");
+  }
+
+  #[test]
+  fn read_headers_probes_dts_payload() {
+    let bytes = riff_wrap(vec![
+      (b"fmt ", fmt_pcm(48_000, 2, 16)),
+      (b"data", crate::media_metadata::audio::dts::build_dts_stream(6, 2, 13)),
+    ]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("dts.wav", 0);
+    WavReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks[0].codec.id, "A_DTS");
+  }
+
+  #[test]
+  fn empty_data_chunk_does_not_produce_track() {
+    let bytes = riff_wrap(vec![(b"fmt ", fmt_pcm(48_000, 2, 16)), (b"data", Vec::new())]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(parse_source(&mut s).unwrap().is_none());
+  }
+
+  #[test]
+  fn ac3_format_tag_without_probe_is_unsupported() {
+    let mut bytes = build_wav(48_000, 2, 16, 1024);
+    let fmt_id_pos = bytes.windows(4).position(|w| w == b"fmt ").unwrap();
+    bytes[fmt_id_pos + 8..fmt_id_pos + 10].copy_from_slice(&0x2000u16.to_le_bytes());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("bad-ac3.wav", 0);
+    WavReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.container.recognized);
+    assert!(!out.container.supported);
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn dts_format_tag_without_probe_is_unsupported() {
+    let mut bytes = build_wav(48_000, 2, 16, 1024);
+    let fmt_id_pos = bytes.windows(4).position(|w| w == b"fmt ").unwrap();
+    bytes[fmt_id_pos + 8..fmt_id_pos + 10].copy_from_slice(&(WAVE_FORMAT_DTS as u16).to_le_bytes());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("bad-dts.wav", 0);
+    WavReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.container.recognized);
+    assert!(!out.container.supported);
+    assert!(out.tracks.is_empty());
   }
 
   #[test]

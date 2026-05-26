@@ -9,11 +9,11 @@ Progress is measured against the corresponding parser in `../mkvtoolnix` for Bat
 | [Matroska / WebM](matroska/matroska.md) | EBML-based Matroska/WebM reader for segment info, tracks, chapters, attachments, tags, cues, and cluster timestamp hints. | `src-tauri/src/media_metadata/matroska/reader.rs` | 89% |
 | [AVI](avi/avi.md) | RIFF/AVI reader for header lists, ODML metadata, video/audio streams, and embedded subtitle hints. | `src-tauri/src/media_metadata/avi/reader.rs` | 87% |
 | [Ogg / OGM](ogg/ogg.md) | Ogg page reader with codec sniffers for Vorbis, Opus, Theora, FLAC, Speex, Kate, and legacy OGM. | `src-tauri/src/media_metadata/ogg/reader.rs` | 98% |
-| [MP4 / QuickTime](mp4/mp4.md) | ISO BMFF/QuickTime reader for movie boxes, sample entries, codec-specific boxes, metadata, fragments, and first-sample verification. | `src-tauri/src/media_metadata/mp4/reader.rs` | 97% |
+| [MP4 / QuickTime](mp4/mp4.md) | ISO BMFF/QuickTime reader for movie boxes, sample entries, codec-specific boxes, metadata, fragments, and first-sample verification. | `src-tauri/src/media_metadata/mp4/reader.rs` | 99% |
 | [MPEG Program Stream](mpeg_ps/mpeg_ps.md) | MPEG-PS start-code walker with program-stream-map support and PES payload enrichment. | `src-tauri/src/media_metadata/mpeg_ps/reader.rs` | 80% |
-| [MPEG Transport Stream](mpeg_ts/mpeg_ts.md) | MPEG-TS packet reader for PAT, PMT, SDT, descriptors, PID tables, and PES-based stream enrichment. | `src-tauri/src/media_metadata/mpeg_ts/reader.rs` | 90% |
+| [MPEG Transport Stream](mpeg_ts/mpeg_ts.md) | MPEG-TS packet reader for PAT, PMT, SDT, descriptors, PID tables, and PES-based stream enrichment. | `src-tauri/src/media_metadata/mpeg_ts/reader.rs` | 92% |
 | [FLV](flv/flv.md) | Flash Video reader for file headers, tags, script metadata, AAC/H.264/H.265 configs, and legacy FLV codecs. | `src-tauri/src/media_metadata/flv/reader.rs` | 94% |
-| [RealMedia](realmedia/realmedia.md) | RealMedia chunk reader for PROP, CONT, MDPR, DATA, RealVideo, RealAudio, and first-packet refinements. | `src-tauri/src/media_metadata/realmedia/reader.rs` | 81% |
+| [RealMedia](realmedia/realmedia.md) | RealMedia chunk reader for PROP, CONT, MDPR, DATA, RealVideo, RealAudio, and first-packet refinements. | `src-tauri/src/media_metadata/realmedia/reader.rs` | 86% |
 | [IVF](ivf.md) | IVF header reader for AV1, VP8, VP9, frame-rate defaults, and AV1 Dolby Vision RPU hints. | `src-tauri/src/media_metadata/ivf.rs` | 97% |
 | [Blu-ray MPLS Playlist](mpls/mpls.md) | Blu-ray playlist parser that resolves clip chains, playlist metadata, chapters, and stream languages before delegating to MPEG-TS parsing. | `src-tauri/src/media_metadata/mpls/mod.rs` | 82% |
 | [AAC](audio/aac.md) | ADTS and LOAS/LATM AAC reader with AudioSpecificConfig parsing and ID3 skipping. | `src-tauri/src/media_metadata/audio/aac.rs` | 98% |
@@ -23,7 +23,7 @@ Progress is measured against the corresponding parser in `../mkvtoolnix` for Bat
 | [MP3 / MPEG Audio](audio/mp3.md) | MPEG audio frame reader for Layers I, II, III with ID3v2 and ID3v1 trimming. | `src-tauri/src/media_metadata/audio/mp3.rs` | 97% |
 | [TrueHD / MLP](audio/truehd.md) | Dolby TrueHD/MLP reader with major-sync parsing and coupled AC-3 substream reporting. | `src-tauri/src/media_metadata/audio/truehd.rs` | 92% |
 | [TTA](audio/tta.md) | TTA1 reader for stream header, seek-table validation, duration, and audio properties. | `src-tauri/src/media_metadata/audio/tta.rs` | 85% |
-| [WAV / RF64 / Wave64](audio/wav.md) | WAV-family reader for RIFF, RF64, Wave64, WAVEFORMATEX/TENSIBLE, PCM, AC-3, and DTS payloads. | `src-tauri/src/media_metadata/audio/wav.rs` | 94% |
+| [WAV / RF64 / Wave64](audio/wav.md) | WAV-family reader for RIFF, RF64, Wave64, WAVEFORMATEX/TENSIBLE, PCM, AC-3, and DTS payloads. | `src-tauri/src/media_metadata/audio/wav.rs` | 98% |
 | [WavPack](audio/wavpack.md) | WavPack v4 frame reader for sample rate, channels, bit depth, DSD rate hints, and duration. | `src-tauri/src/media_metadata/audio/wavpack.rs` | 93% |
 | [CoreAudio CAF](coreaudio/coreaudio.md) | CAF reader for desc/data/pakt/kuki chunks, ALAC cookies, and audio properties. | `src-tauri/src/media_metadata/coreaudio/reader.rs` | 95% |
 | [AVC / H.264 Elementary Stream](elementary/avc/avc.md) | Annex B H.264 reader for SPS/PPS discovery, codec-private generation, dimensions, profile, level, and VUI timing. | `src-tauri/src/media_metadata/elementary/avc/reader.rs` | 92% |
