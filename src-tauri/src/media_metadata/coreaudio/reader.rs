@@ -49,7 +49,9 @@ struct Chunk {
 }
 
 /// Port of `scan_chunks` — walk `type(4) + size(u64 BE)` headers through the
-/// file. A zero size means "to end of file".
+/// file. mkvtoolnix treats a declared size of zero as a file-sized chunk; the
+/// later exact body read then fails because the body starts after the chunk
+/// header and cannot contain that many bytes.
 fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
   let mut chunks = Vec::new();
   let mut pos = 8u64; // after "caff" + version(2) + flags(2)
@@ -62,8 +64,7 @@ fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, Parse
     let ctype = [hdr[0], hdr[1], hdr[2], hdr[3]];
     let raw_size = get_u64_be(&hdr[4..]);
     let data_pos = pos + 12;
-    let remaining = file_size.saturating_sub(data_pos);
-    let size = if raw_size == 0 { remaining } else { raw_size };
+    let size = if raw_size == 0 { file_size } else { raw_size.min(file_size) };
     chunks.push(Chunk { ctype, data_pos, size });
     let Some(next) = data_pos.checked_add(size) else {
       break;
@@ -495,7 +496,7 @@ mod tests {
     let err = CoreAudioReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap_err();
-    assert!(matches!(err, ParseError::Malformed { .. }));
+    assert!(matches!(err, ParseError::UnexpectedEof { .. } | ParseError::OversizedElement { .. }));
   }
 
   #[test]

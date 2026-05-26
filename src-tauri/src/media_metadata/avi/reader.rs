@@ -48,13 +48,13 @@ impl Reader for AviReader {
     }
     // Only a primary `RIFF/AVI ` file is claimed. `AVIX` chunks are OpenDML
     // extension segments, not standalone files (PARSER-061).
-    Ok(&head[0..4] == b"RIFF" && &head[8..12] == b"AVI ")
+    Ok(head[0..4].eq_ignore_ascii_case(b"RIFF") && head[8..12].eq_ignore_ascii_case(b"AVI "))
   }
 
   fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     src.seek_to(0)?;
     let riff_header = riff::read_chunk_header(src)?;
-    if &riff_header.kind != b"RIFF" {
+    if !riff_header.kind.eq_ignore_ascii_case(b"RIFF") {
       return Err(ParseError::Malformed {
         format: "avi",
         offset: riff_header.start,
@@ -62,7 +62,7 @@ impl Reader for AviReader {
       });
     }
     let form_type = riff::read_list_subtype(src)?;
-    if &form_type != b"AVI " {
+    if !form_type.eq_ignore_ascii_case(b"AVI ") {
       return Err(ParseError::Malformed {
         format: "avi",
         offset: riff_header.start,
@@ -404,6 +404,21 @@ mod tests {
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(AviReader.probe(&mut s).unwrap());
     assert_eq!(s.position(), 0);
+  }
+
+  #[test]
+  fn probe_and_read_headers_accept_case_variants_of_riff_avi_magic() {
+    let mut bytes = build_avi(vec![build_video_strl(640, 480)], false);
+    bytes[0..4].copy_from_slice(b"riff");
+    bytes[8..12].copy_from_slice(b"AvI ");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(AviReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Avi);
+    assert_eq!(out.tracks.len(), 1);
   }
 
   #[test]

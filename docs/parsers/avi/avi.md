@@ -1,6 +1,6 @@
 # AVI Parser
 
-Implementation progress: 87%
+Implementation progress: 90%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The AVI parser recognises RIFF/AVI files and extracts container duration, dimens
 - Related modules: `src-tauri/src/media_metadata/avi/riff.rs`, `avih.rs`, `strl.rs`, `odml.rs`, `identify.rs`, `subtitles.rs`, `mpeg4_par.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_avi.cpp`, `../mkvtoolnix/src/input/r_avi.h`, `../mkvtoolnix/src/common/mpeg4_p2.cpp`, `../mkvtoolnix/lib/avilib-0.6.10/*`
 
-The reader walks RIFF chunks directly instead of using avilib. It processes `LIST hdrl`, `avih`, one or more `LIST strl` entries, `strh`, `strf`, `vprp`, and ODML `dmlh`. The identify layer maps FOURCC and WAVE format tags into the shared track model.
+The reader walks RIFF chunks directly instead of using avilib. It accepts the top-level `RIFF` and `AVI ` form signatures case-insensitively, matching mkvtoolnix's lowercased probe path, while leaving child chunk dispatch on normal RIFF FOURCCs. It processes `LIST hdrl`, `avih`, one or more `LIST strl` entries, `strh`, `strf`, `vprp`, and ODML `dmlh`. The identify layer maps FOURCC and WAVE format tags into the shared track model.
 
 Display dimensions come from `vprp`'s frame aspect ratio when present (`handle_video_aspect_ratio`). Otherwise, for an MPEG-4 Part 2 (DivX/Xvid) video track, the reader reads the first video frame from `movi` and decodes its Visual-Object-Layer header's `aspect_ratio_info` (`mpeg4_par.rs`, a port of `mtx::mpeg4_p2::extract_par`), then applies that bitstream pixel aspect ratio to the coded dimensions — mirroring `avi_reader_c::extended_identify_mpeg4_l2` (`r_avi.cpp:843-865`). The frame read is bounded (the first matching `NNdb`/`NNdc` chunk, capped at 256 KiB) so the header-only contract holds (PARSER-241).
 
@@ -38,8 +38,4 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 
 ## Gaps and Handling
 
-Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks.
-
-## Open Issues
-
-- `PARSER-308` - AVI RIFF/Form magic checks are case-sensitive. mkvtoolnix lowercases the first 12 bytes before checking `riff` and `avi `, so mixed-case or lowercase `RIFF`/`AVI ` signatures are accepted upstream but are rejected by the native probe/read path.
+Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix.

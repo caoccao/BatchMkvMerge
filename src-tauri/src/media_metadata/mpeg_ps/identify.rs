@@ -25,7 +25,7 @@
 
 use crate::media_metadata::audio::{ac3, dts, mp3, truehd};
 use crate::media_metadata::codec::TrackKind;
-use crate::media_metadata::elementary::{avc, mpeg_video};
+use crate::media_metadata::elementary::{avc, mpeg_video, vc1};
 use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
@@ -183,67 +183,89 @@ fn resolve_codec(obs: &StreamObservation) -> Option<Codec> {
   codec_from_bare_id(obs.stream_id)
 }
 
-/// Decode codec headers from the depacketised payload (PARSER-052).
-fn decode_payload(codec: &mut Codec, payload: &[u8]) -> (Option<VideoTrackProperties>, Option<AudioTrackProperties>) {
+/// Decode codec headers from the depacketised payload (PARSER-052). Returns
+/// `None` when mkvtoolnix's `new_stream_*` probe would throw and block the
+/// stream id (PARSER-306).
+fn decode_payload(codec: &mut Codec, payload: &[u8]) -> Option<(Option<VideoTrackProperties>, Option<AudioTrackProperties>)> {
   match codec.kind {
     TrackKind::Video => {
-      // Prefer an AVC SPS when present; otherwise an MPEG sequence header.
-      if let Some(sps) = first_avc_sps(payload) {
-        codec.id = "V_MPEG4/ISO/AVC";
-        codec.name = "AVC/H.264";
+      if codec.id == "V_MPEG4/ISO/AVC" {
+        let sps = first_avc_sps(payload)?;
         let mut v = VideoTrackProperties::default();
         v.pixel_dimensions = Some(Dimensions2D {
           width: sps.display_width,
           height: sps.display_height,
         });
-        return (Some(v), None);
+        return Some((Some(v), None));
       }
-      if let Some(seq) = mpeg_video::decode_sequence_header(payload) {
+      if codec.id == "V_VC1" {
+        let seq = vc1::decode_sequence_header(payload)?;
+        let mut v = VideoTrackProperties::default();
+        v.pixel_dimensions = Some(Dimensions2D {
+          width: seq.max_coded_width,
+          height: seq.max_coded_height,
+        });
+        return Some((Some(v), None));
+      }
+      if matches!(codec.id, "V_MPEG1" | "V_MPEG2") {
+        // Bare PS video streams default to MPEG-1/2, but mkvtoolnix first
+        // sniffs whether the elementary payload is Annex B AVC.
+        if let Some(sps) = first_avc_sps(payload) {
+          codec.id = "V_MPEG4/ISO/AVC";
+          codec.name = "AVC/H.264";
+          let mut v = VideoTrackProperties::default();
+          v.pixel_dimensions = Some(Dimensions2D {
+            width: sps.display_width,
+            height: sps.display_height,
+          });
+          return Some((Some(v), None));
+        }
+        let seq = mpeg_video::decode_sequence_header(payload)?;
         if seq.horizontal_size != 0 && seq.vertical_size != 0 {
           let mut v = VideoTrackProperties::default();
           v.pixel_dimensions = Some(Dimensions2D {
             width: seq.horizontal_size,
             height: seq.vertical_size,
           });
-          return (Some(v), None);
+          return Some((Some(v), None));
         }
       }
-      (Some(VideoTrackProperties::default()), None)
+      None
     }
     TrackKind::Audio => {
       let mut a = AudioTrackProperties::default();
       if matches!(codec.id, "A_AC3" | "A_EAC3") {
-        if let Some(off) = ac3::find_frame_sync(payload) {
-          if let Some(f) = ac3::decode_frame(&payload[off..]) {
-            a.sampling_frequency = Some(f.sample_rate as f64);
-            a.channels = Some(f.channels);
-          }
-        }
+        let (channels, sample_rate) = ac3::first_frame_params(payload)?;
+        a.sampling_frequency = Some(sample_rate as f64);
+        a.channels = Some(channels);
       } else if codec.id == "A_DTS" {
         // PARSER-176: decode the first DTS header from the accumulated
         // payload (`r_mpeg_ps.cpp:820-844`).
-        if let Some((channels, sample_rate, _bits)) = dts::first_header_params(payload) {
-          a.channels = Some(channels);
-          a.sampling_frequency = Some(sample_rate as f64);
-        }
+        let (channels, sample_rate, _bits) = dts::first_header_params(payload)?;
+        a.channels = Some(channels);
+        a.sampling_frequency = Some(sample_rate as f64);
       } else if codec.id == "A_TRUEHD" {
         // PARSER-176: scan TrueHD frames for the first non-AC-3 sync frame
         // (`r_mpeg_ps.cpp:846-884`).  Embedded AC-3 frames are skipped.
+        let mut found = false;
         for frame in truehd::parse_frames(payload) {
           if frame.frame_type == truehd::FrameType::Sync && frame.codec != truehd::Codec::Ac3 {
             a.channels = Some(frame.channels);
             a.sampling_frequency = Some(frame.sampling_rate as f64);
+            found = true;
             break;
           }
+        }
+        if !found {
+          return None;
         }
       } else if codec.id == "A_PCM/INT/BIG" {
         // PARSER-176: DVD-VOB LPCM header (`new_stream_a_pcm`,
         // `r_mpeg_ps.cpp:886-910`).  NB: this layout differs from BD-TS LPCM.
-        if let Some((channels, sample_rate, bits)) = decode_lpcm_header(payload) {
-          a.channels = Some(channels);
-          a.sampling_frequency = Some(sample_rate as f64);
-          a.bit_depth = Some(bits);
-        }
+        let (channels, sample_rate, bits) = decode_lpcm_header(payload)?;
+        a.channels = Some(channels);
+        a.sampling_frequency = Some(sample_rate as f64);
+        a.bit_depth = Some(bits);
       } else if codec.id.starts_with("A_MPEG") {
         // PARSER-252: mkvtoolnix's `new_stream_a_mpeg` decodes a single MPEG
         // audio frame header (`find_mp3_header`, `r_mpeg_ps.cpp`) and replaces
@@ -251,17 +273,19 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> (Option<VideoTrackProper
         // (A_MPEG/L3 or A_MPEG/L2) is corrected to the actual Layer I / II /
         // III.  Use one header (not two) so a short bounded probe that
         // mkvtoolnix accepts is not rejected.
-        if let Some((_off, h)) = mp3::find_consecutive_mp3_headers(payload, 1) {
-          a.sampling_frequency = Some(h.sampling_frequency as f64);
-          a.channels = Some(h.channels);
-          let (id, name) = mp3::codec_for_layer(h.layer);
-          codec.id = id;
-          codec.name = name;
-        }
+        let (_off, h) = mp3::find_consecutive_mp3_headers(payload, 1)?;
+        a.sampling_frequency = Some(h.sampling_frequency as f64);
+        a.channels = Some(h.channels);
+        let (id, name) = mp3::codec_for_layer(h.layer);
+        codec.id = id;
+        codec.name = name;
+      } else {
+        return None;
       }
-      (None, Some(a))
+      Some((None, Some(a)))
     }
-    _ => (None, None),
+    TrackKind::Subtitle => Some((None, None)),
+    _ => None,
   }
 }
 
@@ -301,18 +325,29 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
   out.container.supported = true;
   out.container.properties.is_fragmented = Some(false);
 
-  let mut idx: i64 = 0;
+  let mut prepared = Vec::new();
   for obs in observations {
     let Some(mut codec) = resolve_codec(&obs) else {
       continue;
     };
-    let (video, audio) = decode_payload(&mut codec, &obs.payload);
     let track_type = match codec.kind {
       TrackKind::Video => TrackType::Video,
       TrackKind::Audio => TrackType::Audio,
       TrackKind::Subtitle => TrackType::Subtitles,
       _ => continue,
     };
+    let Some((video, audio)) = decode_payload(&mut codec, &obs.payload) else {
+      continue;
+    };
+    prepared.push((obs, codec, track_type, video, audio));
+  }
+
+  // PARSER-307: mkvtoolnix sorts tracks before identification by type bucket
+  // and encoded stream id, then uses that sorted order for the displayed track
+  // ids.
+  prepared.sort_by_key(|(obs, _codec, track_type, _, _)| (track_sort_bucket(*track_type), encoded_stream_id(obs)));
+
+  for (idx, (obs, codec, track_type, video, audio)) in prepared.into_iter().enumerate() {
     let mut common = CommonTrackProperties::default();
     // PARSER-175: `number` encodes stream identity, not a 1-based index.
     // mkvtoolnix sets `number = (sub_id << 32) | stream_id`
@@ -342,7 +377,7 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
       _ => {}
     }
     out.tracks.push(Track {
-      id: idx,
+      id: idx as i64,
       track_type,
       codec: CodecInfo {
         id: codec.id.to_string(),
@@ -351,13 +386,26 @@ pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
       },
       properties,
     });
-    idx += 1;
   }
+}
+
+fn track_sort_bucket(track_type: TrackType) -> u32 {
+  match track_type {
+    TrackType::Video => 0,
+    TrackType::Audio => 1,
+    TrackType::Subtitles => 2,
+    _ => 3,
+  }
+}
+
+fn encoded_stream_id(obs: &StreamObservation) -> u32 {
+  ((obs.stream_id as u32) << 8) | (obs.sub_id.unwrap_or(0) as u32)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::media_metadata::elementary::mpeg_video;
 
   fn obs(stream_id: u8, sub_id: Option<u8>, psm: Option<u8>) -> StreamObservation {
     StreamObservation {
@@ -366,6 +414,27 @@ mod tests {
       psm_stream_type: psm,
       payload: Vec::new(),
     }
+  }
+
+  fn obs_payload(stream_id: u8, sub_id: Option<u8>, psm: Option<u8>, payload: Vec<u8>) -> StreamObservation {
+    StreamObservation {
+      stream_id,
+      sub_id,
+      psm_stream_type: psm,
+      payload,
+    }
+  }
+
+  fn video_payload() -> Vec<u8> {
+    mpeg_video::build_sequence_header(720, 480, 4)
+  }
+
+  fn mpeg_audio_payload() -> Vec<u8> {
+    mp3::build_mp3_frame_v1(128, 44_100, false)
+  }
+
+  fn lpcm_payload() -> Vec<u8> {
+    vec![0x00u8, 0b10_00_0_101]
   }
 
   #[test]
@@ -401,7 +470,13 @@ mod tests {
   #[test]
   fn finalise_emits_tracks_and_sets_container() {
     let mut m = MediaMetadata::new("clip.mpg", 0);
-    finalise(vec![obs(0xE0, None, None), obs(0xC0, None, None)], &mut m);
+    finalise(
+      vec![
+        obs_payload(0xE0, None, None, video_payload()),
+        obs_payload(0xC0, None, None, mpeg_audio_payload()),
+      ],
+      &mut m,
+    );
     assert_eq!(m.container.format, ContainerFormat::MpegPs);
     assert_eq!(m.tracks.len(), 2);
     assert_eq!(m.tracks[0].track_type, TrackType::Video);
@@ -449,7 +524,13 @@ mod tests {
   #[test]
   fn number_encodes_stream_and_sub_id() {
     let mut m = MediaMetadata::new("clip.vob", 0);
-    finalise(vec![obs(0xE0, None, None), obs(0xBD, Some(0xA0), None)], &mut m);
+    finalise(
+      vec![
+        obs_payload(0xE0, None, None, video_payload()),
+        obs_payload(0xBD, Some(0xA0), None, lpcm_payload()),
+      ],
+      &mut m,
+    );
     // Bare video stream: sub_id defaults to 0 → number == stream_id.
     assert_eq!(m.tracks[0].properties.common.number, Some(0xE0));
     assert_eq!(m.tracks[0].id, 0);
@@ -595,8 +676,8 @@ mod tests {
   }
 
   #[test]
-  fn mpeg_audio_keeps_default_when_no_header_found() {
-    // No decodable frame → the table default codec id is retained.
+  fn mpeg_audio_without_a_header_is_dropped() {
+    // PARSER-306: no decodable frame means mkvtoolnix blocks the stream id.
     let mut m = MediaMetadata::new("clip.mpg", 0);
     finalise(
       vec![StreamObservation {
@@ -607,30 +688,69 @@ mod tests {
       }],
       &mut m,
     );
-    assert_eq!(m.tracks[0].codec.id, "A_MPEG/L3");
+    assert!(m.tracks.is_empty());
   }
 
   #[test]
   fn mpeg_video_dimensions_decoded() {
-    // Sequence header: 0x000001B3 + 720x480.
-    let mut payload = vec![0x00, 0x00, 0x01, 0xB3];
-    payload.push(0x2D); // top 8 bits of horizontal_size (720 = 0x2D0)
-    payload.push((0x0 << 4) | 0x1); // h low nibble + v high nibble (480 = 0x1E0)
-    payload.push(0xE0); // v low byte
-    payload.push(0x13); // aspect + frame-rate code
-    payload.extend_from_slice(&[0u8; 4]);
     let mut m = MediaMetadata::new("c.mpg", 0);
     finalise(
       vec![StreamObservation {
         stream_id: 0xE0,
         sub_id: None,
         psm_stream_type: None,
-        payload,
+        payload: video_payload(),
       }],
       &mut m,
     );
     let v = m.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().width, 720);
     assert_eq!(v.pixel_dimensions.unwrap().height, 480);
+  }
+
+  #[test]
+  fn invalid_codec_probes_are_dropped() {
+    // PARSER-306: stream ids or PSM entries alone are not enough to create a
+    // track; the codec-specific payload probe must validate.
+    let mut m = MediaMetadata::new("bad.mpg", 0);
+    finalise(
+      vec![
+        obs_payload(0xE0, None, None, vec![0u8; 16]),
+        obs_payload(0xC0, None, None, vec![0u8; 16]),
+        obs_payload(0xBD, Some(0x80), None, vec![0u8; 16]),
+        obs_payload(0xBD, Some(0x88), None, vec![0u8; 16]),
+        obs_payload(0xBD, Some(0xA0), None, vec![0u8; 1]),
+        obs_payload(0xBD, Some(0xB0), None, vec![0u8; 16]),
+        obs_payload(0xFD, None, None, vec![0u8; 16]),
+      ],
+      &mut m,
+    );
+    assert!(m.tracks.is_empty());
+  }
+
+  #[test]
+  fn finalise_sorts_by_type_bucket_and_encoded_id() {
+    let mut m = MediaMetadata::new("sorted.mpg", 0);
+    finalise(
+      vec![
+        obs_payload(0xC1, None, None, mpeg_audio_payload()),
+        obs_payload(0xE1, None, None, video_payload()),
+        obs_payload(0xC0, None, None, mpeg_audio_payload()),
+        obs_payload(0xE0, None, None, video_payload()),
+        obs_payload(0xBD, Some(0x20), None, Vec::new()),
+      ],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 5);
+    assert_eq!(m.tracks[0].properties.common.stream_id, Some(0xE0));
+    assert_eq!(m.tracks[0].id, 0);
+    assert_eq!(m.tracks[1].properties.common.stream_id, Some(0xE1));
+    assert_eq!(m.tracks[1].id, 1);
+    assert_eq!(m.tracks[2].properties.common.stream_id, Some(0xC0));
+    assert_eq!(m.tracks[2].id, 2);
+    assert_eq!(m.tracks[3].properties.common.stream_id, Some(0xC1));
+    assert_eq!(m.tracks[3].id, 3);
+    assert_eq!(m.tracks[4].track_type, TrackType::Subtitles);
+    assert_eq!(m.tracks[4].id, 4);
   }
 }

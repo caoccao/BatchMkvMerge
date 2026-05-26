@@ -214,7 +214,6 @@ impl Reader for WebVttReader {
     src.seek_to(0)?;
     let read = src.read_at_most(&mut buf)?;
     buf.truncate(read);
-    let detected = encoding::detect(&buf);
     let text = encoding::decode_lossy(&buf);
     if !looks_like_webvtt(&text) {
       return Err(ParseError::Unrecognised);
@@ -241,7 +240,10 @@ impl Reader for WebVttReader {
         common,
         subtitle: Some(SubtitleTrackProperties {
           text_subtitles: true,
-          encoding: Some(detected.label.to_string()),
+          // PARSER-310: mkvtoolnix normalises WebVTT text before packetising,
+          // so identification always reports UTF-8 regardless of the source
+          // file's BOM or configured charset hint.
+          encoding: Some("UTF-8".to_string()),
           variant: Some("WebVTT".to_string()),
           teletext_page: None,
         }),
@@ -311,6 +313,22 @@ mod tests {
       .unwrap();
     assert_eq!(out.container.format, ContainerFormat::Webvtt);
     assert_eq!(out.tracks[0].codec.id, "S_TEXT/WEBVTT");
+  }
+
+  #[test]
+  fn read_headers_reports_utf8_encoding_after_source_normalisation() {
+    use crate::media_metadata::deadline::Deadline;
+    // UTF-16 LE with BOM: "WEBVTT\n\n".
+    let blob = [
+      0xFFu8, 0xFE, b'W', 0, b'E', 0, b'B', 0, b'V', 0, b'T', 0, b'T', 0, b'\n', 0, b'\n', 0,
+    ];
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    let mut out = MediaMetadata::new("clip.vtt", 0);
+    WebVttReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let sub = out.tracks[0].properties.subtitle.as_ref().unwrap();
+    assert_eq!(sub.encoding.as_deref(), Some("UTF-8"));
   }
 
   #[test]

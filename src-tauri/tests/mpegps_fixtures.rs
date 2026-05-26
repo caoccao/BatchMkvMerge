@@ -27,20 +27,49 @@ fn start_code(stream_id: u8) -> [u8; 4] {
   [0x00, 0x00, 0x01, stream_id]
 }
 
+fn mpeg_video_payload() -> Vec<u8> {
+  vec![
+    0x00, 0x00, 0x01, 0xB3, // sequence header
+    0x2D, 0x01, 0xE0, 0x13, // 720x480, aspect/frame-rate
+    0x00, 0x00, 0x00, 0x00,
+  ]
+}
+
+fn mpeg_audio_payload() -> Vec<u8> {
+  vec![0xFF, 0xFB, 0x90, 0x00, 0x00]
+}
+
+fn pes_packet(stream_id: u8, payload: &[u8]) -> Vec<u8> {
+  let mut bytes = Vec::new();
+  bytes.extend_from_slice(&start_code(stream_id));
+  bytes.extend_from_slice(&((3 + payload.len()) as u16).to_be_bytes());
+  bytes.extend_from_slice(&[0x80, 0x80, 0x00]);
+  bytes.extend_from_slice(payload);
+  bytes
+}
+
+fn private_vobsub_packet() -> Vec<u8> {
+  let payload = [0x20, 0x00, 0x00, 0x00, 0x00];
+  let mut bytes = Vec::new();
+  bytes.extend_from_slice(&start_code(0xBD));
+  bytes.extend_from_slice(&((3 + payload.len()) as u16).to_be_bytes());
+  bytes.extend_from_slice(&[0x80, 0x80, 0x00]);
+  bytes.extend_from_slice(&payload);
+  bytes
+}
+
 fn build_ps(stream_ids: &[u8]) -> Vec<u8> {
   let mut bytes = Vec::new();
   bytes.extend_from_slice(&start_code(0xBA));
   bytes.extend_from_slice(&[0u8; 10]);
   for id in stream_ids {
-    bytes.extend_from_slice(&start_code(*id));
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0x80, 0x00, 0x00]);
-    if *id == 0xBD {
-      bytes.push(0x80);
-      bytes.extend_from_slice(&[0u8; 4]);
-    } else {
-      bytes.extend_from_slice(&[0u8; 5]);
-    }
+    let packet = match *id {
+      0xBD => private_vobsub_packet(),
+      0xC0..=0xDF => pes_packet(*id, &mpeg_audio_payload()),
+      0xE0..=0xEF => pes_packet(*id, &mpeg_video_payload()),
+      _ => pes_packet(*id, &[0u8; 5]),
+    };
+    bytes.extend_from_slice(&packet);
   }
   bytes
 }

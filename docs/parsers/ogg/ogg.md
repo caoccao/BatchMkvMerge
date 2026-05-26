@@ -1,6 +1,6 @@
 # Ogg / OGM Parser
 
-Implementation progress: 98%
+Implementation progress: 99%
 
 ## Purpose
 
@@ -22,6 +22,8 @@ Codec coverage and per-codec header handling:
 
 Simple OGM-style chapters are counted exactly as mkvmerge does. `ogm_reader_c::handle_chapters` (`r_ogm.cpp:740-791`) collects every comment whose key starts with `CHAPTER` (case-insensitive), in order, and feeds the `KEY=VALUE` lines to the simple-chapter parser (`mtx::chapters::parse` → `parse_simple`, `chapters.cpp:251`). That parser alternates strictly between a `CHAPTERxx=HH:MM:SS[.,]frac` timestamp line (fraction mandatory; minute and second < 60) and a `CHAPTERxxNAME=...` line; any deviation throws `chapter_error`, which mkvmerge swallows and reports **no** chapters at all. A trailing unmatched timestamp creates no chapter. The native counter (`simple_chapter_pair_count`) therefore reports only completed `(timestamp, name)` pairs and reports nothing once the grammar is broken — it no longer over-counts loose `CHAPTERxx=` comments.
 
+The page loop mirrors libogg sync recovery for damaged capture patterns. When a page header does not start with `OggS`, the reader scans forward in bounded overlapping windows for the next `OggS` capture pattern and resumes there, so recoverable junk before later BOS, comment, or header pages does not hide streams and tags.
+
 ## Data Structures
 
 ```mermaid
@@ -39,8 +41,4 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 
 ## Gaps and Handling
 
-The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets). The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
-
-## Open Issues
-
-- `PARSER-309` - The page loop stops on the first malformed capture pattern instead of resynchronising to the next `OggS` page. mkvtoolnix uses libogg's sync layer, warns on a damaged page, buffers more data, and continues searching. A recoverable junk or damaged page before later BOS/comment/header pages can therefore hide streams and tags from the native parser.
+The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets), and damaged capture patterns are resynchronised to later `OggS` pages. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.

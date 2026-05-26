@@ -88,7 +88,13 @@ impl Reader for OggReader {
       let header = match page::read_page_header(src) {
         Ok(h) => h,
         Err(ParseError::UnexpectedEof { .. }) => break,
-        Err(ParseError::Malformed { .. }) => break,
+        Err(ParseError::Malformed { .. }) => {
+          src.seek_to(pos.saturating_add(1))?;
+          if !resync_to_next_page(src, stream_end, deadline)? {
+            break;
+          }
+          continue;
+        }
         Err(e) => return Err(e),
       };
       pages_consumed += 1;
@@ -130,6 +136,52 @@ impl Reader for OggReader {
     identify::finalise(states, out);
     Ok(())
   }
+}
+
+/// PARSER-309: libogg's sync layer does not stop at the first damaged capture
+/// pattern; it scans forward until another `OggS` page can be assembled.  This
+/// bounded windowed scan mirrors that recovery behavior while keeping the
+/// header-only parse deterministic.
+fn resync_to_next_page(src: &mut FileSource, stream_end: Option<u64>, deadline: &Deadline) -> Result<bool, ParseError> {
+  const CHUNK: usize = 64 * 1024;
+  const OVERLAP: usize = 3;
+
+  let mut chunk_pos = src.position();
+  let mut carry: Vec<u8> = Vec::new();
+  loop {
+    deadline.check("ogg::resync")?;
+    src.seek_to(chunk_pos)?;
+    let mut buf = vec![0u8; CHUNK];
+    let read = src.read_at_most(&mut buf)?;
+    if read == 0 {
+      break;
+    }
+    let window_start = chunk_pos - carry.len() as u64;
+    let mut window = std::mem::take(&mut carry);
+    window.extend_from_slice(&buf[..read]);
+
+    if window.len() >= 4 {
+      for offset in 0..=window.len() - 4 {
+        if &window[offset..offset + 4] == b"OggS" {
+          src.seek_to(window_start + offset as u64)?;
+          return Ok(true);
+        }
+      }
+    }
+
+    chunk_pos += read as u64;
+    if let Some(end) = stream_end {
+      if chunk_pos >= end {
+        break;
+      }
+    }
+    if read < CHUNK {
+      break;
+    }
+    let keep = window.len().min(OVERLAP);
+    carry = window[window.len() - keep..].to_vec();
+  }
+  Ok(false)
 }
 
 /// Per-bitstream packet reassembly state (PARSER-078).
@@ -1004,6 +1056,31 @@ mod tests {
     let total_payload = ident.len() + comment.len() + regions.len();
     assert!(private.length as usize > total_payload); // includes lace header
     assert!(private.hex.starts_with("02")); // 3 packets → count-1 = 2
+  }
+
+  #[test]
+  fn malformed_page_capture_resyncs_to_later_header_page() {
+    // PARSER-309: a damaged page between the BOS packet and the remaining
+    // Vorbis headers must not hide the later comment/setup packets.
+    let bos = vorbis::build_identification_packet(2, 44100);
+    let mut comments_pkt = vec![0x03];
+    comments_pkt.extend_from_slice(b"vorbis");
+    comments_pkt.extend(build_block("libvorbis", &[("LANGUAGE", "eng")]));
+    comments_pkt.push(0x01);
+    let mut setup_pkt = vec![0x05];
+    setup_pkt.extend_from_slice(b"vorbis");
+    setup_pkt.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend_from_slice(b"damaged-page");
+    bytes.extend(build_page(0, 0, 1, 1, &[&comments_pkt, &setup_pkt]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_VORBIS");
+    assert_eq!(out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2, "eng");
   }
 
   #[test]

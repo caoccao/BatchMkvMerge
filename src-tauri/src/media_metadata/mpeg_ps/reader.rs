@@ -265,7 +265,9 @@ impl Reader for MpegPsReader {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::media_metadata::audio::{dts, mp3};
   use crate::media_metadata::deadline::Deadline;
+  use crate::media_metadata::elementary::{mpeg_video, vc1};
   use crate::media_metadata::model::container::ContainerFormat;
   use crate::media_metadata::model::track::TrackType;
   use std::io::Cursor;
@@ -278,14 +280,49 @@ mod tests {
     [0x00, 0x00, 0x01, stream_id]
   }
 
+  fn video_payload() -> Vec<u8> {
+    mpeg_video::build_sequence_header(720, 480, 4)
+  }
+
+  fn audio_payload() -> Vec<u8> {
+    mp3::build_mp3_frame_v1(128, 44_100, false)
+  }
+
+  fn default_payload(stream_id: u8) -> Vec<u8> {
+    match stream_id {
+      0xC0..=0xDF => audio_payload(),
+      0xE0..=0xEF => video_payload(),
+      0xFD => vc1::build_sequence_header(1280, 720),
+      _ => vec![0u8; 8],
+    }
+  }
+
+  fn pes_packet(stream_id: u8, payload: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(stream_id));
+    let packet_len = (3 + payload.len()) as u16;
+    bytes.extend_from_slice(&packet_len.to_be_bytes());
+    bytes.extend_from_slice(&[0x80, 0x80, 0x00]);
+    bytes.extend_from_slice(payload);
+    bytes
+  }
+
+  fn private_stream_1_audio_packet(sub_id: u8, payload: &[u8]) -> Vec<u8> {
+    let mut body = vec![0x80, 0x80, 0x00, sub_id, 0x00, 0x00, 0x00];
+    body.extend_from_slice(payload);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(0xBD));
+    bytes.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+  }
+
   fn build_ps(stream_ids: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]); // pack body
     for id in stream_ids {
-      bytes.extend_from_slice(&start_code(*id));
-      bytes.extend_from_slice(&8u16.to_be_bytes()); // packet length
-      bytes.extend_from_slice(&[0u8; 8]);
+      bytes.extend_from_slice(&pes_packet(*id, &default_payload(*id)));
     }
     bytes
   }
@@ -358,12 +395,7 @@ mod tests {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    bytes.extend_from_slice(&start_code(0xBD));
-    bytes.extend_from_slice(&16u16.to_be_bytes()); // packet length
-    // PES header: 2 flag bytes + header_data_length=0, then payload.
-    bytes.extend_from_slice(&[0x80, 0x80, 0x00]);
-    bytes.push(0x88); // sub_id → DTS
-    bytes.extend_from_slice(&[0u8; 12]);
+    bytes.extend_from_slice(&private_stream_1_audio_packet(0x88, &dts::build_dts_core_frame(6, 13)));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.vob", 0);
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -378,9 +410,7 @@ mod tests {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    bytes.extend_from_slice(&start_code(0xFD));
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0u8; 8]);
+    bytes.extend_from_slice(&pes_packet(0xFD, &vc1::build_sequence_header(1280, 720)));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.mpg", 0);
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -400,9 +430,7 @@ mod tests {
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
     bytes.extend_from_slice(&vec![0xFFu8; 200 * 1024]); // > 64 KiB filler
-    bytes.extend_from_slice(&start_code(0xE0));
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0u8; 8]);
+    bytes.extend_from_slice(&pes_packet(0xE0, &video_payload()));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.mpg", 0);
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -500,20 +528,19 @@ mod tests {
 
   #[test]
   fn program_stream_map_overrides_classification() {
-    // PSM mapping stream id 0xE0 → stream_type 0x1B (AVC).
+    // PSM mapping stream id 0xC0 (normally audio) → stream_type 0x02 (MPEG-2
+    // video), proving the map wins before payload probing.
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    bytes.extend_from_slice(&psm_packet(&[(0x1B, 0xE0)]));
-    // A video PES on 0xE0.
-    bytes.extend_from_slice(&start_code(0xE0));
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0u8; 8]);
+    bytes.extend_from_slice(&psm_packet(&[(0x02, 0xC0)]));
+    bytes.extend_from_slice(&pes_packet(0xC0, &video_payload()));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.mpg", 0);
     MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 1);
-    assert_eq!(out.tracks[0].codec.id, "V_MPEG4/ISO/AVC");
+    assert_eq!(out.tracks[0].track_type, TrackType::Video);
+    assert_eq!(out.tracks[0].codec.id, "V_MPEG2");
   }
 
   // ---- PARSER-276: packet-body skipping and PSM declared length --------
@@ -527,9 +554,7 @@ mod tests {
     bytes.extend_from_slice(&8u16.to_be_bytes());
     bytes.extend_from_slice(&start_code(0xE0)); // fake packet start inside padding
     bytes.extend_from_slice(&[0u8; 4]);
-    bytes.extend_from_slice(&start_code(0xC0)); // real audio packet after padding
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0u8; 8]);
+    bytes.extend_from_slice(&pes_packet(0xC0, &audio_payload())); // real audio packet after padding
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("padding.mpg", 0);
@@ -547,9 +572,7 @@ mod tests {
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
     bytes.extend_from_slice(&psm);
-    bytes.extend_from_slice(&start_code(0xE0));
-    bytes.extend_from_slice(&8u16.to_be_bytes());
-    bytes.extend_from_slice(&[0u8; 8]);
+    bytes.extend_from_slice(&pes_packet(0xE0, &video_payload()));
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("psm-trailing.mpg", 0);
