@@ -155,9 +155,9 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
   let bit_depth_chroma = (reader.read_ue()? + 8) as u8;
   // PARSER-239: consume scaling_list_data / short_term_ref_pic_set /
   // long_term_ref_pics so the VUI (and its timing + PAR) is reached on ordinary
-  // streams.  A malformed tail degrades to no PAR / no timing rather than
-  // failing the dimensions extraction.
-  let tail = parse_sps_tail(&mut reader, sps_max_sub_layers_minus1).unwrap_or_default();
+  // streams.  Short reads in the tail make the SPS invalid, matching
+  // mkvtoolnix's single exception boundary around the full SPS parse.
+  let tail = parse_sps_tail(&mut reader, sps_max_sub_layers_minus1)?;
 
   let (sub_w, sub_h) = chroma_subsampling_factors(chroma_format_idc);
   let display_width = pic_width_in_luma_samples.saturating_sub((crop_left + crop_right) * sub_w);
@@ -523,6 +523,28 @@ mod tests {
     w.write_bit(false); // conformance_window_flag
     w.write_ue(2); // bit_depth_luma_minus8 → 10-bit
     w.write_ue(2); // bit_depth_chroma_minus8 → 10-bit
+    write_simple_tail_with_optional_timing(&mut w, false);
+    w.into_bytes()
+  }
+
+  fn build_main10_1080p_sps_without_tail() -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4); // sps_vps_id
+    w.write_bits(0, 3); // sps_max_sub_layers_minus1
+    w.write_bit(true); // sps_temporal_id_nesting_flag
+    w.write_bits(0, 2); // profile_space
+    w.write_bit(false); // tier_flag = main
+    w.write_bits(2, 5); // profile_idc = Main 10
+    w.write_bits(0, 32); // profile_compatibility_flag
+    w.write_bits(0, 48); // constraint indicator + reserved
+    w.write_bits(120, 8); // level_idc = 4.0
+    w.write_ue(0); // sps_seq_parameter_set_id
+    w.write_ue(1); // chroma_format_idc (4:2:0)
+    w.write_ue(1920); // pic_width_in_luma_samples
+    w.write_ue(1080); // pic_height_in_luma_samples
+    w.write_bit(false); // conformance_window_flag
+    w.write_ue(2); // bit_depth_luma_minus8
+    w.write_ue(2); // bit_depth_chroma_minus8
     w.into_bytes()
   }
 
@@ -734,6 +756,7 @@ mod tests {
     w.write_bit(false); // conformance_window_flag
     w.write_ue(2);
     w.write_ue(2);
+    write_simple_tail_with_optional_timing(&mut w, false);
     w.into_bytes()
   }
 
@@ -888,6 +911,12 @@ mod tests {
   #[test]
   fn rejects_truncated() {
     assert!(matches!(parse(&[0u8; 4]), Err(ParseError::Malformed { .. })));
+  }
+
+  #[test]
+  fn rejects_truncated_tail_after_bit_depth() {
+    let rbsp = build_main10_1080p_sps_without_tail();
+    assert!(parse(&rbsp).is_err());
   }
 
   #[test]

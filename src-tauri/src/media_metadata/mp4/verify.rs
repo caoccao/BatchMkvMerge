@@ -1102,6 +1102,7 @@ mod tests {
     w.write_ue(0); // crop_right
     w.write_ue(0); // crop_top
     w.write_ue(4); // crop_bottom
+    w.write_bit(false); // vui_parameters_present_flag
     w.into_bytes()
   }
 

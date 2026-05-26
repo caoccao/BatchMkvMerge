@@ -54,7 +54,7 @@ impl FlvTagHeader {
     let ts_ext = bytes[off + 7] as u32;
     // 3-byte stream id at off+8..off+11 — ignored.
     Some(Self {
-      tag_type: flags & 0x1F,
+      tag_type: flags,
       encrypted: (flags & TAG_FLAG_ENCRYPTED) == TAG_FLAG_ENCRYPTED,
       data_size,
       timestamp_ms: (ts_ext << 24) | ts,
@@ -399,13 +399,13 @@ mod tests {
   }
 
   #[test]
-  fn flv_tag_header_decodes_audio_with_high_bits_set_in_type_byte() {
-    // Tag type lives in the lower 5 bits; extra bits in the upper 3 must
-    // be ignored (the encrypted / filter flags occupy them).
+  fn flv_tag_header_rejects_clear_tag_with_reserved_high_bits() {
+    // mkvtoolnix compares the full tag flags for non-encrypted tags; reserved
+    // high bits must not be masked into a real audio tag.
     let mut bytes = build_tag_header(TAG_AUDIO, 16, 0);
-    bytes[4] |= 0xE0; // encryption + reserved bits
+    bytes[4] |= 0x40; // reserved high bit, not encrypted
     let h = FlvTagHeader::parse(&bytes).unwrap();
-    assert!(h.is_audio());
+    assert!(!h.is_audio());
   }
 
   #[test]
@@ -419,7 +419,8 @@ mod tests {
     bytes[4] |= TAG_FLAG_ENCRYPTED;
     let enc = FlvTagHeader::parse(&bytes).unwrap();
     assert!(enc.is_encrypted());
-    // The tag type is still decoded from the lower 5 bits.
-    assert!(enc.is_video());
+    // Classification remains exact; readers skip encrypted tags before
+    // checking audio/video/script kind.
+    assert!(!enc.is_video());
   }
 }

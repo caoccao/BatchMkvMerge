@@ -201,10 +201,10 @@ pub fn parse(rbsp: &[u8]) -> Result<AvcSps, ParseError> {
   let display_width = coded_width.saturating_sub((crop_left + crop_right) * crop_x_unit);
   let display_height = coded_height.saturating_sub((crop_top + crop_bottom) * crop_y_unit);
   // VUI: capture the sample aspect ratio (PARSER-240) and frame timing
-  // (PARSER-238).  A truncated/malformed VUI yields no PAR or timing rather
-  // than failing the whole SPS parse.
-  let vui = if reader.read_bit().unwrap_or(false) {
-    parse_vui(&mut reader).unwrap_or_default()
+  // (PARSER-238).  Short reads here make the SPS invalid, matching
+  // mkvtoolnix's single exception boundary around the full SPS parse.
+  let vui = if reader.read_bit()? {
+    parse_vui(&mut reader)?
   } else {
     VuiInfo::default()
   };
@@ -422,6 +422,29 @@ mod tests {
     w.into_bytes()
   }
 
+  fn encode_sps_tail_with_truncated_vui() -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_ue(0); // seq_parameter_set_id
+    w.write_ue(0); // log2_max_frame_num_minus4
+    w.write_ue(0); // pic_order_cnt_type
+    w.write_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+    w.write_ue(0); // num_ref_frames
+    w.write_bit(false); // gaps_in_frame_num_value_allowed_flag
+    w.write_ue(119);
+    w.write_ue(67);
+    w.write_bit(true); // frame_mbs_only_flag
+    w.write_bit(false); // direct_8x8_inference_flag
+    w.write_bit(true); // frame_cropping_flag
+    w.write_ue(0); // crop_left
+    w.write_ue(0); // crop_right
+    w.write_ue(0); // crop_top
+    w.write_ue(4); // crop_bottom
+    w.write_bit(true); // vui_parameters_present_flag
+    w.write_bit(true); // aspect_ratio_info_present_flag
+    w.write_bits(EXTENDED_SAR, 8); // par_num/par_den are intentionally absent.
+    w.into_bytes()
+  }
+
   #[derive(Default)]
   struct BitWriter {
     buf: Vec<u8>,
@@ -494,6 +517,13 @@ mod tests {
   fn rejects_truncated_rbsp() {
     let rbsp = vec![100u8, 0u8];
     assert!(matches!(parse(&rbsp), Err(ParseError::Malformed { .. })));
+  }
+
+  #[test]
+  fn rejects_truncated_vui_tail() {
+    let mut rbsp = vec![66u8, 0u8, 40u8];
+    rbsp.extend(encode_sps_tail_with_truncated_vui());
+    assert!(matches!(parse(&rbsp), Err(ParseError::UnexpectedEof { .. })));
   }
 
   // ---- PARSER-240: VUI sample aspect ratio → display dimensions --------

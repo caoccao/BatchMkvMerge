@@ -857,6 +857,7 @@ mod tests {
     w.write_ue(0);
     w.write_ue(0);
     w.write_ue(4);
+    w.write_bit(false); // vui_parameters_present_flag
     bytes.extend(w.into_bytes());
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]);
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]);

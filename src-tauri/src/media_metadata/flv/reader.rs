@@ -116,8 +116,8 @@ impl Reader for FlvReader {
     if read < HEADER_LEN {
       return Err(ParseError::Unrecognised);
     }
-    let header = FlvHeader::parse(&buf).ok_or(ParseError::Unrecognised)?;
-    src.seek_to(header.data_offset as u64)?;
+    let _header = FlvHeader::parse(&buf).ok_or(ParseError::Unrecognised)?;
+    src.seek_to(HEADER_LEN as u64)?;
 
     out.container.format = ContainerFormat::Flv;
     out.container.recognized = true;
@@ -328,6 +328,7 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
     10 => {
       state.codec_id.get_or_insert("A_AAC");
       state.codec_name.get_or_insert("AAC");
+      state.headers_read = true;
       if state.sample_rate.is_none() {
         if let Some(rate) = flags.sample_rate() {
           state.sample_rate = Some(rate);
@@ -335,6 +336,9 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
       }
       if state.channels.is_none() {
         state.channels = Some(flags.channels());
+      }
+      if state.bit_depth.is_none() {
+        state.bit_depth = Some(flags.bits_per_sample() as u32);
       }
       if payload.get(1) == Some(&0) && payload.len() > 2 {
         let asc = &payload[2..];
@@ -348,7 +352,6 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
           }
           state.codec_name = Some("AAC");
           state.codec_config = Some(aac::codec_config_from_header(&header, asc));
-          state.headers_read = true;
         }
       }
     }
@@ -864,6 +867,81 @@ mod tests {
     assert_eq!(out.tracks.len(), 2);
     assert!(out.tracks.iter().any(|t| t.codec.id == "V_MPEG4/ISO/AVC"));
     assert!(out.tracks.iter().any(|t| t.codec.id == "A_AAC"));
+  }
+
+  #[test]
+  fn read_headers_starts_tag_scan_at_fixed_header_length() {
+    // mkvtoolnix ignores the stored data_offset for tag scanning and starts
+    // immediately after the packed 9-byte FLV header.
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    blob[5..9].copy_from_slice(&13u32.to_be_bytes());
+    blob.extend_from_slice(&[0xAA, 0xAA, 0xAA, 0xAA]);
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0, 0x12, 0x10]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("offset.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_ignores_reserved_high_bits_on_clear_tags() {
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag_with_flags(TAG_AUDIO | 0x40, &[audio_byte, 0, 0x12, 0x10]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("reserved-tag.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn raw_aac_tag_marks_audio_track_valid() {
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 1, 0xAA, 0xBB]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("raw-aac.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let track = &out.tracks[0];
+    assert_eq!(track.codec.id, "A_AAC");
+    assert!(track.codec.codec_private.is_none());
+    let audio = track.properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(44_100.0));
+    assert_eq!(audio.channels, Some(2));
+    assert_eq!(audio.bit_depth, Some(16));
+    assert!(audio.codec_config.is_none());
+  }
+
+  #[test]
+  fn malformed_aac_sequence_header_still_marks_audio_track_valid() {
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (10 << 4) | (2 << 2) | (1 << 1); // 22.05 kHz mono
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0, 0xFF]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("bad-aac.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let track = &out.tracks[0];
+    assert_eq!(track.codec.id, "A_AAC");
+    assert_eq!(track.codec.codec_private.as_ref().unwrap().hex, "ff");
+    let audio = track.properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(22_050.0));
+    assert_eq!(audio.channels, Some(1));
+    assert!(audio.codec_config.is_none());
   }
 
   #[test]

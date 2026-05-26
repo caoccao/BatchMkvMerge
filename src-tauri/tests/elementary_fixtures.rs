@@ -238,6 +238,7 @@ fn parses_avc_baseline_1080p() {
   w.write_ue(0);
   w.write_ue(0);
   w.write_ue(4);
+  w.write_bit(false); // vui_parameters_present_flag
   // rbsp_trailing_bits
   w.write_bit(true);
   let tail = w.into_bytes();
@@ -272,7 +273,27 @@ fn parses_hevc_main10_1080p() {
   w.write_bit(false);
   w.write_ue(2);
   w.write_ue(2);
-  w.write_bit(true);
+  w.write_ue(4); // log2_max_pic_order_cnt_lsb_minus4
+  w.write_bit(false); // sps_sub_layer_ordering_info_present_flag
+  w.write_ue(0); // sps_max_dec_pic_buffering_minus1
+  w.write_ue(0); // sps_max_num_reorder_pics
+  w.write_ue(0); // sps_max_latency_increase_plus1
+  w.write_ue(0); // log2_min_luma_coding_block_size_minus3
+  w.write_ue(0); // log2_diff_max_min_luma_coding_block_size
+  w.write_ue(0); // log2_min_luma_transform_block_size_minus2
+  w.write_ue(0); // log2_diff_max_min_luma_transform_block_size
+  w.write_ue(0); // max_transform_hierarchy_depth_inter
+  w.write_ue(0); // max_transform_hierarchy_depth_intra
+  w.write_bit(false); // scaling_list_enabled_flag
+  w.write_bit(false); // amp_enabled_flag
+  w.write_bit(false); // sample_adaptive_offset_enabled_flag
+  w.write_bit(false); // pcm_enabled_flag
+  w.write_ue(0); // num_short_term_ref_pic_sets
+  w.write_bit(false); // long_term_ref_pics_present_flag
+  w.write_bit(false); // sps_temporal_mvp_enabled_flag
+  w.write_bit(false); // strong_intra_smoothing_enabled_flag
+  w.write_bit(false); // vui_parameters_present_flag
+  w.write_bit(true); // rbsp_trailing_bits
   let tail = w.into_bytes();
   let mut bytes = vec![0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0b0000_1100, 0b0000_0100, 0x80];
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x42, 0x01]);

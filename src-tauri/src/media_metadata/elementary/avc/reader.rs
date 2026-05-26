@@ -49,6 +49,9 @@ impl Reader for AvcReader {
     if buf.len() < 5 {
       return Ok(false);
     }
+    if starts_with_mpeg_ts_sync(&buf) {
+      return Ok(false);
+    }
     let units = nal::split_nal_units(&buf);
     Ok(extract_headers(&units).is_some())
   }
@@ -60,6 +63,9 @@ impl Reader for AvcReader {
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     let buf = read_probe_prefix(src, Some(deadline))?;
+    if starts_with_mpeg_ts_sync(&buf) {
+      return Err(ParseError::Unrecognised);
+    }
     let units = nal::split_nal_units(&buf);
     let headers = extract_headers(&units).ok_or(ParseError::Unrecognised)?;
     let sps_unit = headers.sps.ok_or(ParseError::Unrecognised)?;
@@ -147,6 +153,10 @@ fn read_probe_prefix(src: &mut FileSource, deadline: Option<&Deadline>) -> Resul
   Ok(out)
 }
 
+fn starts_with_mpeg_ts_sync(buf: &[u8]) -> bool {
+  buf.first() == Some(&0x47)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AvcHeaders<'a> {
   sps: Option<nal::NalUnit<'a>>,
@@ -183,7 +193,7 @@ fn extract_headers<'a>(units: &'a [nal::NalUnit<'a>]) -> Option<AvcHeaders<'a>> 
   for unit in units {
     if unit.nal_unit_type == NAL_UNIT_TYPE_SPS && headers.sps.is_none() {
       let rbsp = nal::strip_emulation_prevention(unit.payload);
-      if sps::parse(&rbsp).is_ok() {
+      if sps::parse(&rbsp).is_ok_and(|sps| sps.display_width > 0 && sps.display_height > 0) {
         headers.sps = Some(*unit);
       }
     } else if unit.nal_unit_type == NAL_UNIT_TYPE_PPS && headers.pps.is_none() {
@@ -222,10 +232,13 @@ mod tests {
   /// Build a tiny Annex B byte stream with a baseline 1920x1080 SPS so the
   /// reader produces a complete track.
   fn build_avc_with_baseline_1080p_sps() -> Vec<u8> {
+    build_avc_with_sps_tail(build_baseline_1080p_tail())
+  }
+
+  fn build_avc_with_sps_tail(tail: Vec<u8>) -> Vec<u8> {
     let mut bytes = vec![0x00, 0x00, 0x00, 0x01, 0x67]; // SPS NAL
     bytes.extend_from_slice(&[66u8, 0u8, 40u8]);
-    // Reuse the test BitWriter from sps.rs by reconstructing the bits here.
-    bytes.extend(build_baseline_1080p_tail());
+    bytes.extend(tail);
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]); // PPS NAL
     // Append an AUD NAL so the SPS NAL has a definite end.
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]);
@@ -237,6 +250,10 @@ mod tests {
   }
 
   fn build_baseline_1080p_tail_with_vui(include_vui: bool) -> Vec<u8> {
+    build_baseline_1080p_tail_with_crop_and_vui(4, include_vui)
+  }
+
+  fn build_baseline_1080p_tail_with_crop_and_vui(crop_bottom: u32, include_vui: bool) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0); // seq_parameter_set_id
     w.write_ue(0); // log2_max_frame_num_minus4
@@ -252,7 +269,7 @@ mod tests {
     w.write_ue(0); // crop_left
     w.write_ue(0); // crop_right
     w.write_ue(0); // crop_top
-    w.write_ue(4); // crop_bottom → 1088 - 4*2 = 1080
+    w.write_ue(crop_bottom); // crop_bottom → 1088 - 4*2 = 1080
     if include_vui {
       w.write_bit(true); // vui_parameters_present_flag
       w.write_bit(false); // aspect_ratio_info_present_flag
@@ -340,6 +357,38 @@ mod tests {
     bytes.truncate(pps_pos);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!AvcReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_mpeg_ts_sync_prefixed_stream() {
+    let mut bytes = vec![0x47];
+    bytes.extend(build_avc_with_baseline_1080p_sps());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!AvcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("sync-prefixed.h264", 0);
+    let err = AvcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
+  }
+
+  #[test]
+  fn probe_rejects_sps_with_zero_cropped_height() {
+    let tail = build_baseline_1080p_tail_with_crop_and_vui(544, false);
+    let bytes = build_avc_with_sps_tail(tail);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!AvcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("overcrop.h264", 0);
+    let err = AvcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
   }
 
   #[test]

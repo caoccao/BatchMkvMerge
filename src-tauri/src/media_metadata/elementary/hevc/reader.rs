@@ -50,6 +50,9 @@ impl Reader for HevcReader {
     if buf.len() < 7 {
       return Ok(false);
     }
+    if starts_with_mpeg_ts_sync(&buf) {
+      return Ok(false);
+    }
     let units = nal::split_nal_units(&buf);
     Ok(extract_headers(&units).is_some())
   }
@@ -61,6 +64,9 @@ impl Reader for HevcReader {
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     let buf = read_probe_prefix(src, Some(deadline))?;
+    if starts_with_mpeg_ts_sync(&buf) {
+      return Err(ParseError::Unrecognised);
+    }
     let units = nal::split_nal_units(&buf);
     let headers = extract_headers(&units).ok_or(ParseError::Unrecognised)?;
     let sps_unit = headers.sps.ok_or(ParseError::Unrecognised)?;
@@ -152,6 +158,10 @@ fn read_probe_prefix(src: &mut FileSource, deadline: Option<&Deadline>) -> Resul
   Ok(out)
 }
 
+fn starts_with_mpeg_ts_sync(buf: &[u8]) -> bool {
+  buf.first() == Some(&0x47)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct HevcHeaders<'a> {
   vps: Option<nal::HevcNalUnit<'a>>,
@@ -228,7 +238,7 @@ fn extract_headers<'a>(units: &'a [nal::HevcNalUnit<'a>]) -> Option<HevcHeaders<
       }
     } else if unit.nal_unit_type == NAL_UNIT_TYPE_SPS && headers.sps.is_none() {
       let rbsp = nal::strip_emulation_prevention(unit.payload);
-      if sps::parse(&rbsp).is_ok() {
+      if sps::parse(&rbsp).is_ok_and(|sps| sps.display_width > 0 && sps.display_height > 0) {
         headers.sps = Some(*unit);
       }
     } else if unit.nal_unit_type == NAL_UNIT_TYPE_PPS && headers.pps.is_none() {
@@ -288,6 +298,10 @@ mod tests {
   }
 
   fn build_main10_1080p_sps_rbsp() -> Vec<u8> {
+    build_main10_1080p_sps_rbsp_with_crop(None)
+  }
+
+  fn build_main10_1080p_sps_rbsp_with_crop(crop_bottom: Option<u32>) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(0, 4);
     w.write_bits(0, 3);
@@ -302,9 +316,18 @@ mod tests {
     w.write_ue(1); // chroma_format_idc
     w.write_ue(1920); // pic_width_in_luma_samples
     w.write_ue(1080); // pic_height_in_luma_samples
-    w.write_bit(false); // conformance_window_flag
+    if let Some(bottom) = crop_bottom {
+      w.write_bit(true); // conformance_window_flag
+      w.write_ue(0); // crop_left
+      w.write_ue(0); // crop_right
+      w.write_ue(0); // crop_top
+      w.write_ue(bottom);
+    } else {
+      w.write_bit(false); // conformance_window_flag
+    }
     w.write_ue(2); // bit_depth_luma_minus8
     w.write_ue(2); // bit_depth_chroma_minus8
+    write_simple_tail(&mut w, false);
     w.into_bytes()
   }
 
@@ -326,11 +349,11 @@ mod tests {
     w.write_bit(false);
     w.write_ue(2);
     w.write_ue(2);
-    write_simple_tail_with_timing(&mut w);
+    write_simple_tail(&mut w, true);
     w.into_bytes()
   }
 
-  fn write_simple_tail_with_timing(w: &mut BitWriter) {
+  fn write_simple_tail(w: &mut BitWriter, include_timing: bool) {
     w.write_ue(4);
     w.write_bit(false);
     w.write_ue(0);
@@ -350,19 +373,21 @@ mod tests {
     w.write_bit(false);
     w.write_bit(false);
     w.write_bit(false);
-    w.write_bit(true); // VUI present
-    w.write_bit(false); // aspect ratio
-    w.write_bit(false); // overscan
-    w.write_bit(false); // video signal
-    w.write_bit(false); // chroma loc
-    w.write_bit(false); // neutral chroma
-    w.write_bit(false); // field seq
-    w.write_bit(false); // frame field info
-    w.write_bit(false); // default display window
-    w.write_bit(true); // timing info
-    w.write_bits(1, 32);
-    w.write_bits(30, 32);
-    w.write_bit(false); // poc proportional timing
+    w.write_bit(include_timing); // VUI present
+    if include_timing {
+      w.write_bit(false); // aspect ratio
+      w.write_bit(false); // overscan
+      w.write_bit(false); // video signal
+      w.write_bit(false); // chroma loc
+      w.write_bit(false); // neutral chroma
+      w.write_bit(false); // field seq
+      w.write_bit(false); // frame field info
+      w.write_bit(false); // default display window
+      w.write_bit(true); // timing info
+      w.write_bits(1, 32);
+      w.write_bits(30, 32);
+      w.write_bit(false); // poc proportional timing
+    }
   }
 
   struct BitWriter {
@@ -502,6 +527,37 @@ mod tests {
     bytes.truncate(pps_pos);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!HevcReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_mpeg_ts_sync_prefixed_stream() {
+    let mut bytes = vec![0x47];
+    bytes.extend(build_main10_stream());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!HevcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("sync-prefixed.hevc", 0);
+    let err = HevcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
+  }
+
+  #[test]
+  fn probe_rejects_sps_with_zero_cropped_height() {
+    let bytes = build_main10_stream_with_sps(build_main10_1080p_sps_rbsp_with_crop(Some(540)));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!HevcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("overcrop.hevc", 0);
+    let err = HevcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
   }
 
   #[test]

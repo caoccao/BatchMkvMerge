@@ -63,13 +63,11 @@ fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, Parse
     let raw_size = get_u64_be(&hdr[4..]);
     let data_pos = pos + 12;
     let remaining = file_size.saturating_sub(data_pos);
-    let size = if raw_size == 0 {
-      remaining
-    } else {
-      raw_size.min(remaining)
-    };
+    let size = if raw_size == 0 { remaining } else { raw_size };
     chunks.push(Chunk { ctype, data_pos, size });
-    let next = data_pos.saturating_add(size);
+    let Some(next) = data_pos.checked_add(size) else {
+      break;
+    };
     if next <= pos || next >= file_size {
       break;
     }
@@ -91,11 +89,25 @@ fn require_chunk<'a>(chunks: &'a [Chunk], ctype: &[u8; 4], name: &'static str) -
 }
 
 fn read_chunk_body(src: &mut FileSource, chunk: &Chunk) -> Result<Vec<u8>, ParseError> {
+  if chunk.size == 0 {
+    return Err(ParseError::Malformed {
+      format: "coreaudio",
+      offset: chunk.data_pos,
+      reason: "zero-sized required chunk".to_string(),
+    });
+  }
+  if chunk.size > MAX_CHUNK_READ {
+    return Err(ParseError::OversizedElement {
+      format: "coreaudio",
+      id: u32::from_be_bytes(chunk.ctype) as u64,
+      size: chunk.size,
+      cap: MAX_CHUNK_READ,
+      offset: chunk.data_pos,
+    });
+  }
   src.seek_to(chunk.data_pos)?;
-  let want = chunk.size.min(MAX_CHUNK_READ);
-  let mut buf = vec![0u8; want as usize];
-  let n = src.read_at_most(&mut buf)?;
-  buf.truncate(n);
+  let mut buf = vec![0u8; chunk.size as usize];
+  src.read_exact(&mut buf)?;
   Ok(buf)
 }
 
@@ -441,6 +453,45 @@ mod tests {
     bytes.truncate(data_pos);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.caf", 0);
+    let err = CoreAudioReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn read_headers_rejects_desc_that_extends_past_eof() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"caff");
+    bytes.extend_from_slice(&1u16.to_be_bytes());
+    bytes.extend_from_slice(&0u16.to_be_bytes());
+    bytes.extend_from_slice(b"desc");
+    bytes.extend_from_slice(&64u64.to_be_bytes());
+    bytes.extend_from_slice(&48_000.0f64.to_bits().to_be_bytes());
+    bytes.extend_from_slice(b"alac");
+    bytes.extend_from_slice(&[0u8; 12]);
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&16u32.to_be_bytes());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("truncated-desc.caf", 0);
+    let err = CoreAudioReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::UnexpectedEof { .. }));
+  }
+
+  #[test]
+  fn read_headers_rejects_zero_sized_required_chunk() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"caff");
+    bytes.extend_from_slice(&1u16.to_be_bytes());
+    bytes.extend_from_slice(&0u16.to_be_bytes());
+    bytes.extend_from_slice(b"desc");
+    bytes.extend_from_slice(&0u64.to_be_bytes());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("zero-desc.caf", 0);
     let err = CoreAudioReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap_err();

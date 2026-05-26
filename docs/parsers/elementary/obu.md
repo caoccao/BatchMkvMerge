@@ -1,6 +1,6 @@
 # AV1 OBU Parser
 
-Implementation progress: 94%
+Implementation progress: 95%
 
 ## Purpose
 
@@ -13,7 +13,7 @@ The AV1 OBU parser recognises raw AV1 Open Bitstream Units streams and reports o
 
 The parser reads the same 1 MiB bounded prefix mkvtoolnix uses for raw OBU probing, decodes OBU headers, LEB128 sizes, sequence headers, operating profile fields, max frame dimensions, bit depth, monochrome/chroma-subsampling flags, and color description fields. Probing requires a sequence header and a frame-like OBU so isolated headers do not claim arbitrary binary files. Metadata OBUs are accepted before the sequence header, matching mkvtoolnix's pre-frame metadata retention. The OBU walker also requires every OBU to carry `obu_has_size_field`: an OBU without a size field stops the walk (and rejects the stream), mirroring `parse_obu()`'s `obu_without_size_unsupported_x` throw, so size-less raw OBU data that mkvmerge rejects is not claimed.
 
-A single structural pass (`scan_obus`) mirrors `parser_c::parse_obu` (`av1.cpp:414-512`): the `obu_forbidden_bit` aborts the walk, `frame_found` is set when a frame / frame-header OBU's header is read *before* the truncation check (`av1.cpp:431`), and when a declared payload exceeds the remaining bytes the OBU body is **not** parsed and the walk stops (`av1.cpp:434-436`). A truncated sequence header is therefore never decoded (PARSER-245), while a truncated frame still counts as a frame, exactly as upstream.
+A single structural pass (`scan_obus`) mirrors `parser_c::parse_obu` (`av1.cpp:414-512`): the `obu_forbidden_bit` aborts the walk, `frame_found` is set when an `OBU_FRAME` or non-redundant `OBU_FRAME_HEADER` header is read *before* the truncation check (`av1.cpp:431`), and when a declared payload exceeds the remaining bytes the OBU body is **not** parsed and the walk stops (`av1.cpp:434-436`). Redundant frame headers are ignored for the frame requirement, so they also do not stop pre-frame metadata retention. A truncated sequence header is therefore never decoded (PARSER-245), while a truncated real frame still counts as a frame, exactly as upstream.
 
 The reader surfaces the metadata mkvmerge's AV1 packetizer would write (PARSER-246):
 
@@ -38,11 +38,3 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 ## Gaps and Handling
 
 The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation, operating-point filtering, and packet muxing remain mkvmerge's concern.
-
-## Open Issues
-
-### PARSER-288: Redundant frame headers satisfy the raw OBU frame requirement
-
-`scan_obus` currently marks `OBU_TYPE_REDUNDANT_FRAME_HEADER` as `frame_found`, and `probe` / `read_headers` accept a stream once a sequence header plus that flag are present. Upstream `parser_c::parse_obu` sets `frame_found` only for `OBU_FRAME` and `OBU_FRAME_HEADER`; redundant frame headers are skipped together with padding and do not satisfy `headers_parsed()`.
-
-This can false-positive a raw OBU stream that contains a sequence header and only redundant frame headers, and it can stop pre-frame metadata retention too early because metadata OBUs are kept only while `frame_found` is false.

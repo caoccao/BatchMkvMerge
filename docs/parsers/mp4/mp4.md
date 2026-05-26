@@ -1,6 +1,6 @@
 # MP4 / QuickTime Parser
 
-Implementation progress: 96%
+Implementation progress: 97%
 
 ## Purpose
 
@@ -16,7 +16,7 @@ The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxe
 
 Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it. The child-box-vs-opaque-private decision also uses that retained first FourCC, so later differing entries overwrite sample data without changing the private-data parser branch.
 
-Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers:
+Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers. Descriptor bodies inside `esds` are validated exactly before their lengths or payloads are recorded, so malformed DecoderSpecificInfo descriptors cannot satisfy later codec verification gates:
 
 - **Opus (`dOps`)** — the box body is wrapped into a Matroska/Ogg Opus ID header: the 8-byte `"OpusHead"` magic is prepended and the pre-skip, input-sample-rate and output-gain fields are converted from MP4 big-endian to little-endian (`parse_dops_audio_header_priv_atom`, `r_qtmp4.cpp:3217-3243`). The bit depth is cleared for Opus.
 - **FLAC (`dfLa`)** — the four-byte FullBox version/flags header is stripped; only the FLAC metadata block chain is stored as codec private (`parse_dfla_audio_header_priv_atom`, `r_qtmp4.cpp:3246-3266`). STREAMINFO is still decoded for sample rate / channels / bit depth.
@@ -56,11 +56,3 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
-
-## Open Issues
-
-### PARSER-293: Truncated `esds` DecoderSpecificInfo can satisfy MP4V/VobSub gates
-
-The `esds` descriptor walker clamps descriptor bodies with `body_end = min(cursor.pos + len, data.len())`. For tag `0x05`, it records `decoder_specific_len = Some(len)` before verifying that all declared bytes are present; if the declared payload is short, `decoder_specific_data` stays absent but the length still looks nonzero. `verify.rs` then keeps MP4V when `esds_object_type` is present and the recorded length is nonzero, and keeps VobSub when the recorded length is at least 64.
-
-mkvtoolnix's `parse_esds_atom` allocates the declared DecoderSpecificInfo length and throws a header parsing error if that many bytes cannot be read. Rust can therefore accept malformed MP4V/VobSub sample entries by trusting a declared descriptor length that has no matching bytes.

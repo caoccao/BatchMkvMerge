@@ -63,7 +63,7 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilde
     &mut object_type,
     &mut decoder_specific_len,
     &mut decoder_specific_data,
-  );
+  )?;
 
   if object_type.is_some_and(is_aac_object_type) {
     let asc = decoder_specific_data
@@ -149,13 +149,24 @@ fn walk(
   object_type_out: &mut Option<u8>,
   decoder_specific_len_out: &mut Option<usize>,
   decoder_specific_data_out: &mut Option<Vec<u8>>,
-) {
+) -> Result<(), ParseError> {
   while let Some(tag) = cursor.read_u8() {
     let len = match cursor.read_ber_length() {
       Some(l) => l,
-      None => return,
+      None => return Ok(()),
     };
-    let body_end = (cursor.pos + len).min(cursor.data.len());
+    let body_end = cursor.pos.checked_add(len).ok_or_else(|| ParseError::Malformed {
+      format: "mp4",
+      offset: cursor.pos as u64,
+      reason: "esds descriptor length overflow".to_string(),
+    })?;
+    if body_end > cursor.data.len() {
+      return Err(ParseError::Malformed {
+        format: "mp4",
+        offset: cursor.pos as u64,
+        reason: format!("truncated esds descriptor tag {tag:#x} body"),
+      });
+    }
     match tag {
       TAG_ES_DESCRIPTOR => {
         let _esid = cursor.read_u16_be();
@@ -183,7 +194,7 @@ fn walk(
           object_type_out,
           decoder_specific_len_out,
           decoder_specific_data_out,
-        );
+        )?;
         cursor.pos = body_end;
       }
       TAG_DECODER_CONFIG => {
@@ -206,7 +217,7 @@ fn walk(
           object_type_out,
           decoder_specific_len_out,
           decoder_specific_data_out,
-        );
+        )?;
         cursor.pos = body_end;
       }
       TAG_DEC_SPECIFIC_INFO => {
@@ -214,10 +225,8 @@ fn walk(
         // `esds.decoder_config`) so the verification pass can gate MP4V /
         // VobSub tracks on its presence / size.
         *decoder_specific_len_out = Some(len);
-        if let Some(slice) = cursor.slice(len) {
-          // PARSER-230: retain the raw bytes for Vorbis-in-MP4 unlacing.
-          *decoder_specific_data_out = Some(slice.to_vec());
-        }
+        // PARSER-230: retain the raw bytes for Vorbis-in-MP4 unlacing.
+        *decoder_specific_data_out = Some(cursor.slice(len).expect("validated descriptor body").to_vec());
         cursor.pos = body_end;
       }
       _ => {
@@ -225,6 +234,7 @@ fn walk(
       }
     }
   }
+  Ok(())
 }
 
 fn is_aac_object_type(object_type: u8) -> bool {
@@ -397,6 +407,15 @@ mod tests {
     b
   }
 
+  fn run_result(payload: Vec<u8>) -> Result<TrackBuilder, ParseError> {
+    let bytes = encode_box(b"esds", &payload);
+    let mut s = FileSource::from_reader_for_test(StdCursor::new(bytes));
+    let h = atom::read_box_header(&mut s).unwrap();
+    let mut b = TrackBuilder::default();
+    parse(&mut s, &h, &mut b)?;
+    Ok(b)
+  }
+
   fn run_with_audio(payload: Vec<u8>, channels: u32, sample_rate: f64) -> TrackBuilder {
     let bytes = encode_box(b"esds", &payload);
     let mut s = FileSource::from_reader_for_test(StdCursor::new(bytes));
@@ -497,6 +516,17 @@ mod tests {
     let audio = b.audio.unwrap();
     assert_eq!(audio.channels, Some(2));
     assert_eq!(audio.sampling_frequency, Some(44_100.0));
+  }
+
+  #[test]
+  fn truncated_decoder_specific_info_is_malformed() {
+    let payload = vec![
+      0, 0, 0, 0, // FullBox header
+      TAG_DEC_SPECIFIC_INFO,
+      0x40, // declares 64 bytes
+      0x12, 0x10,
+    ];
+    assert!(matches!(run_result(payload), Err(ParseError::Malformed { .. })));
   }
 
   #[test]

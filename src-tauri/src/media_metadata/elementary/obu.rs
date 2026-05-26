@@ -60,6 +60,7 @@ const OBU_TYPE_SEQUENCE_HEADER: u8 = 1;
 const OBU_TYPE_FRAME_HEADER: u8 = 3;
 const OBU_TYPE_METADATA: u8 = 5;
 const OBU_TYPE_FRAME: u8 = 6;
+#[cfg(test)]
 const OBU_TYPE_REDUNDANT_FRAME_HEADER: u8 = 7;
 
 /// AV1 metadata_type for ITU-T T.35 (carries the Dolby Vision RPU).
@@ -423,7 +424,7 @@ struct ObuScan<'a> {
   metadata_obus: Vec<&'a [u8]>,
   /// Metadata OBU bodies, parallel to [`Self::metadata_obus`].
   metadata_bodies: Vec<&'a [u8]>,
-  /// Set once a frame / frame-header OBU is encountered (`frame_found`).
+  /// Set once a frame or non-redundant frame-header OBU is encountered (`frame_found`).
   frame_found: bool,
 }
 
@@ -432,7 +433,7 @@ struct ObuScan<'a> {
 ///
 /// * the `obu_forbidden_bit` aborts (PARSER-220-style stop);
 /// * an OBU without a size field aborts (`obu_without_size_unsupported_x`);
-/// * `frame_found` is set when a frame / frame-header OBU's header is read,
+/// * `frame_found` is set when a frame or non-redundant frame-header OBU's header is read,
 ///   *before* the truncation check (`av1.cpp:431`);
 /// * when the declared payload exceeds the remaining bytes the OBU body is
 ///   **not** parsed and the walk stops (`av1.cpp:434-436` returns false →
@@ -466,10 +467,7 @@ fn scan_obus(bytes: &[u8]) -> ObuScan<'_> {
       break; // obu_without_size_unsupported_x → stop
     };
     // frame_found is set before the truncation check (av1.cpp:431).
-    if matches!(
-      header.obu_type,
-      OBU_TYPE_FRAME_HEADER | OBU_TYPE_FRAME | OBU_TYPE_REDUNDANT_FRAME_HEADER
-    ) {
+    if matches!(header.obu_type, OBU_TYPE_FRAME_HEADER | OBU_TYPE_FRAME) {
       scan.frame_found = true;
     }
     let body_end = match pos.checked_add(payload_len) {
@@ -505,7 +503,8 @@ pub fn find_sequence_header(bytes: &[u8]) -> Option<&[u8]> {
   scan_obus(bytes).seq_header_body
 }
 
-/// `true` when the byte stream carries at least one frame / frame-header OBU.
+/// `true` when the byte stream carries at least one frame or non-redundant
+/// frame-header OBU.
 /// PARSER-064: mkvtoolnix's `headers_parsed()` requires both a sequence_header
 /// and a frame.  PARSER-245: a frame whose payload is truncated still counts,
 /// because `frame_found` is set before the truncation check.
@@ -873,6 +872,11 @@ mod tests {
     vec![0x32, 0x01, 0x00]
   }
 
+  fn build_redundant_frame_header_obu() -> Vec<u8> {
+    // type=7, has_extension=0, has_size_field=1, reserved=0 → 0x3A
+    vec![(OBU_TYPE_REDUNDANT_FRAME_HEADER << 3) | 0x02, 0x01, 0x00]
+  }
+
   fn build_metadata_obu(payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x2Au8]; // OBU_METADATA, has_size_field = 1
     bytes.extend(encode_leb128(payload.len()));
@@ -964,6 +968,52 @@ mod tests {
     bytes.extend_from_slice(&body);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!ObuReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_redundant_frame_header_without_real_frame() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    let mut bytes = vec![0x12u8, 0x00];
+    bytes.push(0x0A);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_redundant_frame_header_obu());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!ObuReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("redundant-only.obu", 0);
+    let err = ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Unrecognised));
+  }
+
+  #[test]
+  fn redundant_frame_header_does_not_stop_metadata_retention() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    let mut bytes = vec![0x12u8, 0x00];
+    bytes.push(0x0A);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_redundant_frame_header_obu());
+    bytes.extend(build_metadata_obu(&[0x01, 0x02, 0x03]));
+    bytes.extend(build_frame_obu());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("metadata-after-redundant.obu", 0);
+    ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let private = out.tracks[0].codec.codec_private.as_ref().unwrap();
+    assert!(private.hex.contains("2a03010203"));
   }
 
   #[test]
@@ -1198,8 +1248,9 @@ mod tests {
 
   #[test]
   fn truncated_frame_obu_still_counts_as_frame() {
-    // frame_found is set before the truncation check (av1.cpp:431), so a frame
-    // OBU with a declared payload larger than the buffer still counts.
+    // frame_found is set before the truncation check (av1.cpp:431), so a
+    // non-redundant frame OBU with a declared payload larger than the buffer
+    // still counts.
     let mut bytes = vec![0x32u8, 0x40]; // OBU_FRAME, has_size_field = 1, size = 64
     bytes.extend_from_slice(&[0x00, 0x00]); // only 2 payload bytes present
     assert!(has_frame_obu(&bytes));
