@@ -1,6 +1,6 @@
 # Dirac Elementary Stream Parser
 
-Implementation progress: 70%
+Implementation progress: 88%
 
 ## Purpose
 
@@ -11,7 +11,7 @@ The Dirac parser recognises raw Dirac streams, extracts sequence-header informat
 - Primary implementation: `src-tauri/src/media_metadata/elementary/dirac.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_dirac.cpp`, `../mkvtoolnix/src/input/r_dirac.h`, upstream Dirac helper code under `../mkvtoolnix/src/common`
 
-Mirroring `dirac_es_reader_c::probe_file`, the stream must *start* with the Dirac sync word (`BBCD`) before the parser runs; the parser then locates a sequence-header parse unit, decodes Dirac variable-length integers, handles custom dimensions, and maps a subset of standard video format indexes.
+Mirroring `dirac_es_reader_c::probe_file`, the stream must *start* with the Dirac sync word (`BBCD`) before the parser runs; the parser then locates a sequence-header parse unit and decodes Dirac variable-length integers exactly as `mtx::dirac::parse_sequence_header` (`common/dirac.cpp`). The complete 23-entry standard-video-format table is implemented and indexed directly by `base_video_format` (out-of-range falls back to format 0), so 352x240, 704x480, 2048x1080, 4K, 8K, and 720x486 resolve correctly rather than collapsing to 640x480. Each standard format seeds frame rate, aspect ratio, interlace, and top-field-first, and the parser then applies the custom-source-dimension, chroma, scan, frame-rate (custom or `standard_frame_rates` index), aspect-ratio (custom or `standard_aspect_ratios` index), and clean-area overrides. The track reports display dimensions adjusted by the sample aspect ratio (`p_dirac.cpp` — scale width up when num > den, else scale height up) and a frame-rate-derived `default_duration_ns` (`1e9 * frame_rate_denominator / frame_rate_numerator`, `dirac.cpp:366-367`).
 
 ## Data Structures
 
@@ -24,14 +24,8 @@ flowchart TD
   E --> F["MediaMetadata"]
 ```
 
-The internal `SequenceHeader` contains width, height, interlace/progressive state, and optional default duration.
+The internal `SequenceHeader` contains pixel dimensions, interlace/top-field-first state, frame-rate numerator/denominator, and aspect-ratio numerator/denominator, with helpers for the aspect-adjusted display dimensions and frame-rate-derived default duration.
 
 ## Gaps and Handling
 
-Upstream exposes more standard-format details such as frame rate, aspect ratio, clean area, top-field-first, and default duration. The probe now requires the stream to start with the Dirac sync word (matching upstream), then locates the sequence header within the prefix window and emits the stable dimensions it can decode.
-
-## Open Issues
-
-### PARSER-242: Dirac sequence headers lose standard-format timing, aspect, and clean-area fields
-
-The native Dirac `SequenceHeader` keeps only width, height, and interlace state. mkvtoolnix's Dirac parser fills the full standard-video-format table, then applies custom frame-rate, aspect-ratio, clean-area, left/top-offset, and top-field-first overrides from the same sequence header; the packetizer uses those fields for display dimensions and default duration. Native also implements only a subset of the standard format indices, so formats such as 352x240, 704x480, 2048x1080, 4K, and 8K fall back to 640x480. This under-describes many valid Dirac elementary streams from header data that is already in scope.
+The clean-area width/height and left/top offsets are parsed for bit alignment but not surfaced, matching the packetizer, which derives display dimensions from the sample aspect ratio rather than the clean area. Granule-position timing reconstruction and packet muxing remain mkvmerge's concern.

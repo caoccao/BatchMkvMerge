@@ -17,7 +17,7 @@
 
 //! Top-level `OggReader`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -307,60 +307,148 @@ fn try_decode_comment_packet(packet: &[u8], idx: usize, states: &mut [BitstreamS
   }
 }
 
+/// PARSER-249: count OGM-style simple chapters exactly as mkvmerge does.
+///
+/// `ogm_reader_c::handle_chapters` (`r_ogm.cpp:740-791`) collects every comment
+/// whose key starts with `CHAPTER` (case-insensitive), in order, then feeds the
+/// `KEY=VALUE` lines to the simple-chapter parser (`mtx::chapters::parse` →
+/// `parse_simple`, `chapters.cpp:251`).  That parser alternates strictly
+/// between a `CHAPTERxx=HH:MM:SS[.,]frac` timestamp line and a
+/// `CHAPTERxxNAME=...` line; any deviation calls `chapter_error`, which throws
+/// and aborts the whole parse so that **no** chapters are reported
+/// (`r_ogm.cpp:788` swallows the exception, leaving `m_chapters` null).  A
+/// trailing unmatched timestamp creates no chapter.  We therefore count only
+/// completed (timestamp, name) pairs, and report nothing when the grammar is
+/// violated.
 fn add_chapters_from_comments(entries: &[crate::media_metadata::model::tag::TagEntry], out: &mut MediaMetadata) {
-  let mut chapter_ids = HashSet::new();
-  for entry in entries {
-    if let Some(id) = chapter_timestamp_id(&entry.name) {
-      if parse_chapter_timestamp_ns(&entry.value).is_some() {
-        chapter_ids.insert(id);
-      }
-    }
+  let lines: Vec<&crate::media_metadata::model::tag::TagEntry> = entries
+    .iter()
+    .filter(|e| e.name.to_ascii_uppercase().starts_with("CHAPTER"))
+    .collect();
+  if lines.is_empty() {
+    return;
   }
-  let count = chapter_ids.len() as u32;
+  let Some(count) = simple_chapter_pair_count(&lines) else {
+    // Grammar violation — mkvmerge aborts the parse and reports no chapters.
+    return;
+  };
   if count > out.chapters.num_entries {
     out.chapters.num_entries = count;
     out.chapters.num_editions = 1;
   }
 }
 
-fn chapter_timestamp_id(name: &str) -> Option<String> {
-  let upper = name.to_ascii_uppercase();
-  let rest = upper.strip_prefix("CHAPTER")?;
-  if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
-    return None;
+/// Walk the collected `CHAPTER*` comments under the strict simple-chapter
+/// grammar.  Returns the number of completed `(timestamp, name)` pairs, or
+/// `None` when the alternation is broken (mkvmerge's `chapter_error`).
+fn simple_chapter_pair_count(lines: &[&crate::media_metadata::model::tag::TagEntry]) -> Option<u32> {
+  let mut expect_name = false;
+  let mut count = 0u32;
+  for entry in lines {
+    if expect_name {
+      // mode 1: `^\s*CHAPTER\d+NAME\s*=(.*)`
+      if !is_simple_chapter_name_key(&entry.name) {
+        return None;
+      }
+      expect_name = false;
+      count += 1;
+    } else {
+      // mode 0: `^\s*CHAPTER\d+\s*=\s*(\d+):(\d+):(\d+)[.,](\d{1,9})`
+      if !is_simple_chapter_timestamp_key(&entry.name) || !simple_chapter_timestamp_value_ok(&entry.value) {
+        return None;
+      }
+      expect_name = true;
+    }
   }
-  Some(rest.to_string())
+  // A trailing unmatched timestamp (expect_name still true) created no chapter.
+  Some(count)
 }
 
-fn parse_chapter_timestamp_ns(value: &str) -> Option<u64> {
-  let (h, rest) = value.split_once(':')?;
-  let (m, rest) = rest.split_once(':')?;
-  let (s, frac) = rest
-    .split_once('.')
-    .or_else(|| rest.split_once(','))
-    .unwrap_or((rest, ""));
-  let hours: u64 = h.parse().ok()?;
-  let minutes: u64 = m.parse().ok()?;
-  let seconds: u64 = s.parse().ok()?;
-  if minutes >= 60 || seconds >= 60 {
-    return None;
+/// `CHAPTER` followed by one or more digits and nothing else (ignoring trailing
+/// whitespace) — the key of a simple-chapter timestamp line.
+fn is_simple_chapter_timestamp_key(name: &str) -> bool {
+  let upper = name.trim_end().to_ascii_uppercase();
+  match upper.strip_prefix("CHAPTER") {
+    Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()),
+    None => false,
   }
-  let mut fraction = 0u64;
-  let mut scale = 100_000_000u64;
-  for b in frac.bytes().take(9) {
-    if !b.is_ascii_digit() {
+}
+
+/// `CHAPTER` + digits + `NAME` (ignoring trailing whitespace) — the key of a
+/// simple-chapter name line.
+fn is_simple_chapter_name_key(name: &str) -> bool {
+  let upper = name.trim_end().to_ascii_uppercase();
+  let Some(rest) = upper.strip_prefix("CHAPTER") else {
+    return false;
+  };
+  let Some(digits) = rest.strip_suffix("NAME") else {
+    return false;
+  };
+  !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Validate a timestamp value against `\s*(\d+)\s*:\s*(\d+)\s*:\s*(\d+)\s*[.,]\s*(\d{1,9})`.
+/// The fractional part is mandatory; minute and second must be < 60; trailing
+/// content after the fraction is allowed (the upstream regex is not anchored).
+fn simple_chapter_timestamp_value_ok(value: &str) -> bool {
+  let bytes = value.as_bytes();
+  let mut i = 0usize;
+  let skip_ws = |i: &mut usize| {
+    while *i < bytes.len() && bytes[*i].is_ascii_whitespace() {
+      *i += 1;
+    }
+  };
+  // Read a run of digits; returns the parsed value (saturating on overflow) and
+  // the number of digits consumed.
+  let read_digits = |i: &mut usize| -> Option<u64> {
+    let start = *i;
+    while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+      *i += 1;
+    }
+    if *i == start {
       return None;
     }
-    fraction += (b - b'0') as u64 * scale;
-    scale /= 10;
+    Some(value[start..*i].parse::<u64>().unwrap_or(u64::MAX))
+  };
+  let expect = |i: &mut usize, set: &[u8]| -> bool {
+    if *i < bytes.len() && set.contains(&bytes[*i]) {
+      *i += 1;
+      true
+    } else {
+      false
+    }
+  };
+
+  skip_ws(&mut i);
+  if read_digits(&mut i).is_none() {
+    return false; // hour
   }
-  Some(
-    hours
-      .saturating_mul(3_600_000_000_000)
-      .saturating_add(minutes.saturating_mul(60_000_000_000))
-      .saturating_add(seconds.saturating_mul(1_000_000_000))
-      .saturating_add(fraction),
-  )
+  skip_ws(&mut i);
+  if !expect(&mut i, b":") {
+    return false;
+  }
+  skip_ws(&mut i);
+  let Some(minute) = read_digits(&mut i) else {
+    return false;
+  };
+  skip_ws(&mut i);
+  if !expect(&mut i, b":") {
+    return false;
+  }
+  skip_ws(&mut i);
+  let Some(second) = read_digits(&mut i) else {
+    return false;
+  };
+  skip_ws(&mut i);
+  if !expect(&mut i, b".,") {
+    return false;
+  }
+  skip_ws(&mut i);
+  // At least one fraction digit is required.
+  if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+    return false;
+  }
+  minute < 60 && second < 60
 }
 
 /// PARSER-180: decode a VorbisComment block out of a comment packet using the
@@ -548,7 +636,7 @@ mod tests {
         ("CHAPTER01", "00:00:00.000"),
         ("CHAPTER01NAME", "Intro"),
         ("CHAPTER02", "00:01:02.345"),
-        ("CHAPTERBAD", "ignored"),
+        ("CHAPTER02NAME", "Part Two"),
       ],
     ));
     comments_pkt.push(0x01);
@@ -563,6 +651,87 @@ mod tests {
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.chapters.num_entries, 2);
     assert_eq!(out.chapters.num_editions, 1);
+  }
+
+  // ---- PARSER-249: strict simple-chapter grammar ------------------------
+
+  fn entry(name: &str, value: &str) -> crate::media_metadata::model::tag::TagEntry {
+    crate::media_metadata::model::tag::TagEntry {
+      name: name.to_string(),
+      value: value.to_string(),
+      language: None,
+    }
+  }
+
+  #[test]
+  fn simple_chapter_counts_only_completed_pairs() {
+    let lines = [
+      entry("CHAPTER01", "00:00:00.000"),
+      entry("CHAPTER01NAME", "Intro"),
+      entry("CHAPTER02", "00:01:02.345"),
+      entry("CHAPTER02NAME", "Part Two"),
+    ];
+    let refs: Vec<_> = lines.iter().collect();
+    assert_eq!(simple_chapter_pair_count(&refs), Some(2));
+  }
+
+  #[test]
+  fn simple_chapter_trailing_timestamp_creates_no_chapter() {
+    // A timestamp with no following NAME line is not counted (mkvmerge ends in
+    // mode 1 without creating the atom).
+    let lines = [
+      entry("CHAPTER01", "00:00:00.000"),
+      entry("CHAPTER01NAME", "Intro"),
+      entry("CHAPTER02", "00:01:02.345"),
+    ];
+    let refs: Vec<_> = lines.iter().collect();
+    assert_eq!(simple_chapter_pair_count(&refs), Some(1));
+  }
+
+  #[test]
+  fn simple_chapter_broken_alternation_reports_none() {
+    // A non-NAME line where a NAME is required is a chapter_error → mkvmerge
+    // aborts the parse and reports zero chapters.
+    let lines = [
+      entry("CHAPTER01", "00:00:00.000"),
+      entry("CHAPTERBAD", "ignored"),
+    ];
+    let refs: Vec<_> = lines.iter().collect();
+    assert_eq!(simple_chapter_pair_count(&refs), None);
+  }
+
+  #[test]
+  fn simple_chapter_missing_fraction_reports_none() {
+    // The timestamp regex requires a `[.,]frac` part; a fractionless timestamp
+    // fails in mode 0 → chapter_error.
+    let lines = [
+      entry("CHAPTER01", "00:00:00"),
+      entry("CHAPTER01NAME", "Intro"),
+    ];
+    let refs: Vec<_> = lines.iter().collect();
+    assert_eq!(simple_chapter_pair_count(&refs), None);
+  }
+
+  #[test]
+  fn simple_chapter_rejects_invalid_minute_second() {
+    assert!(!simple_chapter_timestamp_value_ok("00:60:00.000"));
+    assert!(!simple_chapter_timestamp_value_ok("00:00:60.000"));
+    assert!(simple_chapter_timestamp_value_ok("99:59:59.999999999"));
+    // Comma fraction separator + surrounding whitespace tolerated.
+    assert!(simple_chapter_timestamp_value_ok("01 : 02 : 03 , 5"));
+    // Trailing content after the fraction is allowed.
+    assert!(simple_chapter_timestamp_value_ok("00:00:01.000 leftover"));
+  }
+
+  #[test]
+  fn simple_chapter_name_key_recognition() {
+    assert!(is_simple_chapter_name_key("CHAPTER01NAME"));
+    assert!(is_simple_chapter_name_key("chapter12name"));
+    assert!(!is_simple_chapter_name_key("CHAPTER01"));
+    assert!(!is_simple_chapter_name_key("CHAPTERNAME"));
+    assert!(is_simple_chapter_timestamp_key("CHAPTER01"));
+    assert!(!is_simple_chapter_timestamp_key("CHAPTER01NAME"));
+    assert!(!is_simple_chapter_timestamp_key("CHAPTERS"));
   }
 
   #[test]

@@ -44,6 +44,7 @@ pub fn finalise(
   streams: Vec<StreamBuilder>,
   odml: OdmlInfo,
   subtitles: Vec<AviSubtitleDemuxer>,
+  video_frame_par: Option<(u32, u32)>,
   out: &mut MediaMetadata,
 ) {
   if let Some(avih) = avih {
@@ -60,7 +61,7 @@ pub fn finalise(
     };
     match kind {
       AviStreamKind::Video if !emitted_video => {
-        if let Some(track) = make_video_track(0, builder) {
+        if let Some(track) = make_video_track(0, builder, video_frame_par) {
           out.tracks.push(track);
           emitted_video = true;
         }
@@ -133,7 +134,7 @@ fn common_props(id: i64, header: &super::strl::StreamHeader, name: Option<String
 
 /// Build the single video track (id 0).  Returns `None` for non-video streams
 /// or streams without a BITMAPINFOHEADER `strf`.
-fn make_video_track(id: i64, builder: StreamBuilder) -> Option<Track> {
+fn make_video_track(id: i64, builder: StreamBuilder, video_frame_par: Option<(u32, u32)>) -> Option<Track> {
   let header = builder.header.as_ref()?;
   if header.kind != AviStreamKind::Video {
     return None;
@@ -143,7 +144,7 @@ fn make_video_track(id: i64, builder: StreamBuilder) -> Option<Track> {
   };
   let codec_id = fourcc_to_string(&bmih.compression);
   let codec_name = fourcc::lookup(&codec_id).map(|e| e.name.to_string());
-  let video = video_properties(bmih, header, builder.vprp.as_ref());
+  let video = video_properties(bmih, header, builder.vprp.as_ref(), video_frame_par);
   // PARSER-085: surface `BITMAPINFOHEADER + extradata` as the video
   // codec_private blob.  Mirrors mkvtoolnix's `r_avi.cpp:188-206`.
   let private = Some(CodecPrivate::from_bytes(&bmih_codec_private(bmih)));
@@ -239,6 +240,7 @@ fn video_properties(
   bmih: &BitmapInfoHeader,
   header: &super::strl::StreamHeader,
   vprp: Option<&VideoPropertiesHeader>,
+  video_frame_par: Option<(u32, u32)>,
 ) -> VideoTrackProperties {
   let width = bmih.width.max(0) as u32;
   let height = bmih.height.unsigned_abs(); // height may be negative ⇒ top-down DIB
@@ -250,12 +252,24 @@ fn video_properties(
   // PARSER-084: when `vprp` carries a frame aspect ratio, derive display
   // dimensions from it instead of mirroring the pixel dimensions.  Mirrors
   // `avi_reader_c::handle_video_aspect_ratio` (`r_avi.cpp:241-273`).
+  //
+  // PARSER-241: otherwise, an MPEG-4 Part 2 (DivX/Xvid) stream may carry the
+  // pixel aspect ratio only in the first frame's VOL header; when that frame
+  // PAR was extracted, apply it (`extended_identify_mpeg4_l2`,
+  // `r_avi.cpp:843-865`).
   let display = match (pixel, vprp) {
     (Some(p), Some(v))
       if v.frame_aspect_ratio_x != 0 && v.frame_aspect_ratio_y != 0 && p.width != 0 && p.height != 0 =>
     {
       Some(display_dimensions_from_aspect(p, v))
     }
+    (Some(p), _) => match video_frame_par {
+      Some((par_num, par_den)) => {
+        let (w, h) = super::mpeg4_par::display_dimensions(p.width, p.height, par_num, par_den);
+        Some(Dimensions2D { width: w, height: h })
+      }
+      None => pixel,
+    },
     _ => pixel,
   };
   let default_duration_ns = header.frame_duration_ns();
@@ -480,7 +494,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_video_track(0, builder).unwrap();
+    let track = make_video_track(0, builder, None).unwrap();
     assert_eq!(track.track_type, TrackType::Video);
     assert_eq!(track.codec.id, "H264");
     let v = track.properties.video.as_ref().unwrap();
@@ -521,7 +535,7 @@ mod tests {
         frame_height_in_lines: 1080,
       }),
     };
-    let track = make_video_track(0, builder).unwrap();
+    let track = make_video_track(0, builder, None).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(
       v.display_dimensions,
@@ -556,7 +570,7 @@ mod tests {
         frame_height_in_lines: 0,
       }),
     };
-    let track = make_video_track(0, builder).unwrap();
+    let track = make_video_track(0, builder, None).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(
       v.display_dimensions,
@@ -588,7 +602,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_video_track(0, builder).unwrap();
+    let track = make_video_track(0, builder, None).unwrap();
     let private = track.codec.codec_private.unwrap();
     assert_eq!(private.length, 44);
     // First 4 bytes are the BMIH `size` (40) in LE.
@@ -616,7 +630,7 @@ mod tests {
       private: None,
       vprp: None,
     };
-    let track = make_video_track(0, builder).unwrap();
+    let track = make_video_track(0, builder, None).unwrap();
     let v = track.properties.video.unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().height, 1080);
   }
@@ -724,12 +738,12 @@ mod tests {
 
   #[test]
   fn make_video_track_drops_stream_without_header() {
-    assert!(make_video_track(0, StreamBuilder::default()).is_none());
+    assert!(make_video_track(0, StreamBuilder::default(), None).is_none());
   }
 
   #[test]
   fn make_video_track_rejects_audio_stream() {
-    assert!(make_video_track(0, audio_builder()).is_none());
+    assert!(make_video_track(0, audio_builder(), None).is_none());
   }
 
   #[test]
@@ -747,6 +761,7 @@ mod tests {
       vec![video_builder(), audio_builder(), audio_builder()],
       OdmlInfo::default(),
       vec![],
+      None,
       &mut m,
     );
     assert_eq!(m.tracks.len(), 3);
@@ -773,6 +788,7 @@ mod tests {
       vec![video_builder(), midi, text_builder(), audio_builder()],
       OdmlInfo::default(),
       vec![],
+      None,
       &mut m,
     );
     assert_eq!(m.tracks.len(), 2);
@@ -801,6 +817,7 @@ mod tests {
           attachments: Vec::new(),
         },
       ],
+      None,
       &mut m,
     );
     assert_eq!(m.tracks.len(), 4);
@@ -833,6 +850,7 @@ mod tests {
         encoding: None,
         attachments: vec![attachment],
       }],
+      None,
       &mut m,
     );
     // PARSER-213: the SSA demuxer's font is surfaced as a global attachment.
@@ -850,6 +868,7 @@ mod tests {
       vec![video_builder(), video_builder(), audio_builder()],
       OdmlInfo::default(),
       vec![],
+      None,
       &mut m,
     );
     // Second video stream is ignored (mkvtoolnix only identifies track 0).
@@ -883,7 +902,7 @@ mod tests {
       height: 1080,
     };
     let mut m = MediaMetadata::new("clip.avi", 0);
-    finalise(Some(avih), vec![], OdmlInfo::default(), vec![], &mut m);
+    finalise(Some(avih), vec![], OdmlInfo::default(), vec![], None, &mut m);
     assert!(m.container.properties.duration.is_some());
     assert_eq!(m.container.properties.is_fragmented, Some(false));
   }
@@ -904,7 +923,7 @@ mod tests {
       total_frames: Some(1000),
     };
     let mut m = MediaMetadata::new("clip.avi", 0);
-    finalise(Some(avih), vec![], odml, vec![], &mut m);
+    finalise(Some(avih), vec![], odml, vec![], None, &mut m);
     assert!(m.container.properties.duration.is_some());
   }
 }

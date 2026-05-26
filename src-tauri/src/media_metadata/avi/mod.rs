@@ -24,6 +24,7 @@
 
 pub mod avih;
 pub mod identify;
+pub mod mpeg4_par;
 pub mod odml;
 pub mod reader;
 pub mod riff;

@@ -42,6 +42,11 @@ pub struct EsEnrichment {
   pub pixel_dimensions: Option<(u32, u32)>,
   /// PARSER-170: TextST codec_private (the dialog style segment).
   pub codec_private: Option<Vec<u8>>,
+  /// PARSER-250: codec id + display name recovered from the probed elementary
+  /// header, overriding the PMT table default.  mkvtoolnix's `new_stream_a_mpeg`
+  /// replaces the codec with `header.get_codec()` so a stream the PMT defaulted
+  /// to `A_MPEG/L3` is relabelled to the actual Layer I / II / III.
+  pub codec_override: Option<(String, String)>,
 }
 
 /// PARSER-169: per-row probe outcome.  `keep == false` drops the row, mirroring
@@ -322,12 +327,19 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
     .or(row.codec_private.as_ref())
     .map(|bytes| CodecPrivate::from_bytes(bytes));
 
+  // PARSER-250: prefer the codec id/name recovered from the elementary header
+  // probe (e.g. MPEG audio Layer I/II/III) over the PMT table default.
+  let (codec_id, codec_name) = match enrichment.and_then(|e| e.codec_override.clone()) {
+    Some((id, name)) => (id, name),
+    None => (row.codec_id.clone(), row.codec_name.clone()),
+  };
+
   Track {
     id,
     track_type,
     codec: CodecInfo {
-      id: row.codec_id.clone(),
-      name: Some(row.codec_name.clone()),
+      id: codec_id,
+      name: Some(codec_name),
       codec_private,
     },
     properties,
@@ -433,6 +445,27 @@ mod tests {
     let a = m.tracks[1].properties.audio.as_ref().unwrap();
     assert_eq!(a.channels, Some(6));
     assert_eq!(a.sampling_frequency, Some(48000.0));
+  }
+
+  #[test]
+  fn codec_override_relabels_mpeg_audio_layer() {
+    // PARSER-250: a row defaulted to A_MPEG/L3 by the PMT table is relabelled
+    // to the probed layer (A_MPEG/L2) via the enrichment codec override.
+    let rows = vec![row(0x101, TrackKind::Audio, "A_MPEG/L3")];
+    let mut enrichment = std::collections::HashMap::new();
+    enrichment.insert(
+      0x101u16,
+      EsEnrichment {
+        channels: Some(2),
+        sampling_frequency: Some(44100.0),
+        codec_override: Some(("A_MPEG/L2".to_string(), "MP2".to_string())),
+        ..EsEnrichment::default()
+      },
+    );
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise_with_sdt(rows, &std::collections::HashMap::new(), &enrichment, &mut m);
+    assert_eq!(m.tracks[0].codec.id, "A_MPEG/L2");
+    assert_eq!(m.tracks[0].codec.name.as_deref(), Some("MP2"));
   }
 
   #[test]

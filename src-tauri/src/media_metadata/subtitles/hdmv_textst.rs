@@ -132,9 +132,15 @@ impl Reader for HdmvTextStReader {
       },
       properties: TrackProperties {
         common,
+        // mkvtoolnix identifies S_HDMV/TEXTST as a subtitle track carrying the
+        // Dialog Style segment as codec private; its `identify()`
+        // (`r_hdmv_textst.cpp`) does not set `text_subtitles` and exposes no
+        // character encoding.  The TextST character coding is part of the
+        // Blu-ray data model and is not necessarily UTF-8, so labelling it as
+        // plain UTF-8 text was misleading (PARSER-248).
         subtitle: Some(SubtitleTrackProperties {
-          text_subtitles: true,
-          encoding: Some("UTF-8".to_string()),
+          text_subtitles: false,
+          encoding: None,
           variant: Some("HDMV TextST".to_string()),
           teletext_page: None,
         }),
@@ -212,7 +218,11 @@ mod tests {
       .unwrap();
     assert_eq!(out.container.format, ContainerFormat::HdmvTextSt);
     let sub = out.tracks[0].properties.subtitle.as_ref().unwrap();
-    assert!(sub.text_subtitles);
+    // PARSER-248: HDMV TextST is not exposed as plain UTF-8 text; the Dialog
+    // Style segment is carried as codec private instead.
+    assert!(!sub.text_subtitles);
+    assert!(sub.encoding.is_none());
+    assert_eq!(sub.variant.as_deref(), Some("HDMV TextST"));
     assert_eq!(out.tracks[0].codec.codec_private.as_ref().unwrap().length, 11);
   }
 

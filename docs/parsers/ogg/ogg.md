@@ -1,6 +1,6 @@
 # Ogg / OGM Parser
 
-Implementation progress: 95%
+Implementation progress: 96%
 
 ## Purpose
 
@@ -20,6 +20,8 @@ Codec coverage and per-codec header handling:
 - **FLAC-in-Ogg** (`codecs/flac.rs`) — accepts both the post-1.1.1 `[0x7f]FLAC` wrapper (with `fLaC` at offset 9) and the pre-1.1.1 bare-`fLaC` mapping (`r_ogm.cpp:457-459`). The total header-packet count comes from the mapping's `number_of_other_header_packets` field (post-1.1.1) or is discovered by following each metadata block's "last-metadata-block" flag (pre-1.1.1) (`r_ogm_flac.cpp:238-244`). Codec private is assembled by stripping the 9-byte wrapper off the first packet and concatenating all header packets (post-1.1.1) or skipping the first packet and concatenating the rest (pre-1.1.1), mirroring `ogm_a_flac_demuxer_c::create_packetizer` (`r_ogm_flac.cpp:264-290`). Multi-packet header reads are bounded (cap of 64 header packets) to keep the header-only contract.
 - **Kate** (`codecs/kate.rs`) — keeps reading header packets while the high bit of the first byte is set (`r_ogm.cpp:1707-1710`) and Xiph-laces all of them into codec private (`r_ogm.cpp:1678` → `lace_memory_xiph`), bounded by the same 64-packet cap.
 
+Simple OGM-style chapters are counted exactly as mkvmerge does. `ogm_reader_c::handle_chapters` (`r_ogm.cpp:740-791`) collects every comment whose key starts with `CHAPTER` (case-insensitive), in order, and feeds the `KEY=VALUE` lines to the simple-chapter parser (`mtx::chapters::parse` → `parse_simple`, `chapters.cpp:251`). That parser alternates strictly between a `CHAPTERxx=HH:MM:SS[.,]frac` timestamp line (fraction mandatory; minute and second < 60) and a `CHAPTERxxNAME=...` line; any deviation throws `chapter_error`, which mkvmerge swallows and reports **no** chapters at all. A trailing unmatched timestamp creates no chapter. The native counter (`simple_chapter_pair_count`) therefore reports only completed `(timestamp, name)` pairs and reports nothing once the grammar is broken — it no longer over-counts loose `CHAPTERxx=` comments.
+
 ## Data Structures
 
 ```mermaid
@@ -37,10 +39,4 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 
 ## Gaps and Handling
 
-The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment/chapter edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets); chapter parsing remains simpler. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
-
-## Open Issues
-
-### PARSER-249: Ogg chapter comments are counted without mkvmerge's required name-pair grammar
-
-Native chapter extraction counts every `CHAPTER\d+=timestamp` comment whose timestamp parses, regardless of whether a matching `CHAPTER\d+NAME=` line exists or appears in the expected order. mkvmerge collects all `CHAPTER*` comments, feeds them to the simple chapter parser, and that parser alternates strictly between `CHAPTERxx=...` and `CHAPTERxxNAME=...`; an unmatched timestamp at EOF does not create a chapter. Native can therefore over-report chapter counts for malformed Ogg/OGM comments that mkvmerge rejects or ignores.
+The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised and both FLAC-in-Ogg wrappers plus multi-packet Kate headers are fully assembled (bounded to 64 header packets). The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.

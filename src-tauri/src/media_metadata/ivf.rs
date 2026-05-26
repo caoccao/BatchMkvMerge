@@ -84,12 +84,21 @@ impl FileHeader {
     })
   }
 
+  /// mkvtoolnix's `probe_file` claims the container on the `DKIF` magic plus a
+  /// supported codec FourCC alone (`r_ivf.cpp:30-40`) — it does not inspect the
+  /// dimensions or frame rate.
+  pub fn has_supported_codec(&self) -> bool {
+    IvfCodec::from_fourcc(&self.fourcc).is_some()
+  }
+
+  /// `read_headers` sets `m_ok = width && height && frame_rate_num &&
+  /// frame_rate_den` (`r_ivf.cpp:50`); only an `m_ok` file contributes a track.
+  pub fn dimensions_ok(&self) -> bool {
+    self.width != 0 && self.height != 0 && self.frame_rate_num != 0 && self.frame_rate_den != 0
+  }
+
   pub fn is_valid(&self) -> bool {
-    self.width != 0
-      && self.height != 0
-      && self.frame_rate_num != 0
-      && self.frame_rate_den != 0
-      && IvfCodec::from_fourcc(&self.fourcc).is_some()
+    self.dimensions_ok() && self.has_supported_codec()
   }
 }
 
@@ -143,7 +152,7 @@ impl Reader for IvfReader {
       return Ok(false);
     }
     Ok(match FileHeader::parse(&buf) {
-      Some(h) => h.is_valid(),
+      Some(h) => h.has_supported_codec(),
       None => false,
     })
   }
@@ -162,13 +171,18 @@ impl Reader for IvfReader {
     }
     let header = FileHeader::parse(&buf).ok_or(ParseError::Unrecognised)?;
     let codec = IvfCodec::from_fourcc(&header.fourcc).ok_or(ParseError::Unrecognised)?;
-    if !header.is_valid() {
-      return Err(ParseError::Unrecognised);
-    }
 
     out.container.format = ContainerFormat::Ivf;
     out.container.recognized = true;
     out.container.supported = true;
+
+    // mkvtoolnix identifies the container even when `m_ok` is false, but only
+    // an `m_ok` file (nonzero dimensions and frame rate) yields a track
+    // (`add_available_track_ids` / `create_packetizer` gate on `m_ok`,
+    // `r_ivf.cpp:61-86`).
+    if !header.dimensions_ok() {
+      return Ok(());
+    }
 
     let default_duration_ns = if header.frame_rate_num > 0 && header.frame_rate_den > 0 {
       Some((1_000_000_000u64 * header.frame_rate_den as u64) / header.frame_rate_num as u64)
@@ -338,7 +352,9 @@ fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
   None
 }
 
-fn calculate_dovi_level(width: u32, height: u32, duration_ns: u64) -> u8 {
+/// AV1 Dolby Vision level from the picture rate (`common/dovi_meta.cpp`).
+/// Shared with the raw AV1 OBU reader (PARSER-246).
+pub(crate) fn calculate_dovi_level(width: u32, height: u32, duration_ns: u64) -> u8 {
   let frame_rate = 1_000_000_000u64 / duration_ns.max(1);
   let pps = frame_rate.saturating_mul(width as u64 * height as u64);
   match pps {
@@ -359,7 +375,10 @@ fn calculate_dovi_level(width: u32, height: u32, duration_ns: u64) -> u8 {
   }
 }
 
-fn build_av1_dovi_config_record(level: u8, compatibility_id: u8) -> Vec<u8> {
+/// 24-byte AV1 Dolby Vision configuration record (DV profile 10) keyed by the
+/// `dvvC` block-addition FOURCC.  Shared with the raw AV1 OBU reader
+/// (PARSER-246).
+pub(crate) fn build_av1_dovi_config_record(level: u8, compatibility_id: u8) -> Vec<u8> {
   let mut p = vec![0u8; 24];
   p[0] = 1;
   p[1] = 0;
@@ -369,7 +388,7 @@ fn build_av1_dovi_config_record(level: u8, compatibility_id: u8) -> Vec<u8> {
   p
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
   bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
@@ -446,15 +465,18 @@ mod tests {
   }
 
   #[test]
-  fn probe_rejects_zero_dimensions_or_rate() {
+  fn probe_claims_zero_dimensions_or_rate_on_magic_and_fourcc() {
+    // PARSER-247: mkvtoolnix's probe_file only checks DKIF magic + supported
+    // codec FourCC, so malformed-but-claimed IVF headers (zero dimensions or
+    // frame rate) are still claimed by the probe.
     let blob = build_header(b"AV01", 0, 720);
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
-    assert!(!IvfReader.probe(&mut s).unwrap());
+    assert!(IvfReader.probe(&mut s).unwrap());
 
     let mut blob = build_header(b"AV01", 1280, 720);
     blob[20..24].copy_from_slice(&0u32.to_le_bytes());
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
-    assert!(!IvfReader.probe(&mut s).unwrap());
+    assert!(IvfReader.probe(&mut s).unwrap());
   }
 
   #[test]
@@ -606,14 +628,32 @@ mod tests {
   }
 
   #[test]
-  fn read_headers_rejects_invalid_zero_rate() {
+  fn read_headers_recognizes_container_without_track_on_invalid_rate() {
+    // PARSER-247: a claimed-but-not-`m_ok` IVF still identifies the container;
+    // mkvtoolnix adds no track because `add_available_track_ids` gates on
+    // `m_ok`.
     let mut blob = build_header(b"AV01", 1280, 720);
     blob[16..20].copy_from_slice(&0u32.to_le_bytes());
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     let mut out = MediaMetadata::new("clip.ivf", 0);
-    let err = IvfReader
+    IvfReader
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
-      .unwrap_err();
-    assert!(matches!(err, ParseError::Unrecognised));
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Ivf);
+    assert!(out.container.recognized);
+    assert!(out.tracks.is_empty());
+  }
+
+  #[test]
+  fn read_headers_recognizes_container_without_track_on_zero_dimensions() {
+    let blob = build_header(b"AV01", 0, 0);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ivf", 0);
+    IvfReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Ivf);
+    assert!(out.container.recognized);
+    assert!(out.tracks.is_empty());
   }
 }

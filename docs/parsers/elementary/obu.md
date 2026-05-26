@@ -1,6 +1,6 @@
 # AV1 OBU Parser
 
-Implementation progress: 72%
+Implementation progress: 90%
 
 ## Purpose
 
@@ -12,6 +12,14 @@ The AV1 OBU parser recognises raw AV1 Open Bitstream Units streams and reports o
 - Upstream basis: `../mkvtoolnix/src/input/r_obu.cpp`, `../mkvtoolnix/src/input/r_obu.h`, `../mkvtoolnix/src/common/av1.cpp`, `../mkvtoolnix/src/common/av1.h`
 
 The parser decodes OBU headers, LEB128 sizes, sequence headers, operating profile fields, max frame dimensions, bit depth, monochrome/chroma-subsampling flags, and color description fields. Probing requires a sequence header and a frame-like OBU so isolated headers do not claim arbitrary binary files. The OBU walker also requires every OBU to carry `obu_has_size_field`: an OBU without a size field stops the walk (and rejects the stream), mirroring `parse_obu()`'s `obu_without_size_unsupported_x` throw, so size-less raw OBU data that mkvmerge rejects is not claimed.
+
+A single structural pass (`scan_obus`) mirrors `parser_c::parse_obu` (`av1.cpp:414-512`): the `obu_forbidden_bit` aborts the walk, `frame_found` is set when a frame / frame-header OBU's header is read *before* the truncation check (`av1.cpp:431`), and when a declared payload exceeds the remaining bytes the OBU body is **not** parsed and the walk stops (`av1.cpp:434-436`). A truncated sequence header is therefore never decoded (PARSER-245), while a truncated frame still counts as a frame, exactly as upstream.
+
+The reader surfaces the metadata mkvmerge's AV1 packetizer would write (PARSER-246):
+
+- **Default duration** — `timing_info` is decoded (`parse_timing_info`, `av1.cpp:219-231`) into the track `default_duration_ns = 1e9 * num_units_in_display_tick * num_ticks_per_picture / time_scale`.
+- **AV1C codec private** — `build_av1c` is a port of `parser_c::get_av1c` (`av1.cpp:554-596`): the 4-byte AV1 configuration record (marker/version, `seq_profile`, `seq_level_idx_0`, `seq_tier_0`, `high_bitdepth`, `twelve_bit`, `mono_chrome`, chroma subsampling + sample position) followed by the raw sequence-header OBU and the kept metadata OBUs (those before the first frame).
+- **Dolby Vision** — an ITU-T T.35 metadata OBU carrying the DV RPU payload header yields a `dvvC` block-addition mapping with `maxBlockAdditionId = 4`, mirroring `obu_reader_c::probe_file` (`r_obu.cpp:48-69`). The DV level is computed from the picture rate (`get_frame_duration`, defaulting to 1/25 s); the level/record helpers are shared with the IVF reader.
 
 ## Data Structures
 
@@ -29,14 +37,4 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 
 ## Gaps and Handling
 
-Rust scans a smaller prefix than upstream. It does not expose timing/default duration, operating-point filtering, AV1C generation, metadata OBU retention, or Dolby Vision RPU/block-addition mapping. The parser handles this by reporting base AV1 metadata only; IVF has separate first-frame Dolby Vision extraction for wrapped AV1.
-
-## Open Issues
-
-### PARSER-245: Truncated OBUs can satisfy probing
-
-`walk_obus` clamps a declared OBU payload size to the available buffer with `min(bytes.len())` and still visits the OBU. mkvtoolnix's AV1 parser throws `obu_invalid_structure_x` when the declared OBU size exceeds the remaining data. Native can therefore accept a stream where a sequence header is followed by a truncated frame-like OBU, because `has_frame_obu` only checks the type before proving that the whole declared payload is present.
-
-### PARSER-246: AV1 OBU timing, codec-private, and Dolby Vision metadata are not surfaced
-
-The native sequence-header decoder reads timing-info bits only to skip them, never stores `bitstream_default_duration`, and emits `codec_private: None`. It also ignores metadata OBUs, including the ITU-T T.35 Dolby Vision RPU path that mkvmerge's raw OBU reader uses during probing to create block-addition mappings. mkvmerge's AV1 packetizer builds an AV1C codec-private blob from the sequence header plus kept metadata OBUs and applies sequence timing as default duration when present.
+Rust scans a smaller prefix than upstream. The decoder fully consumes the DV RPU payload only as far as is needed to confirm its presence and pick the DV level; the per-RPU header fields (used by upstream for the exact configuration record) are not decoded, so the `dvvC` record carries the level-derived defaults rather than the bitstream's RPU header values. Operating-point filtering and packet muxing remain mkvmerge's concern.

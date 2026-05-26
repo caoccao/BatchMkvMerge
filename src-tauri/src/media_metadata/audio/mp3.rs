@@ -308,8 +308,11 @@ pub fn find_consecutive_mp3_headers(buf: &[u8], num: u32) -> Option<(usize, Mp3H
   None
 }
 
-/// Matroska codec ID for the MPEG audio layer.
-fn codec_for_layer(layer: u8) -> (&'static str, &'static str) {
+/// Matroska codec ID (and display name) for the MPEG audio layer.  Mirrors
+/// `mp3_header_t::get_codec()` so containers that default an MPEG-audio row to
+/// `A_MPEG/L3` can specialise it to the actual layer once a frame header is
+/// decoded (PARSER-250 / PARSER-252).
+pub fn codec_for_layer(layer: u8) -> (&'static str, &'static str) {
   match layer {
     1 => ("A_MPEG/L1", "MP1"),
     2 => ("A_MPEG/L2", "MP2"),

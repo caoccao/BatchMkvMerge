@@ -267,9 +267,18 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> (Option<VideoTrackProper
           a.bit_depth = Some(bits);
         }
       } else if codec.id.starts_with("A_MPEG") {
-        if let Some((_off, h)) = mp3::find_consecutive_mp3_headers(payload, 2) {
+        // PARSER-252: mkvtoolnix's `new_stream_a_mpeg` decodes a single MPEG
+        // audio frame header (`find_mp3_header`, `r_mpeg_ps.cpp`) and replaces
+        // the codec with `header.get_codec()`, so the stream-id / PSM default
+        // (A_MPEG/L3 or A_MPEG/L2) is corrected to the actual Layer I / II /
+        // III.  Use one header (not two) so a short bounded probe that
+        // mkvtoolnix accepts is not rejected.
+        if let Some((_off, h)) = mp3::find_consecutive_mp3_headers(payload, 1) {
           a.sampling_frequency = Some(h.sampling_frequency as f64);
           a.channels = Some(h.channels);
+          let (id, name) = mp3::codec_for_layer(h.layer);
+          codec.id = id;
+          codec.name = name;
         }
       }
       (None, Some(a))
@@ -557,6 +566,67 @@ mod tests {
     let a = t.properties.audio.as_ref().unwrap();
     assert_eq!(a.sampling_frequency, Some(48_000.0));
     assert_eq!(a.channels, Some(2));
+  }
+
+  // ---- PARSER-252: MPEG audio layer specialization --------------------
+
+  #[test]
+  fn bare_mpeg_audio_relabelled_to_probed_layer() {
+    // A bare audio stream id (0xC0) defaults to A_MPEG/L3, but a Layer II
+    // payload must be relabelled to A_MPEG/L2 from a single decoded header.
+    let payload = mp3::build_mp3_frame(1, 2, 128, 44100, false);
+    let mut m = MediaMetadata::new("clip.mpg", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xC0,
+        sub_id: None,
+        psm_stream_type: None,
+        payload,
+      }],
+      &mut m,
+    );
+    assert_eq!(m.tracks.len(), 1);
+    let t = &m.tracks[0];
+    assert_eq!(t.codec.id, "A_MPEG/L2");
+    assert_eq!(t.codec.name.as_deref(), Some("MP2"));
+    let a = t.properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(44_100.0));
+  }
+
+  #[test]
+  fn psm_mpeg_audio_relabelled_to_layer_three() {
+    // PSM stream_type 0x04 defaults to A_MPEG/L2, but a Layer III payload is
+    // relabelled to A_MPEG/L3 from a single decoded header.
+    let payload = mp3::build_mp3_frame_v1(128, 44100, false);
+    let mut m = MediaMetadata::new("clip.mpg", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xC0,
+        sub_id: None,
+        psm_stream_type: Some(0x04),
+        payload,
+      }],
+      &mut m,
+    );
+    assert_eq!(m.tracks[0].codec.id, "A_MPEG/L3");
+    assert_eq!(m.tracks[0].codec.name.as_deref(), Some("MP3"));
+  }
+
+  #[test]
+  fn mpeg_audio_keeps_default_when_no_header_found() {
+    // No decodable frame → the table default codec id is retained.
+    let mut m = MediaMetadata::new("clip.mpg", 0);
+    finalise(
+      vec![StreamObservation {
+        stream_id: 0xC0,
+        sub_id: None,
+        psm_stream_type: None,
+        payload: vec![0u8; 16],
+      }],
+      &mut m,
+    );
+    assert_eq!(m.tracks[0].codec.id, "A_MPEG/L3");
   }
 
   #[test]

@@ -46,11 +46,12 @@ use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
-use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, TrackType};
+use crate::media_metadata::ivf::{build_av1_dovi_config_record, calculate_dovi_level, hex_encode};
+use crate::media_metadata::model::track::{CodecInfo, CodecPrivate, Track, TrackProperties, TrackType};
 use crate::media_metadata::model::track_properties_common::CommonTrackProperties;
 use crate::media_metadata::model::track_properties_video::{
-  ChromaFormat, ChromaSiting, ChromaSubsampling, ColorMetadata, ColorRange, Dimensions2D, VideoCodecConfig,
-  VideoTrackProperties,
+  BlockAdditionMapping, ChromaFormat, ChromaSiting, ChromaSubsampling, ColorMetadata, ColorRange, Dimensions2D,
+  VideoCodecConfig, VideoTrackProperties,
 };
 use crate::media_metadata::reader::Reader;
 
@@ -58,8 +59,15 @@ const PROBE_BYTES: usize = 64 * 1024;
 const OBU_TYPE_SEQUENCE_HEADER: u8 = 1;
 const OBU_TYPE_TEMPORAL_DELIMITER: u8 = 2;
 const OBU_TYPE_FRAME_HEADER: u8 = 3;
+const OBU_TYPE_METADATA: u8 = 5;
 const OBU_TYPE_FRAME: u8 = 6;
 const OBU_TYPE_REDUNDANT_FRAME_HEADER: u8 = 7;
+
+/// AV1 metadata_type for ITU-T T.35 (carries the Dolby Vision RPU).
+const METADATA_TYPE_ITUT_T35: usize = 4;
+/// ITU-T T.35 Dolby Vision RPU payload header (`common/av1.cpp`
+/// `ITU_T_T35_DOVI_RPU_PAYLOAD_HEADER`).
+const DOVI_T35_HEADER: [u8; 9] = [0x00, 0x3b, 0x00, 0x00, 0x08, 0x00, 0x37, 0xcd, 0x08];
 
 /// AV1 §6.4 / §6.8 unspecified sentinels for color description.
 const COLOR_PRIMARIES_UNSPECIFIED: u8 = 2;
@@ -90,12 +98,28 @@ pub fn decode_header(byte: u8) -> ObuHeader {
 #[derive(Debug, Clone, Copy)]
 pub struct SequenceHeader {
   pub seq_profile: u8,
+  /// `seq_level_idx[0]` — the first operating point's level (or the single
+  /// level in the reduced-still-picture path).  Needed for the AV1C record.
+  pub seq_level_idx_0: u8,
+  /// `seq_tier[0]` — `0` unless `seq_level_idx_0 > 7`.
+  pub seq_tier_0: u8,
   pub max_width: u32,
   pub max_height: u32,
+  /// `color_config.high_bitdepth` / `twelve_bit` — kept verbatim for the AV1C
+  /// record (the derived `bit_depth` below is the decoded value).
+  pub high_bitdepth: bool,
+  pub twelve_bit: bool,
   pub bit_depth: u8,
   pub monochrome: bool,
   pub subsampling_x: u8,
   pub subsampling_y: u8,
+  /// PARSER-246: track default duration from `timing_info`
+  /// (`bitstream_default_duration = 1e9 * num_units_in_display_tick *
+  /// num_ticks_per_picture / time_scale`).
+  pub default_duration_ns: Option<u64>,
+  /// PARSER-246: `get_frame_duration` (`1e9 * num_units_in_display_tick /
+  /// time_scale`) — used to pick the Dolby Vision level.
+  pub frame_duration_ns: Option<u64>,
   /// AV1 §6.4 color description.  `None` when the sequence header does not
   /// signal it; falls back to the AV1 "unspecified" sentinels (2 / 2 / 2)
   /// only when the caller asks for them.  PARSER-065.
@@ -130,17 +154,29 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
   let seq_profile = reader.read_bits(3)? as u8;
   let _still_picture = reader.read_bit()?;
   let reduced_still_picture = reader.read_bit()?;
+  let mut seq_level_idx_0: u8 = 0;
+  let mut seq_tier_0: u8 = 0;
+  let mut default_duration_ns: Option<u64> = None;
+  let mut frame_duration_ns: Option<u64> = None;
   if reduced_still_picture {
-    let _seq_level_idx = reader.read_bits(5)?;
+    seq_level_idx_0 = reader.read_bits(5)? as u8;
   } else {
     let timing_info_present = reader.read_bit()?;
     let mut decoder_model_info_present = false;
     if timing_info_present {
-      let _num_units_in_display_tick = reader.read_bits(32)?;
-      let _time_scale = reader.read_bits(32)?;
+      // PARSER-246: port of `parse_timing_info` (`av1.cpp:219-231`).
+      let num_units_in_display_tick = reader.read_bits(32)? as u64;
+      let time_scale = reader.read_bits(32)? as u64;
       let equal_picture_interval = reader.read_bit()?;
-      if equal_picture_interval {
-        let _ = read_uvlc(&mut reader)?;
+      let num_ticks_per_picture = if equal_picture_interval {
+        read_uvlc(&mut reader)? as u64 + 1
+      } else {
+        1
+      };
+      if num_units_in_display_tick != 0 && time_scale != 0 && num_ticks_per_picture != 0 {
+        default_duration_ns =
+          Some(1_000_000_000u64.saturating_mul(num_units_in_display_tick).saturating_mul(num_ticks_per_picture) / time_scale);
+        frame_duration_ns = Some(1_000_000_000u64.saturating_mul(num_units_in_display_tick) / time_scale);
       }
       decoder_model_info_present = reader.read_bit()?;
       if decoder_model_info_present {
@@ -152,11 +188,17 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
     }
     let initial_display_delay_present_flag = reader.read_bit()?;
     let operating_points_cnt_minus_1 = reader.read_bits(5)? as u32;
-    for _ in 0..=operating_points_cnt_minus_1 {
+    for i in 0..=operating_points_cnt_minus_1 {
       let _idc = reader.read_bits(12)?;
-      let seq_level_idx = reader.read_bits(5)?;
+      let seq_level_idx = reader.read_bits(5)? as u8;
+      let mut seq_tier = 0u8;
       if seq_level_idx > 7 {
-        let _ = reader.read_bit()?; // seq_tier
+        seq_tier = reader.read_bit()? as u8;
+      }
+      if i == 0 {
+        // `seq_level_idx_0` / `seq_tier_0` for the AV1C record.
+        seq_level_idx_0 = seq_level_idx;
+        seq_tier_0 = seq_tier;
       }
       if decoder_model_info_present {
         let present = reader.read_bit()?;
@@ -297,16 +339,47 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
   }
   Ok(SequenceHeader {
     seq_profile,
+    seq_level_idx_0,
+    seq_tier_0,
     max_width: max_frame_width,
     max_height: max_frame_height,
+    high_bitdepth,
+    twelve_bit,
     bit_depth,
     monochrome,
     subsampling_x,
     subsampling_y,
+    default_duration_ns,
+    frame_duration_ns,
     color_description,
     full_range,
     chroma_sample_position,
   })
+}
+
+/// Build the Matroska AV1 `CodecPrivate` (AV1C) record: the 4-byte
+/// configuration header followed by the raw sequence-header OBU and any kept
+/// metadata OBUs.  Port of `parser_c::get_av1c` (`av1.cpp:554-596`).
+fn build_av1c(seq: &SequenceHeader, seq_header_obu: &[u8], metadata_obus: &[&[u8]]) -> Vec<u8> {
+  let chroma_pos = seq.chroma_sample_position.unwrap_or(0);
+  let mut out = Vec::with_capacity(4 + seq_header_obu.len());
+  out.push(0x81); // marker(1)=1, version(7)=1
+  out.push((seq.seq_profile << 5) | (seq.seq_level_idx_0 & 0x1f));
+  out.push(
+    ((seq.seq_tier_0 & 1) << 7)
+      | ((seq.high_bitdepth as u8) << 6)
+      | ((seq.twelve_bit as u8) << 5)
+      | ((seq.monochrome as u8) << 4)
+      | ((seq.subsampling_x & 1) << 3)
+      | ((seq.subsampling_y & 1) << 2)
+      | (chroma_pos & 0x03),
+  );
+  out.push(0); // reserved(3) + initial_presentation_delay_present(1) + minus_one(4)
+  out.extend_from_slice(seq_header_obu);
+  for obu in metadata_obus {
+    out.extend_from_slice(obu);
+  }
+  out
 }
 
 fn read_uvlc(reader: &mut BitReader<'_>) -> Result<u32, ParseError> {
@@ -332,63 +405,130 @@ fn read_uvlc(reader: &mut BitReader<'_>) -> Result<u32, ParseError> {
   Ok(value + (1u32 << leading_zeros) - 1)
 }
 
-/// Walk the OBU stream looking for a sequence_header.
-pub fn find_sequence_header(bytes: &[u8]) -> Option<&[u8]> {
-  walk_obus(bytes, |obu_type, payload| {
-    (obu_type == OBU_TYPE_SEQUENCE_HEADER).then_some(payload)
-  })
+/// The result of one structural pass over an OBU byte stream, mirroring the
+/// state `mtx::av1::parser_c` accumulates while parsing.
+#[derive(Debug, Default)]
+struct ObuScan<'a> {
+  /// Full sequence-header OBU bytes (header + size + body), first occurrence.
+  seq_header_obu: Option<&'a [u8]>,
+  /// Sequence-header OBU body (after the header + size field).
+  seq_header_body: Option<&'a [u8]>,
+  /// Full metadata OBU bytes, kept only while no frame has been seen
+  /// (`av1.cpp:507` keeps metadata OBUs only when `!frame_found`).
+  metadata_obus: Vec<&'a [u8]>,
+  /// Metadata OBU bodies, parallel to [`Self::metadata_obus`].
+  metadata_bodies: Vec<&'a [u8]>,
+  /// Set once a frame / frame-header OBU is encountered (`frame_found`).
+  frame_found: bool,
 }
 
-/// `true` when the byte stream carries at least one OBU that begins a frame
-/// (`OBU_FRAME_HEADER`, `OBU_FRAME`, or `OBU_REDUNDANT_FRAME_HEADER`).
-/// PARSER-064: mkvtoolnix's `headers_parsed()` requires both a
-/// sequence_header and a frame to be present.
-pub fn has_frame_obu(bytes: &[u8]) -> bool {
-  walk_obus(bytes, |obu_type, _| {
-    matches!(
-      obu_type,
-      OBU_TYPE_FRAME_HEADER | OBU_TYPE_FRAME | OBU_TYPE_REDUNDANT_FRAME_HEADER
-    )
-    .then_some(())
-  })
-  .is_some()
-}
-
-fn walk_obus<'a, T, F>(bytes: &'a [u8], mut visit: F) -> Option<T>
-where
-  F: FnMut(u8, &'a [u8]) -> Option<T>,
-{
+/// Single structural pass over the OBU stream.  Faithful to `parser_c::parse_obu`
+/// (`av1.cpp:414-512`):
+///
+/// * the `obu_forbidden_bit` aborts (PARSER-220-style stop);
+/// * an OBU without a size field aborts (`obu_without_size_unsupported_x`);
+/// * `frame_found` is set when a frame / frame-header OBU's header is read,
+///   *before* the truncation check (`av1.cpp:431`);
+/// * when the declared payload exceeds the remaining bytes the OBU body is
+///   **not** parsed and the walk stops (`av1.cpp:434-436` returns false →
+///   parse loop breaks), so a truncated sequence header is never decoded
+///   (PARSER-245).
+fn scan_obus(bytes: &[u8]) -> ObuScan<'_> {
+  let mut scan = ObuScan::default();
   let mut pos = 0usize;
   while pos < bytes.len() {
+    let start = pos;
+    if bytes[pos] & 0x80 != 0 {
+      break; // obu_forbidden_bit → obu_invalid_structure_x
+    }
     let header = decode_header(bytes[pos]);
     pos += 1;
     if header.has_extension {
       if pos >= bytes.len() {
-        return None;
+        break;
       }
       pos += 1;
     }
     let payload_len = if header.has_size_field {
-      let (size, consumed) = read_leb128(&bytes[pos..])?;
-      pos += consumed;
-      size
+      match read_leb128(&bytes[pos..]) {
+        Some((size, consumed)) => {
+          pos += consumed;
+          size
+        }
+        None => break, // truncated LEB128 size → end_of_file_x → stop
+      }
     } else {
-      // PARSER-220: mkvtoolnix's `parse_obu()` throws
-      // `obu_without_size_unsupported_x` for an OBU without
-      // `obu_has_size_field` (`../mkvtoolnix/src/common/av1.cpp:414-421`),
-      // and the parse loop breaks — neither this OBU nor anything after it
-      // is parsed.  Mirror that by stopping the walk before visiting the
-      // size-less OBU, so raw AV1-like data that mkvmerge rejects is not
-      // claimed here.
-      return None;
+      break; // obu_without_size_unsupported_x → stop
     };
-    let payload_end = pos.saturating_add(payload_len).min(bytes.len());
-    if let Some(value) = visit(header.obu_type, &bytes[pos..payload_end]) {
-      return Some(value);
+    // frame_found is set before the truncation check (av1.cpp:431).
+    if matches!(
+      header.obu_type,
+      OBU_TYPE_FRAME_HEADER | OBU_TYPE_FRAME | OBU_TYPE_REDUNDANT_FRAME_HEADER
+    ) {
+      scan.frame_found = true;
     }
-    pos = payload_end;
+    let body_end = match pos.checked_add(payload_len) {
+      Some(end) if end <= bytes.len() => end,
+      // Declared payload exceeds the remaining bytes: the OBU body is not
+      // parsed and the walk stops (PARSER-245).
+      _ => break,
+    };
+    let full_obu = &bytes[start..body_end];
+    let body = &bytes[pos..body_end];
+    match header.obu_type {
+      OBU_TYPE_SEQUENCE_HEADER => {
+        if scan.seq_header_obu.is_none() {
+          scan.seq_header_obu = Some(full_obu);
+          scan.seq_header_body = Some(body);
+        }
+      }
+      OBU_TYPE_METADATA => {
+        if !scan.frame_found {
+          scan.metadata_obus.push(full_obu);
+          scan.metadata_bodies.push(body);
+        }
+      }
+      _ => {}
+    }
+    pos = body_end;
   }
-  None
+  scan
+}
+
+/// Walk the OBU stream looking for a fully-present sequence_header body.
+pub fn find_sequence_header(bytes: &[u8]) -> Option<&[u8]> {
+  scan_obus(bytes).seq_header_body
+}
+
+/// `true` when the byte stream carries at least one frame / frame-header OBU.
+/// PARSER-064: mkvtoolnix's `headers_parsed()` requires both a sequence_header
+/// and a frame.  PARSER-245: a frame whose payload is truncated still counts,
+/// because `frame_found` is set before the truncation check.
+pub fn has_frame_obu(bytes: &[u8]) -> bool {
+  scan_obus(bytes).frame_found
+}
+
+/// `true` when any kept metadata OBU body carries an ITU-T T.35 Dolby Vision
+/// RPU.  Mirrors `parse_metadata_type_itu_t_t35` (`av1.cpp:806-826`).
+fn metadata_body_has_dovi_rpu(body: &[u8]) -> bool {
+  let Some((metadata_type, consumed)) = read_leb128(body) else {
+    return false;
+  };
+  if metadata_type != METADATA_TYPE_ITUT_T35 {
+    return false;
+  }
+  let mut pos = consumed;
+  let Some(&country_code) = body.get(pos) else {
+    return false;
+  };
+  pos += 1;
+  if country_code == 0xff {
+    pos += 1;
+  }
+  match body.get(pos..) {
+    Some(rest) => rest.len() > DOVI_T35_HEADER.len() && rest.starts_with(&DOVI_T35_HEADER),
+    None => false,
+  }
 }
 
 fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -453,11 +593,12 @@ impl Reader for ObuReader {
     let mut buf = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut buf)?;
-    let seq_body = find_sequence_header(&buf[..read]).ok_or(ParseError::Unrecognised)?;
+    let scan = scan_obus(&buf[..read]);
+    let seq_body = scan.seq_header_body.ok_or(ParseError::Unrecognised)?;
     let seq = decode_sequence_header(seq_body)?;
     // PARSER-064: a sequence_header alone is insufficient — the stream
     // must also carry at least one frame OBU before we accept it.
-    if !has_frame_obu(&buf[..read]) {
+    if !scan.frame_found {
       return Err(ParseError::Unrecognised);
     }
 
@@ -477,7 +618,14 @@ impl Reader for ObuReader {
         _ => ChromaFormat::Other,
       }
     };
-    let video = VideoTrackProperties {
+
+    // PARSER-246: the AV1 packetizer builds the AV1C codec private from the
+    // sequence-header OBU plus the kept metadata OBUs (`get_av1c`).
+    let codec_private = scan
+      .seq_header_obu
+      .map(|seq_obu| CodecPrivate::from_bytes(&build_av1c(&seq, seq_obu, &scan.metadata_obus)));
+
+    let mut video = VideoTrackProperties {
       pixel_dimensions: Some(Dimensions2D {
         width: seq.max_width,
         height: seq.max_height,
@@ -486,6 +634,8 @@ impl Reader for ObuReader {
         width: seq.max_width,
         height: seq.max_height,
       }),
+      // PARSER-246: track default duration from the sequence-header timing info.
+      default_duration_ns: seq.default_duration_ns,
       color: build_color_metadata(&seq),
       codec_config: Some(VideoCodecConfig {
         profile_idc: Some(seq.seq_profile as u32),
@@ -498,13 +648,30 @@ impl Reader for ObuReader {
       }),
       ..VideoTrackProperties::default()
     };
+
+    // PARSER-246: an ITU-T T.35 Dolby Vision RPU metadata OBU yields a
+    // `dvvC` block-addition mapping, mirroring `obu_reader_c::probe_file`
+    // (`r_obu.cpp:48-69`).  The DV level uses `get_frame_duration` (without
+    // the per-picture tick count), defaulting to 1/25 s.
+    if scan.metadata_bodies.iter().any(|b| metadata_body_has_dovi_rpu(b)) {
+      let duration = seq.frame_duration_ns.filter(|d| *d >= 1_000_000).unwrap_or(40_000_000);
+      let level = calculate_dovi_level(seq.max_width, seq.max_height, duration);
+      let record = build_av1_dovi_config_record(level, 0);
+      video.block_addition_mappings.push(BlockAdditionMapping {
+        id_type: "dvvC".to_owned(),
+        data_hex: hex_encode(&record),
+        ..Default::default()
+      });
+      common.max_block_addition_id = Some(4);
+    }
+
     out.tracks.push(Track {
       id: 0,
       track_type: TrackType::Video,
       codec: CodecInfo {
         id: "V_AV1".to_string(),
         name: Some("AV1".to_string()),
-        codec_private: None,
+        codec_private,
       },
       properties: TrackProperties {
         common,
@@ -966,5 +1133,159 @@ mod tests {
     // Builder asks for sub.0=1 → x reads the bit; sub.1=0 means y stays 0.
     assert_eq!(seq.subsampling_x, 1);
     assert_eq!(seq.subsampling_y, 0);
+  }
+
+  // ---- PARSER-245: truncated OBUs --------------------------------------
+
+  #[test]
+  fn truncated_sequence_header_is_not_decoded() {
+    // A sequence_header OBU whose declared size exceeds the buffer must not be
+    // parsed (mkvtoolnix's parse_obu returns false before parse_sequence_header).
+    let body = build_reduced_sequence_header(0, 1280, 720, false);
+    let mut bytes = vec![0x12u8, 0x00]; // temporal_delimiter
+    bytes.push(0x0A); // sequence_header, has_size_field = 1
+    bytes.push((body.len() as u8) + 10); // declared size larger than what follows
+    bytes.extend_from_slice(&body); // fewer bytes than declared
+    assert!(find_sequence_header(&bytes).is_none());
+  }
+
+  #[test]
+  fn truncated_frame_obu_still_counts_as_frame() {
+    // frame_found is set before the truncation check (av1.cpp:431), so a frame
+    // OBU with a declared payload larger than the buffer still counts.
+    let mut bytes = vec![0x32u8, 0x40]; // OBU_FRAME, has_size_field = 1, size = 64
+    bytes.extend_from_slice(&[0x00, 0x00]); // only 2 payload bytes present
+    assert!(has_frame_obu(&bytes));
+  }
+
+  // ---- PARSER-246: AV1C codec private + timing + Dolby Vision ----------
+
+  /// Build a reduced sequence header that also carries a timing_info block
+  /// (non-reduced path) so a default duration can be derived.
+  fn build_seq_with_timing(num_units: u32, time_scale: u32) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 3); // seq_profile
+    w.write_bit(false); // still_picture
+    w.write_bit(false); // reduced_still_picture_header = 0 (full path)
+    w.write_bit(true); // timing_info_present
+    w.write_bits(num_units as u64, 32);
+    w.write_bits(time_scale as u64, 32);
+    w.write_bit(true); // equal_picture_interval
+    // num_ticks_per_picture_minus_1 = 0 → uvlc "1" bit.
+    w.write_bit(true);
+    w.write_bit(false); // decoder_model_info_present
+    w.write_bit(false); // initial_display_delay_present_flag
+    w.write_bits(0, 5); // operating_points_cnt_minus_1 = 0
+    w.write_bits(0, 12); // operating_point_idc[0]
+    w.write_bits(8, 5); // seq_level_idx[0] = 8 (> 7 → tier bit follows)
+    w.write_bit(false); // seq_tier[0]
+    w.write_bits(11, 4); // frame_width_bits_minus_1
+    w.write_bits(11, 4); // frame_height_bits_minus_1
+    w.write_bits(1919, 12); // max_frame_width_minus_1
+    w.write_bits(1079, 12); // max_frame_height_minus_1
+    w.write_bit(false); // frame_id_numbers_present
+    w.write_bit(false); // use_128x128_superblock
+    w.write_bit(false); // enable_filter_intra
+    w.write_bit(false); // enable_intra_edge_filter
+    w.write_bit(false); // enable_interintra_compound
+    w.write_bit(false); // enable_masked_compound
+    w.write_bit(false); // enable_warped_motion
+    w.write_bit(false); // enable_dual_filter
+    w.write_bit(false); // enable_order_hint
+    w.write_bit(true); // seq_choose_screen_content_tools
+    w.write_bit(true); // seq_choose_integer_mv
+    w.write_bit(false); // enable_superres
+    w.write_bit(false); // enable_cdef
+    w.write_bit(false); // enable_restoration
+    w.write_bit(false); // high_bitdepth
+    w.write_bit(false); // monochrome
+    w.write_bit(false); // color_description_present
+    // non-monochrome, not sRGB → full_range bit, profile 0 → sub 1/1, chroma pos
+    w.write_bit(false); // video_full_range_flag
+    w.write_bits(0, 2); // chroma_sample_position
+    w.write_bit(false); // separate_uv_delta_q
+    w.into_bytes()
+  }
+
+  #[test]
+  fn timing_info_yields_default_duration() {
+    // num_units 1001, time_scale 48000, 1 tick/pic → 1e9*1001/48000 ≈ 20.85 ms.
+    let body = build_seq_with_timing(1001, 48000);
+    let seq = decode_sequence_header(&body).unwrap();
+    assert_eq!(seq.default_duration_ns, Some(1_000_000_000u64 * 1001 / 48000));
+    assert_eq!(seq.frame_duration_ns, Some(1_000_000_000u64 * 1001 / 48000));
+    assert_eq!(seq.seq_level_idx_0, 8);
+    assert_eq!(seq.max_width, 1920);
+  }
+
+  #[test]
+  fn read_headers_emits_av1c_codec_private_and_duration() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_seq_with_timing(1001, 48000);
+    let mut bytes = vec![0x12u8, 0x00]; // temporal_delimiter
+    bytes.push(0x0A); // sequence_header
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_frame_obu());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.obu", 0);
+    ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let track = &out.tracks[0];
+    // AV1C codec private: 4-byte config header + the raw sequence_header OBU.
+    let cp = track.codec.codec_private.as_ref().unwrap();
+    assert!(cp.length as usize >= 4 + 2 + body.len());
+    // First byte = marker(1) + version(7) = 0x81; second byte top 3 bits = profile 0.
+    assert!(cp.hex.starts_with("81"));
+    let v = track.properties.video.as_ref().unwrap();
+    assert_eq!(v.default_duration_ns, Some(1_000_000_000u64 * 1001 / 48000));
+  }
+
+  #[test]
+  fn av1c_packs_config_header_fields() {
+    let seq = decode_sequence_header(&build_seq_with_timing(1001, 48000)).unwrap();
+    let seq_obu = [0xAAu8, 0xBB];
+    let av1c = build_av1c(&seq, &seq_obu, &[]);
+    assert_eq!(av1c[0], 0x81); // marker + version
+    // seq_profile (0) in top 3 bits, seq_level_idx_0 (8) in low 5 bits.
+    assert_eq!(av1c[1], (0 << 5) | 8);
+    assert_eq!(av1c[3], 0x00);
+    // Raw sequence-header OBU appended after the 4-byte config.
+    assert_eq!(&av1c[4..], &seq_obu);
+  }
+
+  #[test]
+  fn dovi_rpu_metadata_obu_creates_block_addition_mapping() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    // TD + sequence_header + ITU-T T.35 DV metadata OBU + frame.
+    let body = build_reduced_sequence_header(0, 3840, 2160, false);
+    let mut bytes = vec![0x12u8, 0x00];
+    bytes.push(0x0A);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    // metadata OBU (type 5): metadata_type=4 (T.35), country 0xB5, DV header.
+    let mut meta = vec![METADATA_TYPE_ITUT_T35 as u8, 0xb5];
+    meta.extend_from_slice(&DOVI_T35_HEADER);
+    meta.extend_from_slice(&[0x11, 0x22]);
+    bytes.push(0x2A); // OBU_METADATA (type 5), has_size_field = 1
+    bytes.push(meta.len() as u8);
+    bytes.extend_from_slice(&meta);
+    bytes.extend(build_frame_obu());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("dv.obu", 0);
+    ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let track = &out.tracks[0];
+    assert_eq!(track.properties.common.max_block_addition_id, Some(4));
+    let v = track.properties.video.as_ref().unwrap();
+    assert_eq!(v.block_addition_mappings.len(), 1);
+    assert_eq!(v.block_addition_mappings[0].id_type, "dvvC");
+    assert_eq!(v.block_addition_mappings[0].data_hex.len(), 48);
   }
 }

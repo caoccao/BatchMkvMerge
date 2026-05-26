@@ -156,9 +156,114 @@ impl Reader for AviReader {
       _ => Vec::new(),
     };
 
-    identify::finalise(avih, streams, odml_info, subtitles, out);
+    // PARSER-241: MPEG-4 Part 2 (DivX/Xvid) AVI carries the pixel aspect ratio
+    // only in the elementary bit-stream, so read the first video frame and
+    // decode the VOL header's PAR (mkvtoolnix's `extended_identify_mpeg4_l2`).
+    let video_frame_par = compute_mpeg4_video_par(src, movi.as_ref(), &streams, deadline)?;
+
+    identify::finalise(avih, streams, odml_info, subtitles, video_frame_par, out);
     Ok(())
   }
+}
+
+/// Maximum number of `movi` child-chunk headers scanned looking for the first
+/// video frame of the MPEG-4 Part 2 stream.
+const MAX_MOVI_FRAME_SCANS: u32 = 4096;
+/// Bytes of the first video frame read for VOL-header PAR decoding — the VOL
+/// header sits at the very start, so a bounded prefix is enough.
+const MAX_VIDEO_FRAME_BYTES: u64 = 256 * 1024;
+
+/// The two `movi` chunk tags for a video stream at index `idx`: `NNdb`
+/// (uncompressed) and `NNdc` (compressed).
+fn video_chunk_tags(idx: usize) -> [[u8; 4]; 2] {
+  let d1 = (idx / 10) as u8 + b'0';
+  let d2 = (idx % 10) as u8 + b'0';
+  [[d1, d2, b'd', b'b'], [d1, d2, b'd', b'c']]
+}
+
+/// Build an ASCII FOURCC string from the 4-byte BITMAPINFOHEADER compression
+/// field for codec matching.
+fn fourcc_ascii(bytes: &[u8; 4]) -> String {
+  bytes.iter().map(|&b| b as char).collect()
+}
+
+/// PARSER-241: when the (single) video stream is MPEG-4 Part 2, read its first
+/// `movi` frame and extract the VOL-header pixel aspect ratio.  Returns `None`
+/// for any non-MPEG-4-P2 stream, a missing `movi`, or a frame without PAR.
+fn compute_mpeg4_video_par(
+  src: &mut FileSource,
+  movi: Option<&ChunkHeader>,
+  streams: &[StreamBuilder],
+  deadline: &Deadline,
+) -> Result<Option<(u32, u32)>, ParseError> {
+  let Some(movi) = movi else {
+    return Ok(None);
+  };
+  let Some(video_idx) = streams
+    .iter()
+    .position(|s| s.header.as_ref().map(|h| h.kind) == Some(AviStreamKind::Video))
+  else {
+    return Ok(None);
+  };
+  let bmih = match streams[video_idx].format.as_ref() {
+    Some(super::strl::StreamFormat::Video(bmih)) => bmih,
+    _ => return Ok(None),
+  };
+  if !super::mpeg4_par::is_mpeg4_p2(&fourcc_ascii(&bmih.compression)) {
+    return Ok(None);
+  }
+  let Some(frame) = read_first_video_frame(src, movi, video_idx, deadline)? else {
+    return Ok(None);
+  };
+  Ok(super::mpeg4_par::extract_par(&frame))
+}
+
+/// Walk the `movi` LIST for the first frame chunk belonging to the video stream
+/// at `video_idx`, returning a bounded prefix of its payload.
+fn read_first_video_frame(
+  src: &mut FileSource,
+  movi: &ChunkHeader,
+  video_idx: usize,
+  deadline: &Deadline,
+) -> Result<Option<Vec<u8>>, ParseError> {
+  let tags = video_chunk_tags(video_idx);
+  let first_child = movi.payload_start() + 4;
+  let parent_end = movi.payload_end();
+  let stream_end = src.length();
+  src.seek_to(first_child)?;
+  let mut scans = 0u32;
+  while scans < MAX_MOVI_FRAME_SCANS {
+    deadline.check("avi::mpeg4_par")?;
+    scans += 1;
+    let pos = src.position();
+    if pos >= parent_end || parent_end - pos < 8 {
+      break;
+    }
+    if let Some(end) = stream_end {
+      if pos >= end || end - pos < 8 {
+        break;
+      }
+    }
+    let child = match riff::read_chunk_header(src) {
+      Ok(h) => h,
+      Err(ParseError::UnexpectedEof { .. }) => break,
+      Err(e) => return Err(e),
+    };
+    if child.payload_end() > parent_end {
+      break;
+    }
+    // Descend into `rec ` interleave sub-lists by skipping the LIST sub-type.
+    if &child.kind == b"LIST" {
+      src.seek_to(child.payload_start() + 4)?;
+      continue;
+    }
+    if tags.iter().any(|t| &child.kind == t) {
+      let bytes = riff::read_payload(src, &child, MAX_VIDEO_FRAME_BYTES)?;
+      return Ok(Some(bytes));
+    }
+    riff::skip_payload_with_pad(src, &child)?;
+  }
+  Ok(None)
 }
 
 fn parse_hdrl(
@@ -448,6 +553,56 @@ mod tests {
     let sub = out.tracks.iter().find(|t| t.track_type == TrackType::Subtitles).unwrap();
     assert_eq!(sub.id, 3);
     assert_eq!(sub.properties.common.number, Some(4));
+  }
+
+  // ---- PARSER-241: MPEG-4 Part 2 frame PAR → display dimensions ---------
+
+  fn build_xvid_video_strl(width: u16, height: u16) -> Vec<u8> {
+    let strh = encode_chunk(b"strh", &build_strh_payload(b"vids", b"XVID", 1001, 24000, 240, 0));
+    let strf = encode_chunk(
+      b"strf",
+      &build_bitmapinfoheader(width as i32, height as i32, 24, b"XVID"),
+    );
+    let mut payload = strh;
+    payload.extend(strf);
+    encode_list(b"LIST", b"strl", &[payload])
+  }
+
+  /// A minimal MPEG-4 Part 2 VOL header carrying aspect_ratio_info = 2 (12:11):
+  /// `00 00 01 20` start code, then `random_access(1)=0`, `vo_type(8)=0`,
+  /// `is_old_id(1)=0`, `aspect_ratio_info(4)=0b0010`.
+  fn xvid_vol_frame_12_11() -> Vec<u8> {
+    vec![0x00, 0x00, 0x01, 0x20, 0x00, 0x08]
+  }
+
+  #[test]
+  fn mpeg4_p2_frame_par_sets_display_dimensions() {
+    // 720x480 XVID with a 12:11 PAR in the first frame and no vprp → display
+    // dimensions stretched to 785x480 (mkvmerge's extended_identify_mpeg4_l2).
+    let frame = encode_chunk(b"00dc", &xvid_vol_frame_12_11());
+    let bytes = build_avi_with_movi(vec![build_xvid_video_strl(720, 480)], vec![frame]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(v.pixel_dimensions.unwrap().width, 720);
+    assert_eq!(
+      v.display_dimensions,
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 785, height: 480 })
+    );
+  }
+
+  #[test]
+  fn non_mpeg4_video_ignores_frame_par() {
+    // An H.264 stream with the same frame bytes must not trigger frame-PAR
+    // display scaling (the FOURCC is not MPEG-4 Part 2).
+    let frame = encode_chunk(b"00dc", &xvid_vol_frame_12_11());
+    let bytes = build_avi_with_movi(vec![build_video_strl(720, 480)], vec![frame]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(v.display_dimensions, v.pixel_dimensions);
   }
 
   #[test]

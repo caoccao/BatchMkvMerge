@@ -41,6 +41,39 @@ struct SequenceHeader {
   pixel_width: u32,
   pixel_height: u32,
   interlaced: bool,
+  top_field_first: bool,
+  frame_rate_numerator: u32,
+  frame_rate_denominator: u32,
+  aspect_ratio_numerator: u32,
+  aspect_ratio_denominator: u32,
+}
+
+impl SequenceHeader {
+  /// Display dimensions after applying the sample aspect ratio, mirroring
+  /// `dirac_video_packetizer_c::set_headers` (`p_dirac.cpp`).
+  fn display_dimensions(&self) -> (u32, u32) {
+    let mut w = self.pixel_width;
+    let mut h = self.pixel_height;
+    let (num, den) = (self.aspect_ratio_numerator as u64, self.aspect_ratio_denominator as u64);
+    if num != 0 && den != 0 {
+      if num > den {
+        w = (((w as u64) * num + den / 2) / den) as u32;
+      } else {
+        h = (((h as u64) * den + num / 2) / num) as u32;
+      }
+    }
+    (w, h)
+  }
+
+  /// Default frame duration in ns from the frame-rate syntax
+  /// (`dirac.cpp:366-367`: `1e9 * frame_rate_denominator / frame_rate_numerator`).
+  fn default_duration_ns(&self) -> Option<u64> {
+    if self.frame_rate_numerator != 0 && self.frame_rate_denominator != 0 {
+      Some(1_000_000_000u64 * self.frame_rate_denominator as u64 / self.frame_rate_numerator as u64)
+    } else {
+      None
+    }
+  }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -76,6 +109,8 @@ impl Reader for DiracReader {
     out.container.recognized = true;
     out.container.supported = true;
 
+    let (display_width, display_height) = sequence.display_dimensions();
+
     let mut common = CommonTrackProperties::default();
     common.number = Some(1);
     out.tracks.push(Track {
@@ -94,9 +129,10 @@ impl Reader for DiracReader {
             height: sequence.pixel_height,
           }),
           display_dimensions: Some(Dimensions2D {
-            width: sequence.pixel_width,
-            height: sequence.pixel_height,
+            width: display_width,
+            height: display_height,
           }),
+          default_duration_ns: sequence.default_duration_ns(),
           interlace: Some(if sequence.interlaced {
             InterlaceFlag::Interlaced
           } else {
@@ -134,20 +170,61 @@ fn parse_sequence_header(bytes: &[u8]) -> Option<SequenceHeader> {
   let _minor = read_uint(&mut br).ok()?;
   let _profile = read_uint(&mut br).ok()?;
   let _level = read_uint(&mut br).ok()?;
-  let base_video_format = read_uint(&mut br).ok()?;
+
+  // base_video_format indexes the standard-format table directly; an
+  // out-of-range value falls back to format 0 (`dirac.cpp:142-145`).
+  let mut base_video_format = read_uint(&mut br).ok()? as usize;
+  if base_video_format >= STANDARD_VIDEO_FORMATS.len() {
+    base_video_format = 0;
+  }
   let mut sequence = standard_video_format(base_video_format);
+
+  // Custom source dimensions.
   if br.read_bit().ok()? {
     sequence.pixel_width = read_uint(&mut br).ok()?;
     sequence.pixel_height = read_uint(&mut br).ok()?;
   }
+  // Custom chroma format (parsed for bit alignment only).
   if br.read_bit().ok()? {
     let _chroma_format = read_uint(&mut br).ok()?;
   }
+  // Custom scan format.
   if br.read_bit().ok()? {
     sequence.interlaced = br.read_bit().ok()?;
     if sequence.interlaced {
-      let _top_field_first = br.read_bit().ok()?;
+      sequence.top_field_first = br.read_bit().ok()?;
     }
+  }
+  // Custom frame rate.
+  if br.read_bit().ok()? {
+    let index = read_uint(&mut br).ok()? as usize;
+    if index == 0 {
+      sequence.frame_rate_numerator = read_uint(&mut br).ok()?;
+      sequence.frame_rate_denominator = read_uint(&mut br).ok()?;
+    } else if index < STANDARD_FRAME_RATES.len() {
+      let (num, den) = STANDARD_FRAME_RATES[index];
+      sequence.frame_rate_numerator = num;
+      sequence.frame_rate_denominator = den;
+    }
+  }
+  // Custom pixel aspect ratio.
+  if br.read_bit().ok()? {
+    let index = read_uint(&mut br).ok()? as usize;
+    if index == 0 {
+      sequence.aspect_ratio_numerator = read_uint(&mut br).ok()?;
+      sequence.aspect_ratio_denominator = read_uint(&mut br).ok()?;
+    } else if index < STANDARD_ASPECT_RATIOS.len() {
+      let (num, den) = STANDARD_ASPECT_RATIOS[index];
+      sequence.aspect_ratio_numerator = num;
+      sequence.aspect_ratio_denominator = den;
+    }
+  }
+  // Custom clean area (parsed for bit alignment; not surfaced).
+  if br.read_bit().ok()? {
+    let _clean_width = read_uint(&mut br).ok()?;
+    let _clean_height = read_uint(&mut br).ok()?;
+    let _left_offset = read_uint(&mut br).ok()?;
+    let _top_offset = read_uint(&mut br).ok()?;
   }
   Some(sequence)
 }
@@ -170,48 +247,76 @@ fn read_uint(br: &mut BitReader<'_>) -> Result<u32, ParseError> {
   Ok((1u32 << count) - 1 + value)
 }
 
-fn standard_video_format(index: u32) -> SequenceHeader {
-  match index {
-    1 => SequenceHeader {
-      pixel_width: 176,
-      pixel_height: 120,
-      interlaced: false,
-    },
-    2 => SequenceHeader {
-      pixel_width: 176,
-      pixel_height: 144,
-      interlaced: false,
-    },
-    7 => SequenceHeader {
-      pixel_width: 720,
-      pixel_height: 480,
-      interlaced: true,
-    },
-    8 => SequenceHeader {
-      pixel_width: 720,
-      pixel_height: 576,
-      interlaced: true,
-    },
-    9 | 10 => SequenceHeader {
-      pixel_width: 1280,
-      pixel_height: 720,
-      interlaced: false,
-    },
-    11 | 12 => SequenceHeader {
-      pixel_width: 1920,
-      pixel_height: 1080,
-      interlaced: true,
-    },
-    13 | 14 | 21 => SequenceHeader {
-      pixel_width: 1920,
-      pixel_height: 1080,
-      interlaced: false,
-    },
-    _ => SequenceHeader {
-      pixel_width: 640,
-      pixel_height: 480,
-      interlaced: false,
-    },
+/// `standard_video_formats[23]` from `common/dirac.cpp:75-99`, indexed directly
+/// by `base_video_format`.  Tuple = `(pixel_width, pixel_height, interlaced,
+/// top_field_first, frame_rate_num, frame_rate_den, aspect_ratio_num,
+/// aspect_ratio_den)`.
+#[rustfmt::skip]
+const STANDARD_VIDEO_FORMATS: [(u32, u32, bool, bool, u32, u32, u32, u32); 23] = [
+  ( 640,  480, false, false, 24000, 1001,  1,  1),
+  ( 176,  120, false, false, 15000, 1001, 10, 11),
+  ( 176,  144, false,  true,    25,    2, 12, 11),
+  ( 352,  240, false, false, 15000, 1001, 10, 11),
+  ( 352,  288, false,  true,    25,    2, 12, 11),
+  ( 704,  480, false, false, 15000, 1001, 10, 11),
+  ( 704,  576, false,  true,    25,    2, 12, 11),
+  ( 720,  480,  true, false, 30000, 1001, 10, 11),
+  ( 720,  576,  true,  true,    25,    1, 12, 11),
+  (1280,  720, false,  true, 60000, 1001,  1,  1),
+  (1280,  720, false,  true,    50,    1,  1,  1),
+  (1920, 1080,  true,  true, 30000, 1001,  1,  1),
+  (1920, 1080,  true,  true,    25,    1,  1,  1),
+  (1920, 1080, false,  true, 60000, 1001,  1,  1),
+  (1920, 1080, false,  true,    50,    1,  1,  1),
+  (2048, 1080, false,  true,    24,    1,  1,  1),
+  (4096, 2160, false,  true,    24,    1,  1,  1),
+  (3840, 2160, false,  true, 60000, 1001,  1,  1),
+  (3840, 2160, false,  true,    50,    1,  1,  1),
+  (7680, 4320, false,  true, 60000, 1001,  1,  1),
+  (7680, 4320, false,  true,    50,    1,  1,  1),
+  (1920, 1080, false,  true, 24000, 1001,  1,  1),
+  ( 720,  486,  true, false, 30000, 1001, 10, 11),
+];
+
+/// `standard_frame_rates[11]` from `common/dirac.cpp:101-113`, indexed 1..=10.
+#[rustfmt::skip]
+const STANDARD_FRAME_RATES: [(u32, u32); 11] = [
+  (    0,    0),
+  (24000, 1001),
+  (   24,    1),
+  (   25,    1),
+  (30000, 1001),
+  (   30,    1),
+  (   50,    1),
+  (60000, 1001),
+  (   60,    1),
+  (15000, 1001),
+  (   25,    2),
+];
+
+/// `standard_aspect_ratios[7]` from `common/dirac.cpp:115-123`, indexed 1..=6.
+#[rustfmt::skip]
+const STANDARD_ASPECT_RATIOS: [(u32, u32); 7] = [
+  ( 0,  0),
+  ( 1,  1),
+  (10, 11),
+  (12, 11),
+  (40, 33),
+  (16, 11),
+  ( 4,  3),
+];
+
+fn standard_video_format(index: usize) -> SequenceHeader {
+  let (w, h, interlaced, tff, frn, frd, arn, ard) = STANDARD_VIDEO_FORMATS[index];
+  SequenceHeader {
+    pixel_width: w,
+    pixel_height: h,
+    interlaced,
+    top_field_first: tff,
+    frame_rate_numerator: frn,
+    frame_rate_denominator: frd,
+    aspect_ratio_numerator: arn,
+    aspect_ratio_denominator: ard,
   }
 }
 
@@ -235,6 +340,56 @@ pub(crate) fn build_dirac_stream() -> Vec<u8> {
   writer.write_bit(false); // frame_rate_flag
   writer.write_bit(false); // aspect_ratio_flag
   writer.write_bit(false); // clean_area_flag
+  bytes.extend(writer.into_bytes());
+  bytes
+}
+
+/// Build a Dirac sequence header that selects `base_video_format` with no
+/// per-field overrides, so the standard-format table values are used verbatim.
+#[cfg(test)]
+pub(crate) fn build_dirac_base_format(base: u32) -> Vec<u8> {
+  let mut bytes = PARSE_INFO_MAGIC.to_vec();
+  bytes.push(0x00);
+  bytes.extend_from_slice(&[0u8; 8]);
+  let mut writer = DiracUintWriter::new();
+  writer.write_uint(2); // major
+  writer.write_uint(2); // minor
+  writer.write_uint(0); // profile
+  writer.write_uint(0); // level
+  writer.write_uint(base); // base video format
+  writer.write_bit(false); // custom dimensions
+  writer.write_bit(false); // chroma
+  writer.write_bit(false); // scan
+  writer.write_bit(false); // frame rate
+  writer.write_bit(false); // aspect ratio
+  writer.write_bit(false); // clean area
+  bytes.extend(writer.into_bytes());
+  bytes
+}
+
+/// Build a Dirac sequence header with custom source dimensions plus a custom
+/// frame-rate index and aspect-ratio index.
+#[cfg(test)]
+pub(crate) fn build_dirac_custom(width: u32, height: u32, frame_rate_index: u32, aspect_ratio_index: u32) -> Vec<u8> {
+  let mut bytes = PARSE_INFO_MAGIC.to_vec();
+  bytes.push(0x00);
+  bytes.extend_from_slice(&[0u8; 8]);
+  let mut writer = DiracUintWriter::new();
+  writer.write_uint(2); // major
+  writer.write_uint(2); // minor
+  writer.write_uint(0); // profile
+  writer.write_uint(0); // level
+  writer.write_uint(0); // base video format
+  writer.write_bit(true); // custom dimensions
+  writer.write_uint(width);
+  writer.write_uint(height);
+  writer.write_bit(false); // chroma
+  writer.write_bit(false); // scan
+  writer.write_bit(true); // frame rate flag
+  writer.write_uint(frame_rate_index);
+  writer.write_bit(true); // aspect ratio flag
+  writer.write_uint(aspect_ratio_index);
+  writer.write_bit(false); // clean area
   bytes.extend(writer.into_bytes());
   bytes
 }
@@ -366,5 +521,71 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap_err();
     assert!(matches!(err, ParseError::Unrecognised));
+  }
+
+  // ---- PARSER-242: full standard-format table + overrides ---------------
+
+  #[test]
+  fn standard_format_table_resolves_all_documented_indices() {
+    // Indices that previously fell back to 640x480.
+    let cases = [
+      (3u32, 352u32, 240u32),
+      (4, 352, 288),
+      (5, 704, 480),
+      (6, 704, 576),
+      (15, 2048, 1080),
+      (16, 4096, 2160),
+      (17, 3840, 2160),
+      (19, 7680, 4320),
+      (22, 720, 486),
+    ];
+    for (index, w, h) in cases {
+      let seq = parse_sequence_header(&build_dirac_base_format(index)).unwrap();
+      assert_eq!((seq.pixel_width, seq.pixel_height), (w, h), "base_video_format {index}");
+    }
+  }
+
+  #[test]
+  fn out_of_range_base_format_falls_back_to_zero() {
+    let seq = parse_sequence_header(&build_dirac_base_format(99)).unwrap();
+    assert_eq!((seq.pixel_width, seq.pixel_height), (640, 480));
+  }
+
+  #[test]
+  fn base_format_carries_frame_rate_and_aspect_ratio() {
+    // Format 7 (720x480 interlaced) → 30000/1001 fps, 10/11 PAR.
+    let seq = parse_sequence_header(&build_dirac_base_format(7)).unwrap();
+    assert_eq!(seq.frame_rate_numerator, 30000);
+    assert_eq!(seq.frame_rate_denominator, 1001);
+    assert_eq!((seq.aspect_ratio_numerator, seq.aspect_ratio_denominator), (10, 11));
+    // 720x480 with 10:11 PAR: num(10) < den(11) → height scaled up.
+    let (dw, dh) = seq.display_dimensions();
+    assert_eq!(dw, 720);
+    assert_eq!(dh, ((480u64 * 11 + 5) / 10) as u32); // 528
+  }
+
+  #[test]
+  fn custom_frame_rate_and_aspect_drive_display_and_duration() {
+    // Custom 720x576, frame-rate index 4 (30000/1001), aspect index 3 (12/11).
+    let bytes = build_dirac_custom(720, 576, 4, 3);
+    let seq = parse_sequence_header(&bytes).unwrap();
+    assert_eq!((seq.pixel_width, seq.pixel_height), (720, 576));
+    assert_eq!((seq.frame_rate_numerator, seq.frame_rate_denominator), (30000, 1001));
+    assert_eq!((seq.aspect_ratio_numerator, seq.aspect_ratio_denominator), (12, 11));
+    // PAR 12:11, num > den → width scaled up: round(720 * 12 / 11) = 785.
+    let (dw, dh) = seq.display_dimensions();
+    assert_eq!((dw, dh), (785, 576));
+    // default duration = 1e9 * 1001 / 30000 = 33_366_666 ns.
+    assert_eq!(seq.default_duration_ns(), Some(33_366_666));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.drc", 0);
+    DiracReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 720, height: 576 }));
+    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 785, height: 576 }));
+    assert_eq!(v.default_duration_ns, Some(33_366_666));
   }
 }

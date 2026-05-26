@@ -143,12 +143,13 @@ pub fn build_rows(
       kind = TrackKind::Audio;
     }
   }
-  // HEVC descriptor disambiguates 0x24 → HEVC.
-  if stream_desc.is_hevc && kind == TrackKind::Unknown {
-    codec_id = "V_HEVC".to_string();
-    codec_name = "HEVC/H.265".to_string();
-    kind = TrackKind::Video;
-  }
+  // PARSER-251: mkvtoolnix's PMT descriptor switch (r_mpeg_ts.cpp:1864-1887)
+  // handles only registration / ISO-639 / teletext / subtitling / AC-3 /
+  // E-AC-3 / DTS / Dolby Vision tags — there is no HEVC-descriptor (0x38)
+  // handler.  A private PES stream signalled only by an HEVC descriptor stays
+  // `unknown` and is dropped; HEVC video is recognised solely by stream_type
+  // 0x24 (→ the canonical `V_MPEGH/ISO/HEVC`).  We therefore do not promote on
+  // the HEVC descriptor (and emit no noncanonical `V_HEVC`).
 
   // PARSER-091: DVB subtitling descriptor (0x59) on a private PES stream
   // creates one S_DVBSUB track per language entry.
@@ -337,11 +338,13 @@ mod tests {
 
   #[test]
   fn dovi_descriptor_on_video_carries_profile_and_base_layer_pid() {
-    // PARSER-173: a private-PES (0x06) stream with an HEVC descriptor (→ video)
-    // plus a Dolby Vision descriptor carries the DV profile + base-layer PID.
-    let mut descs = build_descriptor(TAG_HEVC, &[]);
-    descs.extend(build_descriptor(TAG_DOVI, &dovi_body(7, 0x1010)));
-    let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+    // PARSER-173 / PARSER-251: an HEVC video stream (stream_type 0x24 → the
+    // canonical V_MPEGH/ISO/HEVC) carrying a Dolby Vision descriptor exposes the
+    // DV profile + base-layer PID.  HEVC video is recognised by its stream_type,
+    // not by the HEVC PMT descriptor (which mkvtoolnix ignores).
+    let descs = build_descriptor(TAG_DOVI, &dovi_body(7, 0x1010));
+    let row = build_row(0x1234, 1, &entry(0x24, descs), &DescriptorSummary::default());
+    assert_eq!(row.codec_id, "V_MPEGH/ISO/HEVC");
     assert_eq!(row.track_kind, TrackKind::Video);
     assert_eq!(row.dovi_profile, Some(7));
     assert_eq!(row.dovi_base_layer_pid, Some(0x1010));
@@ -526,10 +529,33 @@ mod tests {
   }
 
   #[test]
-  fn hevc_descriptor_promotes_unknown_to_hevc() {
+  fn hevc_descriptor_does_not_promote_unknown_stream() {
+    // PARSER-251: mkvtoolnix has no HEVC PMT descriptor handler, so an unknown
+    // stream type carrying only an HEVC descriptor (0x38) is not promoted — it
+    // stays unknown and is later dropped.  HEVC video must arrive via
+    // stream_type 0x24.
     let descs = build_descriptor(TAG_HEVC, &[]);
     let row = build_row(0x1234, 1, &entry(0xFA, descs), &DescriptorSummary::default());
-    assert_eq!(row.codec_id, "V_HEVC");
+    assert_eq!(row.track_kind, TrackKind::Unknown);
+    assert_ne!(row.codec_id, "V_HEVC");
+  }
+
+  #[test]
+  fn private_stream_with_only_hevc_descriptor_stays_unknown() {
+    // PARSER-251: a private PES stream (0x06) signalled solely by an HEVC
+    // descriptor does not become AC-3 (the descriptor clears `missing_tag`) and
+    // is not promoted to HEVC — it stays unknown, exactly as mkvtoolnix leaves
+    // it (r_mpeg_ts.cpp:1861-1895).
+    let descs = build_descriptor(TAG_HEVC, &[]);
+    let row = build_row(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
+    assert_eq!(row.track_kind, TrackKind::Unknown);
+  }
+
+  #[test]
+  fn stream_type_24_resolves_to_canonical_hevc() {
+    // PARSER-251: HEVC video uses the canonical Matroska codec id.
+    let row = build_row(0x1234, 1, &entry(0x24, vec![]), &DescriptorSummary::default());
+    assert_eq!(row.codec_id, "V_MPEGH/ISO/HEVC");
     assert_eq!(row.track_kind, TrackKind::Video);
   }
 

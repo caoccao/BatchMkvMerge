@@ -23,7 +23,6 @@ pub mod ac3;
 pub mod dovi;
 pub mod dts;
 pub mod eac3;
-pub mod hevc;
 pub mod iso_639_language;
 pub mod registration;
 pub mod service;
@@ -38,6 +37,9 @@ pub const TAG_AC3: u8 = 0x6A;
 pub const TAG_DTS: u8 = 0x7B;
 pub const TAG_EAC3: u8 = 0x7A;
 pub const TAG_SERVICE: u8 = 0x48;
+/// HEVC video descriptor.  PARSER-251: mkvtoolnix does not handle this tag in
+/// its PMT descriptor switch, so it never promotes a stream's codec — kept only
+/// so the `missing_tag` bookkeeping (`has_disambiguating_tag`) can observe it.
 pub const TAG_HEVC: u8 = 0x38;
 pub const TAG_DOVI: u8 = 0xB0;
 
@@ -54,7 +56,6 @@ pub struct DescriptorSummary {
   pub is_ac3: bool,
   pub is_eac3: bool,
   pub is_dts: bool,
-  pub is_hevc: bool,
   /// PARSER-173: Dolby Vision descriptor (profile + optional base-layer PID).
   pub dovi: Option<dovi::DoviDescriptor>,
   pub service_name: Option<String>,
@@ -116,9 +117,6 @@ pub fn walk(descriptors: &[u8]) -> DescriptorSummary {
       }
       TAG_DTS => {
         summary.is_dts = dts::decode(body);
-      }
-      TAG_HEVC => {
-        summary.is_hevc = hevc::decode(body);
       }
       TAG_DOVI => {
         summary.dovi = dovi::decode(body);

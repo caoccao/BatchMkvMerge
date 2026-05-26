@@ -404,7 +404,7 @@ fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnri
       }
       None
     }
-    "V_MPEGH/ISO/HEVC" | "V_HEVC" => {
+    "V_MPEGH/ISO/HEVC" => {
       for nal in hevc::nal::split_nal_units(es) {
         // HEVC SPS_NUT == 33.
         if nal.nal_unit_type == 33 {
@@ -439,10 +439,16 @@ fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnri
       })
     }
     "A_MPEG/L3" => {
+      // PARSER-250: the PMT defaults stream types 0x03/0x04 to A_MPEG/L3, but
+      // mkvtoolnix's `new_stream_a_mpeg` decodes the first frame header and
+      // replaces the codec with `header.get_codec()` (r_mpeg_ts.cpp:354-357),
+      // so Layer I / II audio is labelled correctly rather than as MP3.
       let (_, header) = mp3::find_consecutive_mp3_headers(es, 1)?;
+      let (codec_id, codec_name) = mp3::codec_for_layer(header.layer);
       Some(EsEnrichment {
         channels: Some(header.channels),
         sampling_frequency: Some(header.sampling_frequency as f64),
+        codec_override: Some((codec_id.to_string(), codec_name.to_string())),
         ..EsEnrichment::default()
       })
     }
@@ -964,11 +970,15 @@ mod tests {
     let es = vc1::build_sequence_header(1920, 1080);
     assert_eq!(enrich_for_codec("V_VC1", 0xEA, &es).unwrap().pixel_dimensions, Some((1920, 1080)));
 
-    // MP3 → channels + sampling frequency.
+    // MP3 → channels + sampling frequency + Layer III codec override.
     let es = mp3::build_mp3_frame_v1(128, 44100, false);
     let m = enrich_for_codec("A_MPEG/L3", 0x03, &es).unwrap();
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(44100.0));
+    assert_eq!(
+      m.codec_override,
+      Some(("A_MPEG/L3".to_string(), "MP3".to_string()))
+    );
 
     // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2) — five consecutive
     // frames are required (PARSER-206).
@@ -986,6 +996,21 @@ mod tests {
     // Unknown / unprobeable codec yields nothing.
     assert!(enrich_for_codec("S_HDMV/PGS", 0x90, &es).is_none());
     assert!(enrich_for_codec("A_AC3", 0x81, &[0u8; 4]).is_none());
+  }
+
+  #[test]
+  fn mpeg_audio_layer_two_specialises_codec() {
+    // PARSER-250: a stream type 0x04 carrying Layer II audio is relabelled from
+    // the table default (A_MPEG/L3) to A_MPEG/L2 once the frame header decodes,
+    // mirroring `new_stream_a_mpeg`'s `header.get_codec()`.
+    use crate::media_metadata::audio::mp3;
+    let es = mp3::build_mp3_frame(1, 2, 128, 44100, false);
+    let m = enrich_for_codec("A_MPEG/L3", 0x04, &es).unwrap();
+    assert_eq!(
+      m.codec_override,
+      Some(("A_MPEG/L2".to_string(), "MP2".to_string()))
+    );
+    assert_eq!(m.channels, Some(2));
   }
 
   // ---- PARSER-206: AAC requires five consecutive frames + LOAS/LATM ------

@@ -129,12 +129,17 @@ fn build_dirac_sequence_header() -> Vec<u8> {
   write_dirac_uint(&mut w, 0);
   write_dirac_uint(&mut w, 0);
   write_dirac_uint(&mut w, 0);
-  w.write_bit(true);
+  w.write_bit(true); // custom dimensions
   write_dirac_uint(&mut w, 1920);
   write_dirac_uint(&mut w, 1080);
-  w.write_bit(false);
-  w.write_bit(true);
-  w.write_bit(false);
+  w.write_bit(false); // chroma_format_flag
+  w.write_bit(true); // scan_format_flag
+  w.write_bit(false); // progressive
+  // A complete sequence header also carries the frame-rate, aspect-ratio, and
+  // clean-area override flags (all absent here), which the parser now reads.
+  w.write_bit(false); // frame_rate_flag
+  w.write_bit(false); // aspect_ratio_flag
+  w.write_bit(false); // clean_area_flag
   bytes.extend(w.into_bytes());
   bytes
 }
