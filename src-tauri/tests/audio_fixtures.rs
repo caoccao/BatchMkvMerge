@@ -163,9 +163,15 @@ fn parses_coreaudio_caf() {
   bytes.extend_from_slice(&32i64.to_be_bytes());
   bytes.extend_from_slice(&(48_000f64).to_bits().to_be_bytes());
   bytes.extend_from_slice(b"alac");
-  bytes.extend_from_slice(&[0u8; 16]);
+  bytes.extend_from_slice(&[0u8; 12]);
   bytes.extend_from_slice(&2u32.to_be_bytes()); // channels
   bytes.extend_from_slice(&16u32.to_be_bytes()); // bits
+  bytes.extend_from_slice(b"pakt");
+  bytes.extend_from_slice(&24i64.to_be_bytes());
+  bytes.extend_from_slice(&0u64.to_be_bytes()); // num_packets
+  bytes.extend_from_slice(&0u64.to_be_bytes()); // num_valid_frames
+  bytes.extend_from_slice(&0u32.to_be_bytes()); // priming
+  bytes.extend_from_slice(&0u32.to_be_bytes()); // remainder
   bytes.extend_from_slice(b"data");
   bytes.extend_from_slice(&100i64.to_be_bytes());
   bytes.extend_from_slice(&[0u8; 100]);

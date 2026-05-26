@@ -153,6 +153,7 @@ fn parse_entry(
     }
     builder.codec_id_str = Some(codec_str);
   }
+  let retained_sample_entry_kind = builder.sample_entry_kind.unwrap_or(entry.kind.0);
 
   // Common 8-byte sample entry header
   src.skip(6)?; // reserved
@@ -195,11 +196,11 @@ fn parse_entry(
   // xvid) — or a SUBTITLE sample entry whose fourcc is not `mp4s` — the entire
   // remaining sample-entry payload is preserved verbatim as codec private
   // (`priv.clone(mem, size)`), rather than walked for sub-boxes.
-  if is_video && !is_known_priv_video_fourcc(&entry.kind.0) {
+  if is_video && !is_known_priv_video_fourcc(&retained_sample_entry_kind) {
     capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
     return Ok(());
   }
-  if is_subtitle && &entry.kind.0 != b"mp4s" {
+  if is_subtitle && retained_sample_entry_kind != *b"mp4s" {
     capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
     return Ok(());
   }
@@ -962,6 +963,40 @@ mod tests {
     let v = b.video.unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().width, 3840);
     assert_eq!(v.pixel_dimensions.unwrap().height, 2160);
+  }
+
+  #[test]
+  fn private_data_decision_uses_retained_first_video_fourcc_for_known_codec() {
+    let pasp = encode_box(
+      b"pasp",
+      &crate::media_metadata::mp4::codec_specific::pasp::build_pasp_payload(4, 3),
+    );
+    let entry_a = build_video_sample_entry(b"avc1", 640, 480, 24, &[]);
+    let entry_b = build_video_sample_entry(b"rle ", 320, 240, 24, &pasp);
+    let payload = build_stsd_payload(&[entry_a, entry_b]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_id_str.as_deref(), Some("avc1"));
+    assert!(b.codec_private_hex.is_none());
+    let cfg = b.video_codec_config.unwrap();
+    assert_eq!(cfg.sample_aspect_ratio.unwrap().num, 4);
+    assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().width, 320);
+  }
+
+  #[test]
+  fn private_data_decision_uses_retained_first_video_fourcc_for_unknown_codec() {
+    let pasp = encode_box(
+      b"pasp",
+      &crate::media_metadata::mp4::codec_specific::pasp::build_pasp_payload(4, 3),
+    );
+    let entry_a = build_video_sample_entry(b"rle ", 640, 480, 24, &[]);
+    let entry_b = build_video_sample_entry(b"avc1", 320, 240, 24, &pasp);
+    let payload = build_stsd_payload(&[entry_a, entry_b]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_id_str.as_deref(), Some("rle "));
+    assert!(b.video_codec_config.is_none());
+    let expected_hex = codec_specific::hex_encode(&pasp);
+    assert_eq!(b.codec_private_hex.as_deref(), Some(expected_hex.as_str()));
+    assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().width, 320);
   }
 
   // A later entry that carries codec-specific child boxes (avcC) must not lose

@@ -446,16 +446,24 @@ fn real_video_display_name(fourcc: &str) -> String {
 }
 
 fn real_audio_codec_id(fourcc: &str) -> (&'static str, &'static str) {
-  match fourcc {
-    "14_4" => ("A_REAL/14_4", "RealAudio 14.4"),
-    "28_8" => ("A_REAL/28_8", "RealAudio 28.8"),
-    "dnet" => ("A_AC3", "AC-3 (RealAudio dnet)"),
-    "sipr" => ("A_REAL/SIPR", "Sipro Lab Telecom"),
-    "cook" => ("A_REAL/COOK", "Cook (RealAudio G2)"),
-    "atrc" => ("A_REAL/ATRC", "Sony ATRAC3"),
-    "raac" | "racp" => ("A_AAC", "AAC (RealAudio)"),
-    "ralf" => ("A_REAL/LF", "RealAudio Lossless"),
-    _ => ("A_REAL/UNKNOWN", "RealAudio"),
+  if fourcc == "14_4" {
+    ("A_REAL/14_4", "RealAudio 14.4")
+  } else if fourcc == "28_8" {
+    ("A_REAL/28_8", "RealAudio 28.8")
+  } else if fourcc == "dnet" {
+    ("A_AC3", "AC-3 (RealAudio dnet)")
+  } else if fourcc == "sipr" {
+    ("A_REAL/SIPR", "Sipro Lab Telecom")
+  } else if fourcc.eq_ignore_ascii_case("cook") {
+    ("A_REAL/COOK", "Cook (RealAudio G2)")
+  } else if fourcc == "atrc" {
+    ("A_REAL/ATRC", "Sony ATRAC3")
+  } else if fourcc.eq_ignore_ascii_case("raac") || fourcc.eq_ignore_ascii_case("racp") {
+    ("A_AAC", "AAC (RealAudio)")
+  } else if fourcc == "ralf" {
+    ("A_REAL/LF", "RealAudio Lossless")
+  } else {
+    ("A_REAL/UNKNOWN", "RealAudio")
   }
 }
 
@@ -624,6 +632,23 @@ mod tests {
   }
 
   #[test]
+  fn read_headers_classifies_uppercase_cook_as_real_cook() {
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    let a_props = build_audio_v4(44_100, 2, 16, b"COOK");
+    blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks[0].codec.id, "A_REAL/COOK");
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("Cook (RealAudio G2)"));
+  }
+
+  #[test]
   fn read_headers_extracts_audio_v5_track_and_promotes_raac_to_aac() {
     // The RealAudio AAC wrapper prefixes the ASC with a 4-byte BE length +
     // one byte (mkvtoolnix `r_real.cpp:260-267`); the ASC begins at byte 5.
@@ -662,6 +687,28 @@ mod tests {
       cfg.raw_hex.as_deref(),
       Some(asc.iter().map(|b| format!("{:02x}", b)).collect::<String>().as_str())
     );
+  }
+
+  #[test]
+  fn read_headers_classifies_uppercase_raac_and_racp_as_aac() {
+    for (fourcc, expected_output_rate) in [(b"RAAC", None), (b"RACP", Some(96_000.0))] {
+      let mut a_props = build_audio_v5(48_000, 2, 16, fourcc);
+      a_props.extend_from_slice(&[0x00]); // no ASC wrapper; RACP still triggers SBR fallback.
+
+      let mut blob = build_rmf_header();
+      blob.extend(build_prop_chunk(0));
+      blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+      blob.extend(build_data_chunk());
+
+      let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+      let mut out = MediaMetadata::new("clip.ra", 0);
+      RealMediaReader
+        .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+        .unwrap();
+      assert_eq!(out.tracks[0].codec.id, "A_AAC");
+      let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+      assert_eq!(audio.output_sampling_frequency, expected_output_rate);
+    }
   }
 
   #[test]

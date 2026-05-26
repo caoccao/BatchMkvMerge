@@ -9,11 +9,11 @@ Progress is measured against the corresponding parser in `../mkvtoolnix` for Bat
 | [Matroska / WebM](matroska/matroska.md) | EBML-based Matroska/WebM reader for segment info, tracks, chapters, attachments, tags, cues, and cluster timestamp hints. | `src-tauri/src/media_metadata/matroska/reader.rs` | 89% |
 | [AVI](avi/avi.md) | RIFF/AVI reader for header lists, ODML metadata, video/audio streams, and embedded subtitle hints. | `src-tauri/src/media_metadata/avi/reader.rs` | 87% |
 | [Ogg / OGM](ogg/ogg.md) | Ogg page reader with codec sniffers for Vorbis, Opus, Theora, FLAC, Speex, Kate, and legacy OGM. | `src-tauri/src/media_metadata/ogg/reader.rs` | 98% |
-| [MP4 / QuickTime](mp4/mp4.md) | ISO BMFF/QuickTime reader for movie boxes, sample entries, codec-specific boxes, metadata, fragments, and first-sample verification. | `src-tauri/src/media_metadata/mp4/reader.rs` | 95% |
+| [MP4 / QuickTime](mp4/mp4.md) | ISO BMFF/QuickTime reader for movie boxes, sample entries, codec-specific boxes, metadata, fragments, and first-sample verification. | `src-tauri/src/media_metadata/mp4/reader.rs` | 96% |
 | [MPEG Program Stream](mpeg_ps/mpeg_ps.md) | MPEG-PS start-code walker with program-stream-map support and PES payload enrichment. | `src-tauri/src/media_metadata/mpeg_ps/reader.rs` | 80% |
 | [MPEG Transport Stream](mpeg_ts/mpeg_ts.md) | MPEG-TS packet reader for PAT, PMT, SDT, descriptors, PID tables, and PES-based stream enrichment. | `src-tauri/src/media_metadata/mpeg_ts/reader.rs` | 90% |
 | [FLV](flv/flv.md) | Flash Video reader for file headers, tags, script metadata, AAC/H.264/H.265 configs, and legacy FLV codecs. | `src-tauri/src/media_metadata/flv/reader.rs` | 91% |
-| [RealMedia](realmedia/realmedia.md) | RealMedia chunk reader for PROP, CONT, MDPR, DATA, RealVideo, RealAudio, and first-packet refinements. | `src-tauri/src/media_metadata/realmedia/reader.rs` | 79% |
+| [RealMedia](realmedia/realmedia.md) | RealMedia chunk reader for PROP, CONT, MDPR, DATA, RealVideo, RealAudio, and first-packet refinements. | `src-tauri/src/media_metadata/realmedia/reader.rs` | 81% |
 | [IVF](ivf.md) | IVF header reader for AV1, VP8, VP9, frame-rate defaults, and AV1 Dolby Vision RPU hints. | `src-tauri/src/media_metadata/ivf.rs` | 97% |
 | [Blu-ray MPLS Playlist](mpls/mpls.md) | Blu-ray playlist parser that resolves clip chains, playlist metadata, chapters, and stream languages before delegating to MPEG-TS parsing. | `src-tauri/src/media_metadata/mpls/mod.rs` | 82% |
 | [AAC](audio/aac.md) | ADTS and LOAS/LATM AAC reader with AudioSpecificConfig parsing and ID3 skipping. | `src-tauri/src/media_metadata/audio/aac.rs` | 98% |
@@ -25,14 +25,14 @@ Progress is measured against the corresponding parser in `../mkvtoolnix` for Bat
 | [TTA](audio/tta.md) | TTA1 reader for stream header, seek-table validation, duration, and audio properties. | `src-tauri/src/media_metadata/audio/tta.rs` | 85% |
 | [WAV / RF64 / Wave64](audio/wav.md) | WAV-family reader for RIFF, RF64, Wave64, WAVEFORMATEX/TENSIBLE, PCM, AC-3, and DTS payloads. | `src-tauri/src/media_metadata/audio/wav.rs` | 94% |
 | [WavPack](audio/wavpack.md) | WavPack v4 frame reader for sample rate, channels, bit depth, DSD rate hints, and duration. | `src-tauri/src/media_metadata/audio/wavpack.rs` | 93% |
-| [CoreAudio CAF](coreaudio/coreaudio.md) | CAF reader for desc/data/pakt/kuki chunks, ALAC cookies, and audio properties. | `src-tauri/src/media_metadata/coreaudio/reader.rs` | 90% |
-| [AVC / H.264 Elementary Stream](elementary/avc/avc.md) | Annex B H.264 reader for SPS/PPS discovery, codec-private generation, dimensions, profile, level, and VUI timing. | `src-tauri/src/media_metadata/elementary/avc/reader.rs` | 87% |
-| [HEVC / H.265 Elementary Stream](elementary/hevc/hevc.md) | Annex B H.265 reader for VPS/SPS/PPS discovery, codec-private generation, profile-tier-level, dimensions, and VUI timing. | `src-tauri/src/media_metadata/elementary/hevc/reader.rs` | 84% |
-| [MPEG-1/2 Video Elementary Stream](elementary/mpeg_video.md) | MPEG video elementary-stream reader for sequence headers, sequence extensions, dimensions, and frame-rate defaults. | `src-tauri/src/media_metadata/elementary/mpeg_video.rs` | 82% |
+| [CoreAudio CAF](coreaudio/coreaudio.md) | CAF reader for desc/data/pakt/kuki chunks, ALAC cookies, and audio properties. | `src-tauri/src/media_metadata/coreaudio/reader.rs` | 94% |
+| [AVC / H.264 Elementary Stream](elementary/avc/avc.md) | Annex B H.264 reader for SPS/PPS discovery, codec-private generation, dimensions, profile, level, and VUI timing. | `src-tauri/src/media_metadata/elementary/avc/reader.rs` | 89% |
+| [HEVC / H.265 Elementary Stream](elementary/hevc/hevc.md) | Annex B H.265 reader for VPS/SPS/PPS discovery, codec-private generation, profile-tier-level, dimensions, and VUI timing. | `src-tauri/src/media_metadata/elementary/hevc/reader.rs` | 86% |
+| [MPEG-1/2 Video Elementary Stream](elementary/mpeg_video.md) | MPEG video elementary-stream reader for sequence headers, sequence extensions, dimensions, and frame-rate defaults. | `src-tauri/src/media_metadata/elementary/mpeg_video.rs` | 84% |
 | [VC-1 Elementary Stream](elementary/vc1.md) | VC-1 advanced-profile elementary-stream reader for sequence headers and dimensions. | `src-tauri/src/media_metadata/elementary/vc1.rs` | 80% |
 | [Dirac Elementary Stream](elementary/dirac.md) | Dirac parse-info reader for sequence headers, standard video formats, dimensions, and frame duration. | `src-tauri/src/media_metadata/elementary/dirac.rs` | 88% |
 | [DV](elementary/dv.md) | DV signature prober that mirrors mkvtoolnix's unsupported-format handling for raw DV streams. | `src-tauri/src/media_metadata/elementary/dv.rs` | 60% |
-| [AV1 OBU](elementary/obu.md) | AV1 Open Bitstream Units reader for sequence headers, frame presence, profile, bit depth, color, and dimensions. | `src-tauri/src/media_metadata/elementary/obu.rs` | 92% |
+| [AV1 OBU](elementary/obu.md) | AV1 Open Bitstream Units reader for sequence headers, frame presence, profile, bit depth, color, and dimensions. | `src-tauri/src/media_metadata/elementary/obu.rs` | 94% |
 | [SRT](subtitles/srt.md) | SubRip text subtitle reader with encoding detection, timecode probing, and empty-file extension fallback. | `src-tauri/src/media_metadata/subtitles/srt.rs` | 92% |
 | [SSA / ASS](subtitles/ssa.md) | SSA/ASS text subtitle reader for variant detection, global headers, language/name metadata, and embedded font attachments. | `src-tauri/src/media_metadata/subtitles/ssa.rs` | 96% |
 | [WebVTT](subtitles/webvtt.md) | WebVTT reader for strict WEBVTT signatures, header preservation, and encoding detection. | `src-tauri/src/media_metadata/subtitles/webvtt.rs` | 80% |

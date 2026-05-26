@@ -52,6 +52,8 @@ const PROBE_BYTES: usize = 1024 * 1024;
 const SEQUENCE_HEADER_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0xB3];
 const EXTENSION_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0xB5];
 const PICTURE_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0x00];
+#[cfg(test)]
+const GOP_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0xB8];
 
 const FRAME_RATE_TABLE: [(u32, u32); 16] = [
   (0, 1),
@@ -242,17 +244,63 @@ fn looks_like_mpeg_video_es(bytes: &[u8]) -> bool {
   if is_transport_stream(bytes) || bytes.starts_with(&[0x00, 0x00, 0x01, 0xba]) {
     return false;
   }
+
+  let start_code_at_beginning = bytes.len() >= 4 && is_start_code(&bytes[..4]);
+  let mut sequence_start_code_found = false;
+  let mut picture_start_code_found = false;
+  let mut gop_start_code_found = false;
+  let mut ext_start_code_found = false;
+  let mut slice_start_codes = 0u32;
+
+  let mut pos = 0usize;
+  while pos + 4 <= bytes.len() {
+    if is_start_code(&bytes[pos..pos + 4]) {
+      let code = bytes[pos + 3];
+      match code {
+        0xB3 => sequence_start_code_found = true,
+        0x00 => picture_start_code_found = true,
+        0xB8 => gop_start_code_found = true,
+        0xB5 => ext_start_code_found = true,
+        0x01..=0xAF => slice_start_codes += 1,
+        _ => {}
+      }
+      if sequence_start_code_found
+        && picture_start_code_found
+        && ((slice_start_codes > 0 && start_code_at_beginning)
+          || (slice_start_codes > 0 && gop_start_code_found && ext_start_code_found)
+          || slice_start_codes >= 25)
+        && mpeg_frame_probe_valid(bytes)
+      {
+        return true;
+      }
+      pos += 4;
+    } else {
+      pos += 1;
+    }
+  }
+  false
+}
+
+fn mpeg_frame_probe_valid(bytes: &[u8]) -> bool {
+  let Some(header) = decode_sequence_header(bytes) else {
+    return false;
+  };
+  if header.horizontal_size == 0 || header.vertical_size == 0 || header.frame_rate_num == 0 {
+    return false;
+  }
   let Some(sequence_pos) = find_sequence_header(bytes) else {
     return false;
   };
   let mut saw_picture = false;
   let mut saw_slice = false;
+  let mut saw_valid_picture_header = false;
   let mut pos = sequence_pos + 4;
   while pos + 4 <= bytes.len() {
     if bytes[pos..pos + 3] == [0x00, 0x00, 0x01] {
       let code = bytes[pos + 3];
       if bytes[pos..pos + 4] == PICTURE_START_CODE {
         saw_picture = true;
+        saw_valid_picture_header = valid_picture_header(bytes.get(pos + 4..));
       } else if (0x01..=0xaf).contains(&code) && saw_picture {
         saw_slice = true;
         break;
@@ -262,7 +310,22 @@ fn looks_like_mpeg_video_es(bytes: &[u8]) -> bool {
       pos += 1;
     }
   }
-  saw_picture && saw_slice
+  saw_picture && saw_valid_picture_header && saw_slice
+}
+
+fn valid_picture_header(body: Option<&[u8]>) -> bool {
+  let Some(body) = body else {
+    return false;
+  };
+  if body.len() < 2 {
+    return false;
+  }
+  let picture_coding_type = (body[1] >> 3) & 0x07;
+  (1..=4).contains(&picture_coding_type)
+}
+
+fn is_start_code(bytes: &[u8]) -> bool {
+  bytes.len() >= 4 && bytes[0..3] == [0x00, 0x00, 0x01]
 }
 
 fn is_transport_stream(bytes: &[u8]) -> bool {
@@ -307,7 +370,7 @@ pub(crate) fn build_sequence_header(width: u32, height: u32, frame_rate_code: u8
 #[cfg(test)]
 fn build_es(width: u32, height: u32, frame_rate_code: u8) -> Vec<u8> {
   let mut bytes = build_sequence_header(width, height, frame_rate_code);
-  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
   bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
   bytes
 }
@@ -405,14 +468,42 @@ mod tests {
   }
 
   #[test]
-  fn probe_accepts_bounded_es_pattern_with_leading_bytes() {
+  fn probe_accepts_bounded_es_pattern_at_start() {
     let bytes = build_es(640, 480, 3);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(MpegVideoReader.probe(&mut s).unwrap());
+  }
 
+  #[test]
+  fn probe_rejects_one_slice_pattern_with_leading_bytes() {
     let mut prefixed = vec![0xAAu8; 4];
     prefixed.extend(build_es(640, 480, 3));
     let mut s = FileSource::from_reader_for_test(Cursor::new(prefixed));
+    assert!(!MpegVideoReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_prefixed_gop_extension_slice_pattern() {
+    let mut bytes = vec![0xAAu8; 4];
+    bytes.extend(build_sequence_header(640, 480, 3));
+    bytes.extend_from_slice(&GOP_START_CODE);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    bytes.extend(sequence_extension(true));
+    bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(MpegVideoReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_prefixed_stream_with_many_slices() {
+    let mut bytes = vec![0xAAu8; 4];
+    bytes.extend(build_sequence_header(640, 480, 3));
+    bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
+    for code in 1..=25u8 {
+      bytes.extend_from_slice(&[0x00, 0x00, 0x01, code, 0x80]);
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(MpegVideoReader.probe(&mut s).unwrap());
   }
 
@@ -448,7 +539,7 @@ mod tests {
     let mut bytes = build_sequence_header(720, 576, 3);
     bytes[7] = (3 << 4) | 3; // 16:9 DAR, 25 fps
     bytes.extend(sequence_extension(false));
-    bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
     bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.m2v", 0);

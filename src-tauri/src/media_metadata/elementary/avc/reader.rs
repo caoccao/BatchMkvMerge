@@ -33,7 +33,8 @@ use crate::media_metadata::reader::Reader;
 use super::nal::{self, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS};
 use super::sps;
 
-const PROBE_BYTES: usize = 64 * 1024;
+const PROBE_CHUNK_BYTES: usize = 1024 * 1024;
+const MAX_PROBE_CHUNKS: usize = 50;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AvcReader;
@@ -44,26 +45,22 @@ impl Reader for AvcReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
-    src.seek_to(0)?;
-    if read < 5 {
+    let buf = read_probe_prefix(src, None)?;
+    if buf.len() < 5 {
       return Ok(false);
     }
-    let units = nal::split_nal_units(&buf[..read]);
-    Ok(extract_headers(&units).and_then(|h| h.sps).is_some())
+    let units = nal::split_nal_units(&buf);
+    Ok(extract_headers(&units).is_some())
   }
 
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    let units = nal::split_nal_units(&buf[..read]);
+    let buf = read_probe_prefix(src, Some(deadline))?;
+    let units = nal::split_nal_units(&buf);
     let headers = extract_headers(&units).ok_or(ParseError::Unrecognised)?;
     let sps_unit = headers.sps.ok_or(ParseError::Unrecognised)?;
     let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
@@ -123,6 +120,31 @@ impl Reader for AvcReader {
     });
     Ok(())
   }
+}
+
+fn read_probe_prefix(src: &mut FileSource, deadline: Option<&Deadline>) -> Result<Vec<u8>, ParseError> {
+  src.seek_to(0)?;
+  let mut out = Vec::new();
+  let mut chunk = vec![0u8; PROBE_CHUNK_BYTES];
+  for _ in 0..MAX_PROBE_CHUNKS {
+    if let Some(d) = deadline {
+      d.check("avc-probe")?;
+    }
+    let read = src.read_at_most(&mut chunk)?;
+    if read == 0 {
+      break;
+    }
+    out.extend_from_slice(&chunk[..read]);
+    if read < PROBE_CHUNK_BYTES {
+      break;
+    }
+    let units = nal::split_nal_units(&out);
+    if extract_headers(&units).is_some() {
+      break;
+    }
+  }
+  src.seek_to(0)?;
+  Ok(out)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -345,6 +367,23 @@ mod tests {
     assert_eq!(cfg.is_elementary_stream, Some(true));
     assert!(cfg.raw_hex.as_ref().unwrap().starts_with("01420028"));
     assert!(out.tracks[0].codec.codec_private.is_some());
+  }
+
+  #[test]
+  fn probe_and_read_headers_find_headers_after_64k_prefix() {
+    let mut bytes = vec![0x00u8; 70 * 1024];
+    bytes.extend(build_avc_with_baseline_1080p_sps());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(AvcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("late.h264", 0);
+    AvcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Avc);
+    assert_eq!(out.tracks.len(), 1);
   }
 
   #[test]

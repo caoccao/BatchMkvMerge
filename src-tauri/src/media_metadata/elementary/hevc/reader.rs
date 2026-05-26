@@ -34,7 +34,8 @@ use super::nal::{self, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS, NAL_UNIT_TYPE_VPS};
 use super::sps::{self, HevcTier};
 use super::vps;
 
-const PROBE_BYTES: usize = 64 * 1024;
+const PROBE_CHUNK_BYTES: usize = 1024 * 1024;
+const MAX_PROBE_CHUNKS: usize = 50;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HevcReader;
@@ -45,26 +46,22 @@ impl Reader for HevcReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
-    src.seek_to(0)?;
-    if read < 7 {
+    let buf = read_probe_prefix(src, None)?;
+    if buf.len() < 7 {
       return Ok(false);
     }
-    let units = nal::split_nal_units(&buf[..read]);
+    let units = nal::split_nal_units(&buf);
     Ok(extract_headers(&units).is_some())
   }
 
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    let units = nal::split_nal_units(&buf[..read]);
+    let buf = read_probe_prefix(src, Some(deadline))?;
+    let units = nal::split_nal_units(&buf);
     let headers = extract_headers(&units).ok_or(ParseError::Unrecognised)?;
     let sps_unit = headers.sps.ok_or(ParseError::Unrecognised)?;
     let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
@@ -128,6 +125,31 @@ impl Reader for HevcReader {
     });
     Ok(())
   }
+}
+
+fn read_probe_prefix(src: &mut FileSource, deadline: Option<&Deadline>) -> Result<Vec<u8>, ParseError> {
+  src.seek_to(0)?;
+  let mut out = Vec::new();
+  let mut chunk = vec![0u8; PROBE_CHUNK_BYTES];
+  for _ in 0..MAX_PROBE_CHUNKS {
+    if let Some(d) = deadline {
+      d.check("hevc-probe")?;
+    }
+    let read = src.read_at_most(&mut chunk)?;
+    if read == 0 {
+      break;
+    }
+    out.extend_from_slice(&chunk[..read]);
+    if read < PROBE_CHUNK_BYTES {
+      break;
+    }
+    let units = nal::split_nal_units(&out);
+    if extract_headers(&units).is_some() {
+      break;
+    }
+  }
+  src.seek_to(0)?;
+  Ok(out)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -415,6 +437,23 @@ mod tests {
     assert_eq!(cfg.bit_depth_luma, Some(10));
     assert!(cfg.raw_hex.as_ref().unwrap().starts_with("01"));
     assert!(out.tracks[0].codec.codec_private.is_some());
+  }
+
+  #[test]
+  fn probe_and_read_headers_find_headers_after_64k_prefix() {
+    let mut bytes = vec![0x00u8; 70 * 1024];
+    bytes.extend(build_main10_stream());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(HevcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("late.hevc", 0);
+    HevcReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Hevc);
+    assert_eq!(out.tracks.len(), 1);
   }
 
   #[test]

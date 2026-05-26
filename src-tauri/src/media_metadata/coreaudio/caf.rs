@@ -61,7 +61,7 @@ pub struct CafMetadata {
 }
 
 pub fn parse(bytes: &[u8]) -> Result<CafMetadata, ParseError> {
-  if bytes.len() < 8 || &bytes[..4] != &CAFF_MAGIC {
+  if bytes.len() < 8 || !bytes[..4].eq_ignore_ascii_case(&CAFF_MAGIC) {
     return Err(ParseError::Unrecognised);
   }
   let mut metadata = CafMetadata::default();
@@ -210,6 +210,13 @@ pub(crate) fn build_caf(format_id: &[u8; 4], sample_rate: f64, channels: u32, bi
   bytes.extend_from_slice(&1024u32.to_be_bytes()); // frames_per_packet
   bytes.extend_from_slice(&channels.to_be_bytes());
   bytes.extend_from_slice(&bits.to_be_bytes());
+  // pakt chunk
+  bytes.extend_from_slice(b"pakt");
+  bytes.extend_from_slice(&24i64.to_be_bytes());
+  bytes.extend_from_slice(&0u64.to_be_bytes()); // num_packets
+  bytes.extend_from_slice(&0u64.to_be_bytes()); // num_valid_frames
+  bytes.extend_from_slice(&0u32.to_be_bytes()); // priming frames
+  bytes.extend_from_slice(&0u32.to_be_bytes()); // remainder frames
   // data chunk
   bytes.extend_from_slice(b"data");
   bytes.extend_from_slice(&100i64.to_be_bytes());
@@ -245,6 +252,14 @@ mod tests {
     let mut bytes = build_caf(b"lpcm", 48_000.0, 2, 16);
     bytes[0] = b'X';
     assert!(matches!(parse(&bytes), Err(ParseError::Unrecognised)));
+  }
+
+  #[test]
+  fn accepts_ascii_case_variants_of_caff_magic() {
+    let mut bytes = build_caf(b"lpcm", 48_000.0, 2, 16);
+    bytes[0..4].copy_from_slice(b"CAFF");
+    let m = parse(&bytes).unwrap();
+    assert!(m.description.is_some());
   }
 
   #[test]

@@ -55,9 +55,8 @@ use crate::media_metadata::model::track_properties_video::{
 };
 use crate::media_metadata::reader::Reader;
 
-const PROBE_BYTES: usize = 64 * 1024;
+const PROBE_BYTES: usize = 1024 * 1024;
 const OBU_TYPE_SEQUENCE_HEADER: u8 = 1;
-const OBU_TYPE_TEMPORAL_DELIMITER: u8 = 2;
 const OBU_TYPE_FRAME_HEADER: u8 = 3;
 const OBU_TYPE_METADATA: u8 = 5;
 const OBU_TYPE_FRAME: u8 = 6;
@@ -547,20 +546,10 @@ impl Reader for ObuReader {
       return Ok(false);
     }
     // PARSER-064: mkvtoolnix's `headers_parsed()` requires both a
-    // sequence_header and a frame OBU to be present.  A bare
-    // sequence_header is rejected, and a temporal_delimiter prefix is no
-    // longer mandatory — but we still gate on a recognisable first OBU
-    // header to avoid claiming arbitrary bitstreams whose first byte
-    // happens to match the forbidden-bit constraint.
-    let header = decode_header(head[0]);
+    // sequence_header and a frame OBU to be present.  A bare sequence_header
+    // is rejected, and the structural OBU walker below decides acceptance so
+    // streams may begin with metadata OBUs just like mkvtoolnix.
     if head[0] & 0x80 != 0 {
-      return Ok(false);
-    }
-    let starts_with_known_obu = matches!(
-      header.obu_type,
-      OBU_TYPE_TEMPORAL_DELIMITER | OBU_TYPE_SEQUENCE_HEADER | OBU_TYPE_FRAME | OBU_TYPE_FRAME_HEADER
-    );
-    if !starts_with_known_obu {
       return Ok(false);
     }
     let buf = &head[..read];
@@ -570,12 +559,14 @@ impl Reader for ObuReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     let mut buf = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
+    deadline.check("obu-probe")?;
     let read = src.read_at_most(&mut buf)?;
+    deadline.check("obu-probe")?;
     let scan = scan_obus(&buf[..read]);
     let seq_body = scan.seq_header_body.ok_or(ParseError::Unrecognised)?;
     let seq = decode_sequence_header(seq_body)?;
@@ -882,6 +873,29 @@ mod tests {
     vec![0x32, 0x01, 0x00]
   }
 
+  fn build_metadata_obu(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0x2Au8]; // OBU_METADATA, has_size_field = 1
+    bytes.extend(encode_leb128(payload.len()));
+    bytes.extend_from_slice(payload);
+    bytes
+  }
+
+  fn encode_leb128(mut value: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    loop {
+      let mut byte = (value & 0x7f) as u8;
+      value >>= 7;
+      if value != 0 {
+        byte |= 0x80;
+      }
+      bytes.push(byte);
+      if value == 0 {
+        break;
+      }
+    }
+    bytes
+  }
+
   fn build_obu_stream(seq_body: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x12u8, 0x00]; // temporal_delimiter
     bytes.push(0x0A); // sequence_header (type=1, has_size_field=1)
@@ -965,6 +979,47 @@ mod tests {
     bytes.extend(build_frame_obu());
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(ObuReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_stream_starting_with_metadata_when_headers_follow() {
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    let mut bytes = build_metadata_obu(&[0x01, 0x02, 0x03]);
+    bytes.push(0x0Au8);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_frame_obu());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(ObuReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_and_read_headers_find_sequence_after_64k_prefix() {
+    use crate::media_metadata::deadline::Deadline;
+    use crate::media_metadata::reader::Reader;
+    use std::io::Cursor;
+    let body = build_reduced_sequence_header(0, 640, 360, false);
+    let mut bytes = Vec::new();
+    for _ in 0..140 {
+      bytes.extend(build_metadata_obu(&[0x00; 512]));
+    }
+    bytes.push(0x0Au8);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_frame_obu());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(ObuReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("late.obu", 0);
+    ObuReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Av1Obu);
+    assert_eq!(out.tracks.len(), 1);
   }
 
   // ---- PARSER-220: OBUs without a size field are rejected -------------

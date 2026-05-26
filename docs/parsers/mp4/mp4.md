@@ -1,6 +1,6 @@
 # MP4 / QuickTime Parser
 
-Implementation progress: 95%
+Implementation progress: 96%
 
 ## Purpose
 
@@ -14,7 +14,7 @@ The MP4 parser recognises ISO BMFF, MP4, M4V, MOV, and QuickTime-style files. It
 
 The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxes, parses `ftyp`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `hdlr`, `stbl`, `stsd`, `stts`, `stsc`, `edts/elst`, `mvex/trex`, `moof/traf/tfhd/trun`, and `udta/meta/ilst`. Codec-specific parsers cover AVC, HEVC, AV1, AAC, ALAC, Opus, FLAC, QuickTime PCM, color, pixel aspect ratio, and Dolby Vision block-addition records.
 
-Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it.
+Every `stsd` sample-description entry is parsed (not just the first). Mirroring mkvtoolnix's `handle_stsd_atom` (`r_qtmp4.cpp:1370-1394`), which re-allocates `dmx.stsd` and re-runs the per-entry parse for each entry, the per-entry **sample data** (dimensions / audio properties / codec private) follows the **last** entry. The codec **identity** (FourCC / codec id / name), however, is taken from the **first** entry — mkvtoolnix keeps the first FourCC and only warns about later differing ones (`handle_audio_stsd_atom` / `handle_video_stsd_atom`, `r_qtmp4.cpp:3007-3013/3091-3099`). So `reset_sample_entry_state` clears the per-entry sample data but leaves the identity intact once the first entry has set it. The child-box-vs-opaque-private decision also uses that retained first FourCC, so later differing entries overwrite sample data without changing the private-data parser branch.
 
 Codec-private data is normalised to match the byte layout mkvtoolnix hands its packetizers:
 
@@ -56,13 +56,3 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
-
-## Open Issues
-
-### PARSER-287 - MP4 private-data parsing uses the current `stsd` FourCC instead of the retained first FourCC
-
-Rust keeps the first sample-description FourCC for codec identity, but `parse_entry` decides whether to walk codec-private child boxes or preserve the remaining sample-entry payload by checking the current entry's `entry.kind`. mkvtoolnix also keeps the first FourCC, and its `parse_video_header_priv_atoms` guard uses that retained `fourcc` / `codec`, not the later entry's FourCC, after warning about mismatches.
-
-Impact: Tracks with multiple `stsd` entries whose FourCCs differ can diverge. If the first entry is AVC/HEVC/AV1/mp4v/xvid and a later entry differs, Rust may preserve opaque private bytes where mkvtoolnix would walk child boxes. If the first entry is unknown and a later entry is AVC/HEVC/AV1/mp4v/xvid, Rust may parse child boxes that mkvtoolnix would keep opaque.
-
-Fix direction: base the child-box-vs-opaque-private decision on the retained first sample-entry FourCC / codec identity, while still letting later entries overwrite the per-entry sample data as mkvtoolnix does.

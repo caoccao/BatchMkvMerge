@@ -55,7 +55,7 @@ fn build_mpeg_sequence_header(width: u32, height: u32, frame_rate_code: u8) -> V
 #[test]
 fn parses_mpeg_video_es() {
   let mut bytes = build_mpeg_sequence_header(720, 480, 5);
-  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
   bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
   let path = write_tempfile(&bytes, "m2v");
   let m = parse(&path, ParseOptions::default()).unwrap();
