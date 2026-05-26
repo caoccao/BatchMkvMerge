@@ -1,6 +1,6 @@
 # AVI Parser
 
-Implementation progress: 84%
+Implementation progress: 87%
 
 ## Purpose
 
@@ -17,6 +17,8 @@ The reader walks RIFF chunks directly instead of using avilib. It processes `LIS
 Display dimensions come from `vprp`'s frame aspect ratio when present (`handle_video_aspect_ratio`). Otherwise, for an MPEG-4 Part 2 (DivX/Xvid) video track, the reader reads the first video frame from `movi` and decodes its Visual-Object-Layer header's `aspect_ratio_info` (`mpeg4_par.rs`, a port of `mtx::mpeg4_p2::extract_par`), then applies that bitstream pixel aspect ratio to the coded dimensions — mirroring `avi_reader_c::extended_identify_mpeg4_l2` (`r_avi.cpp:843-865`). The frame read is bounded (the first matching `NNdb`/`NNdc` chunk, capped at 256 KiB) so the header-only contract holds (PARSER-241).
 
 GAB2 text chunks are classified as SRT or SSA/ASS; for SSA/ASS the embedded payload is re-parsed with the shared SSA parser to harvest `[Fonts]` / `[Graphics]` attachments, mirroring `avi_reader_c::identify_attachments` (`../mkvtoolnix/src/input/r_avi.cpp:942-959`). The harvested attachments are emitted globally with sequential ids in `finalise`.
+
+The video track passes the same gate `avi_reader_c::verify_video_track` applies before identify (`r_avi.cpp:112-114`): the `BITMAPINFOHEADER` must be at least `sizeof(alBITMAPINFOHEADER)` (40 bytes) and both the sign-stripped width and height must be nonzero. A stream that fails any check is suppressed instead of emitting a false-positive video track (PARSER-273). Mirroring avilib, the first `vids` stream is bound as the single video track and consumes the video slot even when it fails verification, so a later video stream is never promoted in its place.
 
 ## Data Structures
 
@@ -36,14 +38,4 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 
 ## Gaps and Handling
 
-Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not).
-
-## Open Issues
-
-### PARSER-273: AVI emits a video track even when mkvtoolnix rejects missing dimensions
-
-`make_video_track` accepts any video stream with a `BITMAPINFOHEADER`-like `strf` and then lets `video_properties` omit pixel dimensions when width or height is zero. mkvtoolnix verifies the video track before identify and only reports it when the bitmap header is large enough and both width and height are nonzero (`r_avi.cpp:112-114`, `877-879`).
-
-The Rust parser can therefore emit an invalid video track for malformed AVI files that mkvtoolnix would identify as having no usable video track. This creates a false-positive track and can expose codec/private data for a stream upstream intentionally suppresses.
-
-Fix by rejecting the AVI video track in identify when the `BITMAPINFOHEADER` size is too small or the effective width/height is zero, matching `avi_reader_c::verify_video_track`.
+Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks.

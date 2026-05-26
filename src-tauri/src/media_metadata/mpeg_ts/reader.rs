@@ -206,14 +206,24 @@ impl Reader for MpegTsReader {
         // Candidate PES PID (PARSER-056 / PARSER-158).  Start a buffer at the
         // first PES-start packet, then keep appending continuation packets up
         // to the cap so the codec probe has enough of the elementary stream.
+        //
+        // PARSER-271: accumulate only *elementary* bytes.  mkvtoolnix finalises
+        // the previous PES at every new payload-unit start, strips that PES
+        // header, and appends only the elementary payload
+        // (`r_mpeg_ts.cpp:2147-2195`, `2394-2427`).  We mirror that by stripping
+        // the PES header on every PES-start packet and appending continuation
+        // packets verbatim, so a later PES header is never injected into the
+        // probe buffer where it would interrupt an AAC / AC-3 / video header
+        // search that spans PES boundaries.
         let is_pes_start =
           header.payload_unit_start && payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1;
         let known = pes_payloads.contains_key(&header.pid);
         if known || (is_pes_start && pes_payloads.len() < MAX_PES_PIDS) {
+          let elementary: &[u8] = if is_pes_start { strip_pes_header(payload) } else { payload };
           let buf = pes_payloads.entry(header.pid).or_default();
           if buf.len() < PES_PAYLOAD_CAP {
-            let take = (PES_PAYLOAD_CAP - buf.len()).min(payload.len());
-            buf.extend_from_slice(&payload[..take]);
+            let take = (PES_PAYLOAD_CAP - buf.len()).min(elementary.len());
+            buf.extend_from_slice(&elementary[..take]);
           }
         }
       }
@@ -235,7 +245,9 @@ impl Reader for MpegTsReader {
         if pmt_stream_pids.contains(&pid) {
           continue;
         }
-        if let Some((kind, id, name)) = sniff_codec(strip_pes_header(&pes_payloads[&pid])) {
+        // PARSER-271: the buffer already holds PES-header-stripped elementary
+        // bytes, so it is sniffed directly.
+        if let Some((kind, id, name)) = sniff_codec(&pes_payloads[&pid]) {
           rows.push(StreamRow {
             pid,
             stream_type: 0,
@@ -307,7 +319,8 @@ fn compute_probes(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> Vec<RowPro
     // stream_type 0x83 produces two coupled rows (TrueHD + AC-3) on one PID;
     // probe the shared payload once and gate each independently.
     if row.stream_type == 0x83 {
-      let (truehd, ac3) = probe_truehd_pair(pes.get(&row.pid).map(|v| strip_pes_header(v)));
+      // PARSER-271: buffers already contain PES-header-stripped elementary bytes.
+      let (truehd, ac3) = probe_truehd_pair(pes.get(&row.pid).map(|v| v.as_slice()));
       // The primary TrueHD row is emitted first, then the coupled AC-3 row.
       let is_primary = row.codec_id == "A_TRUEHD";
       let probe = if is_primary {
@@ -334,7 +347,7 @@ fn compute_probes(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> Vec<RowPro
       continue;
     }
 
-    let es = pes.get(&row.pid).map(|v| strip_pes_header(v)).unwrap_or(&[]);
+    let es = pes.get(&row.pid).map(|v| v.as_slice()).unwrap_or(&[]);
     match enrich_for_codec(&row.codec_id, row.stream_type, es) {
       Some(enrichment) => probes.push(RowProbe { keep: true, enrichment }),
       None => probes.push(RowProbe::default()),
@@ -1056,6 +1069,47 @@ mod tests {
     let mut bytes = pat_pkt;
     bytes.extend(pmt_pkt);
     bytes.extend(pes_packet(aac_pid, &audio_es));
+    for _ in 0..6 {
+      bytes.extend(padding());
+    }
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.ts", 0);
+    MpegTsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    let a = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(a.channels, Some(2));
+    assert_eq!(a.sampling_frequency, Some(48000.0));
+  }
+
+  #[test]
+  fn read_headers_aac_spanning_two_pes_packets_survives() {
+    // PARSER-271: four ADTS frames per PES packet, with each PES exactly filling
+    // its 188-byte TS packet (175-byte ES + 9-byte PES header → 184-byte
+    // payload, no stuffing) so the frame groups are contiguous after the PES
+    // headers are stripped.  Five consecutive frames are required, so the AAC
+    // probe must span the PES boundary: each PES header has to be stripped at
+    // its own packet so the second `00 00 01 E0 …` header is never injected
+    // between frames 4 and 5.  Only the PMT can classify this PID as AAC (the
+    // unlisted-PID fallback never recognises AAC), so the surviving A_AAC track
+    // proves both reassembly and the per-PES header strip.
+    let pmt_pid = 0x100u16;
+    let aac_pid = 0x111u16;
+    let pat_section = build_pat_section(1, &[(1, pmt_pid)]);
+    let pat_pkt = build_packet_with_pointer(0, &pat_section);
+    let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x0F, aac_pid, vec![])]);
+    let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
+    // 4 frames per PES (44+44+44+43 = 175 bytes), all 48 kHz stereo.
+    let mut es = Vec::new();
+    for _ in 0..3 {
+      es.extend(aac::build_adts_frame_with_len(1, 3, 2, 44));
+    }
+    es.extend(aac::build_adts_frame_with_len(1, 3, 2, 43));
+    assert_eq!(es.len(), 175, "ES must fill the TS payload exactly");
+    let mut bytes = pat_pkt;
+    bytes.extend(pmt_pkt);
+    bytes.extend(pes_packet(aac_pid, &es));
+    bytes.extend(pes_packet(aac_pid, &es));
     for _ in 0..6 {
       bytes.extend(padding());
     }

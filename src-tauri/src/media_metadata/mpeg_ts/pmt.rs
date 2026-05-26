@@ -71,7 +71,40 @@ pub fn parse(section: &[u8]) -> Result<Pmt, ParseError> {
       reason: format!("PMT table_id 0x{:02X} != 0x02", section[0]),
     });
   }
+  // PARSER-270: mandatory PSI header flags mkvtoolnix enforces
+  // (`r_mpeg_ts.cpp:1928-1940`).  An inactive next-version section or any
+  // multi-section PMT is rejected.  CRC32 is intentionally not enforced — see
+  // the PAT module doc for the upstream retry-fallback rationale.
+  if section[1] & 0x80 == 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 1,
+      reason: "PMT section_syntax_indicator != 1".to_string(),
+    });
+  }
+  if section[5] & 0x01 == 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 5,
+      reason: "PMT current_next_indicator == 0 (inactive section)".to_string(),
+    });
+  }
+  if section[6] != 0 || section[7] != 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 6,
+      reason: "unsupported multi-section PMT".to_string(),
+    });
+  }
   let section_length = (((section[1] as usize) & 0x0F) << 8) | section[2] as usize;
+  // PARSER-270: section_length bounds (`r_mpeg_ts.cpp:1961-1964`).
+  if !(13..=1021).contains(&section_length) {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 1,
+      reason: format!("PMT section_length {} out of range (13..=1021)", section_length),
+    });
+  }
   if section.len() < 3 + section_length {
     return Err(ParseError::Malformed {
       format: "mpeg_ts",
@@ -251,5 +284,38 @@ mod tests {
     let section = build_section(1, 0x1FF, &[], &[]);
     let pmt = parse(&section).unwrap();
     assert_eq!(pmt.pcr_pid, 0x1FF);
+  }
+
+  // ---- PARSER-270: mandatory PSI header validation ---------------------
+
+  #[test]
+  fn rejects_section_syntax_indicator_zero() {
+    let mut section = build_section(1, 0x100, &[], &[(0x1B, 0x110, vec![])]);
+    section[1] &= !0x80;
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn rejects_inactive_current_next_indicator() {
+    let mut section = build_section(1, 0x100, &[], &[(0x1B, 0x110, vec![])]);
+    section[5] &= !0x01;
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn rejects_multi_section_pmt() {
+    let mut section = build_section(1, 0x100, &[], &[(0x1B, 0x110, vec![])]);
+    section[6] = 1; // section_number != 0
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+    let mut section = build_section(1, 0x100, &[], &[(0x1B, 0x110, vec![])]);
+    section[7] = 1; // last_section_number != 0
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn accepts_single_active_section() {
+    let section = build_section(1, 0x100, &[], &[(0x1B, 0x110, vec![])]);
+    let pmt = parse(&section).unwrap();
+    assert_eq!(pmt.streams.len(), 1);
   }
 }

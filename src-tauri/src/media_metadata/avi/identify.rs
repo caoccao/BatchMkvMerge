@@ -61,9 +61,13 @@ pub fn finalise(
     };
     match kind {
       AviStreamKind::Video if !emitted_video => {
+        // mkvtoolnix's avilib binds the *first* `vids` stream as the one video
+        // track and never falls through to a later one, so the slot is consumed
+        // here even when `verify_video_track` rejects the bitmap header
+        // (PARSER-273). Subsequent video streams are ignored regardless.
+        emitted_video = true;
         if let Some(track) = make_video_track(0, builder, video_frame_par) {
           out.tracks.push(track);
-          emitted_video = true;
         }
       }
       AviStreamKind::Audio => {
@@ -142,6 +146,14 @@ fn make_video_track(id: i64, builder: StreamBuilder, video_frame_par: Option<(u3
   let StreamFormat::Video(bmih) = builder.format.as_ref()? else {
     return None;
   };
+  // PARSER-273: mirror `avi_reader_c::verify_video_track` (`r_avi.cpp:112-114`).
+  // mkvtoolnix only identifies a video track when the BITMAPINFOHEADER is at
+  // least `sizeof(alBITMAPINFOHEADER)` (40) bytes and both the (sign-stripped)
+  // width and height are nonzero. A malformed stream that fails any of these
+  // is suppressed rather than emitted as a false-positive track.
+  if bmih.size < 40 || bmih.width.unsigned_abs() == 0 || bmih.height.unsigned_abs() == 0 {
+    return None;
+  }
   let codec_id = fourcc_to_string(&bmih.compression);
   let codec_name = fourcc::lookup(&codec_id).map(|e| e.name.to_string());
   let video = video_properties(bmih, header, builder.vprp.as_ref(), video_frame_par);
@@ -749,6 +761,52 @@ mod tests {
   #[test]
   fn make_audio_track_rejects_video_stream() {
     assert!(make_audio_track(1, video_builder()).is_none());
+  }
+
+  // ---- PARSER-273: verify_video_track rejection ------------------------
+
+  fn video_builder_with(size: u32, width: i32, height: i32) -> StreamBuilder {
+    let mut b = video_builder();
+    if let Some(StreamFormat::Video(bmih)) = b.format.as_mut() {
+      bmih.size = size;
+      bmih.width = width;
+      bmih.height = height;
+    }
+    b
+  }
+
+  #[test]
+  fn make_video_track_rejects_undersized_bitmap_header() {
+    assert!(make_video_track(0, video_builder_with(30, 1920, 1080), None).is_none());
+  }
+
+  #[test]
+  fn make_video_track_rejects_zero_width() {
+    assert!(make_video_track(0, video_builder_with(40, 0, 1080), None).is_none());
+  }
+
+  #[test]
+  fn make_video_track_rejects_zero_height() {
+    assert!(make_video_track(0, video_builder_with(40, 1920, 0), None).is_none());
+  }
+
+  #[test]
+  fn finalise_suppresses_invalid_video_and_keeps_audio_numbering() {
+    // A malformed video stream (zero dimensions) is rejected, but it still
+    // consumes the single video slot, so a later valid video stream is not
+    // promoted and audio still lands at id 1.
+    let mut m = MediaMetadata::new("clip.avi", 0);
+    finalise(
+      no_avih(),
+      vec![video_builder_with(40, 0, 0), video_builder(), audio_builder()],
+      OdmlInfo::default(),
+      vec![],
+      None,
+      &mut m,
+    );
+    assert!(m.tracks.iter().all(|t| t.track_type != TrackType::Video));
+    let audio = m.tracks.iter().find(|t| t.track_type == TrackType::Audio).unwrap();
+    assert_eq!(audio.id, 1);
   }
 
   // ---- PARSER-193: stable video / audio / subtitle id assignment -------

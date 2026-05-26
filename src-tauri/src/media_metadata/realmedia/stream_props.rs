@@ -149,13 +149,24 @@ fn parse_v5(bytes: &[u8]) -> Option<AudioProps> {
   let sample_size = u16::from_be_bytes([bytes[58], bytes[59]]);
   let channels = u16::from_be_bytes([bytes[60], bytes[61]]);
   let fourcc = [bytes[66], bytes[67], bytes[68], bytes[69]];
+  // PARSER-269: mkvtoolnix skips four bytes past the v5 props struct before
+  // cloning the extra data — `extra_data = ts_data + 4 + sizeof(props)` guarded
+  // by `(sizeof(real_audio_v5_props_t) + 4) < ts_size` (`r_real.cpp:216-217`).
+  // The skipped field would otherwise be misread as the RAAC/RACP wrapper's
+  // big-endian length prefix, breaking `apply_real_aac_config`.
+  let extra_start = PROPS_LEN + 4;
+  let extra_data = if bytes.len() > extra_start {
+    bytes[extra_start..].to_vec()
+  } else {
+    Vec::new()
+  };
   Some(AudioProps {
     fourcc,
     version: 5,
     sample_rate,
     sample_size,
     channels,
-    extra_data: bytes[PROPS_LEN..].to_vec(),
+    extra_data,
   })
 }
 
@@ -279,13 +290,27 @@ mod tests {
   #[test]
   fn audio_props_v5_decodes_fourcc3() {
     let mut bytes = build_audio_v5(48_000, 6, 16, b"raac");
+    // PARSER-269: extra data begins four bytes past the v5 props struct.
+    bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // skipped 4 bytes
     bytes.extend_from_slice(&[0x12, 0x10]);
     let a = AudioProps::parse(&bytes).unwrap();
     assert_eq!(a.version, 5);
     assert_eq!(a.fourcc, *b"raac");
     assert_eq!(a.sample_rate, 48_000);
     assert_eq!(a.channels, 6);
+    // The four skipped bytes must not leak into extra_data.
     assert_eq!(a.extra_data, vec![0x12, 0x10]);
+  }
+
+  #[test]
+  fn audio_props_v5_extra_data_empty_when_only_skip_bytes_present() {
+    // PARSER-269: when only the 4 skipped bytes follow the props struct (no
+    // trailing payload), extra_data is empty — mirroring the strict
+    // `(sizeof(props) + 4) < ts_size` guard in r_real.cpp:216.
+    let mut bytes = build_audio_v5(48_000, 2, 16, b"raac");
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    let a = AudioProps::parse(&bytes).unwrap();
+    assert!(a.extra_data.is_empty());
   }
 
   #[test]

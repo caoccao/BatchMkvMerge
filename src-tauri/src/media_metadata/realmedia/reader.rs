@@ -630,6 +630,9 @@ mod tests {
     let asc = build_aac_lc_asc(); // 48 kHz stereo LC, 2 bytes
     let wrapper = build_real_aac_wrapper(&asc);
     let mut a_props = build_audio_v5(48_000, 6, 16, b"raac");
+    // PARSER-269: mkvtoolnix skips four bytes past the v5 props struct before
+    // the AAC wrapper (`r_real.cpp:216-217`).
+    a_props.extend_from_slice(&[0u8; 4]);
     a_props.extend_from_slice(&wrapper);
 
     let mut blob = build_rmf_header();
@@ -659,6 +662,37 @@ mod tests {
       cfg.raw_hex.as_deref(),
       Some(asc.iter().map(|b| format!("{:02x}", b)).collect::<String>().as_str())
     );
+  }
+
+  #[test]
+  fn read_headers_v5_aac_ignores_four_skipped_bytes_before_wrapper() {
+    // PARSER-269 regression: the four bytes following the v5 props struct are
+    // *not* the AAC wrapper. Seed them with a decoy big-endian length that, if
+    // misread as the wrapper, would point ASC parsing at garbage. The real
+    // wrapper sits after the skip and must still drive ASC detection.
+    let asc = build_aac_lc_asc();
+    let wrapper = build_real_aac_wrapper(&asc);
+    let mut a_props = build_audio_v5(48_000, 6, 16, b"raac");
+    a_props.extend_from_slice(&[0x00, 0x00, 0x00, 0x40]); // decoy length (64)
+    a_props.extend_from_slice(&wrapper);
+
+    let mut blob = build_rmf_header();
+    blob.extend(build_prop_chunk(0));
+    blob.extend(build_mdpr(0, "audio/x-pn-realaudio", &a_props));
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.ra", 0);
+    RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    // ASC parsed from the shifted position -> LC profile, not the SBR fallback.
+    assert_eq!(out.tracks[0].codec.id, "A_AAC");
+    assert_eq!(out.tracks[0].codec.name.as_deref(), Some("AAC LC"));
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.channels, Some(2));
+    let cfg = audio.codec_config.as_ref().unwrap();
+    assert_eq!(cfg.aac_object_type, Some(2));
   }
 
   #[test]

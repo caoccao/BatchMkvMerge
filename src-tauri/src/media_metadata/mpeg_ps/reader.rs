@@ -406,6 +406,38 @@ mod tests {
     assert_eq!(a.bit_depth, Some(24));
   }
 
+  // ---- PARSER-272: MPEG-1 PES optional-header layout -------------------
+
+  #[test]
+  fn mpeg1_pts_only_pes_reaches_codec_probe() {
+    // An MPEG-1 video PES uses the `0x2x` PTS-only marker, *not* the MPEG-2
+    // `header_data_length` byte. The elementary payload (an MPEG sequence
+    // header) must therefore be located at the MPEG-1 offset so dimensions
+    // decode; the old MPEG-2-only offset would have skipped into the wrong
+    // bytes.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&start_code(PACK_HEADER));
+    bytes.extend_from_slice(&[0u8; 10]);
+    // Sequence header: 0x000001B3 + 720x480 + aspect/frame-rate + padding.
+    let seq = [
+      0x00, 0x00, 0x01, 0xB3, 0x2D, 0x01, 0xE0, 0x13, 0x00, 0x00, 0x00, 0x00,
+    ];
+    let pts = [0x21u8, 0x11, 0x11, 0x11, 0x11]; // MPEG-1 PTS-only marker + value
+    let pkt_len = (pts.len() + seq.len()) as u16;
+    bytes.extend_from_slice(&start_code(0xE0));
+    bytes.extend_from_slice(&pkt_len.to_be_bytes());
+    bytes.extend_from_slice(&pts);
+    bytes.extend_from_slice(&seq);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.mpg", 0);
+    MpegPsReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(v.pixel_dimensions.unwrap().width, 720);
+    assert_eq!(v.pixel_dimensions.unwrap().height, 480);
+  }
+
   // ---- PARSER-051: Program Stream Map ----------------------------------
 
   #[test]

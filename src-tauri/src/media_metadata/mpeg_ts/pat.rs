@@ -32,8 +32,19 @@
 //! u32 CRC32
 //! ```
 //!
-//! We accept any sections whose length fits and skip CRC verification (the
-//! reader is lenient — real-world streams sometimes have stale CRCs).
+//! PARSER-270: the mandatory PSI header flags mkvtoolnix enforces
+//! (`r_mpeg_ts.cpp:1755-1786`) are validated — `section_syntax_indicator == 1`,
+//! `current_next_indicator != 0`, `section_number == 0`,
+//! `last_section_number == 0`, and `13 <= section_length <= 1021`. An inactive
+//! next-version section or any multi-section table is rejected so the parser
+//! does not build programs from a table mkvtoolnix would ignore.
+//!
+//! CRC32 is intentionally **not** enforced. mkvtoolnix starts with CRC
+//! validation on (`m_validate_pat_crc{true}`) but automatically disables it on
+//! its retry pass whenever a CRC failure would otherwise leave the PAT
+//! unfound (`r_mpeg_ts.cpp:1388-1392`). A header-only, single-pass parser is
+//! always in that "would otherwise find nothing" position, so the faithful
+//! end-state is to tolerate a stale CRC rather than reject the only PAT.
 
 use crate::media_metadata::error::ParseError;
 
@@ -67,7 +78,40 @@ pub fn parse(section: &[u8]) -> Result<Pat, ParseError> {
       reason: format!("PAT table_id 0x{:02X} != 0x00", section[0]),
     });
   }
+  // PARSER-270: PSI header flags mkvtoolnix treats as mandatory
+  // (`r_mpeg_ts.cpp:1761-1768`).
+  if section[1] & 0x80 == 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 1,
+      reason: "PAT section_syntax_indicator != 1".to_string(),
+    });
+  }
+  if section[5] & 0x01 == 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 5,
+      reason: "PAT current_next_indicator == 0 (inactive section)".to_string(),
+    });
+  }
+  if section[6] != 0 || section[7] != 0 {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 6,
+      reason: "unsupported multi-section PAT".to_string(),
+    });
+  }
   let section_length = (((section[1] as usize) & 0x0F) << 8) | section[2] as usize;
+  // PARSER-270: section_length bounds (`r_mpeg_ts.cpp:1782-1785`).  The minimum
+  // 13 covers transport_stream_id + version/section/last + one program entry +
+  // CRC32; the maximum is the 1021-byte PSI limit.
+  if !(13..=1021).contains(&section_length) {
+    return Err(ParseError::Malformed {
+      format: "mpeg_ts",
+      offset: 1,
+      reason: format!("PAT section_length {} out of range (13..=1021)", section_length),
+    });
+  }
   // section_length counts everything after the 3-byte header.  Total section
   // size is 3 + section_length.  We require the buffer to contain at least
   // that many bytes (excluding the CRC32 at the end is fine because we
@@ -199,9 +243,47 @@ mod tests {
   }
 
   #[test]
-  fn empty_program_list_yields_empty_entries() {
+  fn empty_program_list_rejected_by_section_length_floor() {
+    // PARSER-270: an empty PAT has section_length 9 (< 13), which mkvtoolnix
+    // rejects (`r_mpeg_ts.cpp:1782`).
     let section = build_section(42, &[]);
+    let err = parse(&section).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  // ---- PARSER-270: mandatory PSI header validation ---------------------
+
+  #[test]
+  fn rejects_section_syntax_indicator_zero() {
+    let mut section = build_section(1, &[(1, 0x100)]);
+    section[1] &= !0x80; // clear section_syntax_indicator
+    let err = parse(&section).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn rejects_inactive_current_next_indicator() {
+    let mut section = build_section(1, &[(1, 0x100)]);
+    section[5] &= !0x01; // current_next_indicator = 0 (next, not yet active)
+    let err = parse(&section).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn rejects_multi_section_pat() {
+    let mut section = build_section(1, &[(1, 0x100)]);
+    section[6] = 1; // section_number != 0
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+    let mut section = build_section(1, &[(1, 0x100)]);
+    section[7] = 1; // last_section_number != 0
+    assert!(matches!(parse(&section).unwrap_err(), ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn accepts_single_active_section() {
+    // Sanity: a well-formed single-section PAT still parses.
+    let section = build_section(1, &[(1, 0x100), (2, 0x200)]);
     let pat = parse(&section).unwrap();
-    assert!(pat.entries.is_empty());
+    assert_eq!(pat.entries.len(), 2);
   }
 }

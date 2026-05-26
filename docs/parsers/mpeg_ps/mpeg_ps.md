@@ -1,6 +1,6 @@
 # MPEG Program Stream Parser
 
-Implementation progress: 75%
+Implementation progress: 78%
 
 ## Purpose
 
@@ -13,6 +13,8 @@ The MPEG-PS parser recognises MPEG program streams and VOB-like files, discovers
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ps.cpp`, `../mkvtoolnix/src/input/r_mpeg_ps.h`
 
 The parser scans start codes, recognises pack and system headers, parses program stream maps, discovers private-stream sub IDs, accumulates bounded payload prefixes, and classifies MPEG video, AVC, VC-1, MPEG audio, AAC, AC-3, DTS, TrueHD, LPCM, and VobSub-style private streams.
+
+PES depacketising (`pes::pes_payload_offset`) is a port of `mpeg_ps_reader_c::parse_packet` (`r_mpeg_ps.cpp:343-468`) and supports **both** the MPEG-1 and MPEG-2 PES optional-header layouts (PARSER-272). Starting after the 6-byte prefix it skips `0xff` stuffing, an optional 2-byte STD buffer size (`c & 0xc0 == 0x40`), then consumes the MPEG-1 PTS (`c & 0xf0 == 0x20`, 4 bytes) or PTS+DTS (`c & 0xf0 == 0x30`, 9 bytes), the MPEG-2 optional header (`c & 0xc0 == 0x80`, `flags + header_data_length + that many bytes`), or — for the MPEG-1 no-timestamp marker `0x0f` — nothing, before exposing the elementary payload (the sub-stream-id byte for `0xBD`). MPEG-1 program streams have no `PES_header_data_length` at byte 8, so the elementary payload is now located correctly instead of skipping into or past real stream data. All bounds come from the declared `packet_length`; a zero length (unbounded MPEG-2 video) uses the available buffer.
 
 MPEG audio (bare stream ids `0xC0..0xDF`, defaulted to `A_MPEG/L3`, and PSM stream types `0x03`/`0x04`, defaulted to `A_MPEG/L2`) is relabelled to the actual Layer I / II / III once the first frame header decodes — mirroring `new_stream_a_mpeg`'s `codec = header.get_codec()` (`r_mpeg_ps.cpp`). The probe needs only a single frame header (not two), matching upstream's `find_mp3_header`, so a short bounded payload that mkvtoolnix can identify is not rejected. When no header decodes, the table default id is retained.
 
@@ -34,14 +36,4 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 
 ## Gaps and Handling
 
-Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic.
-
-## Open Issues
-
-### PARSER-272: MPEG-1 PES optional headers are skipped with the MPEG-2-only layout
-
-`pes_payload_offset` always assumes the MPEG-2 PES optional header shape and returns `9 + bytes[8]`. The MPEG-PS reader uses that offset for bare audio/video streams and private-stream-1 payloads before codec probing.
-
-mkvtoolnix's MPEG-PS reader supports the older MPEG-1 PES layout as well: after the 6-byte packet prefix it skips stuffing bytes, optional STD buffer bytes, MPEG-1 PTS/DTS encodings, the MPEG-2 optional header when present, or the `0x0f` marker before exposing elementary payload (`r_mpeg_ps.cpp:347-466`). MPEG-1 program streams do not have `PES_header_data_length` at byte 8.
-
-For MPEG-1 PES packets, Rust can interpret stuffing, PTS/DTS, or elementary payload bytes as the MPEG-2 header length and skip into or past the real stream data. That can hide MPEG video, MPEG audio, AC-3/DTS/LPCM, or private-stream headers that mkvtoolnix would see. Fix by porting the MPEG-1/MPEG-2 PES depacketizing logic before applying private-stream substream skips and codec probes.
+Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. PES depacketising now handles both MPEG-1 and MPEG-2 optional-header layouts, so MPEG-1 program-stream payloads are no longer misaligned.

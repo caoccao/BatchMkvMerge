@@ -1,6 +1,6 @@
 # MPEG Transport Stream Parser
 
-Implementation progress: 87%
+Implementation progress: 90%
 
 ## Purpose
 
@@ -13,6 +13,10 @@ The MPEG-TS parser recognises transport streams, detects packet size, builds pro
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ts.cpp`, `../mkvtoolnix/src/input/r_mpeg_ts.h`
 
 The parser supports 188-byte TS, 192-byte M2TS, and 204-byte FEC packet sizes. It reassembles PAT, PMT, and SDT sections, builds stream rows from stream types and descriptors, extracts language/service data, accumulates bounded PES payloads, and enriches AVC, HEVC, MPEG video, VC-1, AC-3, E-AC-3, AAC, MP3, DTS, TrueHD, LPCM, PGS, DVB subtitles, teletext, TextST, and Dolby Vision pairings.
+
+PAT and PMT sections are validated against the PSI header flags mkvtoolnix treats as mandatory (`r_mpeg_ts.cpp:1755-1786`, `1928-1964`): `section_syntax_indicator == 1`, `current_next_indicator != 0`, `section_number == 0`, `last_section_number == 0`, and `13 <= section_length <= 1021` (PARSER-270). Inactive next-version sections and unsupported multi-section tables are rejected, so programs and stream rows are never built from a table mkvtoolnix would ignore. CRC32 is intentionally not enforced: mkvtoolnix starts with CRC validation on but disables it on its retry pass whenever a CRC failure would otherwise leave the PAT/PMT unfound (`r_mpeg_ts.cpp:1388-1394`); a header-only single-pass parser is always in that position, so tolerating a stale CRC matches the observable end-state.
+
+Per-PID PES payloads accumulate only **elementary** bytes (PARSER-271). Mirroring `r_mpeg_ts.cpp:2147-2195` / `2394-2427`, the PES header is stripped at every payload-unit start and continuation packets are appended verbatim, so a PES header from a later packet is never injected into the probe buffer. This keeps a codec-header search (AAC five-consecutive-frame detection, AC-3/DTS sync, AVC/HEVC SPS, MPEG sequence header) intact when the data it needs spans PES boundaries.
 
 AAC enrichment (stream types `0x0f` and `0x11`) requires five consecutive valid AAC frames in the bounded PES payload before trusting the header, mirroring `new_stream_a_aac`'s `aac::parser_c::find_consecutive_frames(buffer, size, 5)` (r_mpeg_ts.cpp:367). The shared AAC parser recognises both multiplex types — ADTS and LOAS/LATM — so the LOAS/LATM framing that stream type `0x11` commonly carries is decoded as `A_AAC`, and a lone accidental ADTS-looking sync is rejected.
 
@@ -37,22 +41,4 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 
 ## Gaps and Handling
 
-The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks.
-
-## Open Issues
-
-### PARSER-270: PAT/PMT parsing accepts inactive, multi-section, and corrupt tables
-
-`pat::parse` and `pmt::parse` validate the table id and declared length, but they ignore the PSI header flags that mkvtoolnix treats as mandatory: `section_syntax_indicator == 1`, `current_next_indicator != 0`, `section_number == 0`, and `last_section_number == 0`. They also skip PAT/PMT CRC validation entirely.
-
-mkvtoolnix rejects inactive next-version sections, unsupported multi-section PAT/PMT tables, invalid section lengths, and bad CRCs by default (`r_mpeg_ts.cpp:1761-1785`, `1934-1975`). The Rust parser can therefore build programs and stream rows from future, partial, or corrupted tables that upstream would ignore, producing extra tracks or missing the active table that mkvtoolnix would use.
-
-Fix by porting the PSI header checks and CRC behavior. The CRC path should mirror upstream's default strict validation, including any intentional fallback policy for repeated CRC failures if that behavior is required for parity.
-
-### PARSER-271: Multiple PES packets for one PID leave later PES headers inside the codec probe
-
-The TS reader appends every payload for a candidate PID into one capped buffer and calls `strip_pes_header` only once before probing. If a PID contributes more than one PES packet, the first PES header is removed but later `00 00 01 ...` PES headers remain embedded in the elementary stream sample.
-
-mkvtoolnix parses each PES packet independently: it finalizes the previous PES at a new payload-unit start, removes that PES header, appends only elementary payload bytes to the probe buffer, and then starts the next PES (`r_mpeg_ts.cpp:2147-2195`, `2394-2427`). Its AAC probing, for example, searches for five consecutive frames in this header-stripped probe data.
-
-Rust can interrupt AAC, AC-3, DTS, MPEG audio, or video header searches with an injected PES header whenever the needed data spans PES boundaries. Fix by accumulating per-PES packet, stripping every PES header at packet boundaries, appending only elementary payload bytes to the PID probe buffer, and respecting declared PES lengths/discontinuities while staying within the bounded scan budget.
+The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, and per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers.
