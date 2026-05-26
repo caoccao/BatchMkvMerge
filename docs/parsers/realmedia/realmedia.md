@@ -36,3 +36,13 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 ## Gaps and Handling
 
 Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or scan deeply into DATA chunks. Late RealVideo and `dnet` refinements can therefore be missed. The parser records the reliable header metadata and bounded first-packet improvements only.
+
+## Open Issues
+
+### PARSER-278 - RealAudio RAAC/RACP/COOK classification is case-sensitive
+
+`real_audio_codec_id` matches RealAudio FourCC strings exactly (`"cook"`, `"raac"`, `"racp"`), while mkvtoolnix creates the AAC packetizer with `strcasecmp(..., "raac" / "racp")` and enables the Cook fix with `strcasecmp(..., "COOK")`.
+
+Impact: RealMedia files whose AAC or Cook audio FourCC appears as uppercase or mixed-case text are emitted as `A_REAL/UNKNOWN` instead of `A_AAC` or `A_REAL/COOK`; AAC wrapper parsing is then skipped entirely.
+
+Fix direction: normalize or compare RealAudio FourCCs case-insensitively for codec classification and AAC/Cook refinement while keeping the original private data unchanged.

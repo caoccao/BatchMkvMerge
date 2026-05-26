@@ -31,3 +31,13 @@ flowchart TD
 ## Gaps and Handling
 
 Upstream uses a richer `M2VParser` that validates sequence, picture, GOP, extension, and slice patterns while reading actual frames. Rust uses a simpler header heuristic and does not perform full frame parser validation. The metadata it reports is therefore header-accurate, while muxing-grade stream validation remains outside this parser.
+
+## Open Issues
+
+### PARSER-279 - MPEG video elementary-stream probe is too permissive
+
+`looks_like_mpeg_video_es` accepts any buffer that contains a sequence header followed later by a picture start code and one slice start code. mkvtoolnix's probe is stricter: it tracks whether the file starts with a start code, whether GOP and extension start codes were seen, and how many slice start codes exist, then requires either a start-at-beginning slice pattern, a GOP+extension slice pattern, or at least 25 slices. After that structural pass it still runs `M2VParser` in probe mode and requires `read_frame(...)` to succeed.
+
+Impact: Rust can claim arbitrary or container payload bytes that happen to contain one sequence header, one picture start, and one slice-like code inside the first MiB, even though mkvtoolnix would reject them before identification.
+
+Fix direction: port the upstream probe predicates and add an equivalent bounded frame-parser validation step before accepting an MPEG video elementary stream.

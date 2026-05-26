@@ -35,3 +35,13 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Upstream can scan much farther and uses a fuller elementary-stream parser with slice/access-unit state and `might_be_xyzvc` guards. Rust scans the first 64 KiB and focuses on SPS/PPS metadata. The PAR and VUI default-duration are now derived to match mkvmerge; what remains out of scope is the muxing-time "most often used duration" heuristic (which corrects field/frame-rate conventions from actual frame timestamps) — header-only identification reports the SPS-declared value directly.
+
+## Open Issues
+
+### PARSER-282 - AVC elementary-stream probing stops after 64 KiB
+
+Rust reads a fixed 64 KiB prefix in both `probe` and `read_headers`, then requires SPS and PPS in that prefix. mkvtoolnix reads up to fifty 1 MiB chunks, feeding them into the AVC elementary-stream parser until `headers_parsed()` becomes true and dimensions are validated.
+
+Impact: Raw H.264 streams with SPS/PPS after the first 64 KiB but still inside mkvtoolnix's probe range are reported by mkvtoolnix and missed by Rust.
+
+Fix direction: scan incrementally with the configured deadline, using an upstream-like parser state and at least the same 1 MiB chunk granularity where the timeout permits.

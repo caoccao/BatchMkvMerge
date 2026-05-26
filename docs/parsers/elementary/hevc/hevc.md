@@ -37,3 +37,13 @@ Key structures are `HevcNalUnit`, `HevcSps`, `HevcTier`, `VpsSummary`, and the i
 ## Gaps and Handling
 
 The Rust parser scans a 64 KiB prefix while upstream can scan much farther. It does not fully cross-check SPS/VPS IDs and does not require a first access unit. The VUI timing and sample aspect ratio are now extracted (with the scaling-list / reference-picture-set structures consumed to reach them), and a malformed tail degrades gracefully to no PAR / no timing rather than failing the dimensions extraction. The configuration record now matches the hvcC byte layout (profile constraints, chroma/bit-depth offsets, reserved high bits), and the `default_display_window` invalid-window workaround is mirrored. Dolby Vision/RPU/enhancement-layer handling is still out of scope; `min_spatial_segmentation_idc` / `parallelism_type` are emitted as 0 (with the reserved high bits set) rather than recovered from the VUI, since they are not needed for identification. The parser emits stable base-layer metadata and treats uncertain streams as unrecognised rather than fabricating advanced fields.
+
+## Open Issues
+
+### PARSER-283 - HEVC elementary-stream probing stops after 64 KiB
+
+Rust reads a fixed 64 KiB prefix in both `probe` and `read_headers`, then requires VPS, SPS, and PPS in that prefix. mkvtoolnix reads up to fifty 1 MiB chunks, feeding them into the HEVC elementary-stream parser until `headers_parsed()` becomes true and dimensions are validated.
+
+Impact: Raw H.265 streams with VPS/SPS/PPS after the first 64 KiB but still inside mkvtoolnix's probe range are reported by mkvtoolnix and missed by Rust.
+
+Fix direction: scan incrementally with the configured deadline, using an upstream-like parser state and at least the same 1 MiB chunk granularity where the timeout permits.

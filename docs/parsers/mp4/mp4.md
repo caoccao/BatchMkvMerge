@@ -56,3 +56,13 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`.
+
+## Open Issues
+
+### PARSER-287 - MP4 private-data parsing uses the current `stsd` FourCC instead of the retained first FourCC
+
+Rust keeps the first sample-description FourCC for codec identity, but `parse_entry` decides whether to walk codec-private child boxes or preserve the remaining sample-entry payload by checking the current entry's `entry.kind`. mkvtoolnix also keeps the first FourCC, and its `parse_video_header_priv_atoms` guard uses that retained `fourcc` / `codec`, not the later entry's FourCC, after warning about mismatches.
+
+Impact: Tracks with multiple `stsd` entries whose FourCCs differ can diverge. If the first entry is AVC/HEVC/AV1/mp4v/xvid and a later entry differs, Rust may preserve opaque private bytes where mkvtoolnix would walk child boxes. If the first entry is unknown and a later entry is AVC/HEVC/AV1/mp4v/xvid, Rust may parse child boxes that mkvtoolnix would keep opaque.
+
+Fix direction: base the child-box-vs-opaque-private decision on the retained first sample-entry FourCC / codec identity, while still letting later entries overwrite the per-entry sample data as mkvtoolnix does.
