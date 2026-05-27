@@ -35,3 +35,11 @@ Important structures are `WavType`, `WaveFormat`, `WavMetadata`, and internal ch
 ## Gaps and Handling
 
 The byte total now accumulates all data chunks like upstream, so duration is correct for multi-`data`-chunk files, and the >4 GiB data-length repair matches `scan_chunks_wave`. Unsupported format tags are reported through the structured model rather than matching mkvmerge's exact text output.
+
+## Open Issues
+
+### PARSER-330: WAV and Wave64 chunk walking stops after 4096 chunks
+
+`audio/wav.rs` applies `MAX_CHUNKS = 4096` to both `scan_chunks_riff` and `scan_chunks_wave64`. Upstream `wav_reader_c::scan_chunks_wave` and `scan_chunks_wave64` both loop until EOF or an exception, pushing every discovered chunk and accumulating every `data` chunk length. There is no fixed chunk-count ceiling.
+
+A valid WAV/RF64/Wave64 file with many small metadata, `JUNK`, or padding chunks before `fmt `, `ds64`, or later `data` chunks can therefore lose the format chunk, miss RF64 sizes, or undercount duration after the 4096th chunk. The scanner should keep walking declared chunk headers until EOF/truncation or the parser deadline, preserving upstream's full header discovery without reading media payloads chunk by chunk.

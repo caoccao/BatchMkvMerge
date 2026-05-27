@@ -64,3 +64,11 @@ QuickTime chapter tracks are also recognised: a track's `tref/chap` reference re
 ## Gaps and Handling
 
 Upstream has complete sample-table muxing, interleaving, and a wider QuickTime metadata surface, and reads chapter-track sample payloads to recover per-chapter titles and timecodes. Rust implements enough sample-table handling for first-sample verification and chapter counting but not packet output or chapter-name extraction. Rare atoms and codec branches are intentionally narrower; unknown private data is preserved where useful rather than interpreted unsafely. The Vorbis codec private kept on the model is the raw esds decoder configuration (informational); the muxing-time re-lacing into Matroska Vorbis private data is a packetizer concern out of scope for identification. The `hvcC` parser reads `chromaFormat` from byte 16, `bitDepthLumaMinus8` from byte 17 and `bitDepthChromaMinus8` from byte 18 (the avgFrameRate bytes 19-20 are ignored), matching `../mkvtoolnix/src/common/hevc/hevcc.cpp`. HEVC Annex B salvage, subtitle verification, and `esds` object-type mapping now follow mkvtoolnix's identification gates.
+
+## Open Issues
+
+### PARSER-326: Codec-private MP4 payloads are capped or truncated
+
+Several MP4 codec-private paths still impose small local caps that mkvtoolnix does not apply. `avcC` and `hvcC` are read through 4 KiB `MAX_PAYLOAD` limits, so a large AVC/HEVC configuration record fails before its raw private bytes can be preserved. Opaque video sample-entry private data uses `remaining.min(PRIV_CAP)` with `PRIV_CAP = 64 KiB`, silently truncating private data that upstream would clone in full. `dfLa` and Dolby Vision `hvcE` block-addition payloads are also read through 64 KiB atom caps even though upstream parses the full child atom payload from the sample entry.
+
+In `r_qtmp4.cpp`, `parse_video_header_priv_atoms` clones the complete opaque private tail for non-AVC/HEVC/AV1 video entries, and stores complete `avcC`/`hvcC`/`av1C` child atom payloads in `dmx.priv` for packetizer private data. Large but valid sample descriptions can therefore be rejected or have `codec_private`/block-addition data truncated by the Rust parser. These paths should preserve the full declared header payload under the parser's global budget instead of applying codec-local 4 KiB or 64 KiB ceilings.

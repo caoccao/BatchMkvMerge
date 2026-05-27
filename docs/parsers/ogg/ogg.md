@@ -42,3 +42,11 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded scans and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus variable-length Kate headers are assembled until their codec-level terminators, and damaged capture patterns are resynchronised to later `OggS` pages. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+### PARSER-327: Header reading aborts after 2048 pages even if stream headers are incomplete
+
+`reader.rs` breaks the page loop when `pages_consumed >= MAX_PAGES`, with `MAX_PAGES = 2048`. Upstream `ogm_reader_c::read_headers_internal` keeps asking libogg for pages until EOF or until every in-use demuxer has `headers_read`; it has no fixed page-count stop before incomplete headers are dropped.
+
+Ogg headers and comment packets can span many pages, especially with many streams, tiny page payloads, or very large VorbisComment/Kate/FLAC header runs. If the required header packets land after page 2048, the Rust parser finalises the partial states and can drop streams or miss tags that mkvtoolnix would still read during its header pass. The loop should be governed by codec header completion, EOF/truncation, and the configured deadline rather than a fixed page count.

@@ -28,3 +28,11 @@ The reader is implemented through segment helper functions rather than long-live
 ## Gaps and Handling
 
 The codec-private header path is the important parity point and is implemented. Packet delivery and full presentation-segment processing remain out of scope for the header-only parser.
+
+## Open Issues
+
+### PARSER-329: A max-size Dialog Style segment can exceed the 64 KiB TextST window
+
+`hdmv_textst.rs` reads only `PROBE_BYTES = 64 * 1024`, requires the first Dialog Style segment to be complete within that buffer, and stores codec private by slicing the same buffer. Upstream `hdmv_textst_reader_c::read_segment` reads the 3-byte segment descriptor, allocates `segment_size + 3`, and reads exactly the declared 16-bit Dialog Style payload before storing it as codec private.
+
+A valid Dialog Style segment can therefore require `6 + 3 + 65535` bytes from the beginning of the file, which is larger than 64 KiB. The Rust parser rejects or cannot store the full codec-private segment, while mkvtoolnix accepts and preserves it. This should be converted to descriptor-driven exact reads for the first segment rather than a fixed probe window.

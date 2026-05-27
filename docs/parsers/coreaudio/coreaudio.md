@@ -34,3 +34,11 @@ Key structures are `Chunk`, `AudioDescription`, `CafMetadata`, and `AlacConfig`.
 ## Gaps and Handling
 
 Packet tables are used for header-derived duration and validation but are not retained for packet delivery. Codec naming follows the app model rather than mkvmerge's exact codec lookup display strings.
+
+## Open Issues
+
+### PARSER-324: CAF chunk scanning and required body reads have artificial caps
+
+`reader.rs` still stops `scan_chunks` after `MAX_CHUNKS = 4096`, even though the module contract says CAF chunks are scanned through the whole file so `desc`, `pakt`, and `kuki` are found regardless of position. It also rejects any required chunk body above `MAX_CHUNK_READ = 16 MiB`. Upstream `coreaudio_reader_c::scan_chunks` loops until EOF or an I/O exception and `read_chunk` allocates and reads the selected chunk's exact declared size; there is no CAF-local chunk-count cap or 16 MiB body cap.
+
+A CAF with many small chunks before `desc`/`pakt`/`kuki`, or with a large but readable `pakt`/`kuki` body, can therefore be reported malformed/oversized by the Rust parser while mkvtoolnix accepts it. The bounded behavior should come from deadline checks and exact declared-size reads, not from fixed per-format limits that drop reachable header chunks.

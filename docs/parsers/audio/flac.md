@@ -34,3 +34,11 @@ The central structures are `FlacMetadata`, `FlacStreaminfo`, and `FlacPicture`.
 ## Gaps and Handling
 
 The MIME-to-extension table for pictures is intentionally small and practical. The Rust parser does not run libFLAC frame validation, and attachment payloads are represented by metadata rather than loading full image data into the model. Each kept metadata block is read up to a 16 MiB bound (and the PICTURE header up to 1 MiB), so a pathologically large block body is capped; in practice STREAMINFO/SEEKTABLE/CUESHEET/APPLICATION blocks are well under that. Those choices keep parsing bounded and match the app's need to list tracks and attachments rather than remux FLAC packets.
+
+## Open Issues
+
+### PARSER-325: FLAC metadata walking still stops at a fixed block count
+
+`audio/flac.rs` increments `blocks` and breaks once more than `MAX_META_BLOCKS = 4096` metadata blocks have been seen. The FLAC metadata chain is instead delimited by the last-metadata-block flag; mkvtoolnix delegates identification to libFLAC's `FLAC__stream_decoder_process_until_end_of_metadata`, records every metadata callback in `m_metadata_block_info`, and rebuilds the kept header blocks from that complete list.
+
+A valid FLAC file with thousands of legal metadata blocks before a later VorbisComment, PICTURE, CUESHEET, APPLICATION, or final STREAMINFO-adjacent kept block can therefore lose tags, attachments, or codec-private blocks in the Rust parser. The same issue affects the final "last block" flag normalisation, because the parser may mark the last block it happened to keep rather than the last block mkvtoolnix would keep. The walk should continue until the on-disk last-block flag, EOF/truncation, or the parser deadline, without an arbitrary block-count ceiling.
