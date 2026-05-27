@@ -20,7 +20,6 @@
     "noTracks": "Nessuna traccia trovata.",
     "header": {
       "id": "ID",
-      "number": "Numero",
       "type": "Tipo",
       "codec": "Codec",
       "trackName": "Nome traccia",

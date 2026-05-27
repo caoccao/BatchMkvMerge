@@ -147,6 +147,10 @@ interface MkvStore {
   setDefaultTrackByType: (files: string[]) => void;
   /** Header action: reset the forced flag to unspecified on every track. */
   clearForcedFlags: (files: string[]) => void;
+  /** Drag-reorder: move the `fromKey` row to `toKey`'s position in every given
+   *  file that contains both rows. The track `id` is intrinsic and unchanged —
+   *  only the row order changes. */
+  reorderTracks: (files: string[], fromKey: string, toKey: string) => void;
   setFileOutputDir: (file: string, dir: string) => void;
   clearFileOutputDir: (file: string) => void;
   setGroupOutputDir: (files: string[], dir: string) => void;
@@ -585,6 +589,29 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         fileTracks[file] = list.map((t): MediaTrack =>
           t.kind === "track" ? { ...t, forced: "unspecified" } : t,
         );
+      }
+      return { fileTracks };
+    }),
+  reorderTracks: (files, fromKey, toKey) =>
+    set((state) => {
+      if (fromKey === toKey) {
+        return {};
+      }
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        const from = list.findIndex((t) => trackKey(t) === fromKey);
+        const to = list.findIndex((t) => trackKey(t) === toKey);
+        if (from < 0 || to < 0 || from === to) {
+          continue;
+        }
+        const next = list.slice();
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved);
+        fileTracks[file] = next;
       }
       return { fileTracks };
     }),

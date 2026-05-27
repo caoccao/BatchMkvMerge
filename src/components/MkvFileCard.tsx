@@ -125,6 +125,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const cycleTrackFlag = useMkvStore((s) => s.cycleTrackFlag);
   const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
   const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
+  const reorderTracks = useMkvStore((s) => s.reorderTracks);
   const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
   const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
   const cachedTracks = useMkvStore((s) => s.fileTracks[path]);
@@ -494,7 +495,6 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           emptyText={t("merge.noTracks")}
           headers={{
             id: t("merge.header.id"),
-            number: t("merge.header.number"),
             type: t("merge.header.type"),
             codec: t("merge.header.codec"),
             trackName: t("merge.header.trackName"),
@@ -507,6 +507,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           onCycleFlag={(key, kind) => cycleTrackFlag([path], key, kind)}
           onDefaultHeaderClick={() => setDefaultTrackByType([path])}
           onForcedHeaderClick={() => clearForcedFlags([path])}
+          onReorder={(from, to) => reorderTracks([path], from, to)}
         />
       </CardContent>
       <Snackbar

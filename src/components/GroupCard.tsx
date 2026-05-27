@@ -134,6 +134,7 @@ export function GroupCard({ files }: GroupCardProps) {
   const cycleTrackFlag = useMkvStore((s) => s.cycleTrackFlag);
   const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
   const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
+  const reorderTracks = useMkvStore((s) => s.reorderTracks);
 
   const firstFile = files[0];
   const tracks = firstFile ? fileTracksMap[firstFile] ?? [] : [];
@@ -547,7 +548,6 @@ export function GroupCard({ files }: GroupCardProps) {
             emptyText={t("merge.noTracks")}
             headers={{
               id: t("merge.header.id"),
-              number: t("merge.header.number"),
               type: t("merge.header.type"),
               codec: t("merge.header.codec"),
               trackName: t("merge.header.trackName"),
@@ -560,6 +560,7 @@ export function GroupCard({ files }: GroupCardProps) {
             onCycleFlag={(key, kind) => cycleTrackFlag(files, key, kind)}
             onDefaultHeaderClick={() => setDefaultTrackByType(files)}
             onForcedHeaderClick={() => clearForcedFlags(files)}
+            onReorder={(from, to) => reorderTracks(files, from, to)}
           />
         </Box>
       </Box>

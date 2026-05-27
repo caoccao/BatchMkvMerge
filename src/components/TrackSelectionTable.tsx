@@ -15,6 +15,7 @@
  *   limitations under the License.
  */
 
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import {
   Box,
   Checkbox,
@@ -34,6 +35,22 @@ import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
 import CloseIcon from "@mui/icons-material/Close";
 import CameraRollIcon from "@mui/icons-material/CameraRoll";
 import CycloneIcon from "@mui/icons-material/Cyclone";
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  type PointerSensorOptions,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { trackKey } from "../merge";
 import type { MediaTrack } from "../media-metadata";
 import type { TrackFlag } from "../protocol";
@@ -50,6 +67,88 @@ function flagIcon(flag: TrackFlag) {
   return <CheckBoxOutlineBlankIcon fontSize="small" color="disabled" />;
 }
 
+/** `true` when the pointer landed on an interactive control inside a row, so a
+ *  drag must NOT start (the click belongs to the checkbox / flag button). */
+function isInteractiveDragTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest(
+      [
+        "button",
+        "input",
+        "select",
+        "textarea",
+        '[contenteditable="true"]',
+        '[role="checkbox"]',
+        ".MuiButtonBase-root",
+      ].join(","),
+    ) !== null
+  );
+}
+
+/** PointerSensor that ignores pointer-downs on interactive controls, so the
+ *  row's checkboxes / flag buttons keep working while the row stays draggable.
+ *  Mirrors BetterMediaInfo's reorderable tables. */
+class InteractiveSafePointerSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: "onPointerDown" as const,
+      handler: (
+        { nativeEvent: event }: ReactPointerEvent,
+        { onActivation }: PointerSensorOptions,
+      ): boolean => {
+        if (
+          !event.isPrimary ||
+          event.button !== 0 ||
+          isInteractiveDragTarget(event.target)
+        ) {
+          return false;
+        }
+        onActivation?.({ event });
+        return true;
+      },
+    },
+  ];
+}
+
+function SortableTableRow({
+  id,
+  disabled,
+  onClick,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled });
+  return (
+    <TableRow
+      ref={setNodeRef}
+      hover
+      {...attributes}
+      {...listeners}
+      onClick={onClick}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : undefined,
+      }}
+      sx={{ cursor: disabled ? "default" : "grab" }}
+    >
+      {children}
+    </TableRow>
+  );
+}
+
 interface TrackSelectionTableProps {
   tracks: MediaTrack[];
   selectedIds: Set<string>;
@@ -57,7 +156,6 @@ interface TrackSelectionTableProps {
   emptyText: string;
   headers: {
     id: string;
-    number: string;
     type: string;
     codec: string;
     trackName: string;
@@ -77,6 +175,8 @@ interface TrackSelectionTableProps {
   onDefaultHeaderClick: () => void;
   /** Forced Display header: reset every track's forced flag. */
   onForcedHeaderClick: () => void;
+  /** Drag-reorder: move the dragged row (`fromKey`) to the drop row (`toKey`). */
+  onReorder: (fromKey: string, toKey: string) => void;
 }
 
 export function TrackSelectionTable({
@@ -92,7 +192,22 @@ export function TrackSelectionTable({
   onCycleFlag,
   onDefaultHeaderClick,
   onForcedHeaderClick,
+  onReorder,
 }: TrackSelectionTableProps) {
+  const sensors = useSensors(
+    useSensor(InteractiveSafePointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
+  const sortableIds = tracks.map((track) => trackKey(track));
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+    onReorder(String(active.id), String(over.id));
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", py: 1 }}>
@@ -115,125 +230,137 @@ export function TrackSelectionTable({
     );
   }
   return (
-    <TableContainer>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell padding="checkbox">
-              <Checkbox
-                size="small"
-                disabled={disabled}
-                checked={tracks.length > 0 && selectedIds.size === tracks.length}
-                indeterminate={
-                  selectedIds.size > 0 && selectedIds.size < tracks.length
-                }
-                onChange={(event) => onToggleAll(event.target.checked)}
-              />
-            </TableCell>
-            <TableCell>{headers.id}</TableCell>
-            <TableCell>{headers.type}</TableCell>
-            <TableCell>{headers.codec}</TableCell>
-            <TableCell>{headers.trackName}</TableCell>
-            <TableCell>{headers.language}</TableCell>
-            <TableCell>{headers.number}</TableCell>
-            <TableCell padding="checkbox" align="center">
-              <Tooltip title={headers.defaultTrack}>
-                <span>
-                  <IconButton
-                    size="small"
-                    disabled={disabled}
-                    onClick={onDefaultHeaderClick}
-                    sx={{ p: 0.25 }}
-                  >
-                    <CameraRollIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </TableCell>
-            <TableCell padding="checkbox" align="center">
-              <Tooltip title={headers.forcedDisplay}>
-                <span>
-                  <IconButton
-                    size="small"
-                    disabled={disabled}
-                    onClick={onForcedHeaderClick}
-                    sx={{ p: 0.25 }}
-                  >
-                    <CycloneIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {tracks.map((track) => {
-            const key = trackKey(track);
-            return (
-              <TableRow
-                key={key}
-                hover
-                sx={{ cursor: disabled ? "default" : "pointer" }}
-                onClick={() => {
-                  if (disabled) {
-                    return;
-                  }
-                  onToggleOne(key, !selectedIds.has(key));
-                }}
-              >
-                <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={[restrictToVerticalAxis]}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell padding="checkbox">
                   <Checkbox
                     size="small"
                     disabled={disabled}
-                    checked={selectedIds.has(key)}
-                    onChange={(e) => onToggleOne(key, e.target.checked)}
+                    checked={
+                      tracks.length > 0 && selectedIds.size === tracks.length
+                    }
+                    indeterminate={
+                      selectedIds.size > 0 && selectedIds.size < tracks.length
+                    }
+                    onChange={(event) => onToggleAll(event.target.checked)}
                   />
                 </TableCell>
-                <TableCell>{track.id}</TableCell>
-                <TableCell>
-                  <TrackTypeIcon type={track.type} />
+                <TableCell>{headers.id}</TableCell>
+                <TableCell>{headers.type}</TableCell>
+                <TableCell>{headers.codec}</TableCell>
+                <TableCell>{headers.language}</TableCell>
+                <TableCell>{headers.trackName}</TableCell>
+                <TableCell padding="checkbox" align="center">
+                  <Tooltip title={headers.defaultTrack}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={disabled}
+                        onClick={onDefaultHeaderClick}
+                        sx={{ p: 0.25 }}
+                      >
+                        <CameraRollIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </TableCell>
-                <TableCell>{track.codec}</TableCell>
-                <TableCell>{track.trackName}</TableCell>
-                <TableCell>{track.language}</TableCell>
-                <TableCell>{track.number}</TableCell>
-                <TableCell
-                  padding="checkbox"
-                  align="center"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {track.kind === "track" ? (
-                    <IconButton
-                      size="small"
-                      disabled={disabled}
-                      onClick={() => onCycleFlag(key, "default")}
-                      sx={{ p: 0.25 }}
-                    >
-                      {flagIcon(track.defaultTrack)}
-                    </IconButton>
-                  ) : null}
-                </TableCell>
-                <TableCell
-                  padding="checkbox"
-                  align="center"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {track.kind === "track" ? (
-                    <IconButton
-                      size="small"
-                      disabled={disabled}
-                      onClick={() => onCycleFlag(key, "forced")}
-                      sx={{ p: 0.25 }}
-                    >
-                      {flagIcon(track.forced)}
-                    </IconButton>
-                  ) : null}
+                <TableCell padding="checkbox" align="center">
+                  <Tooltip title={headers.forcedDisplay}>
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={disabled}
+                        onClick={onForcedHeaderClick}
+                        sx={{ p: 0.25 }}
+                      >
+                        <CycloneIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </TableCell>
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+            </TableHead>
+            <TableBody>
+              {tracks.map((track) => {
+                const key = trackKey(track);
+                return (
+                  <SortableTableRow
+                    key={key}
+                    id={key}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (disabled) {
+                        return;
+                      }
+                      onToggleOne(key, !selectedIds.has(key));
+                    }}
+                  >
+                    <TableCell
+                      padding="checkbox"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        size="small"
+                        disabled={disabled}
+                        checked={selectedIds.has(key)}
+                        onChange={(e) => onToggleOne(key, e.target.checked)}
+                      />
+                    </TableCell>
+                    <TableCell>{track.id}</TableCell>
+                    <TableCell>
+                      <TrackTypeIcon type={track.type} />
+                    </TableCell>
+                    <TableCell>{track.codec}</TableCell>
+                    <TableCell>{track.language}</TableCell>
+                    <TableCell>{track.trackName}</TableCell>
+                    <TableCell
+                      padding="checkbox"
+                      align="center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {track.kind === "track" ? (
+                        <IconButton
+                          size="small"
+                          disabled={disabled}
+                          onClick={() => onCycleFlag(key, "default")}
+                          sx={{ p: 0.25 }}
+                        >
+                          {flagIcon(track.defaultTrack)}
+                        </IconButton>
+                      ) : null}
+                    </TableCell>
+                    <TableCell
+                      padding="checkbox"
+                      align="center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {track.kind === "track" ? (
+                        <IconButton
+                          size="small"
+                          disabled={disabled}
+                          onClick={() => onCycleFlag(key, "forced")}
+                          sx={{ p: 0.25 }}
+                        >
+                          {flagIcon(track.forced)}
+                        </IconButton>
+                      ) : null}
+                    </TableCell>
+                  </SortableTableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </SortableContext>
+    </DndContext>
   );
 }

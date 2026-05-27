@@ -20,7 +20,6 @@
     "noTracks": "未找到轨道。",
     "header": {
       "id": "ID",
-      "number": "编号",
       "type": "类型",
       "codec": "编码",
       "trackName": "轨道名称",

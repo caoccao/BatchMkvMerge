@@ -20,7 +20,6 @@
     "noTracks": "No tracks found.",
     "header": {
       "id": "ID",
-      "number": "Number",
       "type": "Type",
       "codec": "Codec",
       "trackName": "Track Name",

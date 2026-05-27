@@ -20,7 +20,6 @@
     "noTracks": "找不到軌道。",
     "header": {
       "id": "ID",
-      "number": "編號",
       "type": "類型",
       "codec": "編碼",
       "trackName": "軌道名稱",

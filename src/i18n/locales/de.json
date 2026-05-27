@@ -20,7 +20,6 @@
     "noTracks": "Keine Spuren gefunden.",
     "header": {
       "id": "ID",
-      "number": "Nummer",
       "type": "Typ",
       "codec": "Codec",
       "trackName": "Spurname",
