@@ -38,6 +38,14 @@ pub struct Language {
   /// containing digits (`iso639_2` → `iso6392`); we keep the underscore.
   #[serde(rename = "iso639_2")]
   pub iso639_2: String,
+  /// Bibliographic ISO 639-2/B alias (e.g. `fre` for `fra`), when the language
+  /// has a distinct B code.  Lets a language filter written in either the
+  /// bibliographic or terminologic form match the same track.
+  #[serde(rename = "iso639_2Bib")]
+  pub iso639_2_bib: Option<String>,
+  /// ISO 639-1 alpha-2 code (e.g. `fr`), when one exists.
+  #[serde(rename = "iso639_1")]
+  pub iso639_1: Option<String>,
   /// BCP-47 IETF tag when the source provided one and it validated.
   pub ietf: Option<String>,
   /// English name lookup for display.  Always derived from `iso639_2`.
@@ -45,15 +53,24 @@ pub struct Language {
 }
 
 impl Language {
+  /// Build the full equivalent-code set (terminologic + bibliographic +
+  /// alpha-2) from a canonical ISO 639-2 code.  `ietf` is left `None` for
+  /// callers to fill.
+  fn from_canonical(canonical: &str, name: Option<String>) -> Self {
+    Self {
+      iso639_2: canonical.to_owned(),
+      iso639_2_bib: iso_639::term_to_bib(canonical).map(str::to_owned),
+      iso639_1: iso_639::alpha3_to_alpha2(canonical).map(str::to_owned),
+      ietf: None,
+      name,
+    }
+  }
+
   /// Construct from an ISO 639-2 code.  Unknown codes fall back to `"und"`
   /// with a `name` of `None`, so callers never silently lose data.
   pub fn from_iso_639_2(code: &str) -> Self {
     match iso_639::lookup(code) {
-      Some(m) => Self {
-        iso639_2: m.canonical.to_owned(),
-        ietf: None,
-        name: Some(m.name.to_owned()),
-      },
+      Some(m) => Self::from_canonical(m.canonical, Some(m.name.to_owned())),
       None => Self::undetermined(),
     }
   }
@@ -81,11 +98,9 @@ impl Language {
       Some((c, n)) => (c.to_owned(), Some(n.to_owned())),
       None => (iso_639::UND.to_owned(), None),
     };
-    Some(Self {
-      iso639_2,
-      ietf: Some(canonical_ietf),
-      name,
-    })
+    let mut lang = Self::from_canonical(&iso639_2, name);
+    lang.ietf = Some(canonical_ietf);
+    Some(lang)
   }
 
   /// Construct a language only when the source hint maps to a known ISO-639
@@ -110,6 +125,8 @@ impl Language {
   pub fn undetermined() -> Self {
     Self {
       iso639_2: iso_639::UND.to_owned(),
+      iso639_2_bib: None,
+      iso639_1: None,
       ietf: None,
       name: Some("Undetermined".to_owned()),
     }
@@ -168,6 +185,23 @@ mod tests {
     let l = Language::from_iso_639_2("fre");
     assert_eq!(l.iso639_2, "fra");
     assert_eq!(l.name.as_deref(), Some("French"));
+  }
+
+  #[test]
+  fn exposes_bibliographic_and_alpha2_aliases() {
+    // French/German/Chinese have a B/T split — expose both forms + alpha-2.
+    let l = Language::from_iso_639_2("fre");
+    assert_eq!(l.iso639_2, "fra");
+    assert_eq!(l.iso639_2_bib.as_deref(), Some("fre"));
+    assert_eq!(l.iso639_1.as_deref(), Some("fr"));
+    let de = Language::from_ietf("de").unwrap();
+    assert_eq!(de.iso639_2, "deu");
+    assert_eq!(de.iso639_2_bib.as_deref(), Some("ger"));
+    assert_eq!(de.iso639_1.as_deref(), Some("de"));
+    // English has no bibliographic twin but does have an alpha-2.
+    let en = Language::from_iso_639_2("eng");
+    assert_eq!(en.iso639_2_bib, None);
+    assert_eq!(en.iso639_1.as_deref(), Some("en"));
   }
 
   #[test]

@@ -138,7 +138,7 @@
     "subtitles": "Subtitles",
     "chapters": "Chapters",
     "attachments": "Attachments",
-    "onlyAutoSelectOnDrop": "Only auto-select on file add",
+    "autoSelectOnDrop": "Auto-select on file add",
     "onlyAutoSelectOnDropForLanguages": "Only auto-select on file add for languages",
     "defaultGroupMode": "Default group mode",
     "resetTemplates": "Reset to Defaults"

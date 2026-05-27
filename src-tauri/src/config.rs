@@ -160,19 +160,19 @@ pub struct ConfigProfile {
   pub name: String,
   #[serde(rename = "selectVideo", default)]
   pub select_video: bool,
-  #[serde(rename = "selectAudio", default)]
+  #[serde(rename = "selectAudio", default = "ConfigProfile::default_select_audio")]
   pub select_audio: bool,
   #[serde(rename = "selectSubtitle", default = "ConfigProfile::default_select_subtitle")]
   pub select_subtitle: bool,
-  #[serde(rename = "selectChapters", default)]
+  #[serde(rename = "selectChapters", default = "ConfigProfile::default_select_chapters")]
   pub select_chapters: bool,
   #[serde(rename = "selectAttachments", default)]
   pub select_attachments: bool,
   #[serde(rename = "videoLanguages", default)]
   pub video_languages: String,
-  #[serde(rename = "audioLanguages", default)]
+  #[serde(rename = "audioLanguages", default = "ConfigProfile::default_languages")]
   pub audio_languages: String,
-  #[serde(rename = "subtitleLanguages", default = "ConfigProfile::default_subtitle_languages")]
+  #[serde(rename = "subtitleLanguages", default = "ConfigProfile::default_languages")]
   pub subtitle_languages: String,
   #[serde(rename = "defaultGroupMode", default = "ConfigProfile::default_default_group_mode")]
   pub default_group_mode: bool,
@@ -185,10 +185,18 @@ impl ConfigProfile {
     true
   }
 
-  pub const DEFAULT_SUBTITLE_LANGUAGES: &'static str = "eng, chi, spa, ger, fre, jpn";
+  fn default_select_audio() -> bool {
+    true
+  }
 
-  fn default_subtitle_languages() -> String {
-    Self::DEFAULT_SUBTITLE_LANGUAGES.to_owned()
+  fn default_select_chapters() -> bool {
+    true
+  }
+
+  pub const DEFAULT_LANGUAGES: &'static str = "eng, chi, spa, ger, fre, jpn";
+
+  fn default_languages() -> String {
+    Self::DEFAULT_LANGUAGES.to_owned()
   }
 
   fn default_default_group_mode() -> bool {
@@ -201,13 +209,13 @@ impl Default for ConfigProfile {
     Self {
       name: Self::DEFAULT_NAME.to_owned(),
       select_video: false,
-      select_audio: false,
+      select_audio: true,
       select_subtitle: true,
-      select_chapters: false,
+      select_chapters: true,
       select_attachments: false,
       video_languages: String::new(),
-      audio_languages: String::new(),
-      subtitle_languages: Self::default_subtitle_languages(),
+      audio_languages: Self::default_languages(),
+      subtitle_languages: Self::default_languages(),
       default_group_mode: true,
     }
   }

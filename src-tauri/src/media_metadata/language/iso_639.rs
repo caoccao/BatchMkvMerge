@@ -68,6 +68,27 @@ pub fn is_valid(code: &str) -> bool {
   lookup(code).is_some()
 }
 
+/// Reverse of [`bib_to_term`]: a terminologic code → its bibliographic twin,
+/// when the pair exists (`fra` → `fre`, `deu` → `ger`, `zho` → `chi`).
+/// `None` when the language has no distinct bibliographic code.
+pub fn term_to_bib(term: &str) -> Option<&'static str> {
+  let t = term.trim().to_ascii_lowercase();
+  BIB_T_PAIRS.iter().copied().find_map(|(b, tt)| if tt == t { Some(b) } else { None })
+}
+
+/// Best-effort ISO 639-2 (canonical or bibliographic) → ISO 639-1 alpha-2.
+/// Returns the alpha-2 whose registry row resolves to the same canonical
+/// language (`fra`/`fre` → `fr`, `deu`/`ger` → `de`).  `None` when the
+/// language has no alpha-2 code.
+pub fn alpha3_to_alpha2(code: &str) -> Option<&'static str> {
+  let canonical = lookup(code)?.canonical;
+  ALPHA2_TO_ALPHA3
+    .iter()
+    .copied()
+    .find(|(_, a3)| lookup(a3).map(|m| m.canonical) == Some(canonical))
+    .map(|(a2, _)| a2)
+}
+
 /// Map an ISO 639-1 alpha-2 code (`en`, `ja`, `pt`, ...) to its ISO 639-2
 /// alpha-3 code.  The returned code may be a bibliographic alias (e.g.
 /// `de → ger`); feed it through [`lookup`] to obtain the canonical

@@ -138,7 +138,7 @@
     "subtitles": "字幕",
     "chapters": "章节",
     "attachments": "附件",
-    "onlyAutoSelectOnDrop": "仅在添加文件时自动选择",
+    "autoSelectOnDrop": "添加文件时自动选择",
     "onlyAutoSelectOnDropForLanguages": "仅在添加文件时按语言自动选择",
     "defaultGroupMode": "默认分组模式",
     "resetTemplates": "恢复默认值"

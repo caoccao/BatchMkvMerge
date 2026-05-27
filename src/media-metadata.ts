@@ -48,6 +48,10 @@ export interface MediaTrack {
   trackName: string;
   /** Resolved ISO-639-2 language ("eng", "und", ...). Empty for synthetic rows. */
   language: string;
+  /** Every equivalent language code (terminologic + bibliographic + alpha-2),
+   *  lowercased, used for filter matching so "fre"/"fra"/"fr" all match. Empty
+   *  for synthetic rows. */
+  languageCodes: string[];
 }
 
 /**
@@ -71,19 +75,36 @@ function trackTypeToUiType(t: TrackType): string {
 }
 
 /**
- * Pull the friendliest language code we have for a parsed track. The parser
- * prefers the BCP-47 IETF tag; we fall back to the ISO-639-2 alpha-3, then
- * "und" so callers always have something to filter on.
+ * The language code shown in the track table's Language column. Prefers the
+ * bibliographic ISO 639-2/B form (fre/ger/chi) so the column reads in the same
+ * convention as the language filter list; falls back to the terminologic code
+ * (eng/spa/jpn have no B/T split) or "und". Filter *matching* uses
+ * `trackLanguageCodes` below, which carries every equivalent form.
  */
 function pickTrackLanguage(track: Track): string {
   const lang = track.properties.common.language ?? null;
   if (!lang) {
     return "und";
   }
-  if (lang.ietf && lang.ietf.length > 0) {
-    return lang.ietf;
+  return lang.iso639_2Bib || lang.iso639_2 || "und";
+}
+
+/**
+ * Every equivalent ISO code the backend resolved for a track — terminologic
+ * (`fra`), bibliographic (`fre`) and alpha-2 (`fr`) — lowercased and deduped.
+ * Language filters match if any of these equal a configured code, so a list
+ * written in bibliographic form ("fre", "ger", "chi") still selects tracks
+ * the parser canonicalised to terminologic form ("fra", "deu", "zho").
+ */
+function trackLanguageCodes(track: Track): string[] {
+  const lang = track.properties.common.language ?? null;
+  if (!lang) {
+    return ["und"];
   }
-  return lang.iso639_2 || "und";
+  const codes = [lang.iso639_2, lang.iso639_2Bib, lang.iso639_1]
+    .filter((c): c is string => !!c && c.length > 0)
+    .map((c) => c.toLowerCase());
+  return codes.length > 0 ? Array.from(new Set(codes)) : ["und"];
 }
 
 /**
@@ -122,6 +143,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       codecId: track.codec.id,
       trackName: track.properties.common.trackName ?? "",
       language: pickTrackLanguage(track),
+      languageCodes: trackLanguageCodes(track),
     });
   }
   if (meta.chapters && meta.chapters.numEntries > 0) {
@@ -134,6 +156,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       codecId: "xml",
       trackName: "",
       language: "",
+      languageCodes: [],
     });
   }
   for (const attachment of meta.attachments) {
@@ -147,6 +170,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       codecId: subtype,
       trackName: attachment.fileName,
       language: "",
+      languageCodes: [],
     });
   }
   return rows;

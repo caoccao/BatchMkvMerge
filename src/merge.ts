@@ -39,12 +39,14 @@ function parseLanguageFilter(filter: string): Set<string> | null {
 
 function matchesLanguage(
   filter: Set<string> | null,
-  language: string,
+  codes: string[],
 ): boolean {
   if (filter === null) {
     return true;
   }
-  return filter.has(language.toLowerCase());
+  // `codes` carries the track's terminologic + bibliographic + alpha-2 forms
+  // (already lowercased), so a filter in any form matches.
+  return codes.some((code) => filter.has(code));
 }
 
 export function makeTrackSelector(
@@ -55,19 +57,22 @@ export function makeTrackSelector(
   const subtitleLangs = parseLanguageFilter(profile.subtitleLanguages);
   return (track: MediaTrack) => {
     switch (track.type) {
+      // Video / audio / subtitle: unchecked selects every track of that type;
+      // checked restricts to the configured language list.
       case "video":
-        return (
-          profile.selectVideo && matchesLanguage(videoLangs, track.language)
-        );
+        return profile.selectVideo
+          ? matchesLanguage(videoLangs, track.languageCodes)
+          : true;
       case "audio":
-        return (
-          profile.selectAudio && matchesLanguage(audioLangs, track.language)
-        );
+        return profile.selectAudio
+          ? matchesLanguage(audioLangs, track.languageCodes)
+          : true;
       case "subtitles":
-        return (
-          profile.selectSubtitle &&
-          matchesLanguage(subtitleLangs, track.language)
-        );
+        return profile.selectSubtitle
+          ? matchesLanguage(subtitleLangs, track.languageCodes)
+          : true;
+      // Chapters / attachments: checked adds every track of that type,
+      // unchecked adds none.
       case "chapters":
         return profile.selectChapters;
       case "attachment":

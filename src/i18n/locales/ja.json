@@ -138,7 +138,7 @@
     "subtitles": "字幕",
     "chapters": "チャプター",
     "attachments": "添付ファイル",
-    "onlyAutoSelectOnDrop": "追加時のみ自動で選択",
+    "autoSelectOnDrop": "追加時に自動で選択",
     "onlyAutoSelectOnDropForLanguages": "追加時のみ言語で自動選択",
     "defaultGroupMode": "既定のグループモード",
     "resetTemplates": "デフォルトに戻す"

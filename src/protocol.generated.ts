@@ -338,6 +338,14 @@ export type Language = {
 	 *  containing digits (`iso639_2` → `iso6392`); we keep the underscore.
 	 */
 	iso639_2: string,
+	/**
+	 *  Bibliographic ISO 639-2/B alias (e.g. `fre` for `fra`), when the language
+	 *  has a distinct B code.  Lets a language filter written in either the
+	 *  bibliographic or terminologic form match the same track.
+	 */
+	iso639_2Bib: string | null,
+	/**  ISO 639-1 alpha-2 code (e.g. `fr`), when one exists. */
+	iso639_1: string | null,
 	/**  BCP-47 IETF tag when the source provided one and it validated. */
 	ietf: string | null,
 	/**  English name lookup for display.  Always derived from `iso639_2`. */

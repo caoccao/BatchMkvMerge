@@ -141,20 +141,20 @@ export interface Config {
 }
 
 export const DEFAULT_PROFILE_NAME = "Default";
-export const DEFAULT_SUBTITLE_LANGUAGES = "eng, chi, spa, ger, fre, jpn";
+export const DEFAULT_LANGUAGES = "eng, chi, spa, ger, fre, jpn";
 
 export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile {
   const isDefault = name === DEFAULT_PROFILE_NAME;
   return {
     name,
     selectVideo: false,
-    selectAudio: false,
+    selectAudio: isDefault,
     selectSubtitle: isDefault,
-    selectChapters: false,
+    selectChapters: isDefault,
     selectAttachments: false,
     videoLanguages: "",
-    audioLanguages: "",
-    subtitleLanguages: DEFAULT_SUBTITLE_LANGUAGES,
+    audioLanguages: DEFAULT_LANGUAGES,
+    subtitleLanguages: DEFAULT_LANGUAGES,
     defaultGroupMode: isDefault,
   };
 }

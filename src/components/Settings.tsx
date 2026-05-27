@@ -465,7 +465,7 @@ export default function Settings() {
                     <Typography variant="caption">
                       {row.languagesKey
                         ? t("settings.onlyAutoSelectOnDropForLanguages")
-                        : t("settings.onlyAutoSelectOnDrop")}
+                        : t("settings.autoSelectOnDrop")}
                     </Typography>
                   }
                 />
