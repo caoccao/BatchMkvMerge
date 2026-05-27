@@ -29,10 +29,12 @@
 //! ...
 //! ```
 //!
-//! We probe for an `HH:MM:SS,mmm --> HH:MM:SS,mmm` (or `.mmm` / `:mmm`) line
-//! within the first 16 KB.  The arrow and numeric fields follow mkvtoolnix's
-//! flexible regex, so forms like `00:00:01,000-->00:00:02,000` and
-//! `00:00:01,000 -> 00:00:02,000` are accepted too.
+//! We probe the same line structure as mkvtoolnix: leading blank lines are
+//! skipped, the first meaningful line must be the numeric cue index, and the
+//! next line must carry the timestamp.  The arrow and numeric fields follow
+//! mkvtoolnix's flexible regex, so forms like
+//! `00:00:01,000-->00:00:02,000` and `00:00:01,000 -> 00:00:02,000` are
+//! accepted too.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -44,9 +46,7 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
-use super::encoding;
-
-const PROBE_BYTES: usize = 16 * 1024;
+use super::{encoding, read_source_to_end};
 
 /// `true` when `text` contains a line matching the SRT timecode pattern.
 ///
@@ -237,27 +237,23 @@ impl Reader for SrtReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
-    src.seek_to(0)?;
-    if read == 0 {
+    let buf = read_source_to_end(src, None, "srt::probe")?;
+    if buf.is_empty() {
       return Ok(false);
     }
-    let text = encoding::decode_lossy(&buf[..read]);
+    let text = encoding::decode_lossy(&buf);
     Ok(looks_like_srt(&text))
   }
 
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    let detected = encoding::detect(&buf[..read]);
-    let text = encoding::decode_lossy(&buf[..read]);
+    let buf = read_source_to_end(src, Some(deadline), "srt::headers")?;
+    let detected = encoding::detect(&buf);
+    let text = encoding::decode_lossy(&buf);
     if !looks_like_srt(&text) {
       return Err(ParseError::Unrecognised);
     }
@@ -417,6 +413,18 @@ mod tests {
     assert!(looks_like_srt("1\n00:00:00,000 --> 00:00:02,500\nHello\n"));
     // Leading blank lines are skipped before the index line.
     assert!(looks_like_srt("\n\n  \n42\n00:00:01,000 --> 00:00:02,000\nHi\n"));
+  }
+
+  #[test]
+  fn read_headers_accepts_index_after_large_blank_prefix() {
+    let mut blob = vec![b'\n'; 20 * 1024];
+    blob.extend_from_slice(b"1\n00:00:00,000 --> 00:00:02,500\nHello\n");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("late.srt", 0);
+    SrtReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::Srt);
   }
 
   #[test]

@@ -31,9 +31,6 @@ use super::identify::{self, BitstreamState};
 use super::page;
 
 const PAGE_PAYLOAD_CAP: u64 = 256 * 1024;
-/// Cap on the running buffer used to reassemble multi-page packets
-/// (PARSER-078).  16 MiB is more than enough for any sane comment block.
-const PACKET_REASSEMBLY_CAP: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OggReader;
@@ -245,13 +242,12 @@ fn handle_page(
       entry.buffer.clear();
       entry.pending = false;
     }
-    if (entry.buffer.len() + segment.len()) <= PACKET_REASSEMBLY_CAP {
-      entry.buffer.extend_from_slice(segment);
-    } else {
+    if entry.buffer.len().checked_add(segment.len()).is_none() {
       entry.buffer.clear();
       entry.pending = false;
       return;
     }
+    entry.buffer.extend_from_slice(segment);
     if span.continues_on_next_page {
       entry.pending = true;
       // Wait for the rest of the packet on the next page.

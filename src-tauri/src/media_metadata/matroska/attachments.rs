@@ -32,10 +32,6 @@ use crate::media_metadata::model::attachment::Attachment;
 use super::ebml::{self, ChildAction, ElementHeader};
 use super::ids;
 
-const NAME_CAP: u64 = 4 * 1024;
-const MIME_CAP: u64 = 512;
-const DESCRIPTION_CAP: u64 = 4 * 1024;
-
 pub fn parse(
   src: &mut FileSource,
   parent: &ElementHeader,
@@ -74,13 +70,13 @@ fn read_one(
   ebml::walk_children(src, parent, "matroska::attached_file", deadline, |src, child| {
     match child.id {
       ids::FILE_NAME => {
-        name = Some(ebml::read_string(src, child, NAME_CAP)?);
+        name = Some(ebml::read_string(src, child, deadline.max_element_size())?);
       }
       ids::FILE_DESCRIPTION => {
-        description = Some(ebml::read_string(src, child, DESCRIPTION_CAP)?);
+        description = Some(ebml::read_string(src, child, deadline.max_element_size())?);
       }
       ids::FILE_MIME_TYPE => {
-        mime = Some(ebml::read_string(src, child, MIME_CAP)?);
+        mime = Some(ebml::read_string(src, child, deadline.max_element_size())?);
       }
       ids::FILE_UID => {
         uid = Some(ebml::read_uint(src, child)?);
@@ -180,6 +176,15 @@ mod tests {
     assert_eq!(v[0].size, 32);
     assert_eq!(v[0].uid_hex.as_deref(), Some("00000000deadbeef"));
     assert_eq!(v[0].id, 1);
+  }
+
+  #[test]
+  fn attachment_strings_use_shared_element_budget() {
+    let long_name = "cover".repeat(1024);
+    let payload = build_attached_file(&long_name, "application/octet-stream", 1, &[0u8; 4]);
+    let v = parse_attachments(payload);
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].file_name, long_name);
   }
 
   #[test]

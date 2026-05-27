@@ -75,8 +75,6 @@ const ID_SAMPLE_RATE: u8 = ID_OPTIONAL_DATA | 0x7;
 /// Maximum payload bytes read from the initial block to recover a non-standard
 /// sample rate. `read_next_header`'s validity check caps `ck_size` below 1 MiB.
 const MAX_BLOCK_PAYLOAD: u64 = 1 << 20;
-/// Safety cap on blocks walked while accumulating multichannel layouts.
-const MAX_BLOCKS: usize = 1024;
 
 const SAMPLE_RATES: [u32; 15] = [
   6_000, 8_000, 9_600, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 192_000,
@@ -246,17 +244,23 @@ fn read_next_header(src: &mut FileSource, start: u64) -> Result<Option<(u64, Wav
 /// first segment, accumulating channels and decoding format fields from the
 /// initial block.  Block boundaries are located with `read_next_header`, which
 /// resynchronises across padding / junk gaps between blocks (PARSER-253).
+#[cfg(test)]
 fn parse_frame(src: &mut FileSource) -> Result<Option<WavpackMeta>, ParseError> {
+  parse_frame_with_deadline(src, None)
+}
+
+fn parse_frame_with_deadline(
+  src: &mut FileSource,
+  deadline: Option<&Deadline>,
+) -> Result<Option<WavpackMeta>, ParseError> {
   let mut meta = WavpackMeta::default();
   let mut pos = 0u64;
   let mut can_leave = false;
-  let mut blocks = 0usize;
   let mut first = true;
 
   while !can_leave {
-    blocks += 1;
-    if blocks > MAX_BLOCKS {
-      break;
+    if let Some(deadline) = deadline {
+      deadline.check("wavpack::frame")?;
     }
     let (header_start, h) = match read_next_header(src, pos)? {
       Some(found) => found,
@@ -359,11 +363,11 @@ impl Reader for WavpackReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     src.seek_to(0)?;
-    let meta = parse_frame(src)?.ok_or(ParseError::Unrecognised)?;
+    let meta = parse_frame_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
     // The probe already required a valid version-4 first block; an empty
     // walk (no channels) means nothing decodable was found.
     if meta.channel_count == 0 {
@@ -581,6 +585,20 @@ mod tests {
     let meta = parse_frame(&mut s).unwrap().unwrap();
     assert_eq!(meta.channel_count, 4);
     assert_eq!(meta.sample_rate, 48_000);
+  }
+
+  #[test]
+  fn multichannel_walks_past_old_1024_block_limit() {
+    let mut bytes = build_block(9, 1, true, true, false, 88_200, 1024, &[]);
+    for _ in 0..1024 {
+      bytes.extend(build_block(9, 1, true, false, false, 88_200, 1024, &[]));
+    }
+    bytes.extend(build_block(9, 1, true, false, true, 88_200, 1024, &[]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let meta = parse_frame(&mut s).unwrap().unwrap();
+    assert_eq!(meta.channel_count, 1026);
+    assert_eq!(meta.sample_rate, 44_100);
   }
 
   // ---- PARSER-019: non-standard sample rate -----------------------------

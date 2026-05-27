@@ -543,9 +543,9 @@ fn parse_hvcc(payload: &[u8]) -> ParsedVideoConfig {
     } else {
       ModelHevcTier::Main
     }),
-    chroma_format: Some(classify_hevc_chroma(payload[18] & 0x03)),
-    bit_depth_luma: Some(((payload[19] & 0x07) + 8) as u32),
-    bit_depth_chroma: Some(((payload[20] & 0x07) + 8) as u32),
+    chroma_format: Some(classify_hevc_chroma(payload[16] & 0x03)),
+    bit_depth_luma: Some(((payload[17] & 0x07) + 8) as u32),
+    bit_depth_chroma: Some(((payload[18] & 0x07) + 8) as u32),
     raw_hex,
     is_elementary_stream: Some(false),
     ..VideoCodecConfig::default()
@@ -718,9 +718,9 @@ mod tests {
     payload[0] = 1;
     payload[1] = 1;
     payload[12] = 120;
-    payload[18] = 0xfd;
-    payload[19] = 0xf8;
-    payload[20] = 0xf8;
+    payload[16] = 0xfd;
+    payload[17] = 0xf8;
+    payload[18] = 0xf8;
     payload[22] = 3;
     for nal_type in [32u8, 33, 34] {
       payload.push(0x80 | nal_type);
@@ -1043,6 +1043,24 @@ mod tests {
     let v = out.tracks.iter().find(|t| t.track_type == TrackType::Video).unwrap();
     assert_eq!(v.codec.id, "V_MPEGH/ISO/HEVC");
     assert!(v.codec.codec_private.is_some());
+  }
+
+  #[test]
+  fn hvcc_reads_chroma_and_bit_depth_from_offsets_16_17_18() {
+    let mut payload = vec![0u8; 23];
+    payload[0] = 1;
+    payload[1] = 1;
+    payload[12] = 120;
+    payload[16] = 0xFC | 0x02;
+    payload[17] = 0xF8 | 0x02;
+    payload[18] = 0xF8 | 0x04;
+    payload[19] = 0;
+    payload[20] = 0;
+    let parsed = parse_hvcc(&payload);
+    let cfg = parsed.config.unwrap();
+    assert_eq!(cfg.chroma_format, Some(ChromaFormat::Yuv422));
+    assert_eq!(cfg.bit_depth_luma, Some(10));
+    assert_eq!(cfg.bit_depth_chroma, Some(12));
   }
 
   #[test]

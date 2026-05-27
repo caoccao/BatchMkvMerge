@@ -35,8 +35,6 @@ use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::matroska::ebml::{self, ChildAction, ElementHeader};
 use crate::media_metadata::matroska::ids;
 
-const BINARY_CAP: u64 = 16 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockAdditionMapping {
   pub id_name: Option<String>,
@@ -111,7 +109,7 @@ pub fn parse(
     |src, child| {
       match child.id {
         ids::BLOCK_ADD_ID_NAME => {
-          mapping.id_name = Some(ebml::read_string(src, child, 1024)?);
+          mapping.id_name = Some(ebml::read_string(src, child, deadline.max_element_size())?);
         }
         ids::BLOCK_ADD_ID_VALUE => {
           mapping.id_value = Some(ebml::read_uint(src, child)?);
@@ -120,7 +118,7 @@ pub fn parse(
           mapping.id_type = Some(ebml::read_uint(src, child)?);
         }
         ids::BLOCK_ADD_ID_EXTRA_DATA => {
-          mapping.id_extra_data = Some(ebml::read_binary(src, child, BINARY_CAP)?);
+          mapping.id_extra_data = Some(ebml::read_binary(src, child, deadline.max_element_size())?);
         }
         _ => return Ok(ChildAction::Skip),
       }
@@ -169,12 +167,12 @@ mod tests {
   }
 
   #[test]
-  fn mapping_with_extra_data_kept_and_capped() {
+  fn mapping_with_extra_data_uses_shared_element_budget() {
     let mut payload = Vec::new();
-    payload.extend(encode_element(ids::BLOCK_ADD_ID_EXTRA_DATA, 2, &[1u8; 8]));
+    payload.extend(encode_element(ids::BLOCK_ADD_ID_EXTRA_DATA, 2, &vec![1u8; 17 * 1024]));
     payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_VALUE, 2, 1));
     let m = parse_mapping(payload).unwrap();
-    assert_eq!(m.id_extra_data.as_ref().map(|v| v.len()), Some(8));
+    assert_eq!(m.id_extra_data.as_ref().map(|v| v.len()), Some(17 * 1024));
   }
 
   #[test]

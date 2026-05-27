@@ -29,10 +29,17 @@ use crate::media_metadata::model::track_properties_video::{ColorMetadata, ColorR
 use crate::media_metadata::mp4::atom::{self, BoxHeader};
 use crate::media_metadata::mp4::moov::trak::TrackBuilder;
 
-const MAX_PAYLOAD: u64 = 64 * 1024;
-
 pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
-  let payload = atom::read_payload(src, header, MAX_PAYLOAD)?;
+  parse_with_cap(src, header, builder, u64::MAX)
+}
+
+pub fn parse_with_cap(
+  src: &mut FileSource,
+  header: &BoxHeader,
+  builder: &mut TrackBuilder,
+  payload_cap: u64,
+) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, payload_cap)?;
   if payload.len() < 4 {
     return Ok(());
   }
@@ -142,6 +149,14 @@ mod tests {
     parse(&mut s, &h, &mut b).unwrap();
     // We still get_or_insert the video + color structs, but neither field
     // gets populated.
+    assert!(b.video.is_some());
+  }
+
+  #[test]
+  fn prof_payload_larger_than_sixty_four_kib_is_accepted() {
+    let mut payload = b"prof".to_vec();
+    payload.extend(vec![0x42; 70 * 1024]);
+    let b = run(payload);
     assert!(b.video.is_some());
   }
 

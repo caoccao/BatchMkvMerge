@@ -35,16 +35,12 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
-use super::encoding;
+use super::{encoding, read_source_to_end};
 
-const PROBE_BYTES: usize = 16 * 1024;
-
-/// PARSER-153: mkvtoolnix builds its `ssa_parser_c` over the whole text input,
-/// so the complete global header is used as codec private data and embedded
-/// fonts anywhere in the file are gathered.  We read up to this many bytes for
-/// header parsing (well past the 16 KiB probe window) so large `[V4+ Styles]`
-/// sections and trailing `[Fonts]` blocks are not truncated.
-const MAX_PARSE_BYTES: usize = 32 * 1024 * 1024;
+// Upstream probes at most 100 lines, each read with a 1000-byte line buffer.
+// Reading that whole possible window avoids rejecting files whose first
+// meaningful section header sits past the old 16 KiB byte cap.
+const PROBE_BYTES: usize = 100 * 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsaVariant {
@@ -447,21 +443,13 @@ impl Reader for SsaReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    // PARSER-153: read the whole file (bounded) so the global header and any
-    // embedded `[Fonts]` past the 16 KiB probe window are parsed in full.
-    let cap = src
-      .length()
-      .map(|l| l as usize)
-      .unwrap_or(MAX_PARSE_BYTES)
-      .min(MAX_PARSE_BYTES)
-      .max(PROBE_BYTES);
-    let mut buf = vec![0u8; cap];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    buf.truncate(read);
+    // PARSER-153: mkvtoolnix builds its `ssa_parser_c` over the whole text
+    // input, so the complete global header and embedded `[Fonts]` /
+    // `[Graphics]` sections must be available here.
+    let buf = read_source_to_end(src, Some(deadline), "ssa::headers")?;
     let detected = encoding::detect(&buf);
     let text = encoding::decode_lossy(&buf);
     let variant = classify(&text).ok_or(ParseError::Unrecognised)?;
@@ -590,6 +578,20 @@ mod tests {
   fn probe_accepts_ass_blob() {
     let blob = b"[Script Info]\nScriptType: v4.00+\n";
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    assert!(SsaReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_section_after_sixteen_kib_within_first_hundred_lines() {
+    let mut blob = String::new();
+    for _ in 0..20 {
+      blob.push(';');
+      blob.push_str(&"x".repeat(900));
+      blob.push('\n');
+    }
+    blob.push_str("[Script Info]\nScriptType: v4.00+\n");
+    assert!(blob.len() > 16 * 1024);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.into_bytes()));
     assert!(SsaReader.probe(&mut s).unwrap());
   }
 

@@ -424,8 +424,8 @@ fn walk_sample_entry_children(
       b"hvcC" => codec_specific::hvcc::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       // PARSER-077: AV1 codec configuration box.
       b"av1C" => codec_specific::av1c::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
-      b"esds" => codec_specific::esds::parse(src, &child, builder)?,
-      b"colr" => codec_specific::colr::parse(src, &child, builder)?,
+      b"esds" => codec_specific::esds::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
+      b"colr" => codec_specific::colr::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       b"pasp" => codec_specific::pasp::parse(src, &child, builder)?,
       b"dvcC" | b"dvvC" => codec_specific::dvcc::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       // PARSER-149: the `hvcE` Dolby Vision enhancement-layer config sits on

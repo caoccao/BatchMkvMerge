@@ -57,6 +57,8 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
+use super::read_source_to_end;
+
 /// Upper bound on how much of the `.idx` manifest we decode.  These are tiny
 /// text files in practice; the cap guards against a pathological input while
 /// staying well above any real-world manifest.
@@ -186,7 +188,7 @@ fn parse_filepos(src: &str) -> Option<u64> {
 /// Parse the VobSub `.idx` text into per-language tracks plus the shared
 /// codec-private blob.  Direct port of `vobsub_reader_c::parse_headers`
 /// (`r_vobsub.cpp:193-352`).
-pub fn parse_idx(text: &str) -> ParsedIdx {
+pub fn parse_idx(text: &str) -> Result<ParsedIdx, ParseError> {
   let mut tracks: Vec<VobSubTrack> = Vec::new();
   let mut current: Option<VobSubTrack> = None;
   let mut idx_data = String::new();
@@ -257,8 +259,12 @@ pub fn parse_idx(text: &str) -> ParsedIdx {
     if lower.starts_with("timestamp:") {
       if current.is_none() {
         // r_vobsub.cpp:256-257 — entries before any `id:` are a hard error
-        // upstream; header-only, we skip them.
-        continue;
+        // upstream.
+        return Err(ParseError::Malformed {
+          format: "vobsub",
+          offset: 0,
+          reason: "VobSub timestamp entry encountered before any id track".to_string(),
+        });
       }
       if let Some((timestamp, position)) =
         parse_timestamp_line(line, &mut delay, &mut last_timestamp, &mut sort_required)
@@ -277,10 +283,10 @@ pub fn parse_idx(text: &str) -> ParsedIdx {
 
   flush(&mut tracks, current.take(), sort_required);
 
-  ParsedIdx {
+  Ok(ParsedIdx {
     tracks,
     codec_private: idx_data,
-  }
+  })
 }
 
 /// Parse an `id: <lang>, index: N` line, returning the language code.
@@ -445,12 +451,12 @@ pub fn idx_version(text: &str) -> Option<u32> {
 
 /// Populate `out` from the decoded `.idx` text.  Pushes one `S_VOBSUB` track
 /// per non-empty `id:` entry, sharing the filtered codec-private blob.
-fn populate_from_idx(text: &str, out: &mut MediaMetadata) {
+fn populate_from_idx(text: &str, out: &mut MediaMetadata) -> Result<(), ParseError> {
   out.container.format = ContainerFormat::VobSub;
   out.container.recognized = true;
   out.container.supported = true;
 
-  let parsed = parse_idx(text);
+  let parsed = parse_idx(text)?;
   let codec_private = CodecPrivate::from_bytes(parsed.codec_private.as_bytes());
 
   for (track_idx, track) in parsed.tracks.iter().enumerate() {
@@ -482,6 +488,7 @@ fn populate_from_idx(text: &str, out: &mut MediaMetadata) {
       },
     });
   }
+  Ok(())
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -505,10 +512,8 @@ impl Reader for VobSubReader {
 
   fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     deadline.check("vobsub")?;
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf[..read]);
+    let buf = read_source_to_end(src, Some(deadline), "vobsub::headers")?;
+    let text = String::from_utf8_lossy(&buf);
     if !looks_like_vobsub_idx(&text) {
       return Err(ParseError::Unrecognised);
     }
@@ -516,7 +521,7 @@ impl Reader for VobSubReader {
     // is a hard error, not "unrecognised".  The sibling `.sub` requirement is
     // enforced only on the path-aware entry points, which know the file path.
     require_supported_version(&text)?;
-    populate_from_idx(&text, out);
+    populate_from_idx(&text, out)?;
     Ok(())
   }
 }
@@ -575,7 +580,9 @@ pub fn try_open_by_path(path: &Path, metadata: &mut MediaMetadata) -> Result<boo
   // unsupported version (PARSER-233) is a hard error, not a fall-through.
   let sub_path = require_sibling_sub(&idx_path)?;
   require_supported_version(&text)?;
-  populate_from_idx(&text, metadata);
+  let full = read_source_to_end(&mut src, None, "vobsub::path")?;
+  let full_text = String::from_utf8_lossy(&full);
+  populate_from_idx(&full_text, metadata)?;
   metadata
     .container
     .properties
@@ -696,12 +703,25 @@ timestamp: 00:00:05:000, filepos: 000001000
 id: fr, index: 1
 timestamp: 00:00:02:000, filepos: 000002000
 ";
-    let parsed = parse_idx(txt);
+    let parsed = parse_idx(txt).unwrap();
     assert_eq!(parsed.tracks.len(), 2);
     assert_eq!(parsed.tracks[0].language, "en");
     assert_eq!(parsed.tracks[0].entries.len(), 2);
     assert_eq!(parsed.tracks[1].language, "fr");
     assert_eq!(parsed.tracks[1].entries.len(), 1);
+  }
+
+  #[test]
+  fn parse_idx_errors_on_timestamp_before_id() {
+    let txt = "timestamp: 00:00:01:000, filepos: 000000000\nid: en, index: 0\n";
+    let err = parse_idx(txt).unwrap_err();
+    match err {
+      ParseError::Malformed { format, reason, .. } => {
+        assert_eq!(format, "vobsub");
+        assert!(reason.contains("before any id"), "reason was: {reason}");
+      }
+      other => panic!("expected Malformed, got {other:?}"),
+    }
   }
 
   #[test]
@@ -712,7 +732,7 @@ id: en, index: 0
 id: fr, index: 1
 timestamp: 00:00:02:000, filepos: 000002000
 ";
-    let parsed = parse_idx(txt);
+    let parsed = parse_idx(txt).unwrap();
     // `en` has no timestamp entry and is dropped.
     assert_eq!(parsed.tracks.len(), 1);
     assert_eq!(parsed.tracks[0].language, "fr");
@@ -726,7 +746,7 @@ timestamp: 00:00:05:000, filepos: 000000000
 timestamp: 00:00:01:000, filepos: 000001000
 timestamp: 00:00:03:000, filepos: 000002000
 ";
-    let parsed = parse_idx(txt);
+    let parsed = parse_idx(txt).unwrap();
     assert_eq!(parsed.tracks.len(), 1);
     let ts: Vec<i64> = parsed.tracks[0].entries.iter().map(|e| e.timestamp).collect();
     assert_eq!(ts, vec![1_000_000_000, 3_000_000_000, 5_000_000_000]);
@@ -741,7 +761,7 @@ delay: -00:00:10:000
 timestamp: 00:00:01:000, filepos: 000000000
 timestamp: 00:00:30:000, filepos: 000001000
 ";
-    let parsed = parse_idx(txt);
+    let parsed = parse_idx(txt).unwrap();
     assert_eq!(parsed.tracks.len(), 1);
     // First entry (1s - 10s = -9s) is dropped; second (30s - 10s = 20s) kept.
     assert_eq!(parsed.tracks[0].entries.len(), 1);
@@ -760,7 +780,7 @@ alt: english
 delay: 00:00:00:000
 timestamp: 00:00:01:000, filepos: 000000000
 ";
-    let parsed = parse_idx(txt);
+    let parsed = parse_idx(txt).unwrap();
     let cp = parsed.codec_private;
     assert!(cp.contains("size: 720x576"));
     assert!(cp.contains("palette: 000000, ffffff"));
@@ -813,6 +833,22 @@ timestamp: 00:00:01:000, filepos: 000000000
       .as_ref()
       .expect("language populated");
     assert!(lang1.ietf.as_deref() == Some("fr") || lang1.iso639_2 == "fra");
+  }
+
+  #[test]
+  fn read_headers_parses_manifest_beyond_sixty_four_kib() {
+    let mut blob = String::from("# VobSub index file, v7\nsize: 720x576\n");
+    while blob.len() < 70 * 1024 {
+      blob.push_str("palette: 000000, ffffff\n");
+    }
+    blob.push_str("id: en, index: 0\ntimestamp: 00:00:01:000, filepos: 000000000\n");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.into_bytes()));
+    let mut out = MediaMetadata::new("clip.idx", 0);
+    VobSubReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].properties.common.num_index_entries, Some(1));
   }
 
   #[test]

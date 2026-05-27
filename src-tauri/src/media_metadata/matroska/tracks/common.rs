@@ -93,7 +93,7 @@ impl CommonBuilder {
         self.uid_hex = Some(format!("{:016x}", v));
       }
       ids::TRACK_NAME => {
-        self.name = Some(ebml::read_string(src, child, 4 * 1024)?);
+        self.name = Some(ebml::read_string(src, child, deadline.max_element_size())?);
       }
       ids::TRACK_LANGUAGE => {
         self.language_639 = Some(ebml::read_string(src, child, 64)?);

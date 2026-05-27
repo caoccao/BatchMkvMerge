@@ -35,8 +35,6 @@ use crate::media_metadata::model::tag::TagEntry;
 use super::ebml::{self, ChildAction, ElementHeader};
 use super::ids;
 
-const STRING_CAP: u64 = 16 * 1024;
-
 pub fn parse(
   src: &mut FileSource,
   parent: &ElementHeader,
@@ -104,11 +102,11 @@ fn read_simple_tag(
     deadline,
     |src, child| match child.id {
       ids::TAG_NAME => {
-        name = Some(ebml::read_string(src, child, STRING_CAP)?);
+        name = Some(ebml::read_string(src, child, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       }
       ids::TAG_STRING => {
-        value = Some(ebml::read_string(src, child, STRING_CAP)?);
+        value = Some(ebml::read_string(src, child, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       }
       ids::TAG_LANGUAGE => {
@@ -236,6 +234,15 @@ mod tests {
     assert_eq!(m.tags.global[0].name, "TITLE");
     assert_eq!(m.tags.global[0].value, "Movie");
     assert_eq!(m.tags.per_track_count, 0);
+  }
+
+  #[test]
+  fn simple_tag_strings_use_shared_element_budget() {
+    let value = "A".repeat(17 * 1024);
+    let tag = build_tag(None, vec![build_simple_tag("COMMENT", &value, None)]);
+    let m = parse_tags(tag, vec![]);
+    assert_eq!(m.tags.global.len(), 1);
+    assert_eq!(m.tags.global[0].value, value);
   }
 
   #[test]

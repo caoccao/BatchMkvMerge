@@ -41,9 +41,6 @@ use super::writing_app;
 /// bytes but we accept up to 32 to be lenient.
 const UID_CAP: u64 = 32;
 
-/// Cap for title / muxing app / writing app strings.
-const STRING_CAP: u64 = 4 * 1024;
-
 /// Matroska epoch: 2001-01-01T00:00:00Z, seconds-since-Unix-epoch.
 const MATROSKA_EPOCH_UNIX: i64 = 978_307_200;
 
@@ -67,16 +64,16 @@ pub fn parse(
         Ok(ChildAction::Consumed)
       }
       ids::TITLE => {
-        out.container.properties.title = Some(ebml::read_string(src, child, STRING_CAP)?);
+        out.container.properties.title = Some(ebml::read_string(src, child, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       }
       ids::MUXING_APP => {
-        let s = ebml::read_string(src, child, STRING_CAP)?;
+        let s = ebml::read_string(src, child, deadline.max_element_size())?;
         out.container.properties.muxing_app = Some(s);
         Ok(ChildAction::Consumed)
       }
       ids::WRITING_APP => {
-        let s = ebml::read_string(src, child, STRING_CAP)?;
+        let s = ebml::read_string(src, child, deadline.max_element_size())?;
         // Mirror mkvtoolnix's lower-case + version-extraction logic.
         let parsed = writing_app::parse(&s);
         out.container.properties.writing_app = Some(parsed.into_display(&s));
@@ -199,6 +196,16 @@ mod tests {
     assert_eq!(p.muxing_app.as_deref(), Some("libmkv"));
     assert!(p.writing_app.is_some());
     assert_eq!(p.segment_uid_hex.as_deref(), Some("deadbeef"));
+  }
+
+  #[test]
+  fn info_strings_use_shared_element_budget() {
+    let title = "T".repeat(5 * 1024);
+    let payload = encode_element_string(ids::TITLE, 2, &title);
+    let (_bytes, header, mut s) = build_info(payload);
+    let mut out = MediaMetadata::new("clip.mkv", 100);
+    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.container.properties.title.as_deref(), Some(title.as_str()));
   }
 
   #[test]

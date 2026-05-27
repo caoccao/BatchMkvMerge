@@ -95,8 +95,6 @@ impl BoxHeader {
   }
 }
 
-const SOFT_BOX_CAP: u64 = 64 * 1024 * 1024;
-
 /// Read one box header at the current cursor.  Advances past the header.
 pub fn read_box_header(src: &mut FileSource) -> Result<BoxHeader, ParseError> {
   let start = src.position();
@@ -252,13 +250,12 @@ where
 /// Read a fixed-size payload, capped to avoid runaway allocation.
 pub fn read_payload(src: &mut FileSource, h: &BoxHeader, cap: u64) -> Result<Vec<u8>, ParseError> {
   let size = h.payload_size().unwrap_or(0);
-  let effective_cap = cap.min(SOFT_BOX_CAP);
-  if size > effective_cap {
+  if size > cap {
     return Err(ParseError::OversizedElement {
       format: "mp4",
       id: u32::from_be_bytes(h.kind.0) as u64,
       size,
-      cap: effective_cap,
+      cap,
       offset: h.start,
     });
   }

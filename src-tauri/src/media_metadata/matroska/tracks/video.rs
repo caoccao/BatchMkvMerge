@@ -34,8 +34,6 @@ use crate::media_metadata::model::track_properties_video::{
 use crate::media_metadata::matroska::ebml::{self, ChildAction, ElementHeader};
 use crate::media_metadata::matroska::ids;
 
-const VIDEO_BINARY_CAP: u64 = 4 * 1024 * 1024;
-
 #[derive(Debug, Default)]
 pub struct VideoBuilder {
   pub pixel_width: Option<u32>,
@@ -214,9 +212,9 @@ pub fn parse(
       ids::VIDEO_COLOR_SPACE => {
         // PARSER-068: raw colour-space identifier (FOURCC for
         // uncompressed video).  PARSER-319: mkvtoolnix clones the whole
-        // element payload, so use only the shared video binary safety cap
-        // instead of a local 16-byte cap.
-        let bytes = ebml::read_binary(src, child, VIDEO_BINARY_CAP)?;
+        // element payload, so use the shared parser element-size budget
+        // instead of a local cap.
+        let bytes = ebml::read_binary(src, child, deadline.max_element_size())?;
         builder.color_space = Some(bytes);
         Ok(ChildAction::Consumed)
       }
@@ -420,7 +418,7 @@ fn parse_projection(
         have_pose = true;
       }
       ids::VIDEO_PROJECTION_PRIVATE => {
-        let bytes = ebml::read_binary(src, child, VIDEO_BINARY_CAP)?;
+        let bytes = ebml::read_binary(src, child, deadline.max_element_size())?;
         p.private_hex = Some(hex_encode(&bytes));
       }
       _ => return Ok(ChildAction::Skip),
@@ -1037,7 +1035,7 @@ mod tests {
 
   #[test]
   fn projection_private_uses_shared_video_binary_cap() {
-    let large_private = vec![0xCD; 4 * 1024 + 1];
+    let large_private = vec![0xCD; 4 * 1024 * 1024 + 1];
     let private = encode_element(ids::VIDEO_PROJECTION_PRIVATE, 2, &large_private);
     let proj = encode_element(ids::VIDEO_PROJECTION, 2, &private);
     let (_b, h, mut s) = build_video(proj);

@@ -21,6 +21,10 @@
 //! - Image / segment: VobSub (.idx + .sub sibling), HDMV PGS (.sup),
 //!   HDMV TextST, VobButton.
 
+use crate::media_metadata::deadline::Deadline;
+use crate::media_metadata::error::ParseError;
+use crate::media_metadata::io::file_source::FileSource;
+
 pub mod encoding;
 pub mod hdmv_textst;
 pub mod microdvd;
@@ -41,3 +45,30 @@ pub use usf::UsfReader;
 pub use vobbtn::VobButtonReader;
 pub use vobsub::VobSubReader;
 pub use webvtt::WebVttReader;
+
+pub(crate) fn read_source_to_end(
+  src: &mut FileSource,
+  deadline: Option<&Deadline>,
+  stage: &'static str,
+) -> Result<Vec<u8>, ParseError> {
+  const CHUNK: usize = 64 * 1024;
+
+  src.seek_to(0)?;
+  let mut out = Vec::new();
+  loop {
+    if let Some(deadline) = deadline {
+      deadline.check(stage)?;
+    }
+    let mut chunk = vec![0u8; CHUNK];
+    let read = src.read_at_most(&mut chunk)?;
+    if read == 0 {
+      break;
+    }
+    out.extend_from_slice(&chunk[..read]);
+    if read < CHUNK {
+      break;
+    }
+  }
+  src.seek_to(0)?;
+  Ok(out)
+}

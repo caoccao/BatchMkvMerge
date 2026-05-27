@@ -1,6 +1,6 @@
 # WebVTT Parser
 
-Implementation progress: 95%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The WebVTT parser recognises Web Video Text Tracks files and reports one `S_TEXT
 - Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_webvtt.cpp`, `../mkvtoolnix/src/input/r_webvtt.h`, `../mkvtoolnix/src/common/webvtt.*`
 
-The reader checks whether the first decoded line starts with `WEBVTT` after optional BOM/configured-charset handling, matching mkvtoolnix's prefix probe rather than the stricter W3C separator rule. It parses blank-line-delimited global blocks before the first cue and preserves them as codec private data. Identification always reports the subtitle encoding as `UTF-8`, because mkvtoolnix normalises WebVTT text before packetisation even when the source file used UTF-16 or a configured charset hint.
+The reader checks whether the first decoded line starts with `WEBVTT` after optional BOM/configured-charset handling, matching mkvtoolnix's prefix probe rather than the stricter W3C separator rule. It reads the full text stream for header parsing, parses blank-line-delimited global blocks before the first cue, and preserves them as codec private data. Identification always reports the subtitle encoding as `UTF-8`, because mkvtoolnix normalises WebVTT text before packetisation even when the source file used UTF-16 or a configured charset hint.
 
 ## Data Structures
 
@@ -30,4 +30,4 @@ WebVTT uses helper functions rather than custom structs beyond shared metadata t
 
 ## Gaps and Handling
 
-Codec-private extraction is bounded to a generous header window rather than truly reading unbounded input. Within that bound it follows mkvtoolnix's global-block model and reports UTF-8-normalised text subtitle metadata.
+Codec-private extraction follows mkvtoolnix's global-block model over the complete decoded text and reports UTF-8-normalised text subtitle metadata.

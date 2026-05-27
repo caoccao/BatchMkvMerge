@@ -36,17 +36,17 @@ use crate::media_metadata::model::track::{CodecInfo, Track, TrackProperties, Tra
 use super::ebml::{self, ChildAction, ElementHeader};
 use super::ids;
 
-/// Cap for any single track-entry-level binary payload (CodecPrivate, etc.).
-/// 4 MiB matches the largest realistic AV1/HEVC config we'd see header-only.
-const TRACK_BINARY_CAP: u64 = 4 * 1024 * 1024;
-
 /// Track type byte values per the Matroska spec.
 const KAX_TRACK_VIDEO: u64 = 1;
 const KAX_TRACK_AUDIO: u64 = 2;
+#[cfg(test)]
 const KAX_TRACK_COMPLEX: u64 = 3;
+#[cfg(test)]
 const KAX_TRACK_LOGO: u64 = 16;
 const KAX_TRACK_SUBTITLE: u64 = 17;
+#[cfg(test)]
 const KAX_TRACK_BUTTONS: u64 = 18;
+#[cfg(test)]
 const KAX_TRACK_CONTROL: u64 = 32;
 
 /// Walk Tracks element and populate `out.tracks`.
@@ -102,11 +102,11 @@ fn read_track_entry(
         Ok(ChildAction::Consumed)
       }
       ids::CODEC_NAME => {
-        codec_name = Some(ebml::read_string(src, child, 1024)?);
+        codec_name = Some(ebml::read_string(src, child, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       }
       ids::CODEC_PRIVATE => {
-        codec_private = Some(ebml::read_binary(src, child, TRACK_BINARY_CAP)?);
+        codec_private = Some(ebml::read_binary(src, child, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       }
       ids::TRACK_VIDEO => {
@@ -309,6 +309,25 @@ mod tests {
 
     let sub = out.tracks[2].properties.subtitle.as_ref().unwrap();
     assert!(sub.text_subtitles);
+  }
+
+  #[test]
+  fn codec_private_uses_shared_element_budget() {
+    let private = vec![0x42; 4 * 1024 * 1024 + 1];
+    let mut payload = Vec::new();
+    payload.extend(encode_element_uint(ids::TRACK_NUMBER, 1, 1));
+    payload.extend(encode_element_uint(ids::TRACK_TYPE, 1, KAX_TRACK_VIDEO));
+    payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_MPEG4/ISO/AVC"));
+    payload.extend(encode_element(ids::CODEC_PRIVATE, 2, &private));
+    let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
+
+    let (_b, header, mut s) = build_tracks(vec![entry]);
+    let mut out = MediaMetadata::new("clip.mkv", 0);
+    parse(&mut s, &header, &no_deadline(), &mut out).unwrap();
+    assert_eq!(
+      out.tracks[0].codec.codec_private.as_ref().unwrap().length,
+      private.len() as u64
+    );
   }
 
   #[test]

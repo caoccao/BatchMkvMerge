@@ -39,16 +39,10 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
-use super::encoding;
+use super::{encoding, read_source_to_end};
 
 /// Lightweight probe window — only the first line is needed to claim the file.
 const PROBE_BYTES: usize = 1024;
-
-/// PARSER-197: mkvtoolnix's `webvtt_reader_c::parse_file` reads the whole file
-/// before computing codec-private.  We read up to this bound (well past the probe
-/// window) so large `STYLE` / `REGION` / `NOTE` global blocks preceding the first
-/// cue are captured in full, while still respecting the bounded-header model.
-const MAX_PARSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// PARSER-196: claim the file when its first line starts with `WEBVTT`, matching
 /// `r_webvtt.cpp:24-27` (`getline(100).find("WEBVTT") == 0`).  The BOM is stripped
@@ -197,23 +191,13 @@ impl Reader for WebVttReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     // PARSER-197: mkvtoolnix parses the entire file before extracting
-    // codec-private, so read up to a generous bound (the whole file when its
-    // length is known) instead of the 1 KiB probe window.  This captures
-    // `STYLE` / `REGION` / `NOTE` headers that exceed 1 KiB before the first cue.
-    let cap = src
-      .length()
-      .map(|l| l as usize)
-      .unwrap_or(MAX_PARSE_BYTES)
-      .min(MAX_PARSE_BYTES)
-      .max(PROBE_BYTES);
-    let mut buf = vec![0u8; cap];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    buf.truncate(read);
+    // codec-private, so read the full text instead of stopping at a fixed
+    // header window.
+    let buf = read_source_to_end(src, Some(deadline), "webvtt::headers")?;
     let text = encoding::decode_lossy(&buf);
     if !looks_like_webvtt(&text) {
       return Err(ParseError::Unrecognised);

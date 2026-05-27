@@ -59,13 +59,6 @@ const BLOCK_TYPE_STREAMINFO: u8 = 0;
 const BLOCK_TYPE_PADDING: u8 = 1;
 const BLOCK_TYPE_VORBIS_COMMENT: u8 = 4;
 const BLOCK_TYPE_PICTURE: u8 = 6;
-/// Cap on a single VORBIS_COMMENT block read.
-const MAX_COMMENT_BYTES: u64 = 16 * 1024 * 1024;
-/// Cap on any single metadata block read verbatim into the codec-private
-/// header (STREAMINFO / APPLICATION / SEEKTABLE / CUESHEET / unknown).
-const MAX_KEPT_BLOCK_BYTES: u64 = 16 * 1024 * 1024;
-/// Cap on a PICTURE block header (excluding payload) read into memory.
-const MAX_PICTURE_HEADER_BYTES: u64 = 1024 * 1024;
 
 /// Append a metadata block (`header` + `body`) to the FLAC codec-private blob,
 /// clearing the "last metadata block" flag.  Returns the offset of the block's
@@ -119,6 +112,7 @@ fn parse_source_with_deadline(
   // kept block gets the "last metadata block" flag set after the walk.
   let mut last_kept_offset: Option<usize> = None;
   let mut pos = start + 4;
+  let block_cap = deadline.map(Deadline::max_element_size).unwrap_or(u64::MAX);
 
   loop {
     if let Some(deadline) = deadline {
@@ -137,10 +131,7 @@ fn parse_source_with_deadline(
     match block_type {
       BLOCK_TYPE_STREAMINFO => {
         src.seek_to(body_pos)?;
-        let want = length.min(MAX_KEPT_BLOCK_BYTES) as usize;
-        let mut body = vec![0u8; want];
-        let n = src.read_at_most(&mut body)?;
-        body.truncate(n);
+        let body = src.read_vec_capped(length, block_cap)?;
         if body.len() >= 34 {
           metadata.streaminfo = Some(decode_streaminfo(&body));
         }
@@ -148,10 +139,7 @@ fn parse_source_with_deadline(
       }
       BLOCK_TYPE_VORBIS_COMMENT => {
         src.seek_to(body_pos)?;
-        let want = length.min(MAX_COMMENT_BYTES) as usize;
-        let mut body = vec![0u8; want];
-        let n = src.read_at_most(&mut body)?;
-        body.truncate(n);
+        let body = src.read_vec_capped(length, block_cap)?;
         if let Some(c) = comments::parse(&body) {
           metadata.vendor = Some(c.vendor);
           metadata.tags = c.entries;
@@ -162,30 +150,18 @@ fn parse_source_with_deadline(
       // from the FLAC header (`r_flac.cpp:62-68`); everything else is kept.
       BLOCK_TYPE_PADDING => {}
       BLOCK_TYPE_PICTURE => {
-        // PARSER-226: the attachment listing only needs the declared payload
-        // length, not the bytes.  Validate against the block length (and that
-        // the block is wholly within the file) instead of the truncated read,
-        // so large cover-art beyond the read cap is still surfaced — mkvmerge
-        // receives the full picture from libFLAC regardless of size.
-        if body_pos.saturating_add(length) <= file_size {
-          src.seek_to(body_pos)?;
-          let header_want = length.min(MAX_PICTURE_HEADER_BYTES) as usize;
-          let mut body = vec![0u8; header_want];
-          let n = src.read_at_most(&mut body)?;
-          body.truncate(n);
-          if let Some(p) = decode_picture(&body, length as usize) {
-            metadata.pictures.push(p);
-          }
+        // PARSER-226 / PARSER-334: read the variable PICTURE header fields
+        // completely, but skip the image payload itself.  This keeps large
+        // descriptions/MIME strings parseable without materialising cover art.
+        if let Some(p) = decode_picture_from_source(src, body_pos, length, file_size, block_cap)? {
+          metadata.pictures.push(p);
         }
       }
       // APPLICATION (2), SEEKTABLE (3), CUESHEET (5), and unknown blocks are
       // kept verbatim in the codec-private header (PARSER-225).
       _ => {
         src.seek_to(body_pos)?;
-        let want = length.min(MAX_KEPT_BLOCK_BYTES) as usize;
-        let mut body = vec![0u8; want];
-        let n = src.read_at_most(&mut body)?;
-        body.truncate(n);
+        let body = src.read_vec_capped(length, block_cap)?;
         last_kept_offset = Some(append_kept_block(&mut metadata.codec_private, &header, &body));
       }
     }
@@ -333,6 +309,56 @@ fn decode_picture(body: &[u8], block_length: usize) -> Option<FlacPicture> {
     description,
     data_length,
   })
+}
+
+fn decode_picture_from_source(
+  src: &mut FileSource,
+  body_pos: u64,
+  block_length: u64,
+  file_size: u64,
+  cap: u64,
+) -> Result<Option<FlacPicture>, ParseError> {
+  if body_pos.saturating_add(block_length) > file_size {
+    return Ok(None);
+  }
+  let mut consumed = 0u64;
+
+  src.seek_to(body_pos)?;
+  let picture_type = src.read_u32_be()?;
+  consumed += 4;
+
+  let mime_len = src.read_u32_be()? as u64;
+  consumed += 4;
+  if consumed.saturating_add(mime_len) > block_length {
+    return Ok(None);
+  }
+  let mime_type = String::from_utf8_lossy(&src.read_vec_capped(mime_len, cap)?).into_owned();
+  consumed += mime_len;
+
+  let desc_len = src.read_u32_be()? as u64;
+  consumed += 4;
+  if consumed.saturating_add(desc_len) > block_length {
+    return Ok(None);
+  }
+  let description = String::from_utf8_lossy(&src.read_vec_capped(desc_len, cap)?).into_owned();
+  consumed += desc_len;
+
+  if consumed.saturating_add(20) > block_length {
+    return Ok(None);
+  }
+  src.skip(16)?;
+  consumed += 16;
+  let data_length = src.read_u32_be()?;
+  consumed += 4;
+  if data_length == 0 || consumed.saturating_add(data_length as u64) > block_length {
+    return Ok(None);
+  }
+  Ok(Some(FlacPicture {
+    picture_type,
+    mime_type,
+    description,
+    data_length,
+  }))
 }
 
 fn read_be_u32(body: &[u8], pos: &mut usize) -> Option<u32> {
@@ -863,7 +889,7 @@ mod tests {
     // PARSER-226: a >1 MiB picture is complete on disk; the bounded header read
     // doesn't cover the whole payload, yet the attachment is still surfaced
     // with the declared size.
-    let data_len = (MAX_PICTURE_HEADER_BYTES as usize) + 4096;
+    let data_len = 1024 * 1024 + 4096;
     let bytes = build_flac_with_picture_and_comment(data_len);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.flac", 0);
@@ -873,6 +899,30 @@ mod tests {
     assert_eq!(out.attachments.len(), 1);
     assert_eq!(out.attachments[0].size as usize, data_len);
     assert_eq!(out.attachments[0].file_name, "cover.jpg");
+  }
+
+  #[test]
+  fn picture_header_fields_past_one_mib_are_read() {
+    let mut bytes = b"fLaC".to_vec();
+    bytes.extend(block_header(false, 0, 34));
+    let mut info = vec![0u8; 34];
+    info[..2].copy_from_slice(&4096u16.to_be_bytes());
+    info[2..4].copy_from_slice(&4096u16.to_be_bytes());
+    let packed = (48_000u64 << 44) | ((1u64) << 41) | ((23u64) << 36) | 0u64;
+    info[10..18].copy_from_slice(&packed.to_be_bytes());
+    bytes.extend(info);
+    let description = "D".repeat(1024 * 1024 + 16);
+    let picture = build_picture_block(3, "image/png", &description, 16);
+    bytes.extend(block_header(true, 6, picture.len()));
+    bytes.extend(picture);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.flac", 0);
+    FlacReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.attachments.len(), 1);
+    assert_eq!(out.attachments[0].description.as_ref().unwrap().len(), description.len());
   }
 
   // ---- PARSER-154: zero-length / absent picture data is dropped --------

@@ -1,6 +1,6 @@
 # Matroska / WebM Parser
 
-Implementation progress: 91%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -16,7 +16,7 @@ The Rust reader is a pure-Rust EBML walker. It probes the EBML header and Matros
 
 Attachment parsing keeps a reader-level attachment counter across all `Attachments` level-1 elements. Every `AttachedFile` consumes an ID before filtering for data, MIME type, or other skip conditions, matching mkvtoolnix's `m_attachment_id` bookkeeping; emitted `ui_id` values therefore preserve gaps caused by skipped attachments even across multiple `Attachments` elements.
 
-Video colour range and projection type keep both views of the Matroska integer fields. Known `VideoColourRange` / `VideoProjectionType` values populate the typed `ColorRange` / `ProjectionType` enums, while the raw numeric values are also exposed as `rangeRaw` / `kindRaw`; reserved or future values leave the enum unset instead of being rewritten to a default meaning. `VideoColourSpace` and `VideoProjectionPrivate` clone the full element payload under the shared 4 MiB video-binary safety cap, matching mkvtoolnix's preservation behavior without the old small element-specific caps.
+Video colour range and projection type keep both views of the Matroska integer fields. Known `VideoColourRange` / `VideoProjectionType` values populate the typed `ColorRange` / `ProjectionType` enums, while the raw numeric values are also exposed as `rangeRaw` / `kindRaw`; reserved or future values leave the enum unset instead of being rewritten to a default meaning. Header-level strings and surfaced binary payloads such as `CodecPrivate`, `BlockAddIDExtraData`, `VideoColourSpace`, `VideoProjectionPrivate`, attachment names/descriptions/MIME types, and tag names/values are read under the shared parser element-size budget instead of local Matroska-only caps, matching mkvtoolnix's preservation behavior within the configured budget.
 
 ## Data Structures
 

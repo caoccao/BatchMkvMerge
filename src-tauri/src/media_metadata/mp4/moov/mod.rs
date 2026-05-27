@@ -46,9 +46,6 @@ use super::atom::{self, BoxHeader, ChildAction};
 
 pub use trak::TrackBuilder;
 
-/// Cap on a compressed `cmvd` payload and its inflated output.
-const CMOV_CAP: u64 = 64 * 1024 * 1024;
-
 /// Movie-level information collected during a `moov` walk.
 #[derive(Debug)]
 pub struct MoovBuilder {
@@ -160,7 +157,7 @@ fn handle_cmov(
       Ok(ChildAction::Consumed)
     }
     b"cmvd" => {
-      compressed = Some(atom::read_payload(src, child, CMOV_CAP)?);
+      compressed = Some(atom::read_payload(src, child, u64::MAX)?);
       Ok(ChildAction::Consumed)
     }
     _ => Ok(ChildAction::Skip),
@@ -190,9 +187,9 @@ fn handle_cmov(
 fn inflate_zlib(data: &[u8], expected: usize) -> Result<Vec<u8>, ParseError> {
   use std::io::Read;
   let decoder = flate2::read::ZlibDecoder::new(data);
-  let mut out = Vec::with_capacity(expected.min(CMOV_CAP as usize));
+  let mut out = Vec::new();
   decoder
-    .take(CMOV_CAP)
+    .take(expected as u64)
     .read_to_end(&mut out)
     .map_err(|e| ParseError::Malformed {
       format: "mp4",

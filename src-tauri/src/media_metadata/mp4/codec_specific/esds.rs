@@ -39,13 +39,21 @@ use crate::media_metadata::mp4::moov::trak::TrackBuilder;
 
 use super::hex_encode;
 
-const MAX_PAYLOAD: u64 = 64 * 1024;
 const TAG_ES_DESCRIPTOR: u8 = 0x03;
 const TAG_DECODER_CONFIG: u8 = 0x04;
 const TAG_DEC_SPECIFIC_INFO: u8 = 0x05;
 
 pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
-  let payload = atom::read_payload(src, header, MAX_PAYLOAD)?;
+  parse_with_cap(src, header, builder, u64::MAX)
+}
+
+pub fn parse_with_cap(
+  src: &mut FileSource,
+  header: &BoxHeader,
+  builder: &mut TrackBuilder,
+  payload_cap: u64,
+) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, payload_cap)?;
   if payload.len() < 4 {
     return Ok(());
   }
@@ -493,6 +501,15 @@ mod tests {
       .map(|i| u8::from_str_radix(&raw[i..i + 2], 16).unwrap())
       .collect();
     assert_eq!(decoded, asc);
+  }
+
+  #[test]
+  fn payload_larger_than_sixty_four_kib_is_preserved() {
+    let asc = aac_lc_specific_config(4, 2);
+    let mut payload = build_esds_payload(0x40, &asc);
+    payload.extend(vec![0; 70 * 1024]);
+    let b = run(payload);
+    assert!(b.codec_private_hex.unwrap().len() > 64 * 1024 * 2);
   }
 
   #[test]
