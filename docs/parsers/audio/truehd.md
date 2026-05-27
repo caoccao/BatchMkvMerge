@@ -32,3 +32,7 @@ Key structures are `Frame`, `Codec`, and `FrameType`.
 ## Gaps and Handling
 
 The Rust parser does not verify AC-3 checksums and does not expose less common debug or Atmos extension fields that upstream can inspect while muxing. The current metadata model records the stream identity and usable audio properties, and the probe/read window now matches mkvtoolnix's 512 KiB header-identification range.
+
+## Open Issues
+
+- `PARSER-388` - the TrueHD probe is ordered too early relative to mkvtoolnix's 64-frame raw-audio loop. Upstream tries the 64-frame MP3/AC-3/AAC scans after MPEG-TS/MPEG-PS/OBU and only then tries TrueHD, loose DTS, and VobButton. The Rust dispatcher places `LATE_AMBIGUOUS_READERS` before `RAW_AUDIO_SIXTY_FOUR_FRAME_READERS`, so TrueHD can claim a file that mkvtoolnix would have stopped on as raw audio first.

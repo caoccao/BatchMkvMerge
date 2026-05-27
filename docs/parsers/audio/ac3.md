@@ -34,3 +34,7 @@ Key structures are `Ac3Frame` and `Ac3Variant`. Bit-level parsing uses the share
 The parser now folds dependent-frame channel maps into the effective channel count and uses mkvtoolnix's staged raw-probe windows, including the later ambiguous 64-frame and 20-frame passes. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
 
 Packetizer behavior, sync repair during muxing, and checksum validation are not part of this header-only parser.
+
+## Open Issues
+
+- `PARSER-388` - the 64-frame loose AC-3 probe still runs after TrueHD, loose DTS, and VobButton in `staged_readers`, but mkvtoolnix runs the 64-frame MP3/AC-3/AAC loop immediately after MPEG-TS/MPEG-PS/OBU and before those later ambiguous readers. A stream that satisfies both this 64-frame AC-3 scan and one of the later ambiguous probes can be claimed locally by the wrong reader first.

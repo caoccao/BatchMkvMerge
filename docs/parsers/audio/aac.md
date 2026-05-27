@@ -38,3 +38,7 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). Raw probing and the first-usable-frame search also match upstream, so short mid-file sync runs are rejected, later ambiguous windows are considered, and a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+- `PARSER-388` - the 64-frame loose AAC probe still runs after TrueHD, loose DTS, and VobButton in `staged_readers`, but mkvtoolnix runs the 64-frame MP3/AC-3/AAC loop immediately after MPEG-TS/MPEG-PS/OBU and before those later ambiguous readers. A stream that satisfies both this 64-frame AAC scan and one of the later ambiguous probes can be claimed locally by the wrong reader first.

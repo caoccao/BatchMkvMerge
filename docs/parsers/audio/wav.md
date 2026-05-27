@@ -35,3 +35,7 @@ Important structures are `WavType`, `WaveFormat`, `WavMetadata`, and internal ch
 ## Gaps and Handling
 
 The byte total now accumulates all data chunks like upstream, so duration is correct for multi-`data`-chunk files, and the >4 GiB data-length repair matches `scan_chunks_wave`. Unsupported format tags are reported through the structured model rather than matching mkvmerge's exact text output.
+
+## Open Issues
+
+- `PARSER-391` - the WAV probe accepts too-short RIFF/RF64 headers that mkvtoolnix rejects before probing. Upstream `wav_reader_c::determine_type` returns `unknown` whenever the file is shorter than `sizeof(mtx::w64::header_t)` before it checks classic `RIFF` or `RF64` `WAVE` signatures. The Rust `determine_type` special-cases `head.len() >= 12` and returns `Wave` or `Rf64` from a 12-byte header, so a truncated file can be claimed by the WAV reader and stop the cascade locally while mkvtoolnix would not claim WAV at all.

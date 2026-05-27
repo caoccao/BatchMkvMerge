@@ -40,3 +40,7 @@ Key structures are EBML `ElementHeader`, deferred level-1 position records, trac
 Upstream uses libebml/libmatroska and performs full packetizer checks, content decoding, and cluster processing for muxing. Rust is header-only and does not validate every obscure codec or content-encoding path. Unsupported or unknown details are preserved as structured codec IDs, codec-private blobs, warnings, or omitted fields rather than triggering packetizer-level behavior.
 
 `BlockAdditionMapping` carries the full `block_addition_mapping_t` shape: `BlockAddIDType` (rendered as the source FOURCC when printable, else decimal), `BlockAddIDExtraData` (hex-encoded as `dataHex`), `BlockAddIDName` (`idName`), and `BlockAddIDValue` (`idValue`). Mappings keyed by value or carrying a descriptive name therefore preserve that information on the wire model.
+
+## Open Issues
+
+- `PARSER-392` - the pre-Segment locator only skips level-0 `Void` and `CRC32` elements, but mkvtoolnix also skips `EbmlDummy` elements returned by libebml while searching for the first `KaxSegment`. A Matroska/WebM file with an otherwise skippable unknown EBML element between the EBML head and `Segment` is rejected locally as an unexpected level-0 element, while mkvtoolnix skips it and continues to the segment.

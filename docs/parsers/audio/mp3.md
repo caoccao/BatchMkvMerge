@@ -32,3 +32,7 @@ flowchart TD
 ## Gaps and Handling
 
 Upstream identification does not expose much more than codec, channels, and sampling frequency, so parity is complete for the header-level metadata surface. The Rust model naming is shaped for `MediaMetadata` rather than mkvmerge's exact display strings, but the staged probe windows and underlying codec selection follow the same layer-based behavior.
+
+## Open Issues
+
+- `PARSER-388` - the 64-frame loose MP3 probe still runs after TrueHD, loose DTS, and VobButton in `staged_readers`, but mkvtoolnix runs the 64-frame MP3/AC-3/AAC loop immediately after MPEG-TS/MPEG-PS/OBU and before those later ambiguous readers. A stream that satisfies both this 64-frame MP3 scan and one of the later ambiguous probes can be claimed locally by the wrong reader first.
