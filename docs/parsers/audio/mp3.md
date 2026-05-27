@@ -1,6 +1,6 @@
 # MP3 / MPEG Audio Parser
 
-Implementation progress: 97%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The MP3 parser recognises MPEG audio elementary streams, including MPEG-1, MPEG-
 - Shared helper: `src-tauri/src/media_metadata/audio/id3v2.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_mp3.cpp`, `../mkvtoolnix/src/input/r_mp3.h`
 
-The reader trims ID3v2 and ID3v1 regions, decodes MPEG audio frame headers, and confirms a stream by finding consecutive frames. The codec ID is selected from the MPEG layer, matching mkvmerge's identification behavior for MP1, MP2, and MP3.
+The reader trims ID3v2 and ID3v1 regions, decodes MPEG audio frame headers, and confirms a stream with mkvmerge's raw-audio detection cascade: eight frames at the payload start inside 128 KiB, ambiguous 64-frame windows through 1 MiB, a one-frame-at-start phase inside 32 KiB, then 20-frame ambiguous windows through 1 MiB. `read_headers` then re-runs the five-frame confirmation used by mkvmerge's MP3 reader over the bounded payload before reporting the track. The codec ID is selected from the MPEG layer, matching mkvmerge's identification behavior for MP1, MP2, and MP3 (PARSER-354).
 
 ## Data Structures
 
@@ -31,8 +31,4 @@ flowchart TD
 
 ## Gaps and Handling
 
-Upstream identification does not expose much more than codec, channels, and sampling frequency, so parity is high. The Rust model naming is shaped for `MediaMetadata` rather than mkvmerge's exact display strings, but the underlying codec selection follows the same layer-based behavior.
-
-## Open Issues
-
-- `PARSER-354` - The raw MP3 probe uses the `read_headers` five-frame confirmation over one 128 KiB window at any offset after ID3 trimming. mkvtoolnix's detection cascade uses different gates: eight frames at the stream start, 64-frame and 20-frame ambiguous windows up to 1 MiB, and a one-frame-at-start phase before `read_headers` later confirms five frames. Native MP3 can therefore both over-claim short mid-file runs and miss valid streams accepted by mkvtoolnix's later phases.
+Upstream identification does not expose much more than codec, channels, and sampling frequency, so parity is complete for the header-level metadata surface. The Rust model naming is shaped for `MediaMetadata` rather than mkvmerge's exact display strings, but the staged probe windows and underlying codec selection follow the same layer-based behavior.

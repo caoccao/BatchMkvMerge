@@ -30,10 +30,15 @@
 //! recover the raw byte stream payload (RBSP without escape bytes).
 
 pub const NAL_UNIT_TYPE_SLICE: u8 = 1;
+pub const NAL_UNIT_TYPE_DP_A_SLICE: u8 = 2;
+pub const NAL_UNIT_TYPE_DP_B_SLICE: u8 = 3;
+pub const NAL_UNIT_TYPE_DP_C_SLICE: u8 = 4;
 pub const NAL_UNIT_TYPE_IDR_SLICE: u8 = 5;
 pub const NAL_UNIT_TYPE_SPS: u8 = 7;
 pub const NAL_UNIT_TYPE_PPS: u8 = 8;
 pub const NAL_UNIT_TYPE_AUD: u8 = 9;
+pub const NAL_UNIT_TYPE_END_OF_SEQ: u8 = 10;
+pub const NAL_UNIT_TYPE_END_OF_STREAM: u8 = 11;
 pub const NAL_UNIT_TYPE_FILLER: u8 = 12;
 
 #[derive(Debug, Clone, Copy)]

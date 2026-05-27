@@ -30,7 +30,10 @@ use crate::media_metadata::model::track_properties_video::{
 use crate::media_metadata::mp4::codec_specific::hex_encode;
 use crate::media_metadata::reader::Reader;
 
-use super::nal::{self, NAL_UNIT_TYPE_AUD, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS, NAL_UNIT_TYPE_VPS};
+use super::nal::{
+  self, NAL_UNIT_TYPE_AUD, NAL_UNIT_TYPE_END_OF_SEQ, NAL_UNIT_TYPE_END_OF_STREAM, NAL_UNIT_TYPE_FILLER,
+  NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_PREFIX_SEI, NAL_UNIT_TYPE_SPS, NAL_UNIT_TYPE_SUFFIX_SEI, NAL_UNIT_TYPE_VPS,
+};
 use super::sps::{self, HevcTier};
 use super::vps;
 
@@ -242,7 +245,13 @@ fn extract_headers<'a>(units: &'a [nal::HevcNalUnit<'a>]) -> Option<HevcHeaders<
     sps: None,
     pps: None,
   };
+  let mut configuration_record_ready = false;
+  let mut first_access_unit_parsing_slices = false;
+  let mut first_access_unit_parsed = false;
   for unit in units {
+    if hevc_flushes_incomplete_frame(unit.nal_unit_type) && first_access_unit_parsing_slices {
+      first_access_unit_parsed = true;
+    }
     if unit.nal_unit_type == NAL_UNIT_TYPE_VPS && headers.vps.is_none() {
       let rbsp = nal::strip_emulation_prevention(unit.payload);
       if vps::parse(&rbsp).is_ok() {
@@ -256,18 +265,54 @@ fn extract_headers<'a>(units: &'a [nal::HevcNalUnit<'a>]) -> Option<HevcHeaders<
     } else if unit.nal_unit_type == NAL_UNIT_TYPE_PPS && headers.pps.is_none() {
       headers.pps = Some(*unit);
     }
+    let headers_ready = headers.vps.is_some() && headers.sps.is_some() && headers.pps.is_some();
+    if headers_ready && hevc_sets_configuration_record_ready(unit.nal_unit_type) {
+      configuration_record_ready = true;
+    }
+    if hevc_is_vcl(unit.nal_unit_type) {
+      first_access_unit_parsing_slices = true;
+    }
   }
-  if headers.vps.is_some() && headers.sps.is_some() && headers.pps.is_some() && has_access_unit_evidence(units) {
+  if configuration_record_ready && first_access_unit_parsed {
     Some(headers)
   } else {
     None
   }
 }
 
-fn has_access_unit_evidence(units: &[nal::HevcNalUnit<'_>]) -> bool {
-  units
-    .iter()
-    .any(|unit| unit.nal_unit_type <= 31 || unit.nal_unit_type == NAL_UNIT_TYPE_AUD)
+fn hevc_is_vcl(nal_unit_type: u8) -> bool {
+  nal_unit_type <= 31
+}
+
+fn hevc_flushes_incomplete_frame(nal_unit_type: u8) -> bool {
+  match nal_unit_type {
+    NAL_UNIT_TYPE_VPS
+    | NAL_UNIT_TYPE_SPS
+    | NAL_UNIT_TYPE_PPS
+    | NAL_UNIT_TYPE_AUD
+    | NAL_UNIT_TYPE_END_OF_STREAM
+    | NAL_UNIT_TYPE_PREFIX_SEI => true,
+    NAL_UNIT_TYPE_END_OF_SEQ | NAL_UNIT_TYPE_FILLER | NAL_UNIT_TYPE_SUFFIX_SEI => false,
+    45..=47 | 56..=63 => false,
+    _ => !hevc_is_vcl(nal_unit_type),
+  }
+}
+
+fn hevc_sets_configuration_record_ready(nal_unit_type: u8) -> bool {
+  hevc_is_vcl(nal_unit_type)
+    || !matches!(
+      nal_unit_type,
+      NAL_UNIT_TYPE_VPS
+        | NAL_UNIT_TYPE_SPS
+        | NAL_UNIT_TYPE_PPS
+        | NAL_UNIT_TYPE_AUD
+        | NAL_UNIT_TYPE_END_OF_SEQ
+        | NAL_UNIT_TYPE_END_OF_STREAM
+        | NAL_UNIT_TYPE_FILLER
+        | NAL_UNIT_TYPE_PREFIX_SEI
+        | NAL_UNIT_TYPE_SUFFIX_SEI
+    )
+    && !matches!(nal_unit_type, 45..=47 | 56..=63)
 }
 
 fn nal_bytes(unit: nal::HevcNalUnit<'_>) -> Vec<u8> {
@@ -376,6 +421,7 @@ pub(crate) fn build_test_main10_stream() -> Vec<u8> {
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x42, 0x01]);
   bytes.extend(sps);
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0x80]);
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50]);
   bytes
 }
@@ -404,9 +450,18 @@ mod tests {
     bytes.extend(sps);
     // PPS NAL (type 34)
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
-    // AUD NAL (type 35) so parser acceptance mirrors headers_parsed() needing
-    // access-unit evidence, not parameter sets alone.
+    // VCL NAL (type 19) followed by an AUD boundary so parser acceptance
+    // mirrors headers_parsed() requiring a flushed first access unit.
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0x80]);
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50]);
+    bytes
+  }
+
+  fn build_main10_stream_with_aud_only_after_parameter_sets() -> Vec<u8> {
+    let mut bytes = build_main10_stream();
+    let vcl_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x26]).unwrap();
+    let aud_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x46]).unwrap();
+    bytes.drain(vcl_pos..aud_pos);
     bytes
   }
 
@@ -722,10 +777,17 @@ mod tests {
   }
 
   #[test]
-  fn probe_rejects_parameter_sets_without_access_unit_evidence() {
+  fn probe_rejects_unflushed_first_access_unit() {
     let mut bytes = build_main10_stream();
     let aud_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x46]).unwrap();
     bytes.truncate(aud_pos);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!HevcReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_aud_only_after_parameter_sets() {
+    let bytes = build_main10_stream_with_aud_only_after_parameter_sets();
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!HevcReader.probe(&mut s).unwrap());
   }

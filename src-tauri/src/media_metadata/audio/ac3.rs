@@ -50,8 +50,12 @@ use crate::media_metadata::reader::Reader;
 
 use super::id3v2;
 
-const PROBE_BYTES: usize = 128 * 1024;
+const STRICT_PROBE_BYTES: usize = 128 * 1024;
+const START_ONLY_PROBE_BYTES: usize = 32 * 1024;
+const EXTENDED_PROBE_BYTES: usize = 1024 * 1024;
 const MIN_CONFIRM_FRAMES: usize = 8;
+const AMBIGUOUS_PROBE_FRAMES_64: usize = 64;
+const AMBIGUOUS_PROBE_FRAMES_20: usize = 20;
 
 /// AC-3 frame sync word, big-endian (`0x0B 0x77`).
 const SYNC_WORD: u16 = 0x0B77;
@@ -393,6 +397,10 @@ fn effective_channels(bytes: &[u8], offset: usize) -> Option<u32> {
 /// back-to-back valid frame headers, skipping the IEC 61937 16-bit `0x0110`
 /// preamble wherever it appears (`get_uint16_be == 0x0110` → advance 16 bytes).
 pub fn find_frame_sync(bytes: &[u8]) -> Option<usize> {
+  find_frame_sync_with_frames(bytes, MIN_CONFIRM_FRAMES)
+}
+
+fn find_frame_sync_with_frames(bytes: &[u8], num_required_frames: usize) -> Option<usize> {
   let len = bytes.len();
   let mut base = 0usize;
 
@@ -415,7 +423,7 @@ pub fn find_frame_sync(bytes: &[u8]) -> Option<usize> {
     let mut offset = position + first.frame_length;
     let mut found = 1usize;
 
-    while found < MIN_CONFIRM_FRAMES && offset < len {
+    while found < num_required_frames && offset < len {
       if offset + 16 < len && get_u16_be(&bytes[offset..]) == 0x0110 {
         offset += 16;
       }
@@ -429,7 +437,7 @@ pub fn find_frame_sync(bytes: &[u8]) -> Option<usize> {
       offset += current.frame_length;
     }
 
-    if found == MIN_CONFIRM_FRAMES {
+    if found == num_required_frames {
       return Some(position);
     }
 
@@ -473,14 +481,14 @@ impl Reader for Ac3Reader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     let read = src.read_at_most(&mut probe)?;
     src.seek_to(0)?;
     if read < 6 {
       return Ok(false);
     }
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    Ok(find_frame_sync(&probe[start..read]).is_some())
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    Ok(find_probe_frame_sync(&probe[start..end.min(read)]).is_some())
   }
 
   fn read_headers(
@@ -489,12 +497,12 @@ impl Reader for Ac3Reader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut probe)?;
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    let bytes = &probe[start..read];
-    let offset = find_frame_sync(bytes).ok_or(ParseError::Unrecognised)?;
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    let bytes = &probe[start..end.min(read)];
+    let offset = find_probe_frame_sync(bytes).ok_or(ParseError::Unrecognised)?;
     let frame = decode_frame(&bytes[offset..]).ok_or(ParseError::Unrecognised)?;
     // PARSER-216: fold dependent-substream channel maps into the count.
     let channels = effective_channels(bytes, offset).unwrap_or(frame.channels);
@@ -530,6 +538,52 @@ impl Reader for Ac3Reader {
     });
     Ok(())
   }
+}
+
+fn find_probe_frame_sync(bytes: &[u8]) -> Option<usize> {
+  find_frames_at_start(bytes, STRICT_PROBE_BYTES, MIN_CONFIRM_FRAMES)
+    .or_else(|| {
+      find_frames_in_windows(
+        bytes,
+        &[STRICT_PROBE_BYTES, 256 * 1024, 512 * 1024, EXTENDED_PROBE_BYTES],
+        AMBIGUOUS_PROBE_FRAMES_64,
+      )
+    })
+    .or_else(|| find_frames_at_start(bytes, START_ONLY_PROBE_BYTES, 1))
+    .or_else(|| {
+      find_frames_in_windows(
+        bytes,
+        &[
+          START_ONLY_PROBE_BYTES,
+          64 * 1024,
+          STRICT_PROBE_BYTES,
+          256 * 1024,
+          512 * 1024,
+          EXTENDED_PROBE_BYTES,
+        ],
+        AMBIGUOUS_PROBE_FRAMES_20,
+      )
+    })
+}
+
+fn find_frames_at_start(bytes: &[u8], window_size: usize, num_required_frames: usize) -> Option<usize> {
+  let window = &bytes[..bytes.len().min(window_size)];
+  let offset = find_frame_sync_with_frames(window, num_required_frames)?;
+  if offset == 0 {
+    Some(offset)
+  } else {
+    None
+  }
+}
+
+fn find_frames_in_windows(bytes: &[u8], windows: &[usize], num_required_frames: usize) -> Option<usize> {
+  for &window_size in windows {
+    let window = &bytes[..bytes.len().min(window_size)];
+    if let Some(offset) = find_frame_sync_with_frames(window, num_required_frames) {
+      return Some(offset);
+    }
+  }
+  None
 }
 
 #[cfg(test)]
@@ -691,6 +745,29 @@ mod tests {
   #[test]
   fn probe_accepts_ac3_stream() {
     let bytes = build_ac3_stream(10, 0, 8);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(Ac3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_single_header_at_start() {
+    let bytes = build_ac3_frame(0, 8);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(Ac3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_short_midfile_run() {
+    let mut bytes = vec![0x00u8; 16];
+    bytes.extend(build_ac3_stream(8, 0, 8));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!Ac3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_later_sixty_four_frame_run() {
+    let mut bytes = vec![0x00u8; 200 * 1024];
+    bytes.extend(build_ac3_stream(64, 0, 8));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(Ac3Reader.probe(&mut s).unwrap());
   }

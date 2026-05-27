@@ -41,7 +41,7 @@ use crate::media_metadata::reader::Reader;
 
 use super::{ac3, id3v2};
 
-const PROBE_BYTES: usize = 256 * 1024;
+const PROBE_BYTES: usize = 512 * 1024;
 const MIN_HEADER_SIZE: usize = 12;
 const TRUEHD_SYNC_WORD: u32 = 0xf872_6fba;
 const MLP_SYNC_WORD: u32 = 0xf872_6fbb;
@@ -511,6 +511,15 @@ mod tests {
     let mut two = build_truehd_frame(1, 1);
     two.extend(build_truehd_frame(1, 1));
     let mut s = FileSource::from_reader_for_test(Cursor::new(two));
+    assert!(TrueHdReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_scans_full_512k_window() {
+    let mut data = build_truehd_frame(1, 1);
+    data.resize(300 * 1024, 0);
+    data.extend(build_truehd_frame(1, 1));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(data));
     assert!(TrueHdReader.probe(&mut s).unwrap());
   }
 

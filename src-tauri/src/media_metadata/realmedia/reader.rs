@@ -23,7 +23,6 @@ use std::collections::{HashMap, HashSet};
 use crate::media_metadata::audio::{aac, ac3};
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
-use crate::media_metadata::io::bit_reader::BitReader;
 use crate::media_metadata::io::file_source::FileSource;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::model::container::ContainerFormat;
@@ -279,29 +278,15 @@ fn push_track(out: &mut MediaMetadata, id: i64, track: &MdprChunk, first_packet:
           width: v.width as u32,
           height: v.height as u32,
         };
-        // r_real.cpp:241-242 + :588-590 — only RV40 derives its dimensions
-        // from the first packet; RV10/RV20/RV30 keep their header dimensions
-        // (mkvtoolnix sets `rv_dimensions = true` for every non-RV40 fourcc
-        // and only calls `set_dimensions` while that flag is false).
-        let packet_dims = if fourcc == "RV40" {
-          first_packet.and_then(real_video_dimensions_from_packet)
+        // mkvtoolnix identify reports the MDPR RealVideo dimensions. RV40
+        // packet-derived dimensions are applied later during packet delivery,
+        // not during header identification.
+        let display_dims = if header_dims.width > 0 && header_dims.height > 0 {
+          Some(header_dims)
         } else {
           None
         };
-        let pixel_dims = packet_dims.unwrap_or(header_dims);
-        let display_dims =
-          if packet_dims.is_some() && header_dims.width > 0 && header_dims.height > 0 && header_dims != pixel_dims {
-            Some(header_dims)
-          } else if pixel_dims.width > 0 && pixel_dims.height > 0 {
-            Some(pixel_dims)
-          } else {
-            None
-          };
-        let dims = if pixel_dims.width > 0 && pixel_dims.height > 0 {
-          Some(pixel_dims)
-        } else {
-          None
-        };
+        let dims = display_dims;
         let fps = v.fps();
         let default_duration_ns = if fps > 0.0 {
           Some((1_000_000_000.0 / fps).round() as u64)
@@ -455,59 +440,6 @@ fn apply_real_aac_config(fourcc: &str, a: &AudioProps, audio: &mut AudioTrackPro
       *codec_name = aac::format_aac_profile(4);
       audio.codec_config = Some(cfg);
     }
-  }
-}
-
-fn real_video_dimensions_from_packet(packet: &[u8]) -> Option<Dimensions2D> {
-  let skip = 1 + 2 * 4 * (packet.first().copied()? as usize + 1);
-  if skip + 10 >= packet.len() {
-    return None;
-  }
-  let (width, height) = parse_real_video_dimensions(&packet[skip..])?;
-  Some(Dimensions2D { width, height })
-}
-
-fn parse_real_video_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-  const CW: [u32; 8] = [160, 176, 240, 320, 352, 640, 704, 0];
-  const CH1: [u32; 8] = [120, 132, 144, 240, 288, 480, 0, 0];
-  const CH2: [u32; 4] = [180, 360, 576, 0];
-
-  let mut br = BitReader::new(bytes);
-  br.skip_bits(13).ok()?;
-  br.skip_bits(13).ok()?;
-  let mut v = br.read_bits(3).ok()? as usize;
-  let mut width = CW[v];
-  if width == 0 {
-    loop {
-      let c = br.read_bits(8).ok()? as u32;
-      width = width.saturating_add(c << 2);
-      if c != 255 {
-        break;
-      }
-    }
-  }
-
-  let mut c = br.read_bits(3).ok()? as usize;
-  let mut height = CH1[c];
-  if height == 0 {
-    v = br.read_bits(1).ok()? as usize;
-    c = ((c << 1) | v) & 3;
-    height = CH2[c];
-    if height == 0 {
-      loop {
-        let next = br.read_bits(8).ok()? as u32;
-        height = height.saturating_add(next << 2);
-        if next != 255 {
-          break;
-        }
-      }
-    }
-  }
-
-  if width > 0 && height > 0 {
-    Some((width, height))
-  } else {
-    None
   }
 }
 
@@ -1065,7 +997,7 @@ mod tests {
   }
 
   #[test]
-  fn read_headers_refines_realvideo_dimensions_from_first_data_packet() {
+  fn read_headers_keeps_rv40_mdpr_dimensions_despite_packet_dims() {
     let mut blob = build_rmf_header();
     blob.extend(build_prop_chunk(0));
     let v_props = build_video_props(b"RV40", 320, 240, 25.0);
@@ -1084,8 +1016,8 @@ mod tests {
     assert_eq!(
       video.pixel_dimensions,
       Some(Dimensions2D {
-        width: 640,
-        height: 480
+        width: 320,
+        height: 240
       })
     );
     assert_eq!(
@@ -1099,8 +1031,8 @@ mod tests {
 
   #[test]
   fn read_headers_keeps_header_dims_for_rv20_despite_packet() {
-    // RV20 must NOT derive dimensions from the first packet (mkvtoolnix only
-    // enables packet dimensions for RV40 — `r_real.cpp:241-242,588-590`).
+    // Identify reports MDPR dimensions; frame-derived dimensions are not part
+    // of the header-only result.
     let mut blob = build_rmf_header();
     blob.extend(build_prop_chunk(0));
     let v_props = build_video_props(b"RV20", 320, 240, 25.0);

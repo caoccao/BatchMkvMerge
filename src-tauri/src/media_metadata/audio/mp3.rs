@@ -19,9 +19,9 @@
 //! `mkvtoolnix/src/common/mp3.cpp` + `src/input/r_mp3.cpp`.
 //!
 //! Layer I and Layer II are now decoded alongside Layer III with the correct
-//! frame sizing and Matroska codec ID (PARSER-014), and the probe requires
-//! [`MIN_CONFIRM_FRAMES`] back-to-back frames whose version/layer/channel/
-//! sample-rate agree (PARSER-015), matching `find_consecutive_mp3_headers`.
+//! frame sizing and Matroska codec ID (PARSER-014), and `read_headers`
+//! requires [`MIN_CONFIRM_FRAMES`] back-to-back frames whose version/layer/
+//! channel/sample-rate agree (PARSER-015), matching `find_consecutive_mp3_headers`.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -36,9 +36,14 @@ use crate::media_metadata::reader::Reader;
 
 use super::id3v2;
 
-const PROBE_BYTES: usize = 128 * 1024;
+const STRICT_PROBE_BYTES: usize = 128 * 1024;
+const START_ONLY_PROBE_BYTES: usize = 32 * 1024;
+const EXTENDED_PROBE_BYTES: usize = 1024 * 1024;
 /// `r_mp3.cpp::read_headers` confirms a stream with five consecutive headers.
 const MIN_CONFIRM_FRAMES: u32 = 5;
+const STRICT_PROBE_FRAMES: u32 = 8;
+const AMBIGUOUS_PROBE_FRAMES_64: u32 = 64;
+const AMBIGUOUS_PROBE_FRAMES_20: u32 = 20;
 
 /// `mp3_bitrates_mpeg1[layer-1][index]` (kbps).
 const BITRATES_MPEG1: [[u32; 16]; 3] = [
@@ -329,14 +334,14 @@ impl Reader for Mp3Reader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     let read = src.read_at_most(&mut probe)?;
     src.seek_to(0)?;
     if read < 4 {
       return Ok(false);
     }
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    Ok(find_consecutive_mp3_headers(&probe[start..read], MIN_CONFIRM_FRAMES).is_some())
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    Ok(find_probe_mp3_headers(&probe[start..end.min(read)]).is_some())
   }
 
   fn read_headers(
@@ -345,11 +350,11 @@ impl Reader for Mp3Reader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut probe)?;
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    let bytes = &probe[start..read];
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    let bytes = &probe[start..end.min(read)];
     let (_offset, frame) = find_consecutive_mp3_headers(bytes, MIN_CONFIRM_FRAMES).ok_or(ParseError::Unrecognised)?;
 
     out.container.format = ContainerFormat::Mp3;
@@ -381,6 +386,46 @@ impl Reader for Mp3Reader {
     });
     Ok(())
   }
+}
+
+fn find_probe_mp3_headers(bytes: &[u8]) -> Option<(usize, Mp3Header)> {
+  find_headers_at_start(bytes, STRICT_PROBE_BYTES, STRICT_PROBE_FRAMES)
+    .or_else(|| find_headers_in_windows(bytes, &[STRICT_PROBE_BYTES, 256 * 1024, 512 * 1024, EXTENDED_PROBE_BYTES], AMBIGUOUS_PROBE_FRAMES_64))
+    .or_else(|| find_headers_at_start(bytes, START_ONLY_PROBE_BYTES, 1))
+    .or_else(|| {
+      find_headers_in_windows(
+        bytes,
+        &[
+          START_ONLY_PROBE_BYTES,
+          64 * 1024,
+          STRICT_PROBE_BYTES,
+          256 * 1024,
+          512 * 1024,
+          EXTENDED_PROBE_BYTES,
+        ],
+        AMBIGUOUS_PROBE_FRAMES_20,
+      )
+    })
+}
+
+fn find_headers_at_start(bytes: &[u8], window_size: usize, num_headers: u32) -> Option<(usize, Mp3Header)> {
+  let window = &bytes[..bytes.len().min(window_size)];
+  let (offset, header) = find_consecutive_mp3_headers(window, num_headers)?;
+  if offset == 0 {
+    Some((offset, header))
+  } else {
+    None
+  }
+}
+
+fn find_headers_in_windows(bytes: &[u8], windows: &[usize], num_headers: u32) -> Option<(usize, Mp3Header)> {
+  for &window_size in windows {
+    let window = &bytes[..bytes.len().min(window_size)];
+    if let Some(found) = find_consecutive_mp3_headers(window, num_headers) {
+      return Some(found);
+    }
+  }
+  None
 }
 
 #[cfg(test)]
@@ -629,6 +674,29 @@ mod tests {
   fn probe_accepts_mp3_after_id3v2_header() {
     let mut bytes = id3v2::build_id3v2_tag(false, 64);
     bytes.extend(build_mp3_stream(10, 128, 44_100));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(Mp3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_single_header_at_start() {
+    let bytes = build_mp3_frame_v1(128, 44_100, false);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(Mp3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_short_midfile_run() {
+    let mut bytes = vec![0x00u8; 16];
+    bytes.extend(build_mp3_stream(8, 128, 44_100));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!Mp3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_later_sixty_four_frame_run() {
+    let mut bytes = vec![0x00u8; 200 * 1024];
+    bytes.extend(build_mp3_stream(64, 128, 44_100));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(Mp3Reader.probe(&mut s).unwrap());
   }

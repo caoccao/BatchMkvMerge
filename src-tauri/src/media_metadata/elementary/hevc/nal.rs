@@ -31,6 +31,11 @@ pub const NAL_UNIT_TYPE_VPS: u8 = 32;
 pub const NAL_UNIT_TYPE_SPS: u8 = 33;
 pub const NAL_UNIT_TYPE_PPS: u8 = 34;
 pub const NAL_UNIT_TYPE_AUD: u8 = 35;
+pub const NAL_UNIT_TYPE_END_OF_SEQ: u8 = 36;
+pub const NAL_UNIT_TYPE_END_OF_STREAM: u8 = 37;
+pub const NAL_UNIT_TYPE_FILLER: u8 = 38;
+pub const NAL_UNIT_TYPE_PREFIX_SEI: u8 = 39;
+pub const NAL_UNIT_TYPE_SUFFIX_SEI: u8 = 40;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HevcNalUnit<'a> {

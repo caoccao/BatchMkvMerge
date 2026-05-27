@@ -1,6 +1,6 @@
 # AAC Parser
 
-Implementation progress: 98%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The AAC parser recognises raw AAC streams and reports one audio track with codec
 - Shared helper: `src-tauri/src/media_metadata/audio/id3v2.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_aac.cpp`, `../mkvtoolnix/src/input/r_aac.h`, `../mkvtoolnix/src/common/aac.cpp`, `../mkvtoolnix/src/common/aac.h`
 
-The Rust reader decodes ADTS fixed and variable headers, AudioSpecificConfig, program-config elements, and LOAS/LATM stream-mux configuration. Probing requires eight consecutive valid frames, mirroring mkvmerge's raw-audio confirmation policy. `read_headers` samples a bounded prefix, locates the confirmed base offset, then **drains frames until one reports both a nonzero sample rate and a nonzero channel count** (`drain_to_usable_header`), exactly mirroring `aac_reader_c::read_headers`'s `while (frames_available()) { … if (sr>0 && ch>0) break; }` loop (`../mkvtoolnix/src/input/r_aac.cpp:61-64`). If no frame qualifies, the last decoded frame's header is kept. It then writes a `ContainerFormat::Aac` container plus one `TrackType::Audio` track.
+The Rust reader decodes ADTS fixed and variable headers, AudioSpecificConfig, program-config elements, and LOAS/LATM stream-mux configuration. Probing mirrors mkvmerge's raw-audio detection cascade after ID3 trimming: eight frames at the payload start inside 128 KiB, ambiguous 64-frame windows through 1 MiB, a one-frame-at-start phase inside 32 KiB, then 20-frame ambiguous windows through 1 MiB. `read_headers` samples the same bounded prefix, locates the confirmed base offset, then **drains frames until one reports both a nonzero sample rate and a nonzero channel count** (`drain_to_usable_header`), exactly mirroring `aac_reader_c::read_headers`'s `while (frames_available()) { … if (sr>0 && ch>0) break; }` loop (`../mkvtoolnix/src/input/r_aac.cpp:61-64`). If no frame qualifies, the last decoded frame's header is kept. It then writes a `ContainerFormat::Aac` container plus one `TrackType::Audio` track (PARSER-354).
 
 Object type 29 (Parametric Stereo / HE-AACv2) is decoded as an SBR-style extension — when its bitstream guard passes, the output sample rate and inner object type are read and `aac_ps_present` is set, mirroring `header_c::parse_audio_specific_config` (`../mkvtoolnix/src/common/aac.cpp:1224-1232`). Raw-AAC identification promotes ADTS headers with a sample rate of 24 kHz or below to the SBR profile (`PROFILE_SBR`), matching `aac_reader_c::read_headers`/`identify` (`../mkvtoolnix/src/input/r_aac.cpp:73-76`); the core sampling frequency is still reported as-is.
 
@@ -35,10 +35,6 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 
 ## Gaps and Handling
 
-Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). The first-usable-frame search also matches upstream (`drain_to_usable_header`), so a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
+Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). Raw probing and the first-usable-frame search also match upstream, so short mid-file sync runs are rejected, later ambiguous windows are considered, and a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
-
-## Open Issues
-
-- `PARSER-354` - The raw AAC probe is collapsed to one 128 KiB scan for eight consecutive frames at any offset after ID3 trimming. mkvtoolnix first requires eight frames at the stream start, then retries ambiguous AAC probing with 64-frame and 20-frame windows up to 1 MiB and also has a one-frame-at-start phase. Native AAC can therefore over-claim short mid-file runs and miss valid streams whose decisive confirmation appears only in the later upstream probe phases.

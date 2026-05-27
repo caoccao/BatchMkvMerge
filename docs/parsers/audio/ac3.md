@@ -1,6 +1,6 @@
 # AC-3 / E-AC-3 Parser
 
-Implementation progress: 88%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -11,7 +11,7 @@ The AC-3 parser recognises raw Dolby Digital and Dolby Digital Plus streams, inc
 - Primary implementation: `src-tauri/src/media_metadata/audio/ac3.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_ac3.cpp`, `../mkvtoolnix/src/input/r_ac3.h`, `../mkvtoolnix/src/common/ac3.cpp`, `../mkvtoolnix/src/common/ac3.h`
 
-`decode_frame` reads the sync word, decides between AC-3 and E-AC-3 from `bsid`, decodes rate/channel/frame-size fields, and supports the common IEC 61937 preamble offset. For E-AC-3 the decode continues past `lfeon` through `dialnorm`/`compre`, the dual-mono second `dialnorm`, and — for dependent frames — the `chanmape`/`chanmap` block, so each frame carries a speaker-layout bitmask. The reader's `probe` scans for eight consecutive frames; `read_headers` decodes the first independent frame and then folds any immediately-following dependent E-AC-3 frames into the effective channel count (`get_effective_number_of_channels`: OR of all layouts + each frame's LFE), populating `ContainerFormat::Ac3` or `ContainerFormat::Eac3`.
+`decode_frame` reads the sync word, decides between AC-3 and E-AC-3 from `bsid`, decodes rate/channel/frame-size fields, and supports the common IEC 61937 preamble offset. For E-AC-3 the decode continues past `lfeon` through `dialnorm`/`compre`, the dual-mono second `dialnorm`, and — for dependent frames — the `chanmape`/`chanmap` block, so each frame carries a speaker-layout bitmask. The reader's `probe` mirrors mkvmerge's raw-audio detection cascade after ID3 trimming: eight frames at the payload start inside 128 KiB, ambiguous 64-frame windows through 1 MiB, a one-frame-at-start phase inside 32 KiB, then 20-frame ambiguous windows through 1 MiB. `read_headers` decodes the first independent frame from the same selected base and then folds any immediately-following dependent E-AC-3 frames into the effective channel count (`get_effective_number_of_channels`: OR of all layouts + each frame's LFE), populating `ContainerFormat::Ac3` or `ContainerFormat::Eac3` (PARSER-354).
 
 ## Data Structures
 
@@ -31,10 +31,6 @@ Key structures are `Ac3Frame` and `Ac3Variant`. Bit-level parsing uses the share
 
 ## Gaps and Handling
 
-The parser now folds dependent-frame channel maps into the effective channel count. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
+The parser now folds dependent-frame channel maps into the effective channel count and uses mkvtoolnix's staged raw-probe windows, including the later ambiguous 64-frame and 20-frame passes. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
 
 Packetizer behavior, sync repair during muxing, and checksum validation are not part of this header-only parser.
-
-## Open Issues
-
-- `PARSER-354` - The raw AC-3/E-AC-3 probe is collapsed to one 128 KiB scan for eight consecutive frames at any offset after ID3 trimming. mkvtoolnix first requires eight frames at the stream start, then retries ambiguous AC-3 probing with 64-frame and 20-frame windows up to 1 MiB and also has a one-frame-at-start phase. Native AC-3 can therefore over-claim short mid-file runs and miss valid streams found by the later upstream probe phases.

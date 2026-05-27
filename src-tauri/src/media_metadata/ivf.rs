@@ -51,7 +51,6 @@ use crate::media_metadata::reader::Reader;
 pub const MAGIC: [u8; 4] = *b"DKIF";
 const HEADER_LEN: usize = 32;
 const FRAME_HEADER_LEN: usize = 12;
-const FIRST_FRAME_CAP: usize = 1024 * 1024;
 const OBU_TYPE_METADATA: u8 = 5;
 const METADATA_TYPE_ITUT_T35: usize = 4;
 const DOVI_T35_HEADER: [u8; 9] = [0x00, 0x3b, 0x00, 0x00, 0x08, 0x00, 0x37, 0xcd, 0x08];
@@ -161,7 +160,7 @@ impl Reader for IvfReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     let mut buf = [0u8; HEADER_LEN];
@@ -191,7 +190,7 @@ impl Reader for IvfReader {
       None
     };
     let dovi_config = if codec == IvfCodec::Av1 {
-      read_first_frame(src).ok().flatten().and_then(|frame| {
+      read_first_frame(src, deadline).ok().flatten().and_then(|frame| {
         av1_dovi_config_from_frame(&frame, header.width as u32, header.height as u32, default_duration_ns)
       })
     } else {
@@ -252,16 +251,17 @@ struct DoviConfig {
   raw_config: Vec<u8>,
 }
 
-fn read_first_frame(src: &mut FileSource) -> Result<Option<Vec<u8>>, ParseError> {
+fn read_first_frame(src: &mut FileSource, deadline: &Deadline) -> Result<Option<Vec<u8>>, ParseError> {
   src.seek_to(HEADER_LEN as u64)?;
   let mut frame_header = [0u8; FRAME_HEADER_LEN];
   if src.read_at_most(&mut frame_header)? < FRAME_HEADER_LEN {
     return Ok(None);
   }
   let frame_size = u32::from_le_bytes([frame_header[0], frame_header[1], frame_header[2], frame_header[3]]) as usize;
-  if frame_size == 0 || frame_size > FIRST_FRAME_CAP {
+  if frame_size == 0 || frame_size as u64 > deadline.max_element_size() {
     return Ok(None);
   }
+  deadline.check("ivf-first-frame")?;
   let mut frame = vec![0u8; frame_size];
   if src.read_at_most(&mut frame)? < frame_size {
     return Ok(None);
@@ -805,6 +805,19 @@ mod tests {
     // Unspecified AV1 color with an RPU-inferred profile 8 maps to BL
     // compatibility id 2, encoded in the high nibble of byte 4.
     assert_eq!(&mapping.data_hex[8..10], "20");
+  }
+
+  #[test]
+  fn av1_dovi_first_frame_over_one_mib_is_still_read() {
+    let mut frame = build_av1_frame_with_dovi();
+    frame.resize(1024 * 1024 + 1, 0);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(build_ivf_with_first_frame(&frame)));
+    let mut out = MediaMetadata::new("dv-large.ivf", 0);
+    IvfReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let video = out.tracks[0].properties.video.as_ref().unwrap();
+    assert_eq!(video.block_addition_mappings.len(), 1);
   }
 
   #[test]

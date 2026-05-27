@@ -47,8 +47,6 @@ const PROBE_BYTES: usize = 128 * 1024;
 /// DTS-HD chunk magics (8 ASCII bytes read as a big-endian u64).  PARSER-151.
 const CHUNK_DTSHDHDR: u64 = 0x4454_5348_4448_4452; // "DTSHDHDR"
 const CHUNK_STRMDATA: u64 = 0x5354_524d_4441_5441; // "STRMDATA"
-/// Safety cap on the chunk walk so a corrupt header cannot stall the probe.
-const MAX_DTS_CHUNKS: usize = 1024;
 
 const SYNC_CORE: u32 = 0x7ffe8001;
 const SYNC_EXSS: u32 = 0x64582025;
@@ -1025,33 +1023,30 @@ fn apply_transform(src: &[u8], convert_14_to_16: bool, swap_bytes: bool) -> Vec<
 /// `DTSHDHDR` chunk and store the actual DTS frames in a later `STRMDATA`
 /// chunk; we walk the `[type(8)][size(8)][data]` chain to find it.  Plain
 /// `.dts`/`.dtshd` core streams have no chunk header, so the payload starts at
-/// byte 0.  PARSER-151.
-fn strmdata_offset(src: &mut FileSource) -> Result<u64, ParseError> {
+/// byte 0. A DTS-HD chunked file without a usable STRMDATA chunk is rejected
+/// instead of falling back to byte 0.  PARSER-151 / PARSER-357.
+fn strmdata_offset(src: &mut FileSource) -> Result<Option<u64>, ParseError> {
   let file_size = src.length().unwrap_or(0);
   if file_size < 16 {
-    return Ok(0);
+    return Ok(Some(0));
   }
   src.seek_to(0)?;
   if src.read_u64_be()? != CHUNK_DTSHDHDR {
-    return Ok(0);
+    return Ok(Some(0));
   }
   let mut next = 0u64;
-  for _ in 0..MAX_DTS_CHUNKS {
-    if next + 16 >= file_size {
-      break;
-    }
+  while next + 16 <= file_size {
     src.seek_to(next)?;
     let chunk_type = src.read_u64_be()?;
     let raw_size = src.read_u64_be()?;
     let data_start = next + 16;
     let data_size = raw_size.min(file_size - data_start);
     if chunk_type == CHUNK_STRMDATA && data_size > 1 {
-      return Ok(data_start);
+      return Ok(Some(data_start));
     }
     next = data_start + data_size;
   }
-  // No STRMDATA chunk found — fall back to byte 0 (treat as a bare stream).
-  Ok(0)
+  Ok(None)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1064,7 +1059,10 @@ impl Reader for DtsReader {
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
     // PARSER-151: read from the STRMDATA chunk for DTS-HD files, else byte 0.
-    let offset = strmdata_offset(src)?;
+    let Some(offset) = strmdata_offset(src)? else {
+      src.seek_to(0)?;
+      return Ok(false);
+    };
     src.seek_to(offset)?;
     let mut probe = vec![0u8; PROBE_BYTES];
     let read = src.read_at_most(&mut probe)?;
@@ -1085,7 +1083,7 @@ impl Reader for DtsReader {
   ) -> Result<(), ParseError> {
     let mut probe = vec![0u8; PROBE_BYTES];
     // PARSER-151: DTS-HD frames live in the STRMDATA chunk, not at byte 0.
-    let offset = strmdata_offset(src)?;
+    let offset = strmdata_offset(src)?.ok_or(ParseError::Unrecognised)?;
     src.seek_to(offset)?;
     let read = src.read_at_most(&mut probe)?;
     let (start, _end) = id3v2::payload_bounds(&probe[..read]);
@@ -1459,7 +1457,7 @@ mod tests {
   fn strmdata_offset_finds_stream_chunk() {
     let bytes = build_dtshd_file();
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
-    let offset = strmdata_offset(&mut s).unwrap();
+    let offset = strmdata_offset(&mut s).unwrap().unwrap();
     // DTSHDHDR(16+16) + FILEINFO(16+8) = 56 byte header region; STRMDATA data
     // starts 16 bytes after the chunk header at offset 56.
     assert_eq!(offset, 16 + 16 + 16 + 8 + 16);
@@ -1472,7 +1470,19 @@ mod tests {
   fn strmdata_offset_zero_for_bare_stream() {
     let bytes = build_dts_stream(2, 6, 13);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
-    assert_eq!(strmdata_offset(&mut s).unwrap(), 0);
+    assert_eq!(strmdata_offset(&mut s).unwrap(), Some(0));
+  }
+
+  #[test]
+  fn strmdata_offset_rejects_dtshd_without_stream_chunk() {
+    let mut bytes = build_dts_chunk(CHUNK_DTSHDHDR, &[0u8; 16]);
+    let stream = build_dts_stream(5, 6, 13);
+    bytes.extend(build_dts_chunk(0x4a55_4e4b_4441_5441, &stream)); // "JUNKDATA"
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert_eq!(strmdata_offset(&mut s).unwrap(), None);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!DtsReader.probe(&mut s).unwrap());
   }
 
   #[test]

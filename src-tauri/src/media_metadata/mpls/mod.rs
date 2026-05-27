@@ -129,6 +129,10 @@ pub fn try_open(
     // everything but the per-PID language.
     streams: collect_playlist_streams(&playlist),
   });
+  if playlist.chapter_count > 0 {
+    out.chapters.num_entries = playlist.chapter_count;
+    out.chapters.num_editions = 1;
+  }
   Ok(true)
 }
 
@@ -354,15 +358,18 @@ mod tests {
   }
 
   fn build_simple_mpls() -> Vec<u8> {
-    // Reuse the parser test fixture shape via its public parse() expectations:
-    // two clips 00001 (1s) and 00002 (2s), no chapter marks.
-    // Header + playlist + empty chapter block.
+    build_mpls_with_marks(&[("00001", 0, 45_000), ("00002", 0, 90_000)], &[])
+  }
+
+  fn build_mpls_with_marks(items: &[(&str, u32, u32)], marks: &[(u16, u32)]) -> Vec<u8> {
+    // Reuse the parser test fixture shape via its public parse() expectations.
+    // Header + playlist + chapter block.
     let mut playlist = Vec::new();
     playlist.extend(0u32.to_be_bytes());
     playlist.extend(0u16.to_be_bytes());
-    playlist.extend(2u16.to_be_bytes()); // list_count
+    playlist.extend((items.len() as u16).to_be_bytes()); // list_count
     playlist.extend(0u16.to_be_bytes()); // sub_count
-    for (clip, in_t, out_t) in [("00001", 0u32, 45_000u32), ("00002", 0, 90_000)] {
+    for &(clip, in_t, out_t) in items {
       let mut item = Vec::new();
       item.extend(clip.as_bytes());
       item.extend(b"M2TS");
@@ -380,7 +387,17 @@ mod tests {
     }
     let mut chapters = Vec::new();
     chapters.extend(0u32.to_be_bytes());
-    chapters.extend(0u16.to_be_bytes());
+    chapters.extend((marks.len() as u16).to_be_bytes());
+    for &(play_item_idx, timestamp) in marks {
+      let mut mark = Vec::new();
+      mark.push(0);
+      mark.push(1);
+      mark.extend(play_item_idx.to_be_bytes());
+      mark.extend(timestamp.to_be_bytes());
+      mark.extend(0u16.to_be_bytes());
+      mark.extend(0u32.to_be_bytes());
+      chapters.extend(mark);
+    }
 
     let playlist_pos = 40u32;
     let chapter_pos = playlist_pos + playlist.len() as u32;
@@ -417,6 +434,22 @@ mod tests {
     assert_eq!(pl.total_size, 64 + 128);
     assert_eq!(pl.duration.unwrap().ns, 3_000_000_000);
     assert_eq!(pl.chapters, 0);
+  }
+
+  #[test]
+  fn populates_standard_chapter_summary_from_playlist_marks() {
+    let mpls = build_mpls_with_marks(&[("00001", 0, 450_000)], &[(0, 0), (0, 90_000), (0, 180_000)]);
+    let (root, mpls_path) = build_bd_tree(&mpls, &[("00001.m2ts", &[0u8; 64])]);
+
+    let mut src = FileSource::from_reader_for_test(Cursor::new(mpls.clone()));
+    let mut out = MediaMetadata::new("00000.mpls", mpls.len() as u64);
+    let handled = try_open(&mut src, &mpls_path, &no_deadline(), &mut out).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(handled);
+    assert_eq!(out.container.properties.playlist.as_ref().unwrap().chapters, 3);
+    assert_eq!(out.chapters.num_entries, 3);
+    assert_eq!(out.chapters.num_editions, 1);
   }
 
   #[test]

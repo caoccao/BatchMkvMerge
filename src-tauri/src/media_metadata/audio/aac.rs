@@ -61,10 +61,14 @@ use crate::media_metadata::reader::Reader;
 
 use super::id3v2;
 
-const PROBE_BYTES: usize = 128 * 1024;
+const STRICT_PROBE_BYTES: usize = 128 * 1024;
+const START_ONLY_PROBE_BYTES: usize = 32 * 1024;
+const EXTENDED_PROBE_BYTES: usize = 1024 * 1024;
 /// Primary AAC probe in mkvtoolnix requires eight consecutive headers at the
 /// start (`do_probe<aac_reader_c>(io, { 128 * 1024, 8, true })`).
 const MIN_CONFIRM_FRAMES: usize = 8;
+const AMBIGUOUS_PROBE_FRAMES_64: usize = 64;
+const AMBIGUOUS_PROBE_FRAMES_20: usize = 20;
 
 const ADTS_SYNC_WORD: u32 = 0xfff000;
 const ADTS_SYNC_WORD_MASK: u32 = 0xfff000; // first 12 of 24 bits
@@ -814,12 +818,12 @@ pub fn decode_loas_latm(bytes: &[u8]) -> Option<(AacHeader, usize)> {
 /// successfully and whose fixed fields agree. Returns the base offset.
 pub fn find_consecutive_frames(buffer: &[u8], num_required_frames: usize) -> Option<usize> {
   let buffer_size = buffer.len();
-  if buffer_size < 9 {
+  if buffer_size < 3 {
     return None;
   }
 
   let mut base = 0usize;
-  while base + 8 < buffer_size {
+  while base + 3 <= buffer_size {
     let value = get_uint24_be(&buffer[base..]);
     let is_adts = (value & ADTS_SYNC_WORD_MASK) == ADTS_SYNC_WORD;
     let is_loas = (value & LOAS_SYNC_WORD_MASK) == LOAS_SYNC_WORD;
@@ -829,32 +833,38 @@ pub fn find_consecutive_frames(buffer: &[u8], num_required_frames: usize) -> Opt
       continue;
     }
 
-    // Shortcut: require a second compatible header right after this one
-    // before running the (more expensive) full parse.
-    if is_loas {
-      let loas_frame_size = (value & LOAS_FRAME_SIZE_MASK) as usize;
-      if loas_frame_size == 0 || (base + loas_frame_size + 3 + 3) > buffer_size {
-        base += 1;
-        continue;
-      }
-      let next = get_uint24_be(&buffer[base + 3 + loas_frame_size..]);
-      if (next & LOAS_SYNC_WORD_MASK) != LOAS_SYNC_WORD {
-        base += 1;
-        continue;
-      }
-    } else {
-      // adts_frame_size: 2@b3 + 8@b4 + 3@b5.
-      let adts_frame_size = (((buffer[base + 3] & 0x03) as usize) << 11)
-        | ((buffer[base + 4] as usize) << 3)
-        | ((buffer[base + 5] as usize) >> 5);
-      if adts_frame_size < 7 || (base + adts_frame_size + 8) > buffer_size {
-        base += 1;
-        continue;
-      }
-      let next = get_uint24_be(&buffer[base + adts_frame_size..]);
-      if (next & ADTS_SYNC_WORD_MASK) != ADTS_SYNC_WORD {
-        base += 1;
-        continue;
+    // Shortcut: require a second compatible header right after this one before
+    // running the full parse when a multi-frame confirmation is requested.
+    if num_required_frames > 1 {
+      if is_loas {
+        let loas_frame_size = (value & LOAS_FRAME_SIZE_MASK) as usize;
+        if loas_frame_size == 0 || (base + loas_frame_size + 3 + 3) > buffer_size {
+          base += 1;
+          continue;
+        }
+        let next = get_uint24_be(&buffer[base + 3 + loas_frame_size..]);
+        if (next & LOAS_SYNC_WORD_MASK) != LOAS_SYNC_WORD {
+          base += 1;
+          continue;
+        }
+      } else {
+        if base + 6 > buffer_size {
+          base += 1;
+          continue;
+        }
+        // adts_frame_size: 2@b3 + 8@b4 + 3@b5.
+        let adts_frame_size = (((buffer[base + 3] & 0x03) as usize) << 11)
+          | ((buffer[base + 4] as usize) << 3)
+          | ((buffer[base + 5] as usize) >> 5);
+        if adts_frame_size < 7 || (base + adts_frame_size + 8) > buffer_size {
+          base += 1;
+          continue;
+        }
+        let next = get_uint24_be(&buffer[base + adts_frame_size..]);
+        if (next & ADTS_SYNC_WORD_MASK) != ADTS_SYNC_WORD {
+          base += 1;
+          continue;
+        }
       }
     }
 
@@ -990,14 +1000,14 @@ impl Reader for AacReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     let read = src.read_at_most(&mut probe)?;
     src.seek_to(0)?;
-    if read < 9 {
+    if read < 3 {
       return Ok(false);
     }
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    Ok(find_consecutive_frames(&probe[start..read], MIN_CONFIRM_FRAMES).is_some())
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    Ok(find_probe_frames(&probe[start..end.min(read)]).is_some())
   }
 
   fn read_headers(
@@ -1006,14 +1016,14 @@ impl Reader for AacReader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut probe = vec![0u8; PROBE_BYTES];
+    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
     src.seek_to(0)?;
     let read = src.read_at_most(&mut probe)?;
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    let bytes = &probe[start..read];
+    let (start, end) = id3v2::payload_bounds(&probe[..read]);
+    let bytes = &probe[start..end.min(read)];
     // PARSER-224: locate the confirmed base offset, then drain frames until one
     // carries usable audio properties (mirrors aac_reader_c::read_headers).
-    let base = find_consecutive_frames(bytes, MIN_CONFIRM_FRAMES).ok_or(ParseError::Unrecognised)?;
+    let base = find_probe_frames(bytes).ok_or(ParseError::Unrecognised)?;
     let mut header = drain_to_usable_header(&bytes[base..]).ok_or(ParseError::Unrecognised)?;
 
     // PARSER-215: raw AAC identification promotes ADTS headers with sample
@@ -1077,6 +1087,52 @@ impl Reader for AacReader {
     });
     Ok(())
   }
+}
+
+fn find_probe_frames(bytes: &[u8]) -> Option<usize> {
+  find_frames_at_start(bytes, STRICT_PROBE_BYTES, MIN_CONFIRM_FRAMES)
+    .or_else(|| {
+      find_frames_in_windows(
+        bytes,
+        &[STRICT_PROBE_BYTES, 256 * 1024, 512 * 1024, EXTENDED_PROBE_BYTES],
+        AMBIGUOUS_PROBE_FRAMES_64,
+      )
+    })
+    .or_else(|| find_frames_at_start(bytes, START_ONLY_PROBE_BYTES, 1))
+    .or_else(|| {
+      find_frames_in_windows(
+        bytes,
+        &[
+          START_ONLY_PROBE_BYTES,
+          64 * 1024,
+          STRICT_PROBE_BYTES,
+          256 * 1024,
+          512 * 1024,
+          EXTENDED_PROBE_BYTES,
+        ],
+        AMBIGUOUS_PROBE_FRAMES_20,
+      )
+    })
+}
+
+fn find_frames_at_start(bytes: &[u8], window_size: usize, num_required_frames: usize) -> Option<usize> {
+  let window = &bytes[..bytes.len().min(window_size)];
+  let offset = find_consecutive_frames(window, num_required_frames)?;
+  if offset == 0 {
+    Some(offset)
+  } else {
+    None
+  }
+}
+
+fn find_frames_in_windows(bytes: &[u8], windows: &[usize], num_required_frames: usize) -> Option<usize> {
+  for &window_size in windows {
+    let window = &bytes[..bytes.len().min(window_size)];
+    if let Some(offset) = find_consecutive_frames(window, num_required_frames) {
+      return Some(offset);
+    }
+  }
+  None
 }
 
 pub(crate) fn format_aac_profile(profile: u32) -> String {
@@ -1358,11 +1414,27 @@ mod tests {
   }
 
   #[test]
-  fn probe_rejects_single_header() {
+  fn probe_accepts_single_header_at_start() {
     let mut bytes = build_adts_frame(1, 3, 2);
     bytes.extend(vec![0x00u8; 64]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(AacReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_short_midfile_run() {
+    let mut bytes = vec![0x00u8; 16];
+    bytes.extend(build_adts_stream(8, 1, 3, 2));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!AacReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_later_sixty_four_frame_run() {
+    let mut bytes = vec![0x00u8; 200 * 1024];
+    bytes.extend(build_adts_stream(64, 1, 3, 2));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(AacReader.probe(&mut s).unwrap());
   }
 
   #[test]

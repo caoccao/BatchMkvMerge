@@ -1,6 +1,6 @@
 # Blu-ray MPLS Playlist Parser
 
-Implementation progress: 82%
+Implementation progress: 86%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The MPLS parser recognises Blu-ray playlist files, resolves referenced stream cl
 - Binary parser: `src-tauri/src/media_metadata/mpls/parser.rs`
 - Upstream basis: `../mkvtoolnix/src/common/bluray/mpls.cpp`, `../mkvtoolnix/src/common/bluray/mpls.h`, `../mkvtoolnix/src/common/mm_mpls_multi_file_io.cpp`, MPEG-TS playlist hooks in `../mkvtoolnix/src/input/r_mpeg_ts.cpp`
 
-`parser.rs` validates the MPLS header, version, playlist offsets, play items, sub paths, sub play items, STN stream entries, and chapter marks. `mod.rs` resolves `STREAM/*.m2ts` files, parses available segments through the MPEG-TS reader, merges tracks by PID, records playlist metadata, and applies STN languages to matching tracks.
+`parser.rs` validates the MPLS header, version, playlist offsets, play items, sub paths, sub play items, STN stream entries, and chapter marks. `mod.rs` resolves `STREAM/*.m2ts` files, parses available segments through the MPEG-TS reader, merges tracks by PID, records playlist metadata, mirrors the playlist chapter count into the standard `MediaMetadata.chapters` summary, and applies STN languages to matching tracks (PARSER-353).
 
 ## Data Structures
 
@@ -32,8 +32,4 @@ Key structures are `Playlist`, `PlayItem`, `SubPath`, `SubPlayItem`, `SubPlayIte
 
 ## Gaps and Handling
 
-Rust does not use CLPI metadata, does not implement true multi-file packet IO or timestamp continuity, and does not fully surface chapter names or angle/multiclip details. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing.
-
-## Open Issues
-
-- `PARSER-353` - The playlist chapter count is recorded only in `container.properties.playlist.chapters`. mkvtoolnix also emits the standard chapter identification result through `id_result_chapters(m_mpls_chapters.size())`, so native callers that read `MediaMetadata.chapters` see zero entries for MPLS playlists that upstream reports as having chapters.
+Rust does not use CLPI metadata, does not implement true multi-file packet IO or timestamp continuity, and does not fully surface chapter names or angle/multiclip details. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing, but playlists with chapter marks now expose both playlist-specific chapter metadata and the standard chapter summary that mkvtoolnix reports during identification.
