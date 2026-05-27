@@ -247,6 +247,7 @@ fn parses_avc_baseline_1080p() {
   bytes.extend_from_slice(&[66u8, 0u8, 40u8]);
   bytes.extend(tail);
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]);
   let path = write_tempfile(&bytes, "h264");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);
@@ -300,6 +301,7 @@ fn parses_hevc_main10_1080p() {
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x42, 0x01]);
   bytes.extend(tail);
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50]);
   let path = write_tempfile(&bytes, "h265");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

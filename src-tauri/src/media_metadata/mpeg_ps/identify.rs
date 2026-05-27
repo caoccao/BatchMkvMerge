@@ -190,7 +190,7 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> Option<(Option<VideoTrac
   match codec.kind {
     TrackKind::Video => {
       if codec.id == "V_MPEG4/ISO/AVC" {
-        let sps = first_avc_sps(payload)?;
+        let sps = avc::reader::sps_from_complete_annex_b(payload)?;
         let mut v = VideoTrackProperties::default();
         v.pixel_dimensions = Some(Dimensions2D {
           width: sps.display_width,
@@ -210,7 +210,7 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> Option<(Option<VideoTrac
       if matches!(codec.id, "V_MPEG1" | "V_MPEG2") {
         // Bare PS video streams default to MPEG-1/2, but mkvtoolnix first
         // sniffs whether the elementary payload is Annex B AVC.
-        if let Some(sps) = first_avc_sps(payload) {
+        if let Some(sps) = avc::reader::sps_from_complete_annex_b(payload) {
           codec.id = "V_MPEG4/ISO/AVC";
           codec.name = "AVC/H.264";
           let mut v = VideoTrackProperties::default();
@@ -219,6 +219,9 @@ fn decode_payload(codec: &mut Codec, payload: &[u8]) -> Option<(Option<VideoTrac
             height: sps.display_height,
           });
           return Some((Some(v), None));
+        }
+        if !mpeg_video::looks_like_mpeg_video_es(payload) {
+          return None;
         }
         let seq = mpeg_video::decode_sequence_header(payload)?;
         if seq.horizontal_size != 0 && seq.vertical_size != 0 {
@@ -305,18 +308,6 @@ fn decode_lpcm_header(payload: &[u8]) -> Option<(u32, u32, u32)> {
     return None;
   }
   Some((channels, sample_rate, bits_per_sample))
-}
-
-fn first_avc_sps(payload: &[u8]) -> Option<avc::sps::AvcSps> {
-  for nal in avc::nal::split_nal_units(payload) {
-    if nal.nal_unit_type == 7 {
-      let rbsp = avc::nal::strip_emulation_prevention(nal.payload);
-      if let Ok(sps) = avc::sps::parse(&rbsp) {
-        return Some(sps);
-      }
-    }
-  }
-  None
 }
 
 pub fn finalise(observations: Vec<StreamObservation>, out: &mut MediaMetadata) {
@@ -426,7 +417,7 @@ mod tests {
   }
 
   fn video_payload() -> Vec<u8> {
-    mpeg_video::build_sequence_header(720, 480, 4)
+    mpeg_video::build_probe_stream(720, 480, 4)
   }
 
   fn mpeg_audio_payload() -> Vec<u8> {
@@ -706,6 +697,15 @@ mod tests {
     let v = m.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().width, 720);
     assert_eq!(v.pixel_dimensions.unwrap().height, 480);
+  }
+
+  #[test]
+  fn isolated_mpeg_sequence_header_is_dropped() {
+    // PARSER-347: a bare sequence header exposes dimensions but is not enough
+    // evidence for mkvtoolnix's video probe; require picture + slice state.
+    let mut m = MediaMetadata::new("weak.mpg", 0);
+    finalise(vec![obs_payload(0xE0, None, None, mpeg_video::build_sequence_header(720, 480, 4))], &mut m);
+    assert!(m.tracks.is_empty());
   }
 
   #[test]

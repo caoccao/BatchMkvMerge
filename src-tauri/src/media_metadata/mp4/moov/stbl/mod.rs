@@ -33,8 +33,10 @@
 //! (sample-to-chunk map) + `stco` / `co64` (chunk offsets) + `stsz` / `stz2`
 //! (sample sizes), capped at [`MAX_INDEX_SAMPLES`] samples / [`MAX_INDEX_BYTES`]
 //! aggregate bytes so a tiny-sample stream never makes us build an unbounded
-//! table.  We still never enter `mdat` payloads — only header tables.  `stss`
-//! / `ctts` stay skipped (keyframe / composition data isn't needed here).
+//! table.  The byte cap matches the largest first-sample verification window
+//! (HEVC Annex B salvage, 1 MiB).  We still never enter `mdat` payloads — only
+//! header tables.  `stss` / `ctts` stay skipped (keyframe / composition data
+//! isn't needed here).
 
 pub mod stsc;
 pub mod stsd;
@@ -48,12 +50,13 @@ use crate::media_metadata::mp4::atom::{self, BoxHeader, ChildAction};
 
 use super::trak::TrackBuilder;
 
-/// Hard cap on how many samples the bounded index reconstructs.  16 384 one-byte
-/// samples is the worst case for collecting the 16 KiB first-bytes window.
-pub const MAX_INDEX_SAMPLES: usize = 16_384;
-/// Hard cap on the aggregate bytes the index promises to cover — matches the
-/// largest first-bytes window the verification path ever requests.
-pub const MAX_INDEX_BYTES: u64 = 16_384;
+/// Hard cap on how many samples the bounded index reconstructs.  1 MiB of
+/// one-byte samples is the worst case for collecting the largest first-bytes
+/// window used by verification.
+pub const MAX_INDEX_SAMPLES: usize = 1024 * 1024;
+/// Hard cap on the aggregate bytes the index promises to cover — matches HEVC
+/// Annex B salvage's maximum first-sample read.
+pub const MAX_INDEX_BYTES: u64 = 1024 * 1024;
 
 /// Raw sample-table inputs collected during the `stbl` walk.  The index is
 /// built once all of them are known (sub-box order is not guaranteed).
@@ -294,7 +297,7 @@ fn read_stz2(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, V
 
 /// Read the chunk offsets from an `stco` box: FullBox(4) + entry_count(4) +
 /// entry_count × u32.  Bounded by [`MAX_INDEX_SAMPLES`] (every chunk holds at
-/// least one sample, so more chunks than that can't extend a 16 KiB read).
+/// least one sample, so more chunks than that can't extend the 1 MiB read).
 fn read_chunk_offsets_32(src: &mut FileSource, header: &BoxHeader) -> Result<Vec<u64>, ParseError> {
   let payload = header.payload_size().unwrap_or(0);
   if payload < 8 {
@@ -580,15 +583,26 @@ mod tests {
 
   #[test]
   fn first_samples_stops_at_byte_budget() {
-    // One chunk, many samples each 8192 bytes — index stops once it covers the
-    // 16 KiB window (2 samples).
-    let sizes = vec![8192u32; 8];
+    // One chunk, samples large enough that the second one covers the 1 MiB
+    // HEVC Annex B salvage window.
+    let sizes = vec![600 * 1024u32; 3];
     let mut children = stsz_per_sample(&sizes);
     children.extend(stco(&[0]));
-    children.extend(stsc_box(&[(1, 8, 1)]));
+    children.extend(stsc_box(&[(1, 3, 1)]));
     let b = run_stbl(children);
     assert_eq!(b.first_samples.len(), 2);
-    assert_eq!(b.first_samples, vec![(0, 8192), (8192, 8192)]);
+    assert_eq!(b.first_samples, vec![(0, 600 * 1024), (600 * 1024, 600 * 1024)]);
+  }
+
+  #[test]
+  fn first_samples_keeps_small_samples_past_old_sixteen_kib_window() {
+    let sizes = vec![1u32; 20_000];
+    let mut children = stsz_per_sample(&sizes);
+    children.extend(stco(&[1000]));
+    children.extend(stsc_box(&[(1, 20_000, 1)]));
+    let b = run_stbl(children);
+    assert_eq!(b.first_samples.len(), 20_000);
+    assert_eq!(b.first_samples[16_384], (17_384, 1));
   }
 
   #[test]

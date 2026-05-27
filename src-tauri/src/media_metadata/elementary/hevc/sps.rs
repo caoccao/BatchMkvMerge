@@ -23,6 +23,7 @@
 //! - pic_width / pic_height (luma)
 //! - bit_depth_luma / bit_depth_chroma
 //! - conformance_window cropping
+//! - VUI sample aspect ratio, timing, and bitstream-restriction fields
 
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::bit_reader::BitReader;
@@ -51,6 +52,8 @@ pub struct HevcSps {
   pub par_num: u32,
   pub par_den: u32,
   pub default_duration_ns: Option<u64>,
+  pub min_spatial_segmentation_idc: u16,
+  pub parallelism_type: u8,
   // ----- profile_tier_level fields the HEVCDecoderConfigurationRecord needs
   // (PARSER-255).  Ported from `profile_tier_copy`,
   // `../mkvtoolnix/src/common/hevc/util.cpp:62-103`.
@@ -114,6 +117,8 @@ struct HevcTailInfo {
   par_num: u32,
   par_den: u32,
   default_duration_ns: Option<u64>,
+  min_spatial_segmentation_idc: u16,
+  parallelism_type: u8,
 }
 
 pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
@@ -178,6 +183,8 @@ pub fn parse(rbsp: &[u8]) -> Result<HevcSps, ParseError> {
     par_num: tail.par_num,
     par_den: tail.par_den,
     default_duration_ns: tail.default_duration_ns,
+    min_spatial_segmentation_idc: tail.min_spatial_segmentation_idc,
+    parallelism_type: tail.parallelism_type,
     profile_space: ptl.profile_space,
     profile_compatibility_flag: ptl.profile_compatibility_flag,
     progressive_source_flag: ptl.progressive_source_flag,
@@ -249,7 +256,7 @@ fn parse_sps_tail(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32) -> Res
   if !vui_parameters_present {
     return Ok(HevcTailInfo::default());
   }
-  parse_vui(reader)
+  parse_vui(reader, max_sub_layers_minus1)
 }
 
 /// Port of `scaling_list_data_copy` (`util.cpp:188-209`).
@@ -346,8 +353,9 @@ fn malformed(reason: &'static str) -> ParseError {
 }
 
 /// Decode the VUI parameters mkvtoolnix consumes, capturing the sample aspect
-/// ratio (PARSER-240) and frame timing (`vui_parameters_copy`, `util.cpp:346-417`).
-fn parse_vui(reader: &mut BitReader<'_>) -> Result<HevcTailInfo, ParseError> {
+/// ratio, frame timing, and bitstream-restriction fields
+/// (`vui_parameters_copy`, `util.cpp:346-436`).
+fn parse_vui(reader: &mut BitReader<'_>, max_sub_layers_minus1: u32) -> Result<HevcTailInfo, ParseError> {
   let mut info = HevcTailInfo::default();
   // aspect_ratio_info_present_flag
   if reader.read_bit()? {
@@ -401,8 +409,115 @@ fn parse_vui(reader: &mut BitReader<'_>) -> Result<HevcTailInfo, ParseError> {
       info.default_duration_ns =
         Some((num_units_in_tick as u128 * 1_000_000_000u128 / time_scale as u128) as u64);
     }
+    if reader.read_bit()? {
+      // vui_poc_proportional_to_timing_flag
+      let _ = reader.read_ue()?; // vui_num_ticks_poc_diff_one_minus1
+    }
+    if reader.read_bit()? {
+      // vui_hrd_parameters_present_flag
+      skip_hrd_parameters(reader, true, max_sub_layers_minus1)?;
+    }
+  }
+  if reader.read_bit()? {
+    // bitstream_restriction_flag
+    let tiles_fixed_structure = reader.read_bit()?;
+    reader.skip_bits(2)?; // motion_vectors_over_pic_boundaries_flag + restricted_ref_pic_lists_flag
+    let min_spatial = reader.read_ue()?.min(0x0fff);
+    info.min_spatial_segmentation_idc = min_spatial as u16;
+    // The hvcC field is a compact two-bit advisory.  When the VUI says a
+    // fixed tile structure is present alongside min_spatial_segmentation_idc,
+    // carry that as tile-based parallelism; otherwise keep mkvtoolnix's zero.
+    if tiles_fixed_structure && min_spatial > 0 {
+      info.parallelism_type = 2;
+    }
+    let _ = reader.read_ue()?; // max_bytes_per_pic_denom
+    let _ = reader.read_ue()?; // max_bits_per_min_cu_denom
+    let _ = reader.read_ue()?; // log2_max_mv_length_horizontal
+    let _ = reader.read_ue()?; // log2_max_mv_length_vertical
   }
   Ok(info)
+}
+
+fn skip_hrd_parameters(
+  reader: &mut BitReader<'_>,
+  common_inf_present: bool,
+  max_sub_layers_minus1: u32,
+) -> Result<(), ParseError> {
+  if max_sub_layers_minus1 > 7 {
+    return Err(malformed("max_sub_layers_minus1 out of range"));
+  }
+  let mut nal_hrd_parameters_present = false;
+  let mut vcl_hrd_parameters_present = false;
+  let mut sub_pic_hrd_params_present = false;
+  if common_inf_present {
+    nal_hrd_parameters_present = reader.read_bit()?;
+    vcl_hrd_parameters_present = reader.read_bit()?;
+    if nal_hrd_parameters_present || vcl_hrd_parameters_present {
+      sub_pic_hrd_params_present = reader.read_bit()?;
+      if sub_pic_hrd_params_present {
+        reader.skip_bits(8)?; // tick_divisor_minus2
+        reader.skip_bits(5)?; // du_cpb_removal_delay_increment_length_minus1
+        reader.skip_bits(1)?; // sub_pic_cpb_params_in_pic_timing_sei_flag
+        reader.skip_bits(5)?; // dpb_output_delay_du_length_minus1
+      }
+      reader.skip_bits(4)?; // bit_rate_scale
+      reader.skip_bits(4)?; // cpb_size_scale
+      if sub_pic_hrd_params_present {
+        reader.skip_bits(4)?; // cpb_size_du_scale
+      }
+      reader.skip_bits(5)?; // initial_cpb_removal_delay_length_minus1
+      reader.skip_bits(5)?; // au_cpb_removal_delay_length_minus1
+      reader.skip_bits(5)?; // dpb_output_delay_length_minus1
+    }
+  }
+
+  for _ in 0..=max_sub_layers_minus1 {
+    let fixed_pic_rate_general = reader.read_bit()?;
+    let mut fixed_pic_rate_within_cvs = fixed_pic_rate_general;
+    if !fixed_pic_rate_general {
+      fixed_pic_rate_within_cvs = reader.read_bit()?;
+    }
+    let mut low_delay_hrd = false;
+    if fixed_pic_rate_within_cvs {
+      let _ = reader.read_ue()?; // elemental_duration_in_tc_minus1
+    } else {
+      low_delay_hrd = reader.read_bit()?;
+    }
+    let mut cpb_cnt_minus1 = 0;
+    if !low_delay_hrd {
+      cpb_cnt_minus1 = reader.read_ue()?;
+      if cpb_cnt_minus1 > 31 {
+        return Err(malformed("cpb_cnt_minus1 out of range"));
+      }
+    }
+    if nal_hrd_parameters_present {
+      skip_sub_layer_hrd_parameters(reader, cpb_cnt_minus1 + 1, sub_pic_hrd_params_present)?;
+    }
+    if vcl_hrd_parameters_present {
+      skip_sub_layer_hrd_parameters(reader, cpb_cnt_minus1 + 1, sub_pic_hrd_params_present)?;
+    }
+  }
+  Ok(())
+}
+
+fn skip_sub_layer_hrd_parameters(
+  reader: &mut BitReader<'_>,
+  cpb_count: u32,
+  sub_pic_hrd_params_present: bool,
+) -> Result<(), ParseError> {
+  if cpb_count == 0 || cpb_count > 32 {
+    return Err(malformed("cpb_count out of range"));
+  }
+  for _ in 0..cpb_count {
+    let _ = reader.read_ue()?; // bit_rate_value_minus1
+    let _ = reader.read_ue()?; // cpb_size_value_minus1
+    if sub_pic_hrd_params_present {
+      let _ = reader.read_ue()?; // cpb_size_du_value_minus1
+      let _ = reader.read_ue()?; // bit_rate_du_value_minus1
+    }
+    reader.skip_bits(1)?; // cbr_flag
+  }
+  Ok(())
 }
 
 /// The general profile/tier/level fields the configuration record carries
@@ -582,6 +697,8 @@ mod tests {
       w.write_bits(1, 32); // vui_num_units_in_tick
       w.write_bits(30, 32); // vui_time_scale
       w.write_bit(false); // vui_poc_proportional_to_timing_flag
+      w.write_bit(false); // vui_hrd_parameters_present_flag
+      w.write_bit(false); // bitstream_restriction_flag
     }
   }
 
@@ -665,6 +782,9 @@ mod tests {
     w.write_bit(true); // vui_timing_info_present_flag
     w.write_bits(1, 32); // vui_num_units_in_tick
     w.write_bits(30, 32); // vui_time_scale
+    w.write_bit(false); // vui_poc_proportional_to_timing_flag
+    w.write_bit(false); // vui_hrd_parameters_present_flag
+    w.write_bit(false); // bitstream_restriction_flag
   }
 
   fn build_main10_1080p_sps_with_structures(aspect_idc: u8, par: Option<(u16, u16)>) -> Vec<u8> {
@@ -760,6 +880,69 @@ mod tests {
     w.into_bytes()
   }
 
+  fn build_main10_1080p_sps_with_bitstream_restriction() -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4);
+    w.write_bits(0, 3);
+    w.write_bit(true);
+    w.write_bits(0, 2);
+    w.write_bit(false);
+    w.write_bits(2, 5);
+    w.write_bits(0, 32);
+    w.write_bits(0, 48);
+    w.write_bits(120, 8);
+    w.write_ue(0);
+    w.write_ue(1);
+    w.write_ue(1920);
+    w.write_ue(1080);
+    w.write_bit(false);
+    w.write_ue(2);
+    w.write_ue(2);
+    write_tail_with_bitstream_restriction(&mut w, true, 0x123);
+    w.into_bytes()
+  }
+
+  fn write_tail_with_bitstream_restriction(w: &mut BitWriter, tiles_fixed: bool, min_spatial: u32) {
+    w.write_ue(4); // log2_max_pic_order_cnt_lsb_minus4
+    w.write_bit(false); // sps_sub_layer_ordering_info_present_flag
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(false); // scaling_list_enabled_flag
+    w.write_bit(false); // amp_enabled_flag
+    w.write_bit(false); // sample_adaptive_offset_enabled_flag
+    w.write_bit(false); // pcm_enabled_flag
+    w.write_ue(0); // num_short_term_ref_pic_sets
+    w.write_bit(false); // long_term_ref_pics_present_flag
+    w.write_bit(false); // sps_temporal_mvp_enabled_flag
+    w.write_bit(false); // strong_intra_smoothing_enabled_flag
+    w.write_bit(true); // vui_parameters_present_flag
+    w.write_bit(false); // aspect_ratio_info_present_flag
+    w.write_bit(false); // overscan_info_present_flag
+    w.write_bit(false); // video_signal_type_present_flag
+    w.write_bit(false); // chroma_loc_info_present_flag
+    w.write_bit(false); // neutral_chroma_indication_flag
+    w.write_bit(false); // field_seq_flag
+    w.write_bit(false); // frame_field_info_present_flag
+    w.write_bit(false); // default_display_window_flag
+    w.write_bit(false); // vui_timing_info_present_flag
+    w.write_bit(true); // bitstream_restriction_flag
+    w.write_bit(tiles_fixed); // tiles_fixed_structure_flag
+    w.write_bit(true); // motion_vectors_over_pic_boundaries_flag
+    w.write_bit(false); // restricted_ref_pic_lists_flag
+    w.write_ue(min_spatial); // min_spatial_segmentation_idc
+    w.write_ue(0); // max_bytes_per_pic_denom
+    w.write_ue(0); // max_bits_per_min_cu_denom
+    w.write_ue(0); // log2_max_mv_length_horizontal
+    w.write_ue(0); // log2_max_mv_length_vertical
+  }
+
   /// Build an SPS whose VUI carries the known-invalid default-display-window
   /// pattern (`peek_bits(21) == 0x100000`) immediately followed by valid timing.
   /// mkvtoolnix's workaround must reinterpret that 1-bit as
@@ -818,6 +1001,7 @@ mod tests {
     w.write_bits(30, 32); // vui_time_scale → 30
     w.write_bit(false); // vui_poc_proportional_to_timing_flag
     w.write_bit(false); // vui_hrd_parameters_present_flag
+    w.write_bit(false); // bitstream_restriction_flag
     w.write_bits(0, 8); // padding so remaining_bits at the peek point ≥ 68
     w.into_bytes()
   }
@@ -867,6 +1051,14 @@ mod tests {
     let rbsp = build_main10_1080p_sps_with_timing();
     let sps = parse(&rbsp).unwrap();
     assert_eq!(sps.default_duration_ns, Some(33_333_333));
+  }
+
+  #[test]
+  fn parses_bitstream_restriction_for_hvcc_fields() {
+    let rbsp = build_main10_1080p_sps_with_bitstream_restriction();
+    let sps = parse(&rbsp).unwrap();
+    assert_eq!(sps.min_spatial_segmentation_idc, 0x123);
+    assert_eq!(sps.parallelism_type, 2);
   }
 
   // ---- PARSER-239: reach the VUI past scaling-list / ref-pic-set blocks --

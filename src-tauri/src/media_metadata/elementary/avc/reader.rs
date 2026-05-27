@@ -30,7 +30,9 @@ use crate::media_metadata::model::track_properties_video::{
 use crate::media_metadata::mp4::codec_specific::hex_encode;
 use crate::media_metadata::reader::Reader;
 
-use super::nal::{self, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS};
+use super::nal::{
+  self, NAL_UNIT_TYPE_AUD, NAL_UNIT_TYPE_IDR_SLICE, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SLICE, NAL_UNIT_TYPE_SPS,
+};
 use super::sps;
 
 const PROBE_CHUNK_BYTES: usize = 1024 * 1024;
@@ -157,6 +159,17 @@ fn starts_with_mpeg_ts_sync(buf: &[u8]) -> bool {
   buf.first() == Some(&0x47)
 }
 
+pub(crate) fn sps_from_complete_annex_b(buf: &[u8]) -> Option<sps::AvcSps> {
+  let units = nal::split_nal_units(buf);
+  let headers = extract_headers(&units)?;
+  if !has_access_unit_evidence(&units) {
+    return None;
+  }
+  let sps_unit = headers.sps?;
+  let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
+  sps::parse(&rbsp).ok()
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AvcHeaders<'a> {
   sps: Option<nal::NalUnit<'a>>,
@@ -200,11 +213,20 @@ fn extract_headers<'a>(units: &'a [nal::NalUnit<'a>]) -> Option<AvcHeaders<'a>> 
       headers.pps = Some(*unit);
     }
   }
-  if headers.sps.is_some() && headers.pps.is_some() {
+  if headers.sps.is_some() && headers.pps.is_some() && has_access_unit_evidence(units) {
     Some(headers)
   } else {
     None
   }
+}
+
+fn has_access_unit_evidence(units: &[nal::NalUnit<'_>]) -> bool {
+  units.iter().any(|unit| {
+    matches!(
+      unit.nal_unit_type,
+      NAL_UNIT_TYPE_SLICE | NAL_UNIT_TYPE_IDR_SLICE | NAL_UNIT_TYPE_AUD
+    )
+  })
 }
 
 fn nal_bytes(unit: nal::NalUnit<'_>) -> Vec<u8> {
@@ -291,6 +313,7 @@ mod tests {
     bytes.extend_from_slice(&[66u8, 0u8, 40u8]);
     bytes.extend(build_baseline_1080p_tail_with_vui(true));
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x68, 0xCE]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x09, 0xF0]);
     bytes
   }
 
@@ -355,6 +378,15 @@ mod tests {
     let mut bytes = build_avc_with_baseline_1080p_sps();
     let pps_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x68]).unwrap();
     bytes.truncate(pps_pos);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!AvcReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_parameter_sets_without_access_unit_evidence() {
+    let mut bytes = build_avc_with_baseline_1080p_sps();
+    let aud_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x09]).unwrap();
+    bytes.truncate(aud_pos);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!AvcReader.probe(&mut s).unwrap());
   }

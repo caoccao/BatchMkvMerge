@@ -23,10 +23,10 @@
 //! embedded content is recognised as SRT or SSA/ASS.  Unknown content is
 //! dropped (`avi_subs_demuxer_t::TYPE_UNKNOWN` is never pushed).
 //!
-//! To stay inside the header-only / deadline model we never scan the whole
-//! `movi` list: we walk chunk *headers* only, reading the payload of just the
-//! first `NNtx` chunk for each text stream and stopping once every text track
-//! has been resolved or a small scan budget is exhausted.
+//! To stay inside the header-only / deadline model we walk `movi` chunk
+//! *headers* only, reading the payload of just the first `NNtx` chunk for each
+//! text stream and stopping once every text track has been resolved or the
+//! caller's deadline expires.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -39,15 +39,6 @@ use super::riff::{self, ChunkHeader};
 const GAB2_TAG: &[u8; 4] = b"GAB2";
 /// GAB2 block id carrying the subtitle file content.
 const GAB2_ID_SUBTITLES: u16 = 4;
-
-/// Maximum number of `movi` child-chunk headers we are willing to inspect
-/// before giving up.  Keeps the scan bounded for pathological files where the
-/// text chunks (if any) never appear near the front of the movie data.
-const MAX_MOVI_CHUNK_SCANS: u32 = 4096;
-/// Maximum size of a single text chunk we will read into memory.
-const MAX_TEXT_CHUNK_BYTES: u64 = 1024 * 1024;
-/// Maximum size of the GAB2 subtitle payload we decode + classify.
-const MAX_SUBTITLE_BYTES: usize = 1024 * 1024;
 
 /// The recognised subtitle kinds.  Mirrors `avi_subs_demuxer_t::TYPE_*`; the
 /// `TYPE_UNKNOWN` case is represented by `None` (the demuxer is dropped).
@@ -105,9 +96,9 @@ fn text_chunk_tag(stream_index: usize) -> [u8; 4] {
 
 /// Walk the `movi` LIST looking for the first text chunk of each `text_streams`
 /// entry, parse its GAB2 payload, and return the recognised subtitle demuxers
-/// **in text-stream order**.  Bounded: only chunk headers are scanned, only the
-/// first matching chunk per stream is read, and the scan stops early once every
-/// text stream is resolved.
+/// **in text-stream order**.  Only chunk headers are scanned, only the first
+/// matching chunk per stream is read, and the scan stops early once every text
+/// stream is resolved.
 pub fn parse_subtitle_chunks(
   src: &mut FileSource,
   movi: &ChunkHeader,
@@ -129,10 +120,8 @@ pub fn parse_subtitle_chunks(
   let stream_end = src.length();
   src.seek_to(first_child)?;
 
-  let mut scans = 0u32;
-  while remaining > 0 && scans < MAX_MOVI_CHUNK_SCANS {
+  while remaining > 0 {
     deadline.check("avi::subtitles")?;
-    scans += 1;
     let pos = src.position();
     if pos >= parent_end || parent_end - pos < 8 {
       break;
@@ -165,7 +154,7 @@ pub fn parse_subtitle_chunks(
       .position(|&idx| child.kind == text_chunk_tag(idx))
       .filter(|&slot| !resolved[slot]);
     if let Some(slot) = slot {
-      let bytes = riff::read_payload(src, &child, MAX_TEXT_CHUNK_BYTES)?;
+      let bytes = riff::read_payload(src, &child, deadline.max_element_size())?;
       recognised[slot] = classify_gab2(&bytes);
       resolved[slot] = true;
       remaining -= 1;
@@ -210,8 +199,7 @@ pub fn classify_gab2(bytes: &[u8]) -> Option<AviSubtitleDemuxer> {
     let data_start = pos + 6;
     let data_end = data_start.saturating_add(len).min(bytes.len());
     if id == GAB2_ID_SUBTITLES {
-      let capped = data_end.min(data_start + MAX_SUBTITLE_BYTES);
-      subtitle = Some(bytes[data_start..capped].to_vec());
+      subtitle = Some(bytes[data_start..data_end].to_vec());
     }
     pos = data_end;
   }

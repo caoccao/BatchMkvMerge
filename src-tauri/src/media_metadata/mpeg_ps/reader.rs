@@ -47,7 +47,10 @@ use super::{pes, stream_map};
 // the ~1 second deadline contract.
 const PROBE_BYTES: usize = 10 * 1024 * 1024;
 const PROBE_SCAN: usize = 32 * 1024;
-const STREAM_PAYLOAD_CAP: usize = 256 * 1024;
+// PARSER-347: keep each elementary payload for the whole bounded probe window.
+// A smaller per-stream cap can stop before mkvtoolnix has seen enough video
+// state (sequence + picture + slice, or complete AVC access-unit evidence).
+const STREAM_PAYLOAD_CAP: usize = PROBE_BYTES;
 const MAX_STREAMS: usize = 64;
 const PACKET_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, PACK_HEADER];
 
@@ -281,7 +284,7 @@ mod tests {
   }
 
   fn video_payload() -> Vec<u8> {
-    mpeg_video::build_sequence_header(720, 480, 4)
+    mpeg_video::build_probe_stream(720, 480, 4)
   }
 
   fn audio_payload() -> Vec<u8> {
@@ -483,10 +486,12 @@ mod tests {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
-    // Sequence header: 0x000001B3 + 720x480 + aspect/frame-rate + padding.
-    let seq = [
+    // Sequence header plus picture/slice evidence.
+    let mut seq = vec![
       0x00, 0x00, 0x01, 0xB3, 0x2D, 0x01, 0xE0, 0x13, 0x00, 0x00, 0x00, 0x00,
     ];
+    seq.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
+    seq.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
     let pts = [0x21u8, 0x11, 0x11, 0x11, 0x11]; // MPEG-1 PTS-only marker + value
     let pkt_len = (pts.len() + seq.len()) as u16;
     bytes.extend_from_slice(&start_code(0xE0));

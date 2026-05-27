@@ -470,7 +470,7 @@ mod tests {
     bytes.extend(packet::build_packet_with_pointer(pmt_pid, &pmt_section));
     for (stream_type, pid, _descs) in streams {
       match stream_type {
-        0x02 => bytes.extend(pes_packet(*pid, &mpeg_video::build_sequence_header(1280, 720, 4))),
+        0x02 => bytes.extend(pes_packet(*pid, &mpeg_video::build_probe_stream(1280, 720, 4))),
         // PARSER-206: AAC enrichment now needs five consecutive frames.
         0x0F => bytes.extend(pes_packet(*pid, &aac::build_adts_stream(6, 1, 3, 2))),
         _ => {}

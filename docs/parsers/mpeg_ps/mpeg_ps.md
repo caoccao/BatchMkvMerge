@@ -1,6 +1,6 @@
 # MPEG Program Stream Parser
 
-Implementation progress: 90%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -20,7 +20,7 @@ MPEG audio (bare stream ids `0xC0..0xDF`, defaulted to `A_MPEG/L3`, and PSM stre
 
 Program Stream Map classification is limited to mkvmerge's `found_new_stream` `es_type` switch: `0x01`, `0x02`, `0x03`, `0x04`, `0x0f`, `0x10`, `0x11`, `0x1b`, `0x80`, and `0x81`. Unsupported nonzero PSM stream types are left unclassified and dropped rather than falling back to a bare stream-id guess; DTS, TrueHD, LPCM, and VobSub handling still comes from private-stream-1 substream ids. PSM AAC (`0x0f`/`0x11`) and MPEG-4 Visual (`0x10`) entries are recognised at map level but not emitted because mkvmerge's MPEG-PS header path has no supported `new_stream_*` probe for them. The PSM parser enforces mkvmerge's declared length bounds (`1..=1018`) and clamps the elementary-stream map to the declared body before the CRC.
 
-Finalisation mirrors mkvmerge's blocking behavior for codec probes. MPEG-1/2 video needs a valid sequence header unless the payload sniffs as AVC and yields an SPS; explicit AVC needs an SPS; VC-1 needs an advanced-profile sequence header; MPEG audio, AC-3, DTS, TrueHD, and DVD LPCM each need their corresponding first header to decode. Streams whose bounded accumulated payload never validates are dropped instead of producing default tracks from stream IDs alone. Before track ids are assigned, emitted tracks are sorted by mkvmerge's bucket order (`video`, `audio`, `subtitles`, other) and encoded stream id `((stream_id << 8) | sub_id)`.
+Finalisation mirrors mkvmerge's blocking behavior for codec probes. MPEG-1/2 video needs sequence, picture, and slice evidence (`looks_like_mpeg_video_es`) before its sequence header can contribute dimensions; bare MPEG video that is actually Annex B AVC is promoted only when the AVC helper sees SPS, PPS, and access-unit evidence. Explicit AVC also uses that complete Annex B gate. VC-1 needs an advanced-profile sequence header; MPEG audio, AC-3, DTS, TrueHD, and DVD LPCM each need their corresponding first header to decode. Streams whose accumulated payload never validates are dropped instead of producing default tracks from stream IDs alone. Before track ids are assigned, emitted tracks are sorted by mkvmerge's bucket order (`video`, `audio`, `subtitles`, other) and encoded stream id `((stream_id << 8) | sub_id)` (PARSER-347).
 
 ## Data Structures
 
@@ -38,8 +38,4 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 
 ## Gaps and Handling
 
-Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. PES depacketising handles both MPEG-1 and MPEG-2 optional-header layouts, codec probes block false-positive stream ids, and output ordering follows mkvmerge's identification order.
-
-## Open Issues
-
-- `PARSER-347`: MPEG-PS video probing still accepts weaker evidence than mkvtoolnix and can also stop too early. Local explicit AVC streams are emitted from the first SPS alone, and bare MPEG video streams can be reclassified to AVC from SPS alone or accepted as MPEG-1/2 from a sequence header alone. Upstream first distinguishes AVC from MPEG-1/2 by requiring SPS + PPS + slice/access-unit evidence or MPEG sequence + picture evidence, then runs the AVC parser until `headers_parsed()` or the MPEG video parser until it has a valid frame, I-frame, and following non-B frame. The local `STREAM_PAYLOAD_CAP` of 256 KiB can also miss headers that mkvtoolnix would find while continuing through its probe range.
+Upstream has broader percentage-based scaling above the fixed probe floor, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. The fixed 10 MiB probe range is also the per-stream payload cap, so video evidence can be found anywhere inside the local probe window instead of being truncated by a smaller stream-local limit. PES depacketising handles both MPEG-1 and MPEG-2 optional-header layouts, codec probes block false-positive stream ids, and output ordering follows mkvmerge's identification order.

@@ -28,9 +28,10 @@
 //! }
 //! ```
 //!
-//! We map a known subset of tags onto either container fields
-//! (`title`, `muxing_app`, `date_utc`) or the global `tags.global` bundle
-//! when they don't correspond to anything else.
+//! We map the same identification-time fields mkvtoolnix reads from `ilst`:
+//! title (`©nam`), encoder/muxing app (`©too`), comment (`©cmt`) and cover art
+//! (`covr`).  Other metadata atoms are skipped instead of being surfaced as
+//! generic tags.
 
 use crate::media_metadata::deadline::Deadline;
 use crate::media_metadata::error::ParseError;
@@ -42,12 +43,11 @@ use crate::media_metadata::model::tag::TagEntry;
 
 use crate::media_metadata::mp4::atom::{self, BoxHeader, ChildAction};
 
-const TYPE_UTF8: u32 = 1;
-const TYPE_UTF16: u32 = 2;
 const TYPE_JPEG: u32 = 13;
 const TYPE_PNG: u32 = 14;
-const TYPE_SIGNED_INT: u32 = 21;
 const TYPE_BMP: u32 = 27;
+#[cfg(test)]
+const TYPE_UTF8: u32 = 1;
 
 pub fn parse(
   src: &mut FileSource,
@@ -57,38 +57,45 @@ pub fn parse(
 ) -> Result<(), ParseError> {
   atom::walk_children(src, parent, "mp4::ilst", deadline, |src, child| {
     let key = child.kind.0;
-    // PARSER-073: `----` carries reverse-DNS named iTunes metadata.
-    // Decode the embedded `mean`/`name`/`data` sub-boxes and surface
-    // the value as a global tag named `"<mean>:<name>"`.
+    // mkvtoolnix consumes `----:iTunSMPB` internally for encoder delay/padding
+    // and does not expose it in identify output.  We have no encoder-delay
+    // model field, so all freeform atoms are skipped here rather than reported
+    // as extra tags.
     if &key == b"----" {
-      handle_freeform(src, child, deadline, &mut out.tags.global)?;
+      return Ok(ChildAction::Skip);
+    }
+
+    if matches!(&key, b"covr") {
+      let value = match read_cover_value(src, child, deadline) {
+        Ok(v) => v,
+        Err(_) => return Ok(ChildAction::Skip),
+      };
+      if let Some(DataValue::Image { mime_type, length }) = value {
+        let id = (out.attachments.len() as u32) + 1;
+        let extension = primary_extension_for_mime(mime_type);
+        let file_name = format!("cover.{extension}");
+        out.attachments.push(Attachment {
+          id,
+          file_name,
+          mime_type: Some(mime_type.to_string()),
+          description: None,
+          size: length as u64,
+          uid_hex: None,
+        });
+      }
       return Ok(ChildAction::Consumed);
     }
-    let value = match read_data_value(src, child, deadline) {
+
+    if !matches!(&key, b"\xA9nam" | b"\xA9too" | b"\xA9cmt") {
+      return Ok(ChildAction::Skip);
+    }
+
+    let value = match read_text_value(src, child, deadline) {
       Ok(v) => v,
       Err(_) => return Ok(ChildAction::Skip),
     };
     if let Some(value) = value {
-      // PARSER-072: `covr` artwork becomes an `Attachment` with the
-      // appropriate MIME type and declared length.  Mirrors mkvtoolnix's
-      // `r_qtmp4.cpp:1087-1115` cover-attachment creation.
-      if matches!(&key, b"covr") {
-        if let DataValue::Image { mime_type, length } = value {
-          let id = (out.attachments.len() as u32) + 1;
-          let extension = primary_extension_for_mime(mime_type);
-          let file_name = format!("cover.{extension}");
-          out.attachments.push(Attachment {
-            id,
-            file_name,
-            mime_type: Some(mime_type.to_string()),
-            description: None,
-            size: length as u64,
-            uid_hex: None,
-          });
-          return Ok(ChildAction::Consumed);
-        }
-      }
-      route(&key, value, &mut out.container.properties, &mut out.tags.global);
+      route_text(&key, value, &mut out.container.properties, &mut out.tags.global);
     }
     Ok(ChildAction::Consumed)
   })
@@ -103,64 +110,8 @@ fn primary_extension_for_mime(mime: &str) -> &'static str {
   }
 }
 
-fn handle_freeform(
-  src: &mut FileSource,
-  parent: &BoxHeader,
-  deadline: &Deadline,
-  global_tags: &mut Vec<TagEntry>,
-) -> Result<(), ParseError> {
-  let mut mean: Option<String> = None;
-  let mut name: Option<String> = None;
-  let mut value: Option<String> = None;
-  atom::walk_children(src, parent, "mp4::ilst::----", deadline, |src, child| {
-    match &child.kind.0 {
-      b"mean" => {
-        let payload = atom::read_payload(src, child, 4096)?;
-        if payload.len() > 4 {
-          mean = Some(String::from_utf8_lossy(&payload[4..]).into_owned());
-        }
-      }
-      b"name" => {
-        let payload = atom::read_payload(src, child, 4096)?;
-        if payload.len() > 4 {
-          name = Some(String::from_utf8_lossy(&payload[4..]).into_owned());
-        }
-      }
-      b"data" => {
-        let payload = atom::read_payload(src, child, 16 * 1024)?;
-        if payload.len() >= 8 {
-          let type_code = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x00FF_FFFF;
-          let body = &payload[8..];
-          value = match type_code {
-            TYPE_UTF8 => Some(String::from_utf8_lossy(body).into_owned()),
-            TYPE_UTF16 => Some(decode_utf16_be(body)),
-            TYPE_SIGNED_INT => Some(decode_signed_int(body).to_string()),
-            _ => Some(String::from_utf8_lossy(body).trim().to_string()),
-          };
-        }
-      }
-      _ => {}
-    }
-    Ok(ChildAction::Consumed)
-  })?;
-  if let (Some(name), Some(value)) = (name, value) {
-    let tag_name = match mean {
-      Some(m) if !m.is_empty() => format!("{m}:{name}"),
-      _ => name,
-    };
-    global_tags.push(TagEntry {
-      name: tag_name,
-      value,
-      language: None,
-    });
-  }
-  Ok(())
-}
-
 #[derive(Debug, Clone)]
 enum DataValue {
-  Text(String),
-  Int(i64),
   /// PARSER-072: cover-art image payload.  We don't materialise the body;
   /// the declared length plus the detected MIME type are enough to expose
   /// it as an `Attachment`.
@@ -170,17 +121,33 @@ enum DataValue {
   },
 }
 
-/// Text / integer `data` values are buffered up to this cap; image payloads
-/// (`covr` artwork) are never buffered — only their declared length is needed.
-const TEXT_VALUE_CAP: usize = 16 * 1024;
+fn read_text_value(
+  src: &mut FileSource,
+  parent: &BoxHeader,
+  deadline: &Deadline,
+) -> Result<Option<String>, ParseError> {
+  let mut result: Option<String> = None;
+  atom::walk_children(src, parent, "mp4::ilst::tag", deadline, |src, child| {
+    if !child.kind.eq_ascii(b"data") {
+      return Ok(ChildAction::Skip);
+    }
+    let payload = atom::read_payload(src, child, deadline.max_element_size())?;
+    if payload.len() < 8 {
+      return Ok(ChildAction::Consumed);
+    }
+    result = Some(String::from_utf8_lossy(&payload[8..]).trim().to_string());
+    Ok(ChildAction::Consumed)
+  })?;
+  Ok(result)
+}
 
-fn read_data_value(
+fn read_cover_value(
   src: &mut FileSource,
   parent: &BoxHeader,
   deadline: &Deadline,
 ) -> Result<Option<DataValue>, ParseError> {
   let mut result: Option<DataValue> = None;
-  atom::walk_children(src, parent, "mp4::ilst::tag", deadline, |src, child| {
+  atom::walk_children(src, parent, "mp4::ilst::cover", deadline, |src, child| {
     if !child.kind.eq_ascii(b"data") {
       return Ok(ChildAction::Skip);
     }
@@ -188,11 +155,10 @@ fn read_data_value(
     if payload_size < 8 {
       return Ok(ChildAction::Consumed);
     }
-    // The 8-byte fixed prefix is `type_code` (u32) + `locale` (u32).
     let mut head = [0u8; 8];
     src.read_exact(&mut head)?;
     let type_code = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) & 0x00FF_FFFF;
-    // PARSER-162: album art (`covr`) routinely exceeds 16 KiB. We only need
+    // PARSER-162: album art (`covr`) routinely exceeds small text caps. We only need
     // the MIME type and the declared body length, so for image payloads we
     // derive the length from the box size and never buffer the bytes — the
     // walker re-aligns to the child's end. mkvtoolnix likewise records the
@@ -211,16 +177,6 @@ fn read_data_value(
         mime_type: "image/bmp",
         length: body_len,
       }),
-      TYPE_UTF8 | TYPE_UTF16 | TYPE_SIGNED_INT => {
-        let read_len = body_len.min(TEXT_VALUE_CAP);
-        let mut body = vec![0u8; read_len];
-        src.read_exact(&mut body)?;
-        match type_code {
-          TYPE_UTF8 => Some(DataValue::Text(String::from_utf8_lossy(&body).into_owned())),
-          TYPE_UTF16 => Some(DataValue::Text(decode_utf16_be(&body))),
-          _ => Some(DataValue::Int(decode_signed_int(&body))),
-        }
-      }
       _ => None,
     };
     Ok(ChildAction::Consumed)
@@ -228,56 +184,19 @@ fn read_data_value(
   Ok(result)
 }
 
-fn decode_utf16_be(bytes: &[u8]) -> String {
-  let codepoints: Vec<u16> = bytes
-    .chunks_exact(2)
-    .map(|w| u16::from_be_bytes([w[0], w[1]]))
-    .collect();
-  String::from_utf16_lossy(&codepoints)
-}
-
-fn decode_signed_int(bytes: &[u8]) -> i64 {
-  let mut value: i64 = 0;
-  if bytes.is_empty() {
-    return 0;
-  }
-  let sign_extend = bytes[0] & 0x80 != 0;
-  for &b in bytes {
-    value = (value << 8) | b as i64;
-  }
-  let bits = bytes.len() as u32 * 8;
-  if sign_extend && bits < 64 {
-    let mask = !0i64 << bits;
-    value |= mask;
-  }
-  value
-}
-
-fn route(key: &[u8; 4], value: DataValue, container: &mut ContainerProperties, global_tags: &mut Vec<TagEntry>) {
-  let text = match value {
-    DataValue::Text(t) => t,
-    DataValue::Int(i) => i.to_string(),
-    // Cover-art payloads bypass the textual tag route; they're surfaced
-    // as `Attachment` entries by the caller (PARSER-072).
-    DataValue::Image { .. } => return,
-  };
+fn route_text(key: &[u8; 4], text: String, container: &mut ContainerProperties, global_tags: &mut Vec<TagEntry>) {
   match key {
     b"\xA9nam" => container.title = Some(text),
     b"\xA9too" => container.muxing_app = Some(text),
-    b"\xA9day" => container.date_utc = Some(text),
-    _ => {
+    b"\xA9cmt" => {
       global_tags.push(TagEntry {
-        name: key_display(key),
+        name: "comment".to_string(),
         value: text,
         language: None,
       });
     }
+    _ => {}
   }
-}
-
-fn key_display(key: &[u8; 4]) -> String {
-  // Replace the ©  sentinel (0xA9) with the ASCII © glyph for readability.
-  key.iter().map(|b| if *b == 0xA9 { '©' } else { *b as char }).collect()
 }
 
 #[cfg(test)]
@@ -329,35 +248,31 @@ mod tests {
   }
 
   #[test]
-  fn date_into_date_utc() {
-    let payload = build_ilst_tag(b"\xA9day", build_data_box(TYPE_UTF8, b"2024-03-14"));
-    let m = run(payload);
-    assert_eq!(m.container.properties.date_utc.as_deref(), Some("2024-03-14"));
-  }
-
-  #[test]
-  fn artist_routes_to_global_tags() {
-    let payload = build_ilst_tag(b"\xA9ART", build_data_box(TYPE_UTF8, b"Hans Zimmer"));
+  fn comment_extracted_as_supported_global_tag() {
+    let payload = build_ilst_tag(b"\xA9cmt", build_data_box(TYPE_UTF8, b"  Director's cut  "));
     let m = run(payload);
     assert_eq!(m.tags.global.len(), 1);
-    assert_eq!(m.tags.global[0].name, "©ART");
-    assert_eq!(m.tags.global[0].value, "Hans Zimmer");
+    assert_eq!(m.tags.global[0].name, "comment");
+    assert_eq!(m.tags.global[0].value, "Director's cut");
   }
 
   #[test]
-  fn utf16_value_decoded() {
-    // UTF-16 BE "日本"
-    let payload = build_ilst_tag(b"\xA9nam", build_data_box(TYPE_UTF16, &[0x65, 0xE5, 0x67, 0x2C]));
+  fn unsupported_text_atoms_are_ignored() {
+    let mut payload = build_ilst_tag(b"\xA9day", build_data_box(TYPE_UTF8, b"2024-03-14"));
+    payload.extend(build_ilst_tag(b"\xA9ART", build_data_box(TYPE_UTF8, b"Hans Zimmer")));
     let m = run(payload);
-    assert_eq!(m.container.properties.title.as_deref(), Some("日本"));
+    assert!(m.container.properties.date_utc.is_none());
+    assert!(m.tags.global.is_empty());
   }
 
   #[test]
-  fn signed_int_rendered_as_string() {
-    // -1 in 1 byte
-    let payload = build_ilst_tag(b"trkn", build_data_box(TYPE_SIGNED_INT, &[0xFF]));
+  fn long_title_is_not_truncated_by_old_text_cap() {
+    let mut title = vec![b'A'; 20 * 1024];
+    title.extend_from_slice(b"tail");
+    let payload = build_ilst_tag(b"\xA9nam", build_data_box(TYPE_UTF8, &title));
     let m = run(payload);
-    assert_eq!(m.tags.global[0].value, "-1");
+    assert_eq!(m.container.properties.title.as_ref().unwrap().len(), 20 * 1024 + 4);
+    assert!(m.container.properties.title.as_ref().unwrap().ends_with("tail"));
   }
 
   // ---- PARSER-072: covr → attachment --------------------------------
@@ -395,10 +310,10 @@ mod tests {
     assert_eq!(m.attachments[0].file_name, "cover.png");
   }
 
-  // ---- PARSER-073: ---- iTunSMPB extracted as global tag ------------
+  // ---- Freeform metadata is consumed but not exposed ------------------
 
   #[test]
-  fn freeform_atom_extracted_as_global_tag() {
+  fn freeform_itunsmpb_is_not_exposed_as_global_tag() {
     let mean = encode_box(b"mean", &{
       let mut p = vec![0u8; 4]; // version + flags
       p.extend_from_slice(b"com.apple.iTunes");
@@ -415,9 +330,7 @@ mod tests {
     freeform.extend(data);
     let payload = encode_box(b"----", &freeform);
     let m = run(payload);
-    assert_eq!(m.tags.global.len(), 1);
-    assert_eq!(m.tags.global[0].name, "com.apple.iTunes:iTunSMPB");
-    assert!(m.tags.global[0].value.contains("00000840"));
+    assert!(m.tags.global.is_empty());
   }
 
   #[test]
@@ -426,12 +339,5 @@ mod tests {
     let tag = encode_box(b"\xA9nam", &[]);
     let m = run(tag);
     assert!(m.container.properties.title.is_none());
-  }
-
-  #[test]
-  fn signed_int_decodes_positive_and_negative() {
-    assert_eq!(decode_signed_int(&[0x05]), 5);
-    assert_eq!(decode_signed_int(&[0xFF, 0xFB]), -5);
-    assert_eq!(decode_signed_int(&[]), 0);
   }
 }

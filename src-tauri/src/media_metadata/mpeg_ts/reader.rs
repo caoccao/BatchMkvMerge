@@ -50,22 +50,23 @@ const MAX_PACKETS: usize = 64 * 1024;
 const PROBE_BYTES: usize = 16 * 1024;
 const SDT_PID: u16 = 0x0011;
 const NULL_PID: u16 = 0x1FFF;
-/// PARSER-158: bounded per-PID PES accumulation for codec probing.  We hold up
-/// to 64 KiB of each candidate stream's payload — enough for an AVC/HEVC SPS or
-/// the first audio frame header — across at most this many PIDs.
-const PES_PAYLOAD_CAP: usize = 64 * 1024;
+/// PARSER-158 / PARSER-345: bounded per-PID PES accumulation for codec probing.
+/// mkvtoolnix's content probe keeps reading until at least 5 MiB has been
+/// inspected, so each candidate PID may hold up to that much elementary payload
+/// while still obeying the global packet budget and deadline.
+const PES_PAYLOAD_CAP: usize = 5 * 1024 * 1024;
 const MAX_PES_PIDS: usize = 32;
 const RESYNC_SCAN_CAP: u64 = 1024 * 1024;
 /// Packet budget scanned (after all PMTs are seen) before stopping, so the
 /// per-PID PES buffers have a chance to fill for the header probe.
 ///
-/// PARSER-169: mkvtoolnix probes at least 5 MiB before declaring a content
-/// probe successful (`min_size_to_probe`, r_mpeg_ts.cpp:1347-1376).  Because
-/// tracks now survive only when their bounded PES probe succeeds, we must read
-/// far enough that the per-PID buffers can fill or we would under-report
-/// relative to mkvmerge.  5 MiB of 188-byte packets ≈ 27 900 packets; keep it
-/// well under MAX_PACKETS (64 Ki packets) and still bounded by the deadline +
-/// EOF + the per-PID PES cap.
+/// PARSER-169 / PARSER-345: mkvtoolnix probes at least 5 MiB before declaring
+/// a content probe successful (`min_size_to_probe`, r_mpeg_ts.cpp:1347-1376).
+/// Because tracks now survive only when their bounded PES probe succeeds, we
+/// must read far enough that the per-PID buffers can fill or we would
+/// under-report relative to mkvmerge.  5 MiB of 188-byte packets ≈ 27 900
+/// packets; keep it well under MAX_PACKETS (64 Ki packets) and still bounded
+/// by the deadline + EOF + the per-PID PES cap.
 const PES_PROBE_PACKET_BUDGET: usize = 28 * 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -450,38 +451,28 @@ fn opt_rate(v: u32) -> Option<f64> {
 fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnrichment> {
   match codec_id {
     "V_MPEG4/ISO/AVC" => {
-      for nal in avc::nal::split_nal_units(es) {
-        if nal.nal_unit_type == 7 {
-          let rbsp = avc::nal::strip_emulation_prevention(nal.payload);
-          if let Ok(sps) = avc::sps::parse(&rbsp) {
-            return Some(EsEnrichment {
-              pixel_dimensions: Some((sps.display_width, sps.display_height)),
-              ..EsEnrichment::default()
-            });
-          }
-        }
-      }
-      None
+      let sps = avc::reader::sps_from_complete_annex_b(es)?;
+      Some(EsEnrichment {
+        pixel_dimensions: Some((sps.display_width, sps.display_height)),
+        ..EsEnrichment::default()
+      })
     }
     "V_MPEGH/ISO/HEVC" => {
-      for nal in hevc::nal::split_nal_units(es) {
-        // HEVC SPS_NUT == 33.
-        if nal.nal_unit_type == 33 {
-          let rbsp = hevc::nal::strip_emulation_prevention(nal.payload);
-          if let Ok(sps) = hevc::sps::parse(&rbsp) {
-            return Some(EsEnrichment {
-              pixel_dimensions: Some((sps.display_width, sps.display_height)),
-              ..EsEnrichment::default()
-            });
-          }
-        }
-      }
-      None
+      let (_codec_private, sps) = hevc::reader::codec_private_from_annex_b(es)?;
+      Some(EsEnrichment {
+        pixel_dimensions: Some((sps.display_width, sps.display_height)),
+        ..EsEnrichment::default()
+      })
     }
-    "V_MPEG1" | "V_MPEG2" => mpeg_video::decode_sequence_header(es).map(|h| EsEnrichment {
-      pixel_dimensions: Some((h.horizontal_size, h.vertical_size)),
-      ..EsEnrichment::default()
-    }),
+    "V_MPEG1" | "V_MPEG2" => {
+      if !mpeg_video::looks_like_mpeg_video_es(es) {
+        return None;
+      }
+      mpeg_video::decode_sequence_header(es).map(|h| EsEnrichment {
+        pixel_dimensions: Some((h.horizontal_size, h.vertical_size)),
+        ..EsEnrichment::default()
+      })
+    }
     "V_VC1" => vc1::decode_sequence_header(es).map(|h| EsEnrichment {
       pixel_dimensions: Some((h.max_coded_width, h.max_coded_height)),
       ..EsEnrichment::default()
@@ -688,15 +679,13 @@ fn handle_sdt(section: &[u8], sdt: &mut HashMap<u16, (String, String)>) {
 /// Confidently sniff an elementary payload's codec for the unlisted-PID
 /// fallback. Returns `None` unless a real codec header is found.
 fn sniff_codec(payload: &[u8]) -> Option<(TrackKind, &'static str, &'static str)> {
-  for nal in avc::nal::split_nal_units(payload) {
-    if nal.nal_unit_type == 7 {
-      let rbsp = avc::nal::strip_emulation_prevention(nal.payload);
-      if avc::sps::parse(&rbsp).is_ok() {
-        return Some((TrackKind::Video, "V_MPEG4/ISO/AVC", "AVC/H.264"));
-      }
-    }
+  if avc::reader::sps_from_complete_annex_b(payload).is_some() {
+    return Some((TrackKind::Video, "V_MPEG4/ISO/AVC", "AVC/H.264"));
   }
-  if mpeg_video::decode_sequence_header(payload).is_some() {
+  if hevc::reader::codec_private_from_annex_b(payload).is_some() {
+    return Some((TrackKind::Video, "V_MPEGH/ISO/HEVC", "HEVC/H.265"));
+  }
+  if mpeg_video::looks_like_mpeg_video_es(payload) && mpeg_video::decode_sequence_header(payload).is_some() {
     return Some((TrackKind::Video, "V_MPEG2", "MPEG-2 Video"));
   }
   if ac3::find_frame_sync(payload).is_some() {
@@ -755,7 +744,7 @@ mod tests {
       ],
     );
     let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
-    let video_es = mpeg_video::build_sequence_header(1280, 720, 4);
+    let video_es = mpeg_video::build_probe_stream(1280, 720, 4);
     // PARSER-206: AAC enrichment now requires five consecutive frames, so the
     // PES payload carries a multi-frame ADTS stream (sr_index 3 = 48 kHz, ch 2).
     let audio_es = aac::build_adts_stream(6, 1, 3, 2);
@@ -849,7 +838,7 @@ mod tests {
     let pat_pkt = build_packet_with_pointer(0, &pat_section);
     let pmt_section = build_pmt_section(1, pmt_pid, &[], &[(0x02, 0x110, vec![]), (0x0F, 0x111, vec![])]);
     let pmt_pkt = build_packet_with_pointer(pmt_pid, &pmt_section);
-    let video_es = mpeg_video::build_sequence_header(1920, 1080, 4);
+    let video_es = mpeg_video::build_probe_stream(1920, 1080, 4);
     let mut bytes = pat_pkt;
     bytes.extend(pmt_pkt);
     bytes.extend(pes_packet(0x110, &video_es));
@@ -1036,11 +1025,28 @@ mod tests {
   #[test]
   fn enrich_for_codec_decodes_each_supported_codec() {
     use crate::media_metadata::audio::{aac, ac3, mp3};
-    use crate::media_metadata::elementary::{mpeg_video, vc1};
+    use crate::media_metadata::elementary::{hevc, mpeg_video, vc1};
 
     // MPEG-2 video → pixel dimensions.
-    let es = mpeg_video::build_sequence_header(1280, 720, 4);
+    let es = mpeg_video::build_probe_stream(1280, 720, 4);
     assert_eq!(enrich_for_codec("V_MPEG2", 0x02, &es).unwrap().pixel_dimensions, Some((1280, 720)));
+    assert!(enrich_for_codec("V_MPEG2", 0x02, &mpeg_video::build_sequence_header(1280, 720, 4)).is_none());
+
+    // HEVC requires parameter sets plus access-unit evidence, not just SPS.
+    let hevc_es = hevc::reader::build_test_main10_stream();
+    assert_eq!(
+      enrich_for_codec("V_MPEGH/ISO/HEVC", 0x24, &hevc_es)
+        .unwrap()
+        .pixel_dimensions,
+      Some((1920, 1080))
+    );
+    let mut hevc_headers_only = hevc_es.clone();
+    let aud_pos = hevc_headers_only
+      .windows(5)
+      .position(|w| w == [0x00, 0x00, 0x00, 0x01, 0x46])
+      .unwrap();
+    hevc_headers_only.truncate(aud_pos);
+    assert!(enrich_for_codec("V_MPEGH/ISO/HEVC", 0x24, &hevc_headers_only).is_none());
 
     // VC-1 → pixel dimensions.
     let es = vc1::build_terminated_sequence_header(1920, 1080);

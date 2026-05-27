@@ -28,11 +28,14 @@ fn start_code(stream_id: u8) -> [u8; 4] {
 }
 
 fn mpeg_video_payload() -> Vec<u8> {
-  vec![
+  let mut bytes = vec![
     0x00, 0x00, 0x01, 0xB3, // sequence header
     0x2D, 0x01, 0xE0, 0x13, // 720x480, aspect/frame-rate
     0x00, 0x00, 0x00, 0x00,
-  ]
+  ];
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]); // picture
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]); // first slice
+  bytes
 }
 
 fn mpeg_audio_payload() -> Vec<u8> {

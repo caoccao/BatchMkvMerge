@@ -309,9 +309,11 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
       properties.audio = Some(audio);
     }
     TrackType::Subtitles => {
-      let is_text = matches!(row.codec_id.as_str(), "S_TELETEXT" | "S_HDMV/TEXTST");
       properties.subtitle = Some(SubtitleTrackProperties {
-        text_subtitles: is_text,
+        // PARSER-346: mkvtoolnix does not mark Teletext or HDMV TextST rows as
+        // text subtitles here; `text_subtitles` is reserved for SRT-style text
+        // streams, which the TS reader does not emit.
+        text_subtitles: false,
         encoding: None,
         variant: Some(row.codec_name.clone()),
         teletext_page: row.teletext_page,
@@ -500,13 +502,13 @@ mod tests {
   }
 
   #[test]
-  fn teletext_subtitle_marked_text_with_page() {
+  fn teletext_subtitle_keeps_page_without_text_flag() {
     let mut r = row(0x100, TrackKind::Subtitle, "S_TELETEXT");
     r.teletext_page = Some(888);
     let mut m = MediaMetadata::new("clip.ts", 0);
     finalise(vec![r], &mut m);
     let sub = m.tracks[0].properties.subtitle.as_ref().unwrap();
-    assert!(sub.text_subtitles);
+    assert!(!sub.text_subtitles);
     assert_eq!(sub.teletext_page, Some(888));
   }
 

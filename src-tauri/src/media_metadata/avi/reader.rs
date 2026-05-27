@@ -166,13 +166,6 @@ impl Reader for AviReader {
   }
 }
 
-/// Maximum number of `movi` child-chunk headers scanned looking for the first
-/// video frame of the MPEG-4 Part 2 stream.
-const MAX_MOVI_FRAME_SCANS: u32 = 4096;
-/// Bytes of the first video frame read for VOL-header PAR decoding — the VOL
-/// header sits at the very start, so a bounded prefix is enough.
-const MAX_VIDEO_FRAME_BYTES: u64 = 256 * 1024;
-
 /// The two `movi` chunk tags for a video stream at index `idx`: `NNdb`
 /// (uncompressed) and `NNdc` (compressed).
 fn video_chunk_tags(idx: usize) -> [[u8; 4]; 2] {
@@ -219,7 +212,7 @@ fn compute_mpeg4_video_par(
 }
 
 /// Walk the `movi` LIST for the first frame chunk belonging to the video stream
-/// at `video_idx`, returning a bounded prefix of its payload.
+/// at `video_idx`, returning its payload under the shared element-size budget.
 fn read_first_video_frame(
   src: &mut FileSource,
   movi: &ChunkHeader,
@@ -231,10 +224,8 @@ fn read_first_video_frame(
   let parent_end = movi.payload_end();
   let stream_end = src.length();
   src.seek_to(first_child)?;
-  let mut scans = 0u32;
-  while scans < MAX_MOVI_FRAME_SCANS {
+  loop {
     deadline.check("avi::mpeg4_par")?;
-    scans += 1;
     let pos = src.position();
     if pos >= parent_end || parent_end - pos < 8 {
       break;
@@ -258,7 +249,7 @@ fn read_first_video_frame(
       continue;
     }
     if tags.iter().any(|t| &child.kind == t) {
-      let bytes = riff::read_payload(src, &child, MAX_VIDEO_FRAME_BYTES)?;
+      let bytes = riff::read_payload(src, &child, deadline.max_element_size())?;
       return Ok(Some(bytes));
     }
     riff::skip_payload_with_pad(src, &child)?;
@@ -570,6 +561,35 @@ mod tests {
     assert_eq!(sub.properties.common.number, Some(4));
   }
 
+  #[test]
+  fn subtitle_scan_finds_text_chunk_after_old_header_limit() {
+    let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nLate subtitle\r\n";
+    let mut chunks = Vec::new();
+    for _ in 0..4100 {
+      chunks.push(encode_chunk(b"00dc", &[0xFF]));
+    }
+    chunks.push(encode_chunk(b"01tx", &gab2_chunk(srt)));
+    let bytes = build_avi_with_movi(vec![build_video_strl(1920, 1080), build_text_strl()], chunks);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.iter().filter(|t| t.track_type == TrackType::Subtitles).count(), 1);
+  }
+
+  #[test]
+  fn gab2_ssa_attachments_after_one_mib_are_preserved() {
+    let mut ssa = b"[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\n".to_vec();
+    ssa.extend(vec![b';'; 1024 * 1024 + 16]);
+    ssa.extend_from_slice(b"\n[Fonts]\nfontname: late.ttf\n!!!!\n");
+    let text_chunk = encode_chunk(b"01tx", &gab2_chunk(&ssa));
+    let bytes = build_avi_with_movi(vec![build_video_strl(1920, 1080), build_text_strl()], vec![text_chunk]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.attachments.len(), 1);
+    assert_eq!(out.attachments[0].file_name, "late.ttf");
+  }
+
   // ---- PARSER-241: MPEG-4 Part 2 frame PAR → display dimensions ---------
 
   fn build_xvid_video_strl(width: u16, height: u16) -> Vec<u8> {
@@ -601,6 +621,22 @@ mod tests {
     AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     let v = out.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(v.pixel_dimensions.unwrap().width, 720);
+    assert_eq!(
+      v.display_dimensions,
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 785, height: 480 })
+    );
+  }
+
+  #[test]
+  fn mpeg4_p2_frame_par_after_old_prefix_limit_sets_display_dimensions() {
+    let mut payload = vec![0xFF; 256 * 1024 + 32];
+    payload.extend(xvid_vol_frame_12_11());
+    let frame = encode_chunk(b"00dc", &payload);
+    let bytes = build_avi_with_movi(vec![build_xvid_video_strl(720, 480)], vec![frame]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.avi", 0);
+    AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    let v = out.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(
       v.display_dimensions,
       Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 785, height: 480 })

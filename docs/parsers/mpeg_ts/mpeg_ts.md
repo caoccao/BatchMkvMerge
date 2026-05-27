@@ -1,6 +1,6 @@
 # MPEG Transport Stream Parser
 
-Implementation progress: 93%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -18,11 +18,13 @@ After packet-size detection has locked onto the stream, the packet loop resynchr
 
 PAT and PMT sections are validated against the PSI header flags mkvtoolnix treats as mandatory (`r_mpeg_ts.cpp:1755-1786`, `1928-1964`): `section_syntax_indicator == 1`, `current_next_indicator != 0`, `section_number == 0`, `last_section_number == 0`, and `13 <= section_length <= 1021` (PARSER-270). Inactive next-version sections and unsupported multi-section tables are rejected, so programs and stream rows are never built from a table mkvtoolnix would ignore. CRC32 is intentionally not enforced: mkvtoolnix starts with CRC validation on but disables it on its retry pass whenever a CRC failure would otherwise leave the PAT/PMT unfound (`r_mpeg_ts.cpp:1388-1394`); a header-only single-pass parser is always in that position, so tolerating a stale CRC matches the observable end-state.
 
-Per-PID PES payloads accumulate only **elementary** bytes (PARSER-271). Mirroring `r_mpeg_ts.cpp:2147-2195` / `2394-2427`, the PES header is stripped at every payload-unit start and continuation packets are appended verbatim, so a PES header from a later packet is never injected into the probe buffer. This keeps a codec-header search (AAC five-consecutive-frame detection, AC-3/DTS sync, AVC/HEVC SPS, MPEG sequence header) intact when the data it needs spans PES boundaries.
+Per-PID PES payloads accumulate only **elementary** bytes (PARSER-271). Mirroring `r_mpeg_ts.cpp:2147-2195` / `2394-2427`, the PES header is stripped at every payload-unit start and continuation packets are appended verbatim, so a PES header from a later packet is never injected into the probe buffer. This keeps codec-header searches intact when the data they need spans PES boundaries. The per-PID cap is 5 MiB, matching mkvtoolnix's minimum content-probe horizon, and remains bounded by the packet budget, EOF, and parser deadline (PARSER-345).
 
 AAC enrichment (stream types `0x0f` and `0x11`) requires five consecutive valid AAC frames in the bounded PES payload before trusting the header, mirroring `new_stream_a_aac`'s `aac::parser_c::find_consecutive_frames(buffer, size, 5)` (r_mpeg_ts.cpp:367). The shared AAC parser recognises both multiplex types — ADTS and LOAS/LATM — so the LOAS/LATM framing that stream type `0x11` commonly carries is decoded as `A_AAC`, and a lone accidental ADTS-looking sync is rejected.
 
 MPEG audio enrichment (stream types `0x03`/`0x04`, which the PMT table defaults to `A_MPEG/L3`) decodes the first frame header and **relabels the codec to the actual layer** via the enrichment's codec override — mirroring `new_stream_a_mpeg`'s `codec = header.get_codec()` (r_mpeg_ts.cpp:354-357). Layer II transport-stream audio is therefore reported as `A_MPEG/L2`, not MP3.
+
+Video enrichment uses the same elementary gates as the raw readers, so partial headers no longer keep a PMT row alive: AVC requires SPS/PPS plus access-unit evidence, HEVC requires VPS/SPS/PPS plus access-unit evidence and a valid hvcC build, and MPEG-1/2 requires sequence, picture, and slice state before dimensions are accepted. This mirrors mkvtoolnix's parser-driven `headers_parsed()` / frame-state behavior for PES probes and prevents SPS-only or sequence-header-only PIDs from skewing track lists or Dolby Vision pairing (PARSER-344).
 
 HEVC video is recognised solely by stream type `0x24` (→ the canonical `V_MPEGH/ISO/HEVC`). mkvtoolnix's PMT descriptor switch (r_mpeg_ts.cpp:1864-1887) has no HEVC-descriptor (0x38) handler, so the parser does not promote a stream's codec on the HEVC descriptor; a private PES stream signalled only by an HEVC descriptor stays unknown and is dropped, exactly as upstream leaves it. No noncanonical `V_HEVC` id is emitted.
 
@@ -45,10 +47,4 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 
 ## Gaps and Handling
 
-The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers, PMT program descriptors are not rewritten as track metadata, and in-stream sync loss is recovered with a bounded resync scan.
-
-## Open Issues
-
-- `PARSER-344`: video PES probes accept partial headers instead of using mkvtoolnix's parser gates. Local AVC enrichment returns after the first decodable SPS, HEVC after the first decodable SPS, and MPEG-1/2 after a sequence header. Upstream feeds the payload into the AVC/HEVC elementary parsers and requires `headers_parsed()`; for MPEG-1/2 it requires the MPEG video parser to reach frame state. SPS-only or sequence-header-only PIDs can therefore survive locally, skewing track lists and Dolby Vision base/enhancement matching.
-- `PARSER-345`: the 64 KiB per-PID PES payload cap is below mkvtoolnix's detection horizon. mkvtoolnix continues feeding per-track parsers until all streams are probed or at least the 5 MiB `min_size_to_probe` window has been processed. Local accumulation stops each PID at `PES_PAYLOAD_CAP`, so AVC/HEVC/MPEG/audio headers that start after the first 64 KiB of elementary bytes but still within mkvtoolnix's probe range are dropped.
-- `PARSER-346`: Teletext and HDMV TextST subtitle rows set `textSubtitles: true`, but mkvtoolnix's MPEG-TS `identify()` sets `text_subtitles` only when the codec is SRT. TS Teletext/TextST tracks are therefore over-reported as text subtitles locally.
+The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header and keeps up to the 5 MiB probe horizon, video probes use complete elementary-stream gates, Teletext/TextST subtitle rows keep `textSubtitles: false` like mkvtoolnix's TS identification path, PMT program descriptors are not rewritten as track metadata, and in-stream sync loss is recovered with a bounded resync scan.

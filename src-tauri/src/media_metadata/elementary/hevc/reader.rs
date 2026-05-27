@@ -30,7 +30,7 @@ use crate::media_metadata::model::track_properties_video::{
 use crate::media_metadata::mp4::codec_specific::hex_encode;
 use crate::media_metadata::reader::Reader;
 
-use super::nal::{self, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS, NAL_UNIT_TYPE_VPS};
+use super::nal::{self, NAL_UNIT_TYPE_AUD, NAL_UNIT_TYPE_PPS, NAL_UNIT_TYPE_SPS, NAL_UNIT_TYPE_VPS};
 use super::sps::{self, HevcTier};
 use super::vps;
 
@@ -205,11 +205,13 @@ impl<'a> HevcHeaders<'a> {
       | (u8::from(sps.frame_only_constraint_flag) << 4);
     out[12] = sps.level_idc;
     // byte 13: reserved 4 bits (1111) | min_spatial_segmentation_idc high bits
-    // (we report 0, but the reserved nibble must still be set).
-    out[13] = 0xf0;
-    // byte 14: min_spatial_segmentation_idc low byte (0).
-    // byte 15: reserved 6 bits (111111) | parallelism_type(2) = 0.
-    out[15] = 0xfc;
+    // (12-bit value from the VUI bitstream-restriction block).
+    let min_spatial = sps.min_spatial_segmentation_idc.min(0x0fff);
+    out[13] = 0xf0 | ((min_spatial >> 8) as u8 & 0x0f);
+    // byte 14: min_spatial_segmentation_idc low byte.
+    out[14] = min_spatial as u8;
+    // byte 15: reserved 6 bits (111111) | parallelism_type(2).
+    out[15] = 0xfc | (sps.parallelism_type & 0x03);
     // byte 16: reserved 6 bits (111111) | chroma_format_idc(2).
     out[16] = 0xfc | (sps.chroma_format_idc & 0x03);
     // byte 17: reserved 5 bits (11111) | bit_depth_luma_minus8(3).
@@ -255,11 +257,17 @@ fn extract_headers<'a>(units: &'a [nal::HevcNalUnit<'a>]) -> Option<HevcHeaders<
       headers.pps = Some(*unit);
     }
   }
-  if headers.vps.is_some() && headers.sps.is_some() && headers.pps.is_some() {
+  if headers.vps.is_some() && headers.sps.is_some() && headers.pps.is_some() && has_access_unit_evidence(units) {
     Some(headers)
   } else {
     None
   }
+}
+
+fn has_access_unit_evidence(units: &[nal::HevcNalUnit<'_>]) -> bool {
+  units
+    .iter()
+    .any(|unit| unit.nal_unit_type <= 31 || unit.nal_unit_type == NAL_UNIT_TYPE_AUD)
 }
 
 fn nal_bytes(unit: nal::HevcNalUnit<'_>) -> Vec<u8> {
@@ -368,6 +376,7 @@ pub(crate) fn build_test_main10_stream() -> Vec<u8> {
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x42, 0x01]);
   bytes.extend(sps);
   bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50]);
   bytes
 }
 
@@ -395,6 +404,9 @@ mod tests {
     bytes.extend(sps);
     // PPS NAL (type 34)
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0x80]);
+    // AUD NAL (type 35) so parser acceptance mirrors headers_parsed() needing
+    // access-unit evidence, not parameter sets alone.
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50]);
     bytes
   }
 
@@ -488,7 +500,72 @@ mod tests {
       w.write_bits(1, 32);
       w.write_bits(30, 32);
       w.write_bit(false); // poc proportional timing
+      w.write_bit(false); // hrd parameters
+      w.write_bit(false); // bitstream restriction
     }
+  }
+
+  fn build_main10_1080p_sps_rbsp_with_bitstream_restriction() -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 4);
+    w.write_bits(0, 3);
+    w.write_bit(true);
+    w.write_bits(0, 2);
+    w.write_bit(false);
+    w.write_bits(2, 5);
+    w.write_bits(0, 32);
+    w.write_bits(0, 48);
+    w.write_bits(120, 8);
+    w.write_ue(0);
+    w.write_ue(1);
+    w.write_ue(1920);
+    w.write_ue(1080);
+    w.write_bit(false);
+    w.write_ue(2);
+    w.write_ue(2);
+    write_tail_with_bitstream_restriction(&mut w, 0x123);
+    w.into_bytes()
+  }
+
+  fn write_tail_with_bitstream_restriction(w: &mut BitWriter, min_spatial: u32) {
+    w.write_ue(4);
+    w.write_bit(false);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_ue(0);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(false);
+    w.write_bit(true); // VUI present
+    w.write_bit(false); // aspect ratio
+    w.write_bit(false); // overscan
+    w.write_bit(false); // video signal
+    w.write_bit(false); // chroma loc
+    w.write_bit(false); // neutral chroma
+    w.write_bit(false); // field seq
+    w.write_bit(false); // frame field info
+    w.write_bit(false); // default display window
+    w.write_bit(false); // timing info
+    w.write_bit(true); // bitstream restriction
+    w.write_bit(true); // tiles_fixed_structure_flag
+    w.write_bit(true); // motion_vectors_over_pic_boundaries_flag
+    w.write_bit(false); // restricted_ref_pic_lists_flag
+    w.write_ue(min_spatial);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_ue(0);
   }
 
   struct BitWriter {
@@ -622,10 +699,33 @@ mod tests {
   }
 
   #[test]
+  fn codec_private_carries_bitstream_restriction_fields() {
+    let bytes = build_main10_stream_with_sps(build_main10_1080p_sps_rbsp_with_bitstream_restriction());
+    let units = nal::split_nal_units(&bytes);
+    let headers = extract_headers(&units).unwrap();
+    let sps_unit = headers.sps.unwrap();
+    let rbsp = nal::strip_emulation_prevention(sps_unit.payload);
+    let sps = sps::parse(&rbsp).unwrap();
+    let cp = headers.codec_private(&sps);
+    assert_eq!(cp[13], 0xf1);
+    assert_eq!(cp[14], 0x23);
+    assert_eq!(cp[15], 0xfe);
+  }
+
+  #[test]
   fn probe_rejects_incomplete_header_sets() {
     let mut bytes = build_main10_stream();
     let pps_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x44]).unwrap();
     bytes.truncate(pps_pos);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!HevcReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_parameter_sets_without_access_unit_evidence() {
+    let mut bytes = build_main10_stream();
+    let aud_pos = bytes.windows(5).position(|w| w == [0, 0, 0, 1, 0x46]).unwrap();
+    bytes.truncate(aud_pos);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(!HevcReader.probe(&mut s).unwrap());
   }

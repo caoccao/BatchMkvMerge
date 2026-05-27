@@ -225,7 +225,7 @@ fn apply_sequence_extension(bytes: &[u8], sequence_pos: usize, header: &mut Sequ
   header.progressive = progressive;
 }
 
-fn looks_like_mpeg_video_es(bytes: &[u8]) -> bool {
+pub(crate) fn looks_like_mpeg_video_es(bytes: &[u8]) -> bool {
   if is_transport_stream(bytes) || bytes.starts_with(&[0x00, 0x00, 0x01, 0xba]) {
     return false;
   }
@@ -354,6 +354,11 @@ pub(crate) fn build_sequence_header(width: u32, height: u32, frame_rate_code: u8
 
 #[cfg(test)]
 fn build_es(width: u32, height: u32, frame_rate_code: u8) -> Vec<u8> {
+  build_probe_stream(width, height, frame_rate_code)
+}
+
+#[cfg(test)]
+pub(crate) fn build_probe_stream(width: u32, height: u32, frame_rate_code: u8) -> Vec<u8> {
   let mut bytes = build_sequence_header(width, height, frame_rate_code);
   bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
   bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);

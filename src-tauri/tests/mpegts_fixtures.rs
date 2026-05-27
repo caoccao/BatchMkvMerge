@@ -102,9 +102,9 @@ fn build_pes_packet(pid: u16, es: &[u8]) -> Vec<u8> {
   build_packet(pid, true, &pes)
 }
 
-/// A valid MPEG-2 sequence header (1280x720) — start code `00 00 01 B3` +
-/// 12-bit width + 12-bit height + 4-bit aspect + 4-bit frame-rate-code.
-fn mpeg2_sequence_header() -> Vec<u8> {
+/// A valid MPEG-2 elementary prefix (1280x720) with sequence, picture, and
+/// slice evidence for the same frame-state gate the TS reader uses.
+fn mpeg2_probe_stream() -> Vec<u8> {
   let (width, height): (u32, u32) = (1280, 720);
   let mut bytes = vec![0x00, 0x00, 0x01, 0xB3];
   bytes.push(((width >> 4) & 0xFF) as u8);
@@ -112,6 +112,8 @@ fn mpeg2_sequence_header() -> Vec<u8> {
   bytes.push((height & 0xFF) as u8);
   bytes.push((1u8 << 4) | 4); // aspect_ratio marker + frame_rate_code 4
   bytes.extend_from_slice(&[0u8; 4]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
+  bytes.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
   bytes
 }
 
@@ -199,7 +201,7 @@ fn parses_minimal_ts_with_video_and_aac() {
       (0x02, 0x110, vec![0x0A, 0x04, b'e', b'n', b'g', 0x00]), // MPEG-2 + lang
       (0x0F, 0x111, vec![]),                                   // AAC
     ],
-    &[(0x110, mpeg2_sequence_header()), (0x111, adts_frame())],
+    &[(0x110, mpeg2_probe_stream()), (0x111, adts_frame())],
   );
   let path = write_tempfile(&bytes);
   let m = parse(&path, ParseOptions::default()).unwrap();
