@@ -39,3 +39,7 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader scaling probe windows, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. PES depacketising handles both MPEG-1 and MPEG-2 optional-header layouts, codec probes block false-positive stream ids, and output ordering follows mkvmerge's identification order.
+
+## Open Issues
+
+- `PARSER-347`: MPEG-PS video probing still accepts weaker evidence than mkvtoolnix and can also stop too early. Local explicit AVC streams are emitted from the first SPS alone, and bare MPEG video streams can be reclassified to AVC from SPS alone or accepted as MPEG-1/2 from a sequence header alone. Upstream first distinguishes AVC from MPEG-1/2 by requiring SPS + PPS + slice/access-unit evidence or MPEG sequence + picture evidence, then runs the AVC parser until `headers_parsed()` or the MPEG video parser until it has a valid frame, I-frame, and following non-B frame. The local `STREAM_PAYLOAD_CAP` of 256 KiB can also miss headers that mkvtoolnix would find while continuing through its probe range.

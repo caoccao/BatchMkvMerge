@@ -46,3 +46,9 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header so codec probes are no longer interrupted by injected headers, PMT program descriptors are not rewritten as track metadata, and in-stream sync loss is recovered with a bounded resync scan.
+
+## Open Issues
+
+- `PARSER-344`: video PES probes accept partial headers instead of using mkvtoolnix's parser gates. Local AVC enrichment returns after the first decodable SPS, HEVC after the first decodable SPS, and MPEG-1/2 after a sequence header. Upstream feeds the payload into the AVC/HEVC elementary parsers and requires `headers_parsed()`; for MPEG-1/2 it requires the MPEG video parser to reach frame state. SPS-only or sequence-header-only PIDs can therefore survive locally, skewing track lists and Dolby Vision base/enhancement matching.
+- `PARSER-345`: the 64 KiB per-PID PES payload cap is below mkvtoolnix's detection horizon. mkvtoolnix continues feeding per-track parsers until all streams are probed or at least the 5 MiB `min_size_to_probe` window has been processed. Local accumulation stops each PID at `PES_PAYLOAD_CAP`, so AVC/HEVC/MPEG/audio headers that start after the first 64 KiB of elementary bytes but still within mkvtoolnix's probe range are dropped.
+- `PARSER-346`: Teletext and HDMV TextST subtitle rows set `textSubtitles: true`, but mkvtoolnix's MPEG-TS `identify()` sets `text_subtitles` only when the codec is SRT. TS Teletext/TextST tracks are therefore over-reported as text subtitles locally.
