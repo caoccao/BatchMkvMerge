@@ -404,35 +404,30 @@ export default function Settings() {
             [
               {
                 typeKey: "video" as const,
-                templateKey: "videoTemplate" as const,
                 selectKey: "selectVideo" as const,
                 languagesKey: "videoLanguages" as const,
                 label: t("settings.video"),
               },
               {
                 typeKey: "audio" as const,
-                templateKey: "audioTemplate" as const,
                 selectKey: "selectAudio" as const,
                 languagesKey: "audioLanguages" as const,
                 label: t("settings.audio"),
               },
               {
                 typeKey: "subtitles" as const,
-                templateKey: "subtitleTemplate" as const,
                 selectKey: "selectSubtitle" as const,
                 languagesKey: "subtitleLanguages" as const,
                 label: t("settings.subtitles"),
               },
               {
                 typeKey: "chapters" as const,
-                templateKey: "chaptersTemplate" as const,
                 selectKey: "selectChapters" as const,
                 languagesKey: null,
                 label: t("settings.chapters"),
               },
               {
                 typeKey: "attachments" as const,
-                templateKey: "attachmentsTemplate" as const,
                 selectKey: "selectAttachments" as const,
                 languagesKey: null,
                 label: t("settings.attachments"),
@@ -447,17 +442,6 @@ export default function Settings() {
               >
                 {row.label}
               </Typography>
-              <TextField
-                size="small"
-                fullWidth
-                value={activeProfile[row.templateKey]}
-                onChange={(e) =>
-                  updateActiveProfile({
-                    [row.templateKey]: e.target.value,
-                  })
-                }
-                sx={{ mt: 0.5 }}
-              />
               <Box
                 sx={{
                   display: "flex",
@@ -482,8 +466,8 @@ export default function Settings() {
                   label={
                     <Typography variant="caption">
                       {row.languagesKey
-                        ? t("settings.autoSelectOnDropForLanguages")
-                        : t("settings.autoSelectOnDrop")}
+                        ? t("settings.onlyAutoSelectOnDropForLanguages")
+                        : t("settings.onlyAutoSelectOnDrop")}
                     </Typography>
                   }
                 />
@@ -514,13 +498,6 @@ export default function Settings() {
             }
           />
         </SettingRow>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mt: 1 }}
-        >
-          {t("settings.templatePlaceholdersHint")}
-        </Typography>
         <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
           <Button
             variant="outlined"

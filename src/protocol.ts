@@ -105,11 +105,6 @@ export interface ConfigExternalTools {
 
 export interface ConfigProfile {
   name: string;
-  videoTemplate: string;
-  audioTemplate: string;
-  subtitleTemplate: string;
-  chaptersTemplate: string;
-  attachmentsTemplate: string;
   selectVideo: boolean;
   selectAudio: boolean;
   selectSubtitle: boolean;
@@ -146,19 +141,12 @@ export interface Config {
 }
 
 export const DEFAULT_PROFILE_NAME = "Default";
-export const DEFAULT_TEMPLATE = "{file_name}.{track_id}.{language}";
-export const DEFAULT_TEMPLATE_NO_LANGUAGE = "{file_name}.{track_id}";
 export const DEFAULT_SUBTITLE_LANGUAGES = "eng, chi, spa, ger, fre, jpn";
 
 export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile {
   const isDefault = name === DEFAULT_PROFILE_NAME;
   return {
     name,
-    videoTemplate: DEFAULT_TEMPLATE,
-    audioTemplate: DEFAULT_TEMPLATE,
-    subtitleTemplate: DEFAULT_TEMPLATE,
-    chaptersTemplate: DEFAULT_TEMPLATE_NO_LANGUAGE,
-    attachmentsTemplate: DEFAULT_TEMPLATE_NO_LANGUAGE,
     selectVideo: false,
     selectAudio: false,
     selectSubtitle: isDefault,

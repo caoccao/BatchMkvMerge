@@ -25,102 +25,8 @@ import {
 import type { MediaTrack } from "./media-metadata";
 import type { ConfigProfile } from "./protocol";
 
-export interface TemplateContext {
-  fileName: string;
-  trackId: number;
-  trackNumber: number;
-  language: string;
-  codecName: string;
-  trackName: string;
-}
-
-function sanitizeFileNamePart(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, "_");
-}
-
-function buildPlaceholderValues(context: TemplateContext): Record<string, string> {
-  return {
-    file_name: context.fileName,
-    track_id: String(context.trackId),
-    track_number: String(context.trackNumber),
-    language: context.language,
-    codec_name: sanitizeFileNamePart(context.codecName),
-    track_name: sanitizeFileNamePart(context.trackName),
-  };
-}
-
-export function renderTemplate(
-  template: string,
-  context: TemplateContext,
-): string {
-  const values = buildPlaceholderValues(context);
-  const len = template.length;
-  let out = "";
-  let i = 0;
-  while (i < len) {
-    const ch = template[i];
-    if (ch === "{") {
-      if (i + 1 < len && template[i + 1] === "{") {
-        out += "{";
-        i += 2;
-        continue;
-      }
-      let j = i + 1;
-      while (j < len && template[j] !== "}" && template[j] !== "{") {
-        j += 1;
-      }
-      if (j < len && template[j] === "}") {
-        const name = template.slice(i + 1, j);
-        if (Object.prototype.hasOwnProperty.call(values, name)) {
-          out += values[name];
-        } else {
-          out += template.slice(i, j + 1);
-        }
-        i = j + 1;
-      } else {
-        out += template.slice(i, j);
-        i = j;
-      }
-      continue;
-    }
-    if (ch === "}") {
-      if (i + 1 < len && template[i + 1] === "}") {
-        out += "}";
-        i += 2;
-        continue;
-      }
-      out += ch;
-      i += 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
 export function trackKey(track: MediaTrack): string {
   return `${track.type}:${track.id}`;
-}
-
-export function pickTemplateForTrackType(
-  profile: ConfigProfile,
-  trackType: string,
-): string {
-  switch (trackType) {
-    case "video":
-      return profile.videoTemplate;
-    case "audio":
-      return profile.audioTemplate;
-    case "subtitles":
-      return profile.subtitleTemplate;
-    case "chapters":
-      return profile.chaptersTemplate;
-    case "attachment":
-      return profile.attachmentsTemplate;
-    default:
-      return profile.videoTemplate;
-  }
 }
 
 function parseLanguageFilter(filter: string): Set<string> | null {
@@ -348,18 +254,16 @@ export async function resolveOutputDir(
 export function buildOutputFileName(
   fileNameWithoutExt: string,
   track: MediaTrack,
-  profile: ConfigProfile,
+  _profile: ConfigProfile,
 ): string {
-  const template = pickTemplateForTrackType(profile, track.type);
-  const base = renderTemplate(template, {
-    fileName: fileNameWithoutExt,
-    trackId: track.id,
-    trackNumber: track.number,
-    language: track.language,
-    codecName: track.codec,
-    trackName: track.trackName,
-  });
   const ext = getTrackExtension(track.codecId, track.type);
+  const hasLanguage =
+    track.type === "video" ||
+    track.type === "audio" ||
+    track.type === "subtitles";
+  const base = hasLanguage
+    ? `${fileNameWithoutExt}.${track.id}.${track.language}`
+    : `${fileNameWithoutExt}.${track.id}`;
   return `${base}.${ext}`;
 }
 

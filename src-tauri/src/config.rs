@@ -158,19 +158,6 @@ impl Default for UpdateCheckInterval {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfigProfile {
   pub name: String,
-  #[serde(rename = "videoTemplate", default = "ConfigProfile::default_template")]
-  pub video_template: String,
-  #[serde(rename = "audioTemplate", default = "ConfigProfile::default_template")]
-  pub audio_template: String,
-  #[serde(rename = "subtitleTemplate", default = "ConfigProfile::default_template")]
-  pub subtitle_template: String,
-  #[serde(rename = "chaptersTemplate", default = "ConfigProfile::default_template_no_language")]
-  pub chapters_template: String,
-  #[serde(
-    rename = "attachmentsTemplate",
-    default = "ConfigProfile::default_template_no_language"
-  )]
-  pub attachments_template: String,
   #[serde(rename = "selectVideo", default)]
   pub select_video: bool,
   #[serde(rename = "selectAudio", default)]
@@ -193,16 +180,6 @@ pub struct ConfigProfile {
 
 impl ConfigProfile {
   pub const DEFAULT_NAME: &'static str = "Default";
-  pub const DEFAULT_TEMPLATE: &'static str = "{file_name}.{track_id}.{language}";
-  pub const DEFAULT_TEMPLATE_NO_LANGUAGE: &'static str = "{file_name}.{track_id}";
-
-  fn default_template() -> String {
-    Self::DEFAULT_TEMPLATE.to_owned()
-  }
-
-  fn default_template_no_language() -> String {
-    Self::DEFAULT_TEMPLATE_NO_LANGUAGE.to_owned()
-  }
 
   fn default_select_subtitle() -> bool {
     true
@@ -223,11 +200,6 @@ impl Default for ConfigProfile {
   fn default() -> Self {
     Self {
       name: Self::DEFAULT_NAME.to_owned(),
-      video_template: Self::default_template(),
-      audio_template: Self::default_template(),
-      subtitle_template: Self::default_template(),
-      chapters_template: Self::default_template_no_language(),
-      attachments_template: Self::default_template_no_language(),
       select_video: false,
       select_audio: false,
       select_subtitle: true,

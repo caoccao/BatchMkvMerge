@@ -141,10 +141,9 @@
     "subtitles": "Subtítulos",
     "chapters": "Capítulos",
     "attachments": "Adjuntos",
-    "autoSelectOnDrop": "Seleccionar automáticamente al añadir",
-    "autoSelectOnDropForLanguages": "Seleccionar automáticamente al añadir para idiomas",
+    "onlyAutoSelectOnDrop": "Solo seleccionar automáticamente al añadir",
+    "onlyAutoSelectOnDropForLanguages": "Solo seleccionar automáticamente al añadir para idiomas",
     "defaultGroupMode": "Modo de grupo predeterminado",
-    "templatePlaceholdersHint": "Marcadores: {file_name}, {track_id}, {track_number}, {language}, {codec_name}, {track_name}",
     "resetTemplates": "Restablecer valores predeterminados"
   },
   "about": {

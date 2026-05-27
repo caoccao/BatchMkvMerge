@@ -141,10 +141,9 @@
     "subtitles": "Sottotitoli",
     "chapters": "Capitoli",
     "attachments": "Allegati",
-    "autoSelectOnDrop": "Seleziona automaticamente ad aggiunta file",
-    "autoSelectOnDropForLanguages": "Seleziona automaticamente ad aggiunta file per lingua",
+    "onlyAutoSelectOnDrop": "Seleziona automaticamente solo ad aggiunta file",
+    "onlyAutoSelectOnDropForLanguages": "Seleziona automaticamente solo ad aggiunta file per lingua",
     "defaultGroupMode": "Modo gruppo predefinito",
-    "templatePlaceholdersHint": "Segnaposti: {file_name}, {track_id}, {track_number}, {language}, {codec_name}, {track_name}",
     "resetTemplates": "Ripristina predefiniti"
   },
   "about": {
