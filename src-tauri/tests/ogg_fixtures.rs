@@ -179,15 +179,14 @@ fn empty_ogg_file_returns_empty_track_list() {
 }
 
 #[test]
-fn ogg_page_only_without_bos_yields_no_tracks() {
+fn ogg_page_only_without_bos_is_rejected() {
   // Build a minimal OggS-prefixed file (probe will accept) but with no
-  // BOS pages — should result in zero tracks but no error.
+  // BOS pages — mkvtoolnix rejects it instead of recognising an empty Ogg.
   let mut bytes = b"OggS".to_vec();
   bytes.extend_from_slice(&[0u8; 23]); // minimum-length stub
   bytes[26] = 0; // 0 segments → still a valid header
   let path = write_tempfile(&bytes, "ogg");
-  let m = parse(&path, ParseOptions::default()).unwrap();
+  let err = parse(&path, ParseOptions::default()).unwrap_err();
   let _ = std::fs::remove_file(&path);
-  assert_eq!(m.container.format, ContainerFormat::Ogg);
-  assert!(m.tracks.is_empty());
+  assert!(matches!(err, ParseError::Malformed { format: "ogg", .. }));
 }

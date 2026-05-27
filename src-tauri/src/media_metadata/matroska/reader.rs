@@ -250,7 +250,8 @@ fn read_ebml_head_doc_type(
   Ok(doc_type)
 }
 
-/// Scan forward for the next Segment header, skipping Void / CRC32 padding.
+/// Scan forward for the next Segment header, skipping Void / CRC32 padding
+/// plus finite-size libebml `EbmlDummy` placeholders.
 fn locate_segment(src: &mut FileSource, deadline: &Deadline) -> Result<ElementHeader, ParseError> {
   loop {
     deadline.check("matroska::locate_segment")?;
@@ -258,6 +259,9 @@ fn locate_segment(src: &mut FileSource, deadline: &Deadline) -> Result<ElementHe
     match header.id {
       ids::SEGMENT => return Ok(header),
       ids::VOID | ids::CRC32 => {
+        ebml::skip_payload(src, &header)?;
+      }
+      _ if is_skippable_pre_segment_dummy(&header) => {
         ebml::skip_payload(src, &header)?;
       }
       _ => {
@@ -269,6 +273,10 @@ fn locate_segment(src: &mut FileSource, deadline: &Deadline) -> Result<ElementHe
       }
     }
   }
+}
+
+fn is_skippable_pre_segment_dummy(header: &ElementHeader) -> bool {
+  header.size.is_some() && header.id != ids::EBML && !ebml::is_segment_level_1(header.id)
 }
 
 /// Outcome of the linear Segment-L1 walk.  Carries the two facts the later
@@ -773,6 +781,24 @@ mod tests {
     let segment = encode_element(ids::SEGMENT, 4, &info);
     let mut bytes = head;
     bytes.extend(void);
+    bytes.extend(segment);
+    let mut s = src(bytes.clone());
+    let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);
+    MatroskaReader.read_headers(&mut s, &no_deadline(), &mut out).unwrap();
+    assert_eq!(out.container.properties.timestamp_scale, Some(1_000_000));
+  }
+
+  #[test]
+  fn read_headers_skips_finite_unknown_element_before_segment() {
+    // EBML head + libebml-style EbmlDummy at L0 + Segment with Info.
+    let head_payload = encode_element_string(ids::DOC_TYPE, 2, "matroska");
+    let head = encode_element(ids::EBML, 4, &head_payload);
+    let dummy = encode_element(0xC1, 1, &[0xAA, 0xBB, 0xCC]);
+    let info_payload = encode_element_uint(ids::TIMESTAMP_SCALE, 3, 1_000_000);
+    let info = encode_element(ids::INFO, 4, &info_payload);
+    let segment = encode_element(ids::SEGMENT, 4, &info);
+    let mut bytes = head;
+    bytes.extend(dummy);
     bytes.extend(segment);
     let mut s = src(bytes.clone());
     let mut out = MediaMetadata::new("clip.mkv", bytes.len() as u64);

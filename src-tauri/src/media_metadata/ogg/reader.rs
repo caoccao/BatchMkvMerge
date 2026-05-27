@@ -65,6 +65,7 @@ impl Reader for OggReader {
     // terminate after the first stream's comment block lands but before
     // later BOS pages can introduce additional streams.
     let mut past_bos_run = false;
+    let mut saw_bos_page = false;
 
     loop {
       deadline.check("ogg::reader")?;
@@ -89,6 +90,9 @@ impl Reader for OggReader {
 
       let payload = page::read_page_payload(src, &header, PAGE_PAYLOAD_CAP)?;
       let is_bos = header.is_beginning_of_stream();
+      if is_bos {
+        saw_bos_page = true;
+      }
       handle_page(
         &header,
         &payload,
@@ -118,6 +122,14 @@ impl Reader for OggReader {
       if src.position() <= pos {
         break;
       }
+    }
+
+    if !saw_bos_page {
+      return Err(ParseError::Malformed {
+        format: "ogg",
+        offset: src.position(),
+        reason: "header scan ended without a beginning-of-stream page".to_string(),
+      });
     }
 
     if !past_bos_run && !states.is_empty() {
@@ -973,17 +985,14 @@ mod tests {
   }
 
   #[test]
-  fn malformed_first_page_returns_no_tracks() {
+  fn malformed_first_page_without_bos_is_rejected() {
     let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[b"junk"]);
     // Corrupt the magic.
     bytes[0..4].copy_from_slice(b"FAKE");
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogg", 0);
-    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
-    assert!(out.tracks.is_empty());
-    // Reader still claims the container as recognised since we got past
-    // probe; identify::finalise stamps recognized=true.
-    assert_eq!(out.container.format, ContainerFormat::Ogg);
+    let err = OggReader.read_headers(&mut s, &dl(), &mut out).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { format: "ogg", .. }));
   }
 
   #[test]
@@ -1191,7 +1200,7 @@ mod tests {
   }
 
   #[test]
-  fn non_bos_page_without_known_serial_is_ignored() {
+  fn read_headers_rejects_non_bos_page_without_prior_bos() {
     // Just two non-BOS pages.
     let p1 = build_page(0, 0, 999, 0, &[b"data"]);
     let p2 = build_page(0, 0, 998, 0, &[b"more"]);
@@ -1199,7 +1208,7 @@ mod tests {
     bytes.extend(p2);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogg", 0);
-    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
-    assert!(out.tracks.is_empty());
+    let err = OggReader.read_headers(&mut s, &dl(), &mut out).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { format: "ogg", .. }));
   }
 }

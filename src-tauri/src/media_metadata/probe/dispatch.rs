@@ -160,8 +160,8 @@ fn staged_readers(hints: &[super::extension_hint::FileTypeHint]) -> Vec<StagedRe
   extend_stage(&mut readers, RAW_AUDIO_EIGHT_FRAME_READERS, ProbeMode::RawAudioStrict);
   extend_stage(&mut readers, STRICT_DTS_READERS, ProbeMode::DtsStrict);
   extend_stage(&mut readers, AMBIGUOUS_CONTAINER_READERS, ProbeMode::Default);
-  extend_stage(&mut readers, LATE_AMBIGUOUS_READERS, ProbeMode::Default);
   extend_stage(&mut readers, RAW_AUDIO_SIXTY_FOUR_FRAME_READERS, ProbeMode::RawAudioLoose64);
+  extend_stage(&mut readers, LATE_AMBIGUOUS_READERS, ProbeMode::Default);
   extend_stage(&mut readers, ONE_FRAME_START_READERS, ProbeMode::RawAudioOneFrameAtStart);
   extend_stage(&mut readers, LOOSE_ELEMENTARY_READERS, ProbeMode::Default);
   extend_stage(&mut readers, RAW_AUDIO_TWENTY_FRAME_READERS, ProbeMode::RawAudioLoose20);
@@ -499,8 +499,8 @@ mod tests {
     assert!(strict_avc < strict_mp3);
     assert!(strict_mp3 < strict_dts);
     assert!(strict_dts < mpeg_ts);
-    assert!(mpeg_ts < late_dts);
-    assert!(late_dts < loose_mp3_64);
+    assert!(mpeg_ts < loose_mp3_64);
+    assert!(loose_mp3_64 < late_dts);
     assert!(loose_mp3_64 < loose_mp3_20);
     assert!(strict_avc < loose_avc);
   }

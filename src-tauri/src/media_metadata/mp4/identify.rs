@@ -125,22 +125,23 @@ fn build_track(
     t => t,
   };
 
-  // PARSER-043: a generic MPEG-4 system sample entry (mp4a / mp4v / mp4s) is
-  // refined to the real codec from mkvtoolnix's supported
-  // esds objectTypeIndication table.
+  // PARSER-043/PARSER-389: mkvtoolnix checks the supported esds
+  // objectTypeIndication table before falling back to the sample-entry FourCC,
+  // even when the sample entry is not one of the generic MPEG-4 system codes.
   let mut codec_name = builder.codec_name.clone();
-  let is_mp4_system_entry = matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ");
-  if is_mp4_system_entry {
-    if let Some(ot) = builder.esds_object_type {
-      if let Some((id, name)) = codec_from_object_type(ot) {
-        codec_id = id.to_string();
-        codec_name = Some(name.to_string());
-      }
+  let mut codec_from_esds = false;
+  if let Some(ot) = builder.esds_object_type {
+    if let Some((id, name)) = codec_from_object_type(ot) {
+      codec_id = id.to_string();
+      codec_name = Some(name.to_string());
+      codec_from_esds = true;
     }
   }
-  if let Some((id, name)) = pcm_codec_from_sample_entry(&builder) {
-    codec_id = id.to_string();
-    codec_name = Some(name.to_string());
+  if !codec_from_esds {
+    if let Some((id, name)) = pcm_codec_from_sample_entry(&builder) {
+      codec_id = id.to_string();
+      codec_name = Some(name.to_string());
+    }
   }
 
   // PARSER-150: mkvtoolnix drops `mp4a` tracks whose esds objectTypeIndication
@@ -290,18 +291,15 @@ fn build_track(
 
 /// PARSER-177: resolve the effective codec id for a track builder, mirroring
 /// `r_qtmp4.cpp::determine_codec` — the `esds` objectTypeIndication wins over
-/// the raw sample-entry FOURCC for the generic MPEG-4 system entries
-/// (`mp4a` / `mp4v` / `mp4s` / `mp4 `).  Factored out so both the reader's
-/// verification pass and `build_track` agree on the codec used for gating.
+/// the raw sample-entry FOURCC whenever mkvtoolnix's object-type table
+/// recognises it.  Factored out so both the reader's verification pass and
+/// `build_track` agree on the codec used for gating.
 /// Returns the empty string when the builder carries no codec id.
 pub fn effective_codec_id(builder: &super::moov::TrackBuilder) -> String {
   let codec_id = builder.codec_id_str.clone().unwrap_or_default();
-  let is_mp4_system_entry = matches!(codec_id.as_str(), "mp4a" | "mp4v" | "mp4s" | "mp4 ");
-  if is_mp4_system_entry {
-    if let Some(ot) = builder.esds_object_type {
-      if let Some((id, _name)) = codec_from_object_type(ot) {
-        return id.to_string();
-      }
+  if let Some(ot) = builder.esds_object_type {
+    if let Some((id, _name)) = codec_from_object_type(ot) {
+      return id.to_string();
     }
   }
   if let Some((id, _name)) = pcm_codec_from_sample_entry(builder) {
@@ -687,6 +685,23 @@ mod tests {
     assert!(codec_from_object_type(0xA6).is_none());
     assert!(codec_from_object_type(0x23).is_none());
     assert!(codec_from_object_type(0x6C).is_none());
+  }
+
+  #[test]
+  fn recognised_esds_object_type_overrides_nongeneric_sample_entry() {
+    let mut moov = MoovBuilder::default();
+    let mut b = video_builder(1, "avc1", None);
+    b.esds_object_type = Some(0x20);
+    moov.tracks.push(b);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(m.tracks.len(), 1);
+    assert_eq!(m.tracks[0].codec.id, "V_MPEG4/ISO/ASP");
+    assert_eq!(m.tracks[0].codec.name.as_deref(), Some("MPEG-4 Visual"));
+
+    let mut b = video_builder(1, "avc1", None);
+    b.esds_object_type = Some(0x20);
+    assert_eq!(effective_codec_id(&b), "V_MPEG4/ISO/ASP");
   }
 
   // ---- PARSER-265: QuickTime PCM sample-entry mapping ------------------

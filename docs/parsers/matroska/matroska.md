@@ -12,7 +12,7 @@ The Matroska parser recognises Matroska and WebM EBML documents and extracts hea
 - Related modules: `src-tauri/src/media_metadata/matroska/ebml.rs`, `info.rs`, `tracks/`, `attachments.rs`, `chapters.rs`, `tags.rs`, `cues.rs`, `seek_head.rs`, `tail_analyzer.rs`, `cluster_timestamps.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_matroska.cpp`, `../mkvtoolnix/src/input/r_matroska.h`
 
-The Rust reader is a pure-Rust EBML walker. It probes the EBML header and Matroska/WebM doc type, locates `Segment`, processes level-1 elements, follows chained `SeekHead` entries, and falls back to a tail scan for deferred metadata. Cluster payloads are not demuxed, but the parser samples opening cluster timestamps to improve track timing metadata.
+The Rust reader is a pure-Rust EBML walker. It probes the EBML header and Matroska/WebM doc type, locates `Segment`, processes level-1 elements, follows chained `SeekHead` entries, and falls back to a tail scan for deferred metadata. While locating `Segment`, it skips level-0 `Void`, `CRC32`, and finite-size unknown EBML elements that libebml would return as `EbmlDummy`, while still rejecting known Matroska level-1 elements found outside `Segment` (PARSER-392). Cluster payloads are not demuxed, but the parser samples opening cluster timestamps to improve track timing metadata.
 
 Attachment parsing keeps a reader-level attachment counter across all `Attachments` level-1 elements. Every `AttachedFile` consumes an ID before filtering for data, MIME type, or other skip conditions, matching mkvtoolnix's `m_attachment_id` bookkeeping; emitted `ui_id` values therefore preserve gaps caused by skipped attachments even across multiple `Attachments` elements.
 
@@ -40,7 +40,3 @@ Key structures are EBML `ElementHeader`, deferred level-1 position records, trac
 Upstream uses libebml/libmatroska and performs full packetizer checks, content decoding, and cluster processing for muxing. Rust is header-only and does not validate every obscure codec or content-encoding path. Unsupported or unknown details are preserved as structured codec IDs, codec-private blobs, warnings, or omitted fields rather than triggering packetizer-level behavior.
 
 `BlockAdditionMapping` carries the full `block_addition_mapping_t` shape: `BlockAddIDType` (rendered as the source FOURCC when printable, else decimal), `BlockAddIDExtraData` (hex-encoded as `dataHex`), `BlockAddIDName` (`idName`), and `BlockAddIDValue` (`idValue`). Mappings keyed by value or carrying a descriptive name therefore preserve that information on the wire model.
-
-## Open Issues
-
-- `PARSER-392` - the pre-Segment locator only skips level-0 `Void` and `CRC32` elements, but mkvtoolnix also skips `EbmlDummy` elements returned by libebml while searching for the first `KaxSegment`. A Matroska/WebM file with an otherwise skippable unknown EBML element between the EBML head and `Segment` is rejected locally as an unexpected level-0 element, while mkvtoolnix skips it and continues to the segment.

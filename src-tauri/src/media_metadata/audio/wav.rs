@@ -107,15 +107,6 @@ fn id_eq(id: &[u8; 4], want: &[u8; 4]) -> bool {
 /// Port of `wav_reader_c::determine_type`.
 fn determine_type(head: &[u8]) -> Option<WavType> {
   if head.len() < W64_HEADER as usize {
-    // Still allow a short classic header (RIFF/RF64 need only 12 bytes).
-    if head.len() >= 12 {
-      if &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
-        return Some(WavType::Wave);
-      }
-      if &head[0..4] == b"RF64" && &head[8..12] == b"WAVE" {
-        return Some(WavType::Rf64);
-      }
-    }
     return None;
   }
   if &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
@@ -766,6 +757,18 @@ mod tests {
     let bytes = build_wav(48_000, 2, 16, 4);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(WavReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_too_short_riff_wave_header() {
+    let mut s = FileSource::from_reader_for_test(Cursor::new(b"RIFF\0\0\0\0WAVE".to_vec()));
+    assert!(!WavReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_too_short_rf64_wave_header() {
+    let mut s = FileSource::from_reader_for_test(Cursor::new(b"RF64\0\0\0\0WAVE".to_vec()));
+    assert!(!WavReader.probe(&mut s).unwrap());
   }
 
   #[test]
