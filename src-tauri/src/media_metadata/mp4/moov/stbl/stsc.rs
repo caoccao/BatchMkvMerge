@@ -35,24 +35,32 @@ pub struct StscEntry {
   pub samples_per_chunk: u32,
 }
 
-/// Read up to `max_entries` `stsc` entries.  Returns an empty Vec for a
-/// truncated / empty box rather than failing the whole parse — the bounded
-/// index builder degrades gracefully (treating an absent map as "one sample
-/// per chunk", mirroring mkvtoolnix leaving `chunk.size` at 0 when no chunkmap
-/// entry covers a chunk).
+/// Validate the declared `stsc` entry count exactly, then retain up to
+/// `max_entries` entries for the bounded first-sample index.
 pub fn parse(src: &mut FileSource, header: &BoxHeader, max_entries: usize) -> Result<Vec<StscEntry>, ParseError> {
-  if header.payload_size().unwrap_or(0) < 8 {
-    return Ok(Vec::new());
+  let payload = header.payload_size().unwrap_or(0);
+  if payload < 8 {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "truncated stsc atom".to_string(),
+    });
   }
   src.skip(4)?; // FullBox header
   let entry_count = src.read_u32_be()?;
   if entry_count == 0 {
     return Ok(Vec::new());
   }
-  // Cap how many entries we walk: enough chunk-map runs for a bounded read.
+  let available = payload.saturating_sub(8) / 12;
+  if u64::from(entry_count) > available {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "stsc entry_count overruns atom payload".to_string(),
+    });
+  }
+  // Cap how many entries we retain: enough chunk-map runs for a bounded read.
   let to_read = (entry_count as usize).min(max_entries);
-  let available = header.payload_size().unwrap_or(0).saturating_sub(8) / 12;
-  let to_read = to_read.min(available as usize);
   let mut entries = Vec::with_capacity(to_read);
   for _ in 0..to_read {
     let first_chunk = src.read_u32_be()?;
@@ -118,15 +126,15 @@ mod tests {
   }
 
   #[test]
-  fn empty_or_truncated_yields_empty() {
+  fn empty_yields_empty_and_truncated_is_malformed() {
     let (h, mut s) = read(build_stsc_payload(&[]));
     assert!(parse(&mut s, &h, 64).unwrap().is_empty());
     let (h2, mut s2) = read(vec![0u8; 4]); // < 8 bytes
-    assert!(parse(&mut s2, &h2, 64).unwrap().is_empty());
+    assert!(matches!(parse(&mut s2, &h2, 64), Err(ParseError::Malformed { .. })));
   }
 
   #[test]
-  fn caps_against_declared_payload() {
+  fn declared_count_overrun_is_malformed() {
     // entry_count claims 999 but payload only carries one entry.
     let mut p = vec![0u8; 4];
     p.extend_from_slice(&999u32.to_be_bytes());
@@ -134,7 +142,6 @@ mod tests {
     p.extend_from_slice(&4u32.to_be_bytes());
     p.extend_from_slice(&1u32.to_be_bytes());
     let (h, mut s) = read(p);
-    let entries = parse(&mut s, &h, 64).unwrap();
-    assert_eq!(entries.len(), 1);
+    assert!(matches!(parse(&mut s, &h, 64), Err(ParseError::Malformed { .. })));
   }
 }

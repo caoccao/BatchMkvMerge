@@ -218,12 +218,16 @@ fn sample_size_at(tables: &SampleTables, sample_idx: usize) -> u64 {
 /// bounded list of leading per-sample sizes.  Layout: FullBox(4) +
 /// sample_size(4) + sample_count(4) + [if sample_size==0: sample_count × u32].
 /// When `sample_size != 0` it is the fixed size for every sample, so no
-/// per-sample list is read.  Returns `(None, 0, [])` for a truncated payload
-/// rather than failing the parse.
+/// per-sample list is read. The declared per-sample entry count is validated
+/// exactly before the retained prefix is capped.
 fn read_stsz(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, u64, Vec<u64>), ParseError> {
   let payload = header.payload_size().unwrap_or(0);
   if payload < 12 {
-    return Ok((None, 0, Vec::new()));
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "truncated stsz atom".to_string(),
+    });
   }
   src.skip(4)?; // FullBox header
   let sample_size = src.read_u32_be()?;
@@ -231,10 +235,17 @@ fn read_stsz(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, u
   if sample_size != 0 {
     return Ok((Some(sample_count), sample_size as u64, Vec::new()));
   }
-  // Per-sample table: read up to MAX_INDEX_SAMPLES entries, also bounded by the
-  // declared payload so a corrupt count never over-reads.
+  // Per-sample table: first validate the exact declared count, then retain the
+  // bounded prefix needed for first-sample verification.
   let available = payload.saturating_sub(12) / 4;
-  let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  if u64::from(sample_count) > available {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "stsz sample_count overruns atom payload".to_string(),
+    });
+  }
+  let to_read = (sample_count as u64).min(MAX_INDEX_SAMPLES as u64);
   let mut sizes = Vec::with_capacity(to_read as usize);
   for _ in 0..to_read {
     sizes.push(src.read_u32_be()? as u64);
@@ -296,17 +307,28 @@ fn read_stz2(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, V
 }
 
 /// Read the chunk offsets from an `stco` box: FullBox(4) + entry_count(4) +
-/// entry_count × u32.  Bounded by [`MAX_INDEX_SAMPLES`] (every chunk holds at
-/// least one sample, so more chunks than that can't extend the 1 MiB read).
+/// entry_count × u32. The declared count is validated exactly, then retained
+/// offsets are bounded by [`MAX_INDEX_SAMPLES`].
 fn read_chunk_offsets_32(src: &mut FileSource, header: &BoxHeader) -> Result<Vec<u64>, ParseError> {
   let payload = header.payload_size().unwrap_or(0);
   if payload < 8 {
-    return Ok(Vec::new());
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "truncated stco atom".to_string(),
+    });
   }
   src.skip(4)?; // FullBox header
   let entry_count = src.read_u32_be()?;
   let available = payload.saturating_sub(8) / 4;
-  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  if u64::from(entry_count) > available {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "stco entry_count overruns atom payload".to_string(),
+    });
+  }
+  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64);
   let mut offsets = Vec::with_capacity(to_read as usize);
   for _ in 0..to_read {
     offsets.push(src.read_u32_be()? as u64);
@@ -315,16 +337,28 @@ fn read_chunk_offsets_32(src: &mut FileSource, header: &BoxHeader) -> Result<Vec
 }
 
 /// Read the chunk offsets from a `co64` box: FullBox(4) + entry_count(4) +
-/// entry_count × u64.  Bounded by [`MAX_INDEX_SAMPLES`].
+/// entry_count × u64. The declared count is validated exactly, then retained
+/// offsets are bounded by [`MAX_INDEX_SAMPLES`].
 fn read_chunk_offsets_64(src: &mut FileSource, header: &BoxHeader) -> Result<Vec<u64>, ParseError> {
   let payload = header.payload_size().unwrap_or(0);
   if payload < 8 {
-    return Ok(Vec::new());
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "truncated co64 atom".to_string(),
+    });
   }
   src.skip(4)?; // FullBox header
   let entry_count = src.read_u32_be()?;
   let available = payload.saturating_sub(8) / 8;
-  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64).min(available);
+  if u64::from(entry_count) > available {
+    return Err(ParseError::Malformed {
+      format: "mp4",
+      offset: header.payload_start(),
+      reason: "co64 entry_count overruns atom payload".to_string(),
+    });
+  }
+  let to_read = (entry_count as u64).min(MAX_INDEX_SAMPLES as u64);
   let mut offsets = Vec::with_capacity(to_read as usize);
   for _ in 0..to_read {
     offsets.push(src.read_u64_be()?);
@@ -363,7 +397,7 @@ mod tests {
   fn stsz_sample_count_recorded() {
     // stsz: version+flags(4) + sample_size(4) + sample_count(4).
     let mut stsz_payload = vec![0u8; 4];
-    stsz_payload.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0 (per-sample sizes)
+    stsz_payload.extend_from_slice(&1024u32.to_be_bytes()); // fixed sample_size
     stsz_payload.extend_from_slice(&512u32.to_be_bytes()); // sample_count
     let stsz = encode_box(b"stsz", &stsz_payload);
     let stbl = encode_box(b"stbl", &stsz);
@@ -406,13 +440,17 @@ mod tests {
   // ---- PARSER-177: first-sample location (stsz first size + stco/co64) -----
 
   fn run_stbl(children: Vec<u8>) -> TrackBuilder {
+    run_stbl_result(children).unwrap()
+  }
+
+  fn run_stbl_result(children: Vec<u8>) -> Result<TrackBuilder, ParseError> {
     let stbl = encode_box(b"stbl", &children);
     let mut s = FileSource::from_reader_for_test(Cursor::new(stbl));
     let parent = atom::read_box_header(&mut s).unwrap();
     let mut b = TrackBuilder::default();
     let deadline = crate::media_metadata::deadline::Deadline::new(60_000);
-    parse(&mut s, &parent, &deadline, &mut b).unwrap();
-    b
+    parse(&mut s, &parent, &deadline, &mut b)?;
+    Ok(b)
   }
 
   #[test]
@@ -422,6 +460,8 @@ mod tests {
     p.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0
     p.extend_from_slice(&3u32.to_be_bytes()); // sample_count
     p.extend_from_slice(&777u32.to_be_bytes()); // first sample size
+    p.extend_from_slice(&888u32.to_be_bytes());
+    p.extend_from_slice(&999u32.to_be_bytes());
     let b = run_stbl(encode_box(b"stsz", &p));
     assert_eq!(b.sample_count, Some(3));
     assert_eq!(b.first_sample_size, Some(777));
@@ -449,10 +489,19 @@ mod tests {
   }
 
   #[test]
-  fn stsz_truncated_payload_yields_none() {
-    let b = run_stbl(encode_box(b"stsz", &[0u8; 4])); // < 12 bytes
-    assert!(b.sample_count.is_none());
-    assert!(b.first_sample_size.is_none());
+  fn stsz_truncated_payload_is_malformed() {
+    let err = run_stbl_result(encode_box(b"stsz", &[0u8; 4])).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+  }
+
+  #[test]
+  fn stsz_declared_count_overrun_is_malformed() {
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&0u32.to_be_bytes()); // sample_size = 0
+    p.extend_from_slice(&3u32.to_be_bytes()); // sample_count
+    p.extend_from_slice(&777u32.to_be_bytes()); // only one entry
+    let err = run_stbl_result(encode_box(b"stsz", &p)).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
   }
 
   #[test]
@@ -472,16 +521,25 @@ mod tests {
   }
 
   #[test]
-  fn stco_empty_or_truncated_yields_none() {
+  fn stco_empty_yields_none() {
     // Empty entry_count.
     let mut p = vec![0u8; 4];
     p.extend_from_slice(&0u32.to_be_bytes()); // entry_count = 0
     p.extend_from_slice(&1234u32.to_be_bytes());
     let b = run_stbl(encode_box(b"stco", &p));
     assert!(b.first_sample_file_offset.is_none());
-    // Truncated payload (< 12 bytes).
-    let b2 = run_stbl(encode_box(b"stco", &[0u8; 8]));
-    assert!(b2.first_sample_file_offset.is_none());
+  }
+
+  #[test]
+  fn stco_truncated_or_overrun_is_malformed() {
+    let err = run_stbl_result(encode_box(b"stco", &[0u8; 4])).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&2u32.to_be_bytes()); // entry_count
+    p.extend_from_slice(&4096u32.to_be_bytes()); // only one offset
+    let err = run_stbl_result(encode_box(b"stco", &p)).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
   }
 
   #[test]
@@ -494,16 +552,25 @@ mod tests {
   }
 
   #[test]
-  fn co64_empty_or_truncated_yields_none() {
+  fn co64_empty_yields_none() {
     // Empty entry_count.
     let mut p = vec![0u8; 4];
     p.extend_from_slice(&0u32.to_be_bytes());
     p.extend_from_slice(&0u64.to_be_bytes());
     let b = run_stbl(encode_box(b"co64", &p));
     assert!(b.first_sample_file_offset.is_none());
-    // Truncated payload (< 16 bytes).  entry_count reads as 0 here.
-    let b2 = run_stbl(encode_box(b"co64", &[0u8; 8]));
-    assert!(b2.first_sample_file_offset.is_none());
+  }
+
+  #[test]
+  fn co64_truncated_or_overrun_is_malformed() {
+    let err = run_stbl_result(encode_box(b"co64", &[0u8; 4])).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
+
+    let mut p = vec![0u8; 4];
+    p.extend_from_slice(&2u32.to_be_bytes()); // entry_count
+    p.extend_from_slice(&0x1_0000_0000u64.to_be_bytes()); // only one offset
+    let err = run_stbl_result(encode_box(b"co64", &p)).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
   }
 
   // ---- PARSER-183: bounded multi-sample index (stsc + stco + stsz) ---------

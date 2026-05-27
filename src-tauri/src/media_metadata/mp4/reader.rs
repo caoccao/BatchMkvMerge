@@ -541,10 +541,10 @@ mod tests {
 
   #[test]
   fn esds_mp3_object_type_reports_mp3() {
-    use crate::media_metadata::mp4::codec_specific::esds::build_esds_payload;
+    use crate::media_metadata::mp4::codec_specific::esds::build_esds_payload_without_decoder_specific;
     use crate::media_metadata::mp4::moov::stbl::stsd::build_audio_sample_entry_v0;
     // mp4a sample entry carrying an esds with objectType 0x69 (MP3).
-    let esds = encode_box(b"esds", &build_esds_payload(0x69, &[]));
+    let esds = encode_box(b"esds", &build_esds_payload_without_decoder_specific(0x69));
     let entry = build_audio_sample_entry_v0(b"mp4a", 2, 16, 48_000, &esds);
     let stsd = encode_box(
       b"stsd",

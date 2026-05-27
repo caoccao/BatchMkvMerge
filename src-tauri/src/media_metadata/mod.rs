@@ -108,13 +108,11 @@ fn parse_with_extension_fallback(
   // `reader_detection_and_creation.cpp:302-310` extension-hinted phase.
   let hints = probe::extension_hint::hints_for_path(path);
 
-  // PARSER-142: Blu-ray `.mpls` playlists are opened as MPEG-TS playlists
-  // before the normal probe cascade, mirroring
+  // PARSER-142 / PARSER-369: Blu-ray playlists are opened as MPEG-TS
+  // playlists before the normal probe cascade for every input, mirroring
   // `reader_detection_and_creation.cpp:97-107` →
   // `mm_mpls_multi_file_io_c::open_multi`.
-  if hints.contains(&probe::extension_hint::FileTypeHint::BlurayPlaylist)
-    && mpls::try_open(src, path, deadline, metadata)?
-  {
+  if mpls::try_open(src, path, deadline, metadata)? {
     return Ok(());
   }
 
@@ -258,10 +256,14 @@ mod tests {
     std::fs::create_dir_all(bdmv.join("STREAM")).unwrap();
     std::fs::write(bdmv.join("index.bdmv"), b"INDX0200").unwrap();
     std::fs::write(bdmv.join("STREAM").join("00001.m2ts"), [0u8; 64]).unwrap();
-    let mpls_path = bdmv.join("PLAYLIST").join("00000.mpls");
+    let playlist_dir = bdmv.join("PLAYLIST");
+    let mpls_path = playlist_dir.join("00000.mpls");
+    let renamed_path = playlist_dir.join("renamed-playlist.bin");
     std::fs::write(&mpls_path, &mpls).unwrap();
+    std::fs::write(&renamed_path, &mpls).unwrap();
 
     let result = parse(&mpls_path, ParseOptions::default());
+    let renamed_result = parse(&renamed_path, ParseOptions::default());
     let _ = std::fs::remove_dir_all(&root);
 
     let m = result.unwrap();
@@ -270,6 +272,11 @@ mod tests {
     let pl = m.container.properties.playlist.unwrap();
     assert_eq!(pl.files.len(), 1);
     assert_eq!(pl.duration.unwrap().ns, 1_000_000_000);
+
+    let renamed = renamed_result.unwrap();
+    assert!(renamed.container.recognized);
+    assert_eq!(renamed.container.format, ContainerFormat::MpegTs);
+    assert_eq!(renamed.container.properties.playlist.unwrap().files.len(), 1);
   }
 
   #[test]

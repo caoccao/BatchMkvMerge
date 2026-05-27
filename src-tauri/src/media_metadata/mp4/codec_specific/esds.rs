@@ -229,6 +229,13 @@ fn walk(
         cursor.pos = body_end;
       }
       TAG_DEC_SPECIFIC_INFO => {
+        if len == 0 {
+          return Err(ParseError::Malformed {
+            format: "mp4",
+            offset: cursor.pos as u64,
+            reason: "zero-length esds DecoderSpecificInfo descriptor".to_string(),
+          });
+        }
         // PARSER-177: record the DecoderSpecificInfo length (mkvtoolnix's
         // `esds.decoder_config`) so the verification pass can gate MP4V /
         // VobSub tracks on its presence / size.
@@ -401,6 +408,33 @@ pub(crate) fn build_esds_payload(object_type: u8, audio_specific_config: &[u8]) 
 }
 
 #[cfg(test)]
+pub(crate) fn build_esds_payload_without_decoder_specific(object_type: u8) -> Vec<u8> {
+  // FullBox header
+  let mut p = vec![0u8; 4];
+  let dec_config = {
+    let mut v = vec![TAG_DECODER_CONFIG];
+    v.push(13); // object type + stream type + buffer + max/avg bitrate
+    v.push(object_type);
+    v.push(0x15);
+    v.extend_from_slice(&[0u8; 3]);
+    v.extend_from_slice(&0u32.to_be_bytes());
+    v.extend_from_slice(&0u32.to_be_bytes());
+    v
+  };
+  let es_descriptor = {
+    let mut v = vec![TAG_ES_DESCRIPTOR];
+    let body_len = 3 + dec_config.len();
+    v.push(body_len as u8);
+    v.extend_from_slice(&[0u8; 2]);
+    v.push(0);
+    v.extend_from_slice(&dec_config);
+    v
+  };
+  p.extend_from_slice(&es_descriptor);
+  p
+}
+
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::media_metadata::mp4::atom::encode_box;
@@ -524,7 +558,7 @@ mod tests {
 
   #[test]
   fn aac_missing_decoder_specific_synthesizes_default_asc() {
-    let payload = build_esds_payload(0x40, &[]);
+    let payload = build_esds_payload_without_decoder_specific(0x40);
     let b = run_with_audio(payload, 2, 44_100.0);
     assert_eq!(b.esds_decoder_specific_len, Some(2));
     assert_eq!(b.esds_decoder_specific_data.as_deref(), Some(&[0x0a, 0x10][..]));
@@ -533,6 +567,20 @@ mod tests {
     let audio = b.audio.unwrap();
     assert_eq!(audio.channels, Some(2));
     assert_eq!(audio.sampling_frequency, Some(44_100.0));
+  }
+
+  #[test]
+  fn zero_length_decoder_specific_info_is_malformed() {
+    let payload = build_esds_payload(0x40, &[]);
+    assert!(matches!(run_result(payload), Err(ParseError::Malformed { .. })));
+  }
+
+  #[test]
+  fn one_byte_aac_decoder_specific_still_synthesizes_default_asc() {
+    let payload = build_esds_payload(0x40, &[0x12]);
+    let b = run_with_audio(payload, 2, 44_100.0);
+    assert_eq!(b.esds_decoder_specific_len, Some(2));
+    assert_eq!(b.esds_decoder_specific_data.as_deref(), Some(&[0x0a, 0x10][..]));
   }
 
   #[test]

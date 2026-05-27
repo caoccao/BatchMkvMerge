@@ -326,6 +326,9 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
       state.headers_read = true;
     }
     10 => {
+      if payload.len() < 2 {
+        return Ok(());
+      }
       state.codec_id.get_or_insert("A_AAC");
       state.codec_name.get_or_insert("AAC");
       state.headers_read = true;
@@ -921,6 +924,20 @@ mod tests {
     assert_eq!(audio.channels, Some(2));
     assert_eq!(audio.bit_depth, Some(16));
     assert!(audio.codec_config.is_none());
+  }
+
+  #[test]
+  fn one_byte_aac_tag_does_not_emit_track() {
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (10 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("one-byte-aac.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.tracks.is_empty());
   }
 
   #[test]

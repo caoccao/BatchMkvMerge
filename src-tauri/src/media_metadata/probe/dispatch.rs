@@ -17,18 +17,11 @@
 
 //! Reader registry + probe cascade.
 //!
-//! Mirrors mkvtoolnix's `probe_file_format` — a six-phase fallthrough:
-//! unambiguous magics → extension hints → text subtitles → strict elementary
-//! streams → frame-scan audio → ambiguous formats. The cascade walks every
-//! registered reader in priority order
-//! and asks it to `probe`. The first reader that claims the file is asked to
-//! `read_headers` and the result is returned to the caller.
-//!
-//! Phase 3 ships with the Matroska reader as the only registered entry —
-//! every subsequent format reader slots in here without changing the
-//! cascade's shape. The probe outcome is reported via [`DispatchOutcome`] so
-//! the public `parse` entry point can distinguish "no reader claimed" from
-//! "a reader claimed but then failed mid-parse".
+//! Mirrors mkvtoolnix's `probe_file_format` staged fallthrough: unsupported
+//! signatures, unambiguous formats, extension-hinted formats, text subtitles,
+//! strict elementary streams, raw-audio phases, ambiguous MPEG containers, and
+//! late loose elementary/raw phases. The first reader that claims the file is
+//! asked to `read_headers` and the result is returned to the caller.
 
 use crate::media_metadata::audio::{
   AacReader, Ac3Reader, DtsReader, FlacReader, Mp3Reader, TrueHdReader, TtaReader, WavReader, WavpackReader,
@@ -82,10 +75,9 @@ pub fn dispatch(
   dispatch_with_hints(src, deadline, out, &[])
 }
 
-/// Like [`dispatch`], but additionally biases the reader cascade so that
-/// readers whose names match any of `hints` are tried first.  Mirrors
-/// mkvtoolnix's "extension-hinted" phase
-/// (`reader_detection_and_creation.cpp:302-310`).  PARSER-062.
+/// Like [`dispatch`], but additionally runs the extension-hinted readers in
+/// mkvtoolnix's extension phase, after the unambiguous content probes and
+/// before text-subtitle probing (`reader_detection_and_creation.cpp:302-310`).
 pub fn dispatch_with_hints(
   src: &mut FileSource,
   deadline: &Deadline,
@@ -105,38 +97,85 @@ pub fn dispatch_with_hints(
     out.container.supported = false;
     return Ok(DispatchOutcome::Claimed("unsupported"));
   }
-  let mut order: Vec<&'static (dyn Reader + Send + Sync)> = Vec::new();
-  let hinted_names = hints_to_reader_names(hints);
-  // PARSER-062: front-load every reader whose name matches an extension hint
-  // so ambiguous formats (`.mp4` → MP4 / AAC / ALAC; `.ogg` → Ogg / FLAC)
-  // are tried in the order the extension implies.  The remaining readers run
-  // in their original priority order.
-  for reader in registered_readers() {
-    if hinted_names.iter().any(|n| *n == reader.name()) {
-      order.push(*reader);
+  for reader_name in staged_reader_names(hints) {
+    if let Some(outcome) = try_reader_by_name(src, deadline, out, reader_name)? {
+      return Ok(outcome);
     }
-  }
-  for reader in registered_readers() {
-    if !order.iter().any(|r| std::ptr::eq(*r, *reader)) {
-      order.push(*reader);
-    }
-  }
-  for reader in order {
-    // Each probe call must see a freshly-positioned cursor; the trait
-    // contract requires probes to rewind on return, but we re-seek defensively
-    // so a misbehaving probe can't leak position across registry entries.
-    src.seek_to(0)?;
-    deadline.check("probe")?;
-    let claimed = reader.probe(src)?;
-    if !claimed {
-      continue;
-    }
-    src.seek_to(0)?;
-    reader.read_headers(src, deadline, out)?;
-    return Ok(DispatchOutcome::Claimed(reader.name()));
   }
   Err(ParseError::Unrecognised)
 }
+
+fn try_reader_by_name(
+  src: &mut FileSource,
+  deadline: &Deadline,
+  out: &mut MediaMetadata,
+  reader_name: &'static str,
+) -> Result<Option<DispatchOutcome>, ParseError> {
+  let Some(reader) = registered_readers().iter().copied().find(|r| r.name() == reader_name) else {
+    return Ok(None);
+  };
+  // Each probe call must see a freshly-positioned cursor; the trait contract
+  // requires probes to rewind on return, but re-seeking here prevents a
+  // misbehaving probe from leaking position into the next phase.
+  src.seek_to(0)?;
+  deadline.check("probe")?;
+  if !reader.probe(src)? {
+    return Ok(None);
+  }
+  src.seek_to(0)?;
+  reader.read_headers(src, deadline, out)?;
+  Ok(Some(DispatchOutcome::Claimed(reader.name())))
+}
+
+fn staged_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&'static str> {
+  let phases: [&[&str]; 8] = [
+    UNAMBIGUOUS_READERS,
+    TEXT_READERS,
+    STRICT_ELEMENTARY_READERS,
+    RAW_AUDIO_EIGHT_FRAME_READERS,
+    AMBIGUOUS_CONTAINER_READERS,
+    LATE_AMBIGUOUS_READERS,
+    ONE_FRAME_START_READERS,
+    LOOSE_ELEMENTARY_READERS,
+  ];
+  let mut names = Vec::new();
+  names.extend_from_slice(UNAMBIGUOUS_READERS);
+  names.extend(hints_to_reader_names(hints));
+  for phase in phases.iter().skip(1) {
+    names.extend_from_slice(phase);
+  }
+  names.extend_from_slice(RAW_AUDIO_TWENTY_FRAME_READERS);
+  names.extend_from_slice(FINAL_UNSUPPORTED_BUT_LOCAL_READERS);
+  names
+}
+
+const UNAMBIGUOUS_READERS: &[&str] = &[
+  "avi",
+  "flv",
+  "matroska",
+  "wav",
+  "ogg",
+  "hdmv_textst",
+  "flac",
+  "pgs",
+  "realmedia",
+  "mp4",
+  "tta",
+  "vc1",
+  "wavpack",
+  "ivf",
+  "coreaudio",
+  "dirac",
+];
+const TEXT_READERS: &[&str] = &["webvtt", "srt", "ssa", "vobsub", "usf", "microdvd"];
+const STRICT_ELEMENTARY_READERS: &[&str] = &["avc", "hevc"];
+const RAW_AUDIO_EIGHT_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
+const AMBIGUOUS_CONTAINER_READERS: &[&str] = &["dts", "mpeg_ts", "mpeg_ps", "obu"];
+const LATE_AMBIGUOUS_READERS: &[&str] = &["truehd", "dts", "vobbtn"];
+const ONE_FRAME_START_READERS: &[&str] = &["mp3", "ac3", "aac"];
+const LOOSE_ELEMENTARY_READERS: &[&str] = &["mpeg_video", "avc", "hevc"];
+const RAW_AUDIO_TWENTY_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
+const FINAL_UNSUPPORTED_BUT_LOCAL_READERS: &[&str] = &["dv"];
 
 /// Translate [`FileTypeHint`] values into the reader names registered in
 /// [`registered_readers`].  A hint may resolve to multiple reader names when
@@ -147,8 +186,8 @@ fn hints_to_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&
   let mut names = Vec::new();
   for hint in hints {
     let resolved: &[&'static str] = match hint {
-      FileTypeHint::Aac => &["aac"],
-      FileTypeHint::Ac3 => &["ac3"],
+      FileTypeHint::Aac => &[],
+      FileTypeHint::Ac3 => &[],
       FileTypeHint::AvcEs => &["avc"],
       FileTypeHint::Avi => &["avi"],
       FileTypeHint::CoreAudio => &["coreaudio"],
@@ -160,8 +199,8 @@ fn hints_to_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&
       FileTypeHint::HevcEs => &["hevc"],
       FileTypeHint::Ivf => &["ivf"],
       FileTypeHint::Matroska => &["matroska"],
-      FileTypeHint::MicroDvd => &["microdvd"],
-      FileTypeHint::Mp3 => &["mp3"],
+      FileTypeHint::MicroDvd => &[],
+      FileTypeHint::Mp3 => &[],
       FileTypeHint::MpegEs => &["mpeg_video"],
       FileTypeHint::MpegPs => &["mpeg_ps"],
       FileTypeHint::MpegTs => &["mpeg_ts"],
@@ -169,20 +208,20 @@ fn hints_to_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&
       FileTypeHint::PgsSup => &["pgs"],
       FileTypeHint::QtMp4 => &["mp4"],
       FileTypeHint::Real => &["realmedia"],
-      FileTypeHint::Srt => &["srt"],
-      FileTypeHint::Ssa => &["ssa"],
+      FileTypeHint::Srt => &[],
+      FileTypeHint::Ssa => &[],
       FileTypeHint::TrueHd => &["truehd"],
       FileTypeHint::Tta => &["tta"],
-      FileTypeHint::Usf => &["usf"],
+      FileTypeHint::Usf => &[],
       FileTypeHint::Vc1 => &["vc1"],
       FileTypeHint::VobButton => &["vobbtn"],
-      FileTypeHint::VobSub => &["vobsub"],
+      FileTypeHint::VobSub => &[],
       FileTypeHint::Wav => &["wav"],
       FileTypeHint::Wavpack4 => &["wavpack"],
-      FileTypeHint::WebVtt => &["webvtt"],
+      FileTypeHint::WebVtt => &[],
       FileTypeHint::HdmvTextSt => &["hdmv_textst"],
       FileTypeHint::Obu => &["obu"],
-      FileTypeHint::Alac => &["mp4", "coreaudio"],
+      FileTypeHint::Alac => &[],
       // Hint values without dedicated readers — no-op.
       FileTypeHint::Asf
       | FileTypeHint::Cdxa
@@ -347,6 +386,28 @@ mod tests {
     let mut out = MediaMetadata::new("garbage", 16);
     let _ = dispatch(&mut src, &deadline, &mut out);
     assert!(deadline.check("post-dispatch").is_ok());
+  }
+
+  #[test]
+  fn extension_hints_do_not_frontload_raw_audio_or_text_readers() {
+    use super::super::extension_hint::hints_for_extension;
+    assert_eq!(hints_to_reader_names(&hints_for_extension("mp4")), vec!["mp4"]);
+    assert!(hints_to_reader_names(&hints_for_extension("mp3")).is_empty());
+    assert!(hints_to_reader_names(&hints_for_extension("srt")).is_empty());
+  }
+
+  #[test]
+  fn staged_cascade_places_unambiguous_before_extension_and_ts_before_ps_without_hint() {
+    use super::super::extension_hint::hints_for_extension;
+    let hinted = staged_reader_names(&hints_for_extension("mpg"));
+    let dirac = hinted.iter().position(|n| *n == "dirac").unwrap();
+    let hinted_ps = hinted.iter().position(|n| *n == "mpeg_ps").unwrap();
+    assert!(dirac < hinted_ps);
+
+    let unhinted = staged_reader_names(&[]);
+    let ts = unhinted.iter().position(|n| *n == "mpeg_ts").unwrap();
+    let ps = unhinted.iter().position(|n| *n == "mpeg_ps").unwrap();
+    assert!(ts < ps);
   }
 
   // ---- PARSER-063: unsupported signatures ----------------------------

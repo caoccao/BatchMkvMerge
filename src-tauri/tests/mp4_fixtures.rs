@@ -176,6 +176,27 @@ fn esds(object_type: u8, audio_specific_config: &[u8]) -> Vec<u8> {
   encode_box(b"esds", &p)
 }
 
+fn esds_without_decoder_specific(object_type: u8) -> Vec<u8> {
+  const TAG_ES_DESCRIPTOR: u8 = 0x03;
+  const TAG_DECODER_CONFIG: u8 = 0x04;
+
+  let mut p = vec![0u8; 4]; // FullBox header
+  let dec_config = {
+    let mut v = vec![TAG_DECODER_CONFIG, 13, object_type, 0x15];
+    v.extend_from_slice(&[0u8; 3]); // bufferSizeDB
+    v.extend_from_slice(&0u32.to_be_bytes()); // maxBitrate
+    v.extend_from_slice(&0u32.to_be_bytes()); // avgBitrate
+    v
+  };
+  let es_descriptor = {
+    let mut v = vec![TAG_ES_DESCRIPTOR, (3 + dec_config.len()) as u8, 0, 0, 0];
+    v.extend_from_slice(&dec_config);
+    v
+  };
+  p.extend_from_slice(&es_descriptor);
+  encode_box(b"esds", &p)
+}
+
 fn audio_sample_entry(fourcc_kind: &[u8; 4], channels: u16, sample_rate: u32, children: &[u8]) -> Vec<u8> {
   let mut p = Vec::new();
   p.extend_from_slice(&[0u8; 6]);
@@ -642,8 +663,18 @@ fn mp3_frame_mpeg1_l3_128_44100_stereo() -> Vec<u8> {
 fn mp3_in_mp4_params_recovered_from_first_bytes() {
   let frame = mp3_frame_mpeg1_l3_128_44100_stereo();
   let sizes = vec![frame.len() as u32];
-  let trak =
-    move |chunk_offset: u32| audio_trak_with_table(1, b"mp4a", "eng", 0, 0, &esds(0x6B, &[]), &sizes, chunk_offset);
+  let trak = move |chunk_offset: u32| {
+    audio_trak_with_table(
+      1,
+      b"mp4a",
+      "eng",
+      0,
+      0,
+      &esds_without_decoder_specific(0x6B),
+      &sizes,
+      chunk_offset,
+    )
+  };
   let bytes = build_mp4_mdat_first(b"mp42", trak, &frame);
   let path = write_tempfile(&bytes, "mp4");
   let m = parse(&path, ParseOptions::default()).unwrap();
@@ -655,8 +686,8 @@ fn mp3_in_mp4_params_recovered_from_first_bytes() {
 }
 
 #[test]
-fn aac_mp4a_empty_decoder_specific_info_uses_sample_entry_defaults() {
-  let entry = audio_sample_entry(b"mp4a", 2, 44_100, &esds(0x40, &[]));
+fn aac_mp4a_missing_decoder_specific_info_uses_sample_entry_defaults() {
+  let entry = audio_sample_entry(b"mp4a", 2, 44_100, &esds_without_decoder_specific(0x40));
   let stbl_payload = stsd(vec![entry]);
   let minf = encode_box(b"minf", &encode_box(b"stbl", &stbl_payload));
   let mut mdia = mdhd(44_100, 0, "eng");

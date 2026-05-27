@@ -100,14 +100,15 @@ pub fn parse(payload: &[u8]) -> Result<ProgramStreamMap, ParseError> {
     let info_len = u16::from_be_bytes([payload[pos + 2], payload[pos + 3]]) as usize;
     let desc_start = pos + 4;
     let desc_end = desc_start + info_len;
-    if desc_end > map_end {
-      break;
-    }
+    let clamped_desc_end = desc_end.min(map_end);
     entries.push(PsmEntry {
       stream_type,
       elementary_stream_id: stream_id,
-      descriptors: payload[desc_start..desc_end].to_vec(),
+      descriptors: payload[desc_start..clamped_desc_end].to_vec(),
     });
+    if desc_end > map_end {
+      break;
+    }
     pos = desc_end;
   }
   Ok(ProgramStreamMap { entries })
@@ -176,14 +177,17 @@ mod tests {
   }
 
   #[test]
-  fn stops_at_truncated_entry() {
+  fn records_entry_before_overlong_descriptor_skip() {
     let mut payload = build_psm(&[(0x1B, 0xE0, &[1, 2, 3, 4])]);
     // Force the entry's info_len to overrun the map
     let pos = 8; // after program_stream_map_length + version/marker + psi_len + esi_len
     payload[pos + 2] = 0xFF;
     payload[pos + 3] = 0xFF;
     let psm = parse(&payload).unwrap();
-    assert!(psm.entries.is_empty());
+    assert_eq!(psm.entries.len(), 1);
+    assert_eq!(psm.entries[0].stream_type, 0x1B);
+    assert_eq!(psm.entries[0].elementary_stream_id, 0xE0);
+    assert_eq!(psm.entries[0].descriptors, vec![1, 2, 3, 4]);
   }
 
   #[test]
