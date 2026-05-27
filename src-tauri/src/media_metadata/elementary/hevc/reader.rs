@@ -43,21 +43,25 @@ const MAX_PROBE_CHUNKS: usize = 50;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HevcReader;
 
+impl HevcReader {
+  pub(crate) fn probe_strict(src: &mut FileSource) -> Result<bool, ParseError> {
+    let buf = read_probe_prefix(src, None)?;
+    Ok(probe_annex_b(&buf, true))
+  }
+
+  fn probe_all(src: &mut FileSource) -> Result<bool, ParseError> {
+    let buf = read_probe_prefix(src, None)?;
+    Ok(probe_annex_b(&buf, false))
+  }
+}
+
 impl Reader for HevcReader {
   fn name(&self) -> &'static str {
     "hevc"
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let buf = read_probe_prefix(src, None)?;
-    if buf.len() < 7 {
-      return Ok(false);
-    }
-    if starts_with_mpeg_ts_sync(&buf) {
-      return Ok(false);
-    }
-    let units = nal::split_nal_units(&buf);
-    Ok(extract_headers(&units).is_some())
+    Self::probe_all(src)
   }
 
   fn read_headers(
@@ -161,8 +165,23 @@ fn read_probe_prefix(src: &mut FileSource, deadline: Option<&Deadline>) -> Resul
   Ok(out)
 }
 
+fn probe_annex_b(buf: &[u8], require_headers_at_start: bool) -> bool {
+  if buf.len() < 7 || starts_with_mpeg_ts_sync(buf) {
+    return false;
+  }
+  if require_headers_at_start && !starts_with_annex_b_start_code(buf) {
+    return false;
+  }
+  let units = nal::split_nal_units(buf);
+  extract_headers(&units).is_some()
+}
+
 fn starts_with_mpeg_ts_sync(buf: &[u8]) -> bool {
   buf.first() == Some(&0x47)
+}
+
+fn starts_with_annex_b_start_code(buf: &[u8]) -> bool {
+  buf.starts_with(&[0x00, 0x00, 0x01]) || buf.starts_with(&[0x00, 0x00, 0x00, 0x01])
 }
 
 pub(crate) fn codec_private_from_annex_b(buf: &[u8]) -> Option<(Vec<u8>, sps::HevcSps)> {
@@ -704,6 +723,9 @@ mod tests {
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
     assert!(HevcReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!HevcReader::probe_strict(&mut s).unwrap());
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("late.hevc", 0);

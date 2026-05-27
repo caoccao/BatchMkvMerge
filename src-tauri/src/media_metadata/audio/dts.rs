@@ -1052,27 +1052,25 @@ fn strmdata_offset(src: &mut FileSource) -> Result<Option<u64>, ParseError> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DtsReader;
 
+impl DtsReader {
+  pub(crate) fn probe_strict(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_dts_payload(src, |bytes| find_consecutive_headers(bytes, 5) == Some(0))
+  }
+
+  fn probe_all(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_dts_payload(src, |bytes| {
+      detect(bytes).is_some() || find_consecutive_headers(bytes, 5).is_some()
+    })
+  }
+}
+
 impl Reader for DtsReader {
   fn name(&self) -> &'static str {
     "dts"
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    // PARSER-151: read from the STRMDATA chunk for DTS-HD files, else byte 0.
-    let Some(offset) = strmdata_offset(src)? else {
-      src.seek_to(0)?;
-      return Ok(false);
-    };
-    src.seek_to(offset)?;
-    let mut probe = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut probe)?;
-    src.seek_to(0)?;
-    if read < 16 {
-      return Ok(false);
-    }
-    let (start, _end) = id3v2::payload_bounds(&probe[..read]);
-    let bytes = &probe[start..read];
-    Ok(detect(bytes).is_some() || find_consecutive_headers(bytes, 5).is_some())
+    Self::probe_all(src)
   }
 
   fn read_headers(
@@ -1128,6 +1126,26 @@ impl Reader for DtsReader {
     });
     Ok(())
   }
+}
+
+fn probe_dts_payload<F>(src: &mut FileSource, finder: F) -> Result<bool, ParseError>
+where
+  F: FnOnce(&[u8]) -> bool,
+{
+  // PARSER-151: read from the STRMDATA chunk for DTS-HD files, else byte 0.
+  let Some(offset) = strmdata_offset(src)? else {
+    src.seek_to(0)?;
+    return Ok(false);
+  };
+  src.seek_to(offset)?;
+  let mut probe = vec![0u8; PROBE_BYTES];
+  let read = src.read_at_most(&mut probe)?;
+  src.seek_to(0)?;
+  if read < 16 {
+    return Ok(false);
+  }
+  let (start, _end) = id3v2::payload_bounds(&probe[..read]);
+  Ok(finder(&probe[start..read]))
 }
 
 #[cfg(test)]
@@ -1364,6 +1382,18 @@ mod tests {
   #[test]
   fn probe_accepts_valid_core_frame() {
     let bytes = build_dts_core_frame(2, 13);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(DtsReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn strict_probe_rejects_midfile_frame_run() {
+    let mut bytes = vec![0x00u8; 16];
+    bytes.extend(build_dts_stream(5, 2, 13));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!DtsReader::probe_strict(&mut s).unwrap());
+
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(DtsReader.probe(&mut s).unwrap());
   }

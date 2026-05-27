@@ -43,7 +43,7 @@ pub fn decode(body: &[u8]) -> Option<RegistrationDescriptor> {
   // The Blu-ray HDMV registration is structured: 4-byte FourCC ("HDMV") +
   // 1 stuffing byte (must be 0xFF) + 1 stream_coding_type byte + flags.
   // See `determine_codec_for_hdmv_registration_descriptor` for the layout.
-  let hdmv_stream_coding_type = if format_identifier == "HDMV" && body.len() >= 6 && body[4] == 0xFF {
+  let hdmv_stream_coding_type = if format_identifier == "HDMV" && body.len() >= 8 && body[4] == 0xFF {
     Some(body[5])
   } else {
     None
@@ -60,11 +60,9 @@ pub fn decode(body: &[u8]) -> Option<RegistrationDescriptor> {
 /// `mkvtoolnix/src/common/codec.cpp`.
 pub fn hdmv_codec(stream_coding_type: u8) -> Option<(&'static str, &'static str, TrackKind)> {
   Some(match stream_coding_type {
-    0x01 => ("V_MPEG1", "MPEG-1 Video", TrackKind::Video),
-    0x02 => ("V_MPEG2", "MPEG-2 Video", TrackKind::Video),
-    0x1B => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
-    0x20 => ("V_MPEG4/ISO/AVC", "AVC/H.264 (MVC dependent)", TrackKind::Video),
-    0x24 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
+    0x02 => ("V_MPEG12", "MPEG-1/2", TrackKind::Video),
+    0x1B => ("V_MPEG4/ISO/AVC", "AVC/H.264/MPEG-4p10", TrackKind::Video),
+    0x24 => ("V_MPEGH/ISO/HEVC", "HEVC/H.265/MPEG-H", TrackKind::Video),
     0xEA => ("V_VC1", "VC-1", TrackKind::Video),
     0x80 => ("A_PCM", "LPCM", TrackKind::Audio),
     0x81 => ("A_AC3", "AC-3", TrackKind::Audio),
@@ -72,7 +70,6 @@ pub fn hdmv_codec(stream_coding_type: u8) -> Option<(&'static str, &'static str,
     0x83 => ("A_TRUEHD", "TrueHD", TrackKind::Audio),
     0x84 | 0x87 => ("A_EAC3", "E-AC-3", TrackKind::Audio),
     0x90 => ("S_HDMV/PGS", "HDMV PGS", TrackKind::Subtitle),
-    0x91 => ("S_HDMV/IGS", "HDMV Interactive Graphics", TrackKind::Button),
     0x92 => ("S_HDMV/TEXTST", "HDMV Text Subtitles", TrackKind::Subtitle),
     _ => return None,
   })
@@ -82,16 +79,120 @@ pub fn hdmv_codec(stream_coding_type: u8) -> Option<(&'static str, &'static str,
 /// would (the FourCC equals one of the codec FourCCs `codec_c::look_up`
 /// recognises).  Returns `None` for unknown FourCCs.
 pub fn codec_for_fourcc(fourcc: &str) -> Option<(&'static str, &'static str, TrackKind)> {
-  Some(match fourcc {
-    "AC-3" | "BSSD" => ("A_AC3", "AC-3", TrackKind::Audio),
-    "EAC3" => ("A_EAC3", "E-AC-3", TrackKind::Audio),
-    "DTS1" | "DTS2" | "DTS3" => ("A_DTS", "DTS", TrackKind::Audio),
-    "drac" => ("V_DIRAC", "Dirac", TrackKind::Video),
-    "VC-1" => ("V_VC1", "VC-1", TrackKind::Video),
-    "HEVC" => ("V_MPEGH/ISO/HEVC", "HEVC/H.265", TrackKind::Video),
-    "AVC1" => ("V_MPEG4/ISO/AVC", "AVC/H.264", TrackKind::Video),
+  let key = normalise_fourcc(fourcc)?;
+  Some(match key.as_str() {
+    "AV01" => ("V_AV1", "AV1", TrackKind::Video),
+    "CVID" => ("V_CINEPAK", "Cinepak", TrackKind::Video),
+    "DRAC" => ("V_DIRAC", "Dirac", TrackKind::Video),
+    "APCH" | "APCN" | "APCS" | "APCO" | "AP4H" => ("V_PRORES", "ProRes", TrackKind::Video),
+    "SVQI" | "SVQ1" => ("V_SVQ1", "Sorenson v1", TrackKind::Video),
+    "SVQ3" => ("V_SVQ3", "Sorenson v3", TrackKind::Video),
+    "THEO" | "THRA" => ("V_THEORA", "Theora", TrackKind::Video),
+    "VC-1" | "WVC1" => ("V_VC1", "VC-1", TrackKind::Video),
+    "VP80" => ("V_VP8", "VP8", TrackKind::Video),
+    "VP90" | "VP09" => ("V_VP9", "VP9", TrackKind::Video),
+    "MP4A" | "RAAC" | "RACP" => ("A_AAC", "AAC", TrackKind::Audio),
+    "ALAC" => ("A_ALAC", "ALAC", TrackKind::Audio),
+    "ATRC" => ("A_REAL/ATRC", "ATRAC3", TrackKind::Audio),
+    "COOK" => ("A_REAL/COOK", "G2/Cook", TrackKind::Audio),
+    "28_8" => ("A_REAL/28_8", "LD-CELP", TrackKind::Audio),
+    "FLAC" => ("A_FLAC", "FLAC", TrackKind::Audio),
+    "MLP " => ("A_MLP", "MLP", TrackKind::Audio),
+    "MP2A" => ("A_MPEG/L2", "MP2", TrackKind::Audio),
+    "LAME" | "MPGA" => ("A_MPEG/L3", "MP3", TrackKind::Audio),
+    "OPUS" => ("A_OPUS", "Opus", TrackKind::Audio),
+    "TWOS" => ("A_PCM/INT/BIG", "PCM", TrackKind::Audio),
+    "SOWT" | "RAW " | "LPCM" | "IN24" => ("A_PCM/INT/LIT", "PCM", TrackKind::Audio),
+    "QDM2" => ("A_QUICKTIME/QDM2", "QDMC", TrackKind::Audio),
+    "RALF" => ("A_REAL/RALF", "RealAudio-Lossless", TrackKind::Audio),
+    "SIPR" => ("A_REAL/SIPR", "Sipro/ACELP-NET", TrackKind::Audio),
+    "TTA1" => ("A_TTA1", "TrueAudio", TrackKind::Audio),
+    "TRHD" | "MLPA" => ("A_TRUEHD", "TrueHD", TrackKind::Audio),
+    "LPCJ" | "14_4" => ("A_REAL/14_4", "VSELP", TrackKind::Audio),
+    "VORB" => ("A_VORBIS", "Vorbis", TrackKind::Audio),
+    "WVPK" => ("A_WAVPACK4", "WavPack4", TrackKind::Audio),
+    "KATE" => ("S_KATE", "Kate", TrackKind::Subtitle),
+    "TX3G" => ("S_TX3G", "Timed Text", TrackKind::Subtitle),
+    "USF " => ("S_TEXT/USF", "UniversalSubtitleFormat", TrackKind::Subtitle),
+    key if is_avc_fourcc(key) => ("V_MPEG4/ISO/AVC", "AVC/H.264/MPEG-4p10", TrackKind::Video),
+    key if is_hevc_fourcc(key) => ("V_MPEGH/ISO/HEVC", "HEVC/H.265/MPEG-H", TrackKind::Video),
+    key if is_mpeg12_fourcc(key) => ("V_MPEG12", "MPEG-1/2", TrackKind::Video),
+    key if is_mpeg4_part2_fourcc(key) => ("V_MPEG4/ISO/ASP", "MPEG-4p2", TrackKind::Video),
+    key if is_realvideo_fourcc(key) => realvideo_codec(key),
+    key if is_aac_fourcc(key) => ("A_AAC", "AAC", TrackKind::Audio),
+    key if is_ac3_fourcc(key) => ("A_AC3", "AC-3", TrackKind::Audio),
+    key if is_dts_fourcc(key) => ("A_DTS", "DTS", TrackKind::Audio),
+    key if is_mp2_fourcc(key) => ("A_MPEG/L2", "MP2", TrackKind::Audio),
+    key if is_mp3_fourcc(key) => ("A_MPEG/L3", "MP3", TrackKind::Audio),
+    key if is_pcm_fourcc(key) => ("A_PCM/INT/LIT", "PCM", TrackKind::Audio),
     _ => return None,
   })
+}
+
+fn normalise_fourcc(fourcc: &str) -> Option<String> {
+  let cleaned: String = fourcc.chars().filter(|c| !c.is_ascii_control()).collect();
+  if cleaned.len() == 4 {
+    Some(cleaned.to_ascii_uppercase())
+  } else {
+    None
+  }
+}
+
+fn is_avc_fourcc(key: &str) -> bool {
+  key.starts_with("AVC") || matches!(key, "H264" | "X264")
+}
+
+fn is_hevc_fourcc(key: &str) -> bool {
+  matches!(key, "HEVC" | "HVC1" | "HEV1" | "H265" | "X265" | "DVH1" | "DVHE")
+}
+
+fn is_mpeg12_fourcc(key: &str) -> bool {
+  let b = key.as_bytes();
+  matches!(key, "MPEG" | "MPG1" | "MPG2" | "MPGV" | "MP1V" | "MP2V" | "H262")
+    || (b.len() == 4 && b[0] == b'M' && matches!(b[1], b'1' | b'2') && b[2] == b'V')
+}
+
+fn is_mpeg4_part2_fourcc(key: &str) -> bool {
+  matches!(key, "3IV2" | "XVID" | "XVIX" | "DIVX" | "DX50" | "FMP4" | "MP4V")
+}
+
+fn is_realvideo_fourcc(key: &str) -> bool {
+  let b = key.as_bytes();
+  b.len() == 4 && b[0] == b'R' && b[1] == b'V' && matches!(b[2], b'1' | b'2' | b'3' | b'4') && b[3].is_ascii_digit()
+}
+
+fn realvideo_codec(key: &str) -> (&'static str, &'static str, TrackKind) {
+  match key.as_bytes()[2] {
+    b'1' => ("V_REAL/RV10", "RealVideo", TrackKind::Video),
+    b'2' => ("V_REAL/RV20", "RealVideo", TrackKind::Video),
+    b'3' => ("V_REAL/RV30", "RealVideo", TrackKind::Video),
+    _ => ("V_REAL/RV40", "RealVideo", TrackKind::Video),
+  }
+}
+
+fn is_aac_fourcc(key: &str) -> bool {
+  key.starts_with("AAC")
+}
+
+fn is_ac3_fourcc(key: &str) -> bool {
+  matches!(key, "AC-3" | "SAC3" | "EAC3" | "EC-3" | "A52 " | "A52B" | "DNET") || key.starts_with("AC3")
+}
+
+fn is_dts_fourcc(key: &str) -> bool {
+  let b = key.as_bytes();
+  b.len() == 4 && b.starts_with(b"DTS") && matches!(b[3], b' ' | b'B' | b'C' | b'E' | b'H' | b'L')
+}
+
+fn is_mp2_fourcc(key: &str) -> bool {
+  key.starts_with("MP2") || matches!(key, ".MP1" | ".MP2")
+}
+
+fn is_mp3_fourcc(key: &str) -> bool {
+  key.starts_with("MP3") || key == ".MP3"
+}
+
+fn is_pcm_fourcc(key: &str) -> bool {
+  key.starts_with("PCM")
 }
 
 #[cfg(test)]
@@ -132,6 +233,10 @@ mod tests {
     assert_eq!(hdmv_codec(0x81).unwrap().0, "A_AC3");
     assert_eq!(hdmv_codec(0x83).unwrap().0, "A_TRUEHD");
     assert_eq!(hdmv_codec(0x90).unwrap().0, "S_HDMV/PGS");
+    assert_eq!(hdmv_codec(0x02).unwrap().0, "V_MPEG12");
+    assert!(hdmv_codec(0x01).is_none());
+    assert!(hdmv_codec(0x20).is_none());
+    assert!(hdmv_codec(0x91).is_none());
     assert!(hdmv_codec(0x00).is_none());
   }
 
@@ -139,6 +244,18 @@ mod tests {
   fn codec_for_fourcc_maps_known_identifiers() {
     assert_eq!(codec_for_fourcc("AC-3").unwrap().0, "A_AC3");
     assert_eq!(codec_for_fourcc("VC-1").unwrap().0, "V_VC1");
+    assert_eq!(codec_for_fourcc("avc1").unwrap().0, "V_MPEG4/ISO/AVC");
+    assert_eq!(codec_for_fourcc("MP4V").unwrap().0, "V_MPEG4/ISO/ASP");
+    assert_eq!(codec_for_fourcc("MPGV").unwrap().0, "V_MPEG12");
+    assert_eq!(codec_for_fourcc("MP4A").unwrap().0, "A_AAC");
+    assert_eq!(codec_for_fourcc("TX3G").unwrap().0, "S_TX3G");
     assert!(codec_for_fourcc("XYZW").is_none());
+  }
+
+  #[test]
+  fn codec_for_fourcc_drops_non_upstream_registration_aliases() {
+    assert!(codec_for_fourcc("BSSD").is_none());
+    assert!(codec_for_fourcc("DTS1").is_none());
+    assert_eq!(codec_for_fourcc("EAC3").unwrap().0, "A_AC3");
   }
 }

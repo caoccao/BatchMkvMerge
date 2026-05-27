@@ -475,20 +475,35 @@ pub fn first_frame_params(bytes: &[u8]) -> Option<(u32, u32)> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Ac3Reader;
 
+impl Ac3Reader {
+  pub(crate) fn probe_strict(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_ac3_frames(src, |bytes| find_probe_frame_sync_strict(bytes).is_some())
+  }
+
+  pub(crate) fn probe_loose_64(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_ac3_frames(src, |bytes| find_probe_frame_sync_loose_64(bytes).is_some())
+  }
+
+  pub(crate) fn probe_one_frame_at_start(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_ac3_frames(src, |bytes| find_probe_frame_sync_one_at_start(bytes).is_some())
+  }
+
+  pub(crate) fn probe_loose_20(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_ac3_frames(src, |bytes| find_probe_frame_sync_loose_20(bytes).is_some())
+  }
+
+  fn probe_all(src: &mut FileSource) -> Result<bool, ParseError> {
+    probe_ac3_frames(src, |bytes| find_probe_frame_sync(bytes).is_some())
+  }
+}
+
 impl Reader for Ac3Reader {
   fn name(&self) -> &'static str {
     "ac3"
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
-    let read = src.read_at_most(&mut probe)?;
-    src.seek_to(0)?;
-    if read < 6 {
-      return Ok(false);
-    }
-    let (start, end) = id3v2::payload_bounds(&probe[..read]);
-    Ok(find_probe_frame_sync(&probe[start..end.min(read)]).is_some())
+    Self::probe_all(src)
   }
 
   fn read_headers(
@@ -540,30 +555,56 @@ impl Reader for Ac3Reader {
   }
 }
 
+fn probe_ac3_frames<F>(src: &mut FileSource, finder: F) -> Result<bool, ParseError>
+where
+  F: FnOnce(&[u8]) -> bool,
+{
+  let mut probe = vec![0u8; EXTENDED_PROBE_BYTES];
+  let read = src.read_at_most(&mut probe)?;
+  src.seek_to(0)?;
+  if read < 6 {
+    return Ok(false);
+  }
+  let (start, end) = id3v2::payload_bounds(&probe[..read]);
+  Ok(finder(&probe[start..end.min(read)]))
+}
+
 fn find_probe_frame_sync(bytes: &[u8]) -> Option<usize> {
+  find_probe_frame_sync_strict(bytes)
+    .or_else(|| find_probe_frame_sync_loose_64(bytes))
+    .or_else(|| find_probe_frame_sync_one_at_start(bytes))
+    .or_else(|| find_probe_frame_sync_loose_20(bytes))
+}
+
+fn find_probe_frame_sync_strict(bytes: &[u8]) -> Option<usize> {
   find_frames_at_start(bytes, STRICT_PROBE_BYTES, MIN_CONFIRM_FRAMES)
-    .or_else(|| {
-      find_frames_in_windows(
-        bytes,
-        &[STRICT_PROBE_BYTES, 256 * 1024, 512 * 1024, EXTENDED_PROBE_BYTES],
-        AMBIGUOUS_PROBE_FRAMES_64,
-      )
-    })
-    .or_else(|| find_frames_at_start(bytes, START_ONLY_PROBE_BYTES, 1))
-    .or_else(|| {
-      find_frames_in_windows(
-        bytes,
-        &[
-          START_ONLY_PROBE_BYTES,
-          64 * 1024,
-          STRICT_PROBE_BYTES,
-          256 * 1024,
-          512 * 1024,
-          EXTENDED_PROBE_BYTES,
-        ],
-        AMBIGUOUS_PROBE_FRAMES_20,
-      )
-    })
+}
+
+fn find_probe_frame_sync_loose_64(bytes: &[u8]) -> Option<usize> {
+  find_frames_in_windows(
+    bytes,
+    &[STRICT_PROBE_BYTES, 256 * 1024, 512 * 1024, EXTENDED_PROBE_BYTES],
+    AMBIGUOUS_PROBE_FRAMES_64,
+  )
+}
+
+fn find_probe_frame_sync_one_at_start(bytes: &[u8]) -> Option<usize> {
+  find_frames_at_start(bytes, START_ONLY_PROBE_BYTES, 1)
+}
+
+fn find_probe_frame_sync_loose_20(bytes: &[u8]) -> Option<usize> {
+  find_frames_in_windows(
+    bytes,
+    &[
+      START_ONLY_PROBE_BYTES,
+      64 * 1024,
+      STRICT_PROBE_BYTES,
+      256 * 1024,
+      512 * 1024,
+      EXTENDED_PROBE_BYTES,
+    ],
+    AMBIGUOUS_PROBE_FRAMES_20,
+  )
 }
 
 fn find_frames_at_start(bytes: &[u8], window_size: usize, num_required_frames: usize) -> Option<usize> {
@@ -770,6 +811,18 @@ mod tests {
     bytes.extend(build_ac3_stream(64, 0, 8));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     assert!(Ac3Reader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn strict_probe_rejects_later_sixty_four_frame_run() {
+    let mut bytes = vec![0x00u8; 200 * 1024];
+    bytes.extend(build_ac3_stream(64, 0, 8));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes.clone()));
+    assert!(!Ac3Reader::probe_strict(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(Ac3Reader::probe_loose_64(&mut s).unwrap());
   }
 
   #[test]

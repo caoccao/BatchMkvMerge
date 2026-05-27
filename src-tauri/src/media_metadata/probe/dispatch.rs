@@ -96,8 +96,8 @@ pub fn dispatch_with_hints(
     out.container.supported = false;
     return Ok(DispatchOutcome::Claimed("unsupported"));
   }
-  for reader_name in staged_reader_names(hints) {
-    if let Some(outcome) = try_reader_by_name(src, deadline, out, reader_name)? {
+  for staged_reader in staged_readers(hints) {
+    if let Some(outcome) = try_reader_by_name(src, deadline, out, staged_reader)? {
       return Ok(outcome);
     }
   }
@@ -108,9 +108,9 @@ fn try_reader_by_name(
   src: &mut FileSource,
   deadline: &Deadline,
   out: &mut MediaMetadata,
-  reader_name: &'static str,
+  staged_reader: StagedReader,
 ) -> Result<Option<DispatchOutcome>, ParseError> {
-  let Some(reader) = registered_readers().iter().copied().find(|r| r.name() == reader_name) else {
+  let Some(reader) = registered_readers().iter().copied().find(|r| r.name() == staged_reader.name) else {
     return Ok(None);
   };
   // Each probe call must see a freshly-positioned cursor; the trait contract
@@ -118,7 +118,7 @@ fn try_reader_by_name(
   // misbehaving probe from leaking position into the next phase.
   src.seek_to(0)?;
   deadline.check("probe")?;
-  if !reader.probe(src)? {
+  if !probe_reader(src, reader, staged_reader.mode)? {
     return Ok(None);
   }
   src.seek_to(0)?;
@@ -126,26 +126,73 @@ fn try_reader_by_name(
   Ok(Some(DispatchOutcome::Claimed(reader.name())))
 }
 
-fn staged_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&'static str> {
-  let phases: [&[&str]; 8] = [
-    UNAMBIGUOUS_READERS,
-    TEXT_READERS,
-    STRICT_ELEMENTARY_READERS,
-    RAW_AUDIO_EIGHT_FRAME_READERS,
-    AMBIGUOUS_CONTAINER_READERS,
-    LATE_AMBIGUOUS_READERS,
-    ONE_FRAME_START_READERS,
-    LOOSE_ELEMENTARY_READERS,
-  ];
-  let mut names = Vec::new();
-  names.extend_from_slice(UNAMBIGUOUS_READERS);
-  names.extend(hints_to_reader_names(hints));
-  for phase in phases.iter().skip(1) {
-    names.extend_from_slice(phase);
+fn probe_reader(
+  src: &mut FileSource,
+  reader: &'static (dyn Reader + Send + Sync),
+  mode: ProbeMode,
+) -> Result<bool, ParseError> {
+  match (reader.name(), mode) {
+    ("mp3", ProbeMode::RawAudioStrict) => Mp3Reader::probe_strict(src),
+    ("mp3", ProbeMode::RawAudioLoose64) => Mp3Reader::probe_loose_64(src),
+    ("mp3", ProbeMode::RawAudioOneFrameAtStart) => Mp3Reader::probe_one_frame_at_start(src),
+    ("mp3", ProbeMode::RawAudioLoose20) => Mp3Reader::probe_loose_20(src),
+    ("ac3", ProbeMode::RawAudioStrict) => Ac3Reader::probe_strict(src),
+    ("ac3", ProbeMode::RawAudioLoose64) => Ac3Reader::probe_loose_64(src),
+    ("ac3", ProbeMode::RawAudioOneFrameAtStart) => Ac3Reader::probe_one_frame_at_start(src),
+    ("ac3", ProbeMode::RawAudioLoose20) => Ac3Reader::probe_loose_20(src),
+    ("aac", ProbeMode::RawAudioStrict) => AacReader::probe_strict(src),
+    ("aac", ProbeMode::RawAudioLoose64) => AacReader::probe_loose_64(src),
+    ("aac", ProbeMode::RawAudioOneFrameAtStart) => AacReader::probe_one_frame_at_start(src),
+    ("aac", ProbeMode::RawAudioLoose20) => AacReader::probe_loose_20(src),
+    ("dts", ProbeMode::DtsStrict) => DtsReader::probe_strict(src),
+    ("avc", ProbeMode::ElementaryStrict) => AvcReader::probe_strict(src),
+    ("hevc", ProbeMode::ElementaryStrict) => HevcReader::probe_strict(src),
+    _ => reader.probe(src),
   }
-  names.extend_from_slice(RAW_AUDIO_TWENTY_FRAME_READERS);
-  names.extend_from_slice(FINAL_UNSUPPORTED_BUT_LOCAL_READERS);
-  names
+}
+
+fn staged_readers(hints: &[super::extension_hint::FileTypeHint]) -> Vec<StagedReader> {
+  let mut readers = Vec::new();
+  extend_stage(&mut readers, UNAMBIGUOUS_READERS, ProbeMode::Default);
+  extend_stage(&mut readers, &hints_to_reader_names(hints), ProbeMode::Default);
+  extend_stage(&mut readers, TEXT_READERS, ProbeMode::Default);
+  extend_stage(&mut readers, STRICT_ELEMENTARY_READERS, ProbeMode::ElementaryStrict);
+  extend_stage(&mut readers, RAW_AUDIO_EIGHT_FRAME_READERS, ProbeMode::RawAudioStrict);
+  extend_stage(&mut readers, STRICT_DTS_READERS, ProbeMode::DtsStrict);
+  extend_stage(&mut readers, AMBIGUOUS_CONTAINER_READERS, ProbeMode::Default);
+  extend_stage(&mut readers, LATE_AMBIGUOUS_READERS, ProbeMode::Default);
+  extend_stage(&mut readers, RAW_AUDIO_SIXTY_FOUR_FRAME_READERS, ProbeMode::RawAudioLoose64);
+  extend_stage(&mut readers, ONE_FRAME_START_READERS, ProbeMode::RawAudioOneFrameAtStart);
+  extend_stage(&mut readers, LOOSE_ELEMENTARY_READERS, ProbeMode::Default);
+  extend_stage(&mut readers, RAW_AUDIO_TWENTY_FRAME_READERS, ProbeMode::RawAudioLoose20);
+  extend_stage(&mut readers, FINAL_UNSUPPORTED_BUT_LOCAL_READERS, ProbeMode::Default);
+  readers
+}
+
+#[cfg(test)]
+fn staged_reader_names(hints: &[super::extension_hint::FileTypeHint]) -> Vec<&'static str> {
+  staged_readers(hints).into_iter().map(|r| r.name).collect()
+}
+
+fn extend_stage(readers: &mut Vec<StagedReader>, names: &[&'static str], mode: ProbeMode) {
+  readers.extend(names.iter().map(|name| StagedReader { name: *name, mode }));
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StagedReader {
+  name: &'static str,
+  mode: ProbeMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeMode {
+  Default,
+  ElementaryStrict,
+  RawAudioStrict,
+  RawAudioLoose64,
+  RawAudioOneFrameAtStart,
+  RawAudioLoose20,
+  DtsStrict,
 }
 
 const UNAMBIGUOUS_READERS: &[&str] = &[
@@ -169,8 +216,10 @@ const UNAMBIGUOUS_READERS: &[&str] = &[
 const TEXT_READERS: &[&str] = &["webvtt", "srt", "ssa", "usf", "microdvd"];
 const STRICT_ELEMENTARY_READERS: &[&str] = &["avc", "hevc"];
 const RAW_AUDIO_EIGHT_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
-const AMBIGUOUS_CONTAINER_READERS: &[&str] = &["dts", "mpeg_ts", "mpeg_ps", "obu"];
+const STRICT_DTS_READERS: &[&str] = &["dts"];
+const AMBIGUOUS_CONTAINER_READERS: &[&str] = &["mpeg_ts", "mpeg_ps", "obu"];
 const LATE_AMBIGUOUS_READERS: &[&str] = &["truehd", "dts", "vobbtn"];
+const RAW_AUDIO_SIXTY_FOUR_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
 const ONE_FRAME_START_READERS: &[&str] = &["mp3", "ac3", "aac"];
 const LOOSE_ELEMENTARY_READERS: &[&str] = &["mpeg_video", "avc", "hevc"];
 const RAW_AUDIO_TWENTY_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
@@ -407,6 +456,53 @@ mod tests {
     let ts = unhinted.iter().position(|n| *n == "mpeg_ts").unwrap();
     let ps = unhinted.iter().position(|n| *n == "mpeg_ps").unwrap();
     assert!(ts < ps);
+  }
+
+  #[test]
+  fn staged_cascade_uses_strict_raw_modes_before_late_loose_modes() {
+    let staged = staged_readers(&[]);
+    let strict_avc = staged
+      .iter()
+      .position(|r| r.name == "avc" && r.mode == ProbeMode::ElementaryStrict)
+      .unwrap();
+    let strict_mp3 = staged
+      .iter()
+      .position(|r| r.name == "mp3" && r.mode == ProbeMode::RawAudioStrict)
+      .unwrap();
+    let strict_dts = staged
+      .iter()
+      .position(|r| r.name == "dts" && r.mode == ProbeMode::DtsStrict)
+      .unwrap();
+    let mpeg_ts = staged
+      .iter()
+      .position(|r| r.name == "mpeg_ts" && r.mode == ProbeMode::Default)
+      .unwrap();
+    let late_dts = staged
+      .iter()
+      .position(|r| r.name == "dts" && r.mode == ProbeMode::Default)
+      .unwrap();
+    let loose_mp3_64 = staged
+      .iter()
+      .position(|r| r.name == "mp3" && r.mode == ProbeMode::RawAudioLoose64)
+      .unwrap();
+    let loose_avc = staged
+      .iter()
+      .enumerate()
+      .find(|(idx, r)| *idx > strict_avc && r.name == "avc" && r.mode == ProbeMode::Default)
+      .map(|(idx, _)| idx)
+      .unwrap();
+    let loose_mp3_20 = staged
+      .iter()
+      .position(|r| r.name == "mp3" && r.mode == ProbeMode::RawAudioLoose20)
+      .unwrap();
+
+    assert!(strict_avc < strict_mp3);
+    assert!(strict_mp3 < strict_dts);
+    assert!(strict_dts < mpeg_ts);
+    assert!(mpeg_ts < late_dts);
+    assert!(late_dts < loose_mp3_64);
+    assert!(loose_mp3_64 < loose_mp3_20);
+    assert!(strict_avc < loose_avc);
   }
 
   // ---- PARSER-063: unsupported signatures ----------------------------

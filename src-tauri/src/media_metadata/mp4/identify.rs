@@ -320,8 +320,7 @@ fn codec_from_object_type(object_type: u8) -> Option<(&'static str, &'static str
     0x6B => ("A_MPEG/L2", "MP2"),
     0xA9 => ("A_DTS", "DTS"),
     0xDD => ("A_VORBIS", "Vorbis"),
-    0x60 | 0x61 | 0x62 | 0x63 | 0x64 | 0x65 => ("V_MPEG2", "MPEG-2 Video"),
-    0x6A => ("V_MPEG1", "MPEG-1 Video"),
+    0x60 | 0x61 | 0x62 | 0x63 | 0x64 | 0x65 | 0x6A => ("V_MPEG12", "MPEG-1/2"),
     0x20 => ("V_MPEG4/ISO/ASP", "MPEG-4 Visual"),
     0xE0 => ("S_VOBSUB", "VobSub"),
     _ => return None,
@@ -679,6 +678,9 @@ mod tests {
     assert_eq!(codec_from_object_type(0x69).unwrap().0, "A_MPEG/L3");
     assert_eq!(codec_from_object_type(0x6B).unwrap().0, "A_MPEG/L2");
     assert_eq!(codec_from_object_type(0xA9).unwrap().0, "A_DTS");
+    assert_eq!(codec_from_object_type(0x60).unwrap(), ("V_MPEG12", "MPEG-1/2"));
+    assert_eq!(codec_from_object_type(0x65).unwrap(), ("V_MPEG12", "MPEG-1/2"));
+    assert_eq!(codec_from_object_type(0x6A).unwrap(), ("V_MPEG12", "MPEG-1/2"));
     assert_eq!(codec_from_object_type(0x20).unwrap().0, "V_MPEG4/ISO/ASP");
     assert_eq!(codec_from_object_type(0xE0).unwrap().0, "S_VOBSUB");
     assert!(codec_from_object_type(0xA5).is_none());

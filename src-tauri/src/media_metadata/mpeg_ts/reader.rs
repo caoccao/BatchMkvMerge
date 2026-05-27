@@ -464,7 +464,7 @@ fn enrich_for_codec(codec_id: &str, stream_type: u8, es: &[u8]) -> Option<EsEnri
         ..EsEnrichment::default()
       })
     }
-    "V_MPEG1" | "V_MPEG2" => {
+    "V_MPEG1" | "V_MPEG2" | "V_MPEG12" => {
       if !mpeg_video::looks_like_mpeg_video_es(es) {
         return None;
       }
