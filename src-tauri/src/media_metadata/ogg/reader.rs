@@ -59,7 +59,6 @@ impl Reader for OggReader {
     // *complete* packets have been observed so we can stop once each
     // bitstream has its identification + comment headers.
     let mut reassembly: HashMap<u32, PacketReassembly> = HashMap::new();
-    let mut pages_consumed = 0usize;
     // `true` once the cascade has consumed at least one non-BOS page.
     // mkvtoolnix waits until the BOS run is over before declaring the
     // stream table closed (`r_ogm.cpp:598-633`); without this guard we'd
@@ -87,7 +86,6 @@ impl Reader for OggReader {
         }
         Err(e) => return Err(e),
       };
-      pages_consumed += 1;
 
       let payload = page::read_page_payload(src, &header, PAGE_PAYLOAD_CAP)?;
       let is_bos = header.is_beginning_of_stream();
@@ -103,17 +101,16 @@ impl Reader for OggReader {
         past_bos_run = true;
       }
 
-      // PARSER-181: stop once every in-use bitstream has read its required
-      // header packets (its `headers_read` is satisfied) AND we've moved far
-      // enough into the file that no more BOS pages can plausibly arrive.
+      // PARSER-181/PARSER-380: stop once every in-use bitstream has read its
+      // required header packets (its `headers_read` is satisfied) after the
+      // first non-BOS page has closed the BOS run.
       // Mirrors mkvtoolnix's `r_ogm.cpp:598-633` which terminates the header
       // read once `headers_read` is true for every active stream — it does
       // NOT wait for decoded comments (FLAC/Speex/Kate/OGM never decode any,
       // so the old `all_streams_have_comments` gate ran until the safety
-      // ceiling and weakened the 1 s contract).  The `pages_consumed > 4` guard keeps
-      // non-conformant inputs that sandwich a late BOS page from being
-      // truncated by an over-eager early break.
-      if past_bos_run && pages_consumed > 4 && all_streams_have_headers(&states) {
+      // ceiling and weakened the 1 s contract).  Late BOS pages after this
+      // point are non-conforming and mkvtoolnix never admits them.
+      if past_bos_run && all_streams_have_headers(&states) {
         break;
       }
 
@@ -775,7 +772,17 @@ mod tests {
 
   #[test]
   fn read_headers_handles_two_independent_streams() {
-    let v = build_vorbis_stream(1, None);
+    let vorbis_bos = vorbis::build_identification_packet(2, 44100);
+    let mut vorbis_comment = vec![0x03];
+    vorbis_comment.extend_from_slice(b"vorbis");
+    vorbis_comment.extend(build_block("libvorbis 1.3.7", &[("TITLE", "Track")]));
+    vorbis_comment.push(0x01);
+    let mut vorbis_setup = vec![0x05];
+    vorbis_setup.extend_from_slice(b"vorbis");
+    vorbis_setup.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+    let vorbis_page = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&vorbis_bos]);
+    let vorbis_headers_page = build_page(0, 0, 1, 1, &[&vorbis_comment, &vorbis_setup]);
+
     let theora_full = theora::build_identification_packet(640, 480, 24, 1);
     let theora_page = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 2, 0, &[&theora_full]);
     // PARSER-181: Theora's header_packet_target is 3 (ident + comment + setup).
@@ -788,8 +795,9 @@ mod tests {
     theora_setup.extend_from_slice(b"theora");
     theora_setup.extend_from_slice(&[0x11, 0x22, 0x33]);
     let theora_headers_page = build_page(0, 0, 2, 1, &[&theora_comment, &theora_setup]);
-    let mut bytes = v;
+    let mut bytes = vorbis_page;
     bytes.extend(theora_page);
+    bytes.extend(vorbis_headers_page);
     bytes.extend(theora_headers_page);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogv", 0);
@@ -799,6 +807,29 @@ mod tests {
     // PARSER-180: the generic comment-packet path now decodes Theora's
     // LANGUAGE comment from the second header packet.
     assert_eq!(theora.properties.common.language.as_ref().unwrap().iso639_2, "deu");
+  }
+
+  #[test]
+  fn read_headers_stops_before_late_bos_after_active_headers_complete() {
+    // PARSER-380: once the first non-BOS page closes the BOS run and every
+    // active stream has headers_read, mkvtoolnix exits immediately.  A later
+    // BOS page is non-conforming and must not introduce another local stream.
+    let mut bytes = build_vorbis_stream(1, None);
+    let late_flac_bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
+    bytes.extend(build_page(
+      HEADER_FLAG_BEGINNING_OF_STREAM,
+      0,
+      2,
+      0,
+      &[&late_flac_bos],
+    ));
+    bytes.extend(build_page(0, 0, 2, 1, &[]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("late-bos.ogg", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_VORBIS");
   }
 
   #[test]

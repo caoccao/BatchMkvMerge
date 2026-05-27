@@ -51,7 +51,6 @@ use crate::media_metadata::reader::Reader;
 pub const MAGIC: [u8; 4] = *b"DKIF";
 const HEADER_LEN: usize = 32;
 const FRAME_HEADER_LEN: usize = 12;
-const OBU_TYPE_METADATA: u8 = 5;
 const METADATA_TYPE_ITUT_T35: usize = 4;
 const DOVI_T35_HEADER: [u8; 9] = [0x00, 0x3b, 0x00, 0x00, 0x08, 0x00, 0x37, 0xcd, 0x08];
 
@@ -278,10 +277,7 @@ fn av1_dovi_config_from_frame(
   let seq = obu::find_sequence_header(frame).and_then(|body| obu::decode_sequence_header(body).ok())?;
   let duration = default_duration_ns.filter(|d| *d >= 1_000_000).unwrap_or(40_000_000);
   let (color_primaries, transfer_characteristics, matrix_coefficients) = av1_color_triplet(&seq);
-  let raw_config = walk_av1_obus(frame, |obu_type, payload| {
-    if obu_type != OBU_TYPE_METADATA {
-      return None;
-    }
+  let raw_config = obu::filtered_metadata_bodies(frame).into_iter().find_map(|payload| {
     av1_dovi_config_record_from_metadata_body(
       payload,
       width,
@@ -293,39 +289,6 @@ fn av1_dovi_config_from_frame(
     )
   })?;
   Some(DoviConfig { raw_config })
-}
-
-fn walk_av1_obus<'a, T, F>(bytes: &'a [u8], mut visit: F) -> Option<T>
-where
-  F: FnMut(u8, &'a [u8]) -> Option<T>,
-{
-  let mut pos = 0usize;
-  while pos < bytes.len() {
-    let header = obu::decode_header(bytes[pos]);
-    pos += 1;
-    if header.has_extension {
-      pos += 1;
-      if pos > bytes.len() {
-        return None;
-      }
-    }
-    let payload_len = if header.has_size_field {
-      let (size, consumed) = read_leb128(&bytes[pos..])?;
-      pos += consumed;
-      size
-    } else {
-      bytes.len().saturating_sub(pos)
-    };
-    let payload_end = pos.checked_add(payload_len)?;
-    if payload_end > bytes.len() {
-      return None;
-    }
-    if let Some(value) = visit(header.obu_type, &bytes[pos..payload_end]) {
-      return Some(value);
-    }
-    pos = payload_end;
-  }
-  None
 }
 
 fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -748,9 +711,58 @@ mod tests {
     w.into_bytes()
   }
 
+  fn build_sequence_header_with_operating_point(max_w: u32, max_h: u32, operating_point_idc: u16) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(0, 3); // seq_profile
+    w.write_bit(false); // still_picture
+    w.write_bit(false); // reduced_still_picture_header
+    w.write_bit(false); // timing_info_present
+    w.write_bit(false); // initial_display_delay_present_flag
+    w.write_bits(0, 5); // operating_points_cnt_minus_1
+    w.write_bits(operating_point_idc as u64, 12);
+    w.write_bits(8, 5); // seq_level_idx[0]
+    w.write_bit(false); // seq_tier[0]
+    w.write_bits(11, 4); // frame_width_bits_minus_1
+    w.write_bits(11, 4); // frame_height_bits_minus_1
+    w.write_bits((max_w - 1) as u64, 12);
+    w.write_bits((max_h - 1) as u64, 12);
+    w.write_bit(false); // frame_id_numbers_present
+    w.write_bit(false); // use_128x128_superblock
+    w.write_bit(false); // enable_filter_intra
+    w.write_bit(false); // enable_intra_edge_filter
+    w.write_bit(false); // enable_interintra_compound
+    w.write_bit(false); // enable_masked_compound
+    w.write_bit(false); // enable_warped_motion
+    w.write_bit(false); // enable_dual_filter
+    w.write_bit(false); // enable_order_hint
+    w.write_bit(true); // seq_choose_screen_content_tools
+    w.write_bit(true); // seq_choose_integer_mv
+    w.write_bit(false); // enable_superres
+    w.write_bit(false); // enable_cdef
+    w.write_bit(false); // enable_restoration
+    w.write_bit(false); // high_bitdepth
+    w.write_bit(false); // monochrome
+    w.write_bit(false); // color_description_present
+    w.write_bit(false); // video_full_range_flag
+    w.write_bits(0, 2); // chroma_sample_position
+    w.write_bit(false); // separate_uv_delta_q
+    w.into_bytes()
+  }
+
   fn obu_packet(obu_type: u8, payload: &[u8]) -> Vec<u8> {
     assert!(payload.len() < 128);
     let mut out = vec![(obu_type << 3) | 0x02, payload.len() as u8];
+    out.extend_from_slice(payload);
+    out
+  }
+
+  fn obu_packet_with_extension(obu_type: u8, temporal_id: u8, spatial_id: u8, payload: &[u8]) -> Vec<u8> {
+    assert!(payload.len() < 128);
+    let mut out = vec![
+      (obu_type << 3) | 0x04 | 0x02,
+      ((temporal_id & 0x07) << 5) | ((spatial_id & 0x03) << 3),
+      payload.len() as u8,
+    ];
     out.extend_from_slice(payload);
     out
   }
@@ -761,7 +773,7 @@ mod tests {
     let mut metadata = vec![METADATA_TYPE_ITUT_T35 as u8, 0xb5];
     metadata.extend_from_slice(&DOVI_T35_HEADER);
     metadata.extend_from_slice(&valid_av1_dovi_rpu_payload());
-    frame.extend(obu_packet(OBU_TYPE_METADATA, &metadata));
+    frame.extend(obu_packet(5, &metadata));
     frame.extend(obu_packet(6, &[0]));
     frame
   }
@@ -805,6 +817,30 @@ mod tests {
     // Unspecified AV1 color with an RPU-inferred profile 8 maps to BL
     // compatibility id 2, encoded in the high nibble of byte 4.
     assert_eq!(&mapping.data_hex[8..10], "20");
+  }
+
+  #[test]
+  fn av1_dovi_first_frame_ignores_out_of_operating_point_metadata() {
+    let mut frame = Vec::new();
+    frame.extend(obu_packet(
+      1,
+      &build_sequence_header_with_operating_point(1920, 1080, 0x101),
+    ));
+    let mut metadata = vec![METADATA_TYPE_ITUT_T35 as u8, 0xb5];
+    metadata.extend_from_slice(&DOVI_T35_HEADER);
+    metadata.extend_from_slice(&valid_av1_dovi_rpu_payload());
+    frame.extend(obu_packet_with_extension(5, 1, 0, &metadata));
+    frame.extend(obu_packet(6, &[0]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(build_ivf_with_first_frame(&frame)));
+    let mut out = MediaMetadata::new("dv-out-of-op.ivf", 0);
+    IvfReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    let track = &out.tracks[0];
+    assert_eq!(track.properties.common.max_block_addition_id, None);
+    let video = track.properties.video.as_ref().unwrap();
+    assert!(video.block_addition_mappings.is_empty());
   }
 
   #[test]

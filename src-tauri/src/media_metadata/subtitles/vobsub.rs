@@ -248,9 +248,12 @@ pub fn parse_idx(text: &str) -> Result<ParsedIdx, ParseError> {
         factor = -1;
         value = rest;
       }
-      if let Some(ts) = parse_idx_timestamp(value) {
-        delay += ts * factor;
-      }
+      let ts = parse_idx_timestamp(value).ok_or_else(|| ParseError::Malformed {
+        format: "vobsub",
+        offset: 0,
+        reason: format!("Invalid VobSub delay timestamp: {value}"),
+      })?;
+      delay += ts * factor;
       continue;
     }
 
@@ -719,6 +722,23 @@ timestamp: 00:00:02:000, filepos: 000002000
       ParseError::Malformed { format, reason, .. } => {
         assert_eq!(format, "vobsub");
         assert!(reason.contains("before any id"), "reason was: {reason}");
+      }
+      other => panic!("expected Malformed, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn parse_idx_errors_on_invalid_delay_timestamp() {
+    let txt = "\
+id: en, index: 0
+delay: not-a-time
+timestamp: 00:00:01:000, filepos: 000000000
+";
+    let err = parse_idx(txt).unwrap_err();
+    match err {
+      ParseError::Malformed { format, reason, .. } => {
+        assert_eq!(format, "vobsub");
+        assert!(reason.contains("Invalid VobSub delay"), "reason was: {reason}");
       }
       other => panic!("expected Malformed, got {other:?}"),
     }

@@ -57,6 +57,7 @@ use crate::media_metadata::reader::Reader;
 
 const PROBE_BYTES: usize = 1024 * 1024;
 const OBU_TYPE_SEQUENCE_HEADER: u8 = 1;
+const OBU_TYPE_TEMPORAL_DELIMITER: u8 = 2;
 const OBU_TYPE_FRAME_HEADER: u8 = 3;
 const OBU_TYPE_METADATA: u8 = 5;
 const OBU_TYPE_FRAME: u8 = 6;
@@ -100,6 +101,10 @@ pub fn decode_header(byte: u8) -> ObuHeader {
 #[derive(Debug, Clone, Copy)]
 pub struct SequenceHeader {
   pub seq_profile: u8,
+  /// `operating_point_idc[0]` — the first operating point's layer mask.
+  /// Metadata OBUs with extension headers outside this mask are ignored by
+  /// mkvtoolnix's AV1 parser before packetizer metadata is retained.
+  pub operating_point_idc: u16,
   /// `seq_level_idx[0]` — the first operating point's level (or the single
   /// level in the reduced-still-picture path).  Needed for the AV1C record.
   pub seq_level_idx_0: u8,
@@ -156,6 +161,7 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
   let seq_profile = reader.read_bits(3)? as u8;
   let _still_picture = reader.read_bit()?;
   let reduced_still_picture = reader.read_bit()?;
+  let mut operating_point_idc: u16 = 0;
   let mut seq_level_idx_0: u8 = 0;
   let mut seq_tier_0: u8 = 0;
   let mut default_duration_ns: Option<u64> = None;
@@ -195,14 +201,15 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
     let initial_display_delay_present_flag = reader.read_bit()?;
     let operating_points_cnt_minus_1 = reader.read_bits(5)? as u32;
     for i in 0..=operating_points_cnt_minus_1 {
-      let _idc = reader.read_bits(12)?;
+      let idc = reader.read_bits(12)? as u16;
       let seq_level_idx = reader.read_bits(5)? as u8;
       let mut seq_tier = 0u8;
       if seq_level_idx > 7 {
         seq_tier = reader.read_bit()? as u8;
       }
       if i == 0 {
-        // `seq_level_idx_0` / `seq_tier_0` for the AV1C record.
+        // First operating point fields for the AV1 parser state / AV1C record.
+        operating_point_idc = idc;
         seq_level_idx_0 = seq_level_idx;
         seq_tier_0 = seq_tier;
       }
@@ -345,6 +352,7 @@ pub fn decode_sequence_header(body: &[u8]) -> Result<SequenceHeader, ParseError>
   }
   Ok(SequenceHeader {
     seq_profile,
+    operating_point_idc,
     seq_level_idx_0,
     seq_tier_0,
     max_width: max_frame_width,
@@ -428,6 +436,35 @@ struct ObuScan<'a> {
   frame_found: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ObuExtension {
+  temporal_id: u8,
+  spatial_id: u8,
+}
+
+fn decode_extension(byte: u8) -> ObuExtension {
+  ObuExtension {
+    temporal_id: byte >> 5,
+    spatial_id: (byte >> 3) & 0x03,
+  }
+}
+
+fn obu_in_first_operating_point(header: ObuHeader, extension: Option<ObuExtension>, operating_point_idc: u16) -> bool {
+  if header.obu_type == OBU_TYPE_SEQUENCE_HEADER
+    || header.obu_type == OBU_TYPE_TEMPORAL_DELIMITER
+    || operating_point_idc == 0
+  {
+    return true;
+  }
+  let Some(extension) = extension else {
+    return true;
+  };
+  let idc = u32::from(operating_point_idc);
+  let in_temporal_layer = ((idc >> u32::from(extension.temporal_id)) & 1) != 0;
+  let in_spatial_layer = ((idc >> (u32::from(extension.spatial_id) + 8)) & 1) != 0;
+  in_temporal_layer && in_spatial_layer
+}
+
 /// Single structural pass over the OBU stream.  Faithful to `parser_c::parse_obu`
 /// (`av1.cpp:414-512`):
 ///
@@ -435,6 +472,9 @@ struct ObuScan<'a> {
 /// * an OBU without a size field aborts (`obu_without_size_unsupported_x`);
 /// * `frame_found` is set when a frame or non-redundant frame-header OBU's header is read,
 ///   *before* the truncation check (`av1.cpp:431`);
+/// * non-sequence/non-temporal-delimiter OBUs with extension headers are
+///   skipped when their temporal/spatial ids are outside
+///   `operating_point_idc[0]` (`av1.cpp:463-471`; PARSER-378/PARSER-379);
 /// * when the declared payload exceeds the remaining bytes the OBU body is
 ///   **not** parsed and the walk stops (`av1.cpp:434-436` returns false →
 ///   parse loop breaks), so a truncated sequence header is never decoded
@@ -442,6 +482,7 @@ struct ObuScan<'a> {
 fn scan_obus(bytes: &[u8]) -> ObuScan<'_> {
   let mut scan = ObuScan::default();
   let mut pos = 0usize;
+  let mut operating_point_idc: u16 = 0;
   while pos < bytes.len() {
     let start = pos;
     if bytes[pos] & 0x80 != 0 {
@@ -449,10 +490,12 @@ fn scan_obus(bytes: &[u8]) -> ObuScan<'_> {
     }
     let header = decode_header(bytes[pos]);
     pos += 1;
+    let mut extension = None;
     if header.has_extension {
       if pos >= bytes.len() {
         break;
       }
+      extension = Some(decode_extension(bytes[pos]));
       pos += 1;
     }
     let payload_len = if header.has_size_field {
@@ -478,11 +521,18 @@ fn scan_obus(bytes: &[u8]) -> ObuScan<'_> {
     };
     let full_obu = &bytes[start..body_end];
     let body = &bytes[pos..body_end];
+    if !obu_in_first_operating_point(header, extension, operating_point_idc) {
+      pos = body_end;
+      continue;
+    }
     match header.obu_type {
       OBU_TYPE_SEQUENCE_HEADER => {
         if scan.seq_header_obu.is_none() {
           scan.seq_header_obu = Some(full_obu);
           scan.seq_header_body = Some(body);
+          if let Ok(seq) = decode_sequence_header(body) {
+            operating_point_idc = seq.operating_point_idc;
+          }
         }
       }
       OBU_TYPE_METADATA => {
@@ -510,6 +560,13 @@ pub fn find_sequence_header(bytes: &[u8]) -> Option<&[u8]> {
 /// because `frame_found` is set before the truncation check.
 pub fn has_frame_obu(bytes: &[u8]) -> bool {
   scan_obus(bytes).frame_found
+}
+
+/// Metadata OBU bodies retained by the same AV1 parser state as mkvtoolnix.
+/// IVF's AV1 Dolby Vision first-frame path also goes through
+/// `mtx::av1::parser_c`, so it shares this filtered view.
+pub(crate) fn filtered_metadata_bodies(bytes: &[u8]) -> Vec<&[u8]> {
+  scan_obus(bytes).metadata_bodies
 }
 
 fn read_leb128(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -879,6 +936,14 @@ mod tests {
 
   fn build_metadata_obu(payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x2Au8]; // OBU_METADATA, has_size_field = 1
+    bytes.extend(encode_leb128(payload.len()));
+    bytes.extend_from_slice(payload);
+    bytes
+  }
+
+  fn build_metadata_obu_with_extension(temporal_id: u8, spatial_id: u8, payload: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![(OBU_TYPE_METADATA << 3) | 0x04 | 0x02];
+    bytes.push(((temporal_id & 0x07) << 5) | ((spatial_id & 0x03) << 3));
     bytes.extend(encode_leb128(payload.len()));
     bytes.extend_from_slice(payload);
     bytes
@@ -1261,6 +1326,14 @@ mod tests {
   /// Build a reduced sequence header that also carries a timing_info block
   /// (non-reduced path) so a default duration can be derived.
   fn build_seq_with_timing(num_units: u32, time_scale: u32) -> Vec<u8> {
+    build_seq_with_timing_and_operating_point(num_units, time_scale, 0)
+  }
+
+  fn build_seq_with_timing_and_operating_point(
+    num_units: u32,
+    time_scale: u32,
+    operating_point_idc: u16,
+  ) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(0, 3); // seq_profile
     w.write_bit(false); // still_picture
@@ -1274,7 +1347,7 @@ mod tests {
     w.write_bit(false); // decoder_model_info_present
     w.write_bit(false); // initial_display_delay_present_flag
     w.write_bits(0, 5); // operating_points_cnt_minus_1 = 0
-    w.write_bits(0, 12); // operating_point_idc[0]
+    w.write_bits(operating_point_idc as u64, 12); // operating_point_idc[0]
     w.write_bits(8, 5); // seq_level_idx[0] = 8 (> 7 → tier bit follows)
     w.write_bit(false); // seq_tier[0]
     w.write_bits(11, 4); // frame_width_bits_minus_1
@@ -1312,8 +1385,25 @@ mod tests {
     let seq = decode_sequence_header(&body).unwrap();
     assert_eq!(seq.default_duration_ns, Some(1_000_000_000u64 * 1001 / 48000));
     assert_eq!(seq.frame_duration_ns, Some(1_000_000_000u64 * 1001 / 48000));
+    assert_eq!(seq.operating_point_idc, 0);
     assert_eq!(seq.seq_level_idx_0, 8);
     assert_eq!(seq.max_width, 1920);
+  }
+
+  #[test]
+  fn scan_obus_filters_metadata_outside_first_operating_point() {
+    let body = build_seq_with_timing_and_operating_point(1001, 48000, 0x101);
+    let mut bytes = vec![0x12u8, 0x00]; // temporal_delimiter
+    bytes.push(0x0A); // sequence_header
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes.extend(build_metadata_obu_with_extension(1, 0, &[0xDE, 0xAD]));
+    bytes.extend(build_metadata_obu_with_extension(0, 0, &[0xBE, 0xEF]));
+    bytes.extend(build_frame_obu());
+
+    let scan = scan_obus(&bytes);
+    assert_eq!(scan.metadata_bodies.len(), 1);
+    assert_eq!(scan.metadata_bodies[0], &[0xBE, 0xEF]);
   }
 
   #[test]

@@ -1,6 +1,6 @@
 # AV1 OBU Parser
 
-Implementation progress: 95%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -11,9 +11,9 @@ The AV1 OBU parser recognises raw AV1 Open Bitstream Units streams and reports o
 - Primary implementation: `src-tauri/src/media_metadata/elementary/obu.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_obu.cpp`, `../mkvtoolnix/src/input/r_obu.h`, `../mkvtoolnix/src/common/av1.cpp`, `../mkvtoolnix/src/common/av1.h`
 
-The parser reads the same 1 MiB bounded prefix mkvtoolnix uses for raw OBU probing, decodes OBU headers, LEB128 sizes, sequence headers, operating profile fields, max frame dimensions, bit depth, monochrome/chroma-subsampling flags, and color description fields. Probing requires a sequence header and a frame-like OBU so isolated headers do not claim arbitrary binary files. Metadata OBUs are accepted before the sequence header, matching mkvtoolnix's pre-frame metadata retention. The OBU walker also requires every OBU to carry `obu_has_size_field`: an OBU without a size field stops the walk (and rejects the stream), mirroring `parse_obu()`'s `obu_without_size_unsupported_x` throw, so size-less raw OBU data that mkvmerge rejects is not claimed.
+The parser reads the same 1 MiB bounded prefix mkvtoolnix uses for raw OBU probing, decodes OBU headers and extension layer ids, LEB128 sizes, sequence headers, operating profile fields, the first `operating_point_idc`, max frame dimensions, bit depth, monochrome/chroma-subsampling flags, and color description fields. Probing requires a sequence header and a frame-like OBU so isolated headers do not claim arbitrary binary files. Metadata OBUs are accepted before the sequence header, matching mkvtoolnix's pre-frame metadata retention. After the first sequence header has supplied `operating_point_idc[0]`, non-sequence/non-temporal-delimiter OBUs with extension headers are dropped when their temporal or spatial id is outside the first operating point, so AV1C and Dolby Vision metadata retention mirrors `parser_c::parse_obu` (PARSER-378/PARSER-379). The OBU walker also requires every OBU to carry `obu_has_size_field`: an OBU without a size field stops the walk (and rejects the stream), mirroring `parse_obu()`'s `obu_without_size_unsupported_x` throw, so size-less raw OBU data that mkvmerge rejects is not claimed.
 
-A single structural pass (`scan_obus`) mirrors `parser_c::parse_obu` (`av1.cpp:414-512`): the `obu_forbidden_bit` aborts the walk, `frame_found` is set when an `OBU_FRAME` or non-redundant `OBU_FRAME_HEADER` header is read *before* the truncation check (`av1.cpp:431`), and when a declared payload exceeds the remaining bytes the OBU body is **not** parsed and the walk stops (`av1.cpp:434-436`). Redundant frame headers are ignored for the frame requirement, so they also do not stop pre-frame metadata retention. A truncated sequence header is therefore never decoded (PARSER-245), while a truncated real frame still counts as a frame, exactly as upstream.
+A single structural pass (`scan_obus`) mirrors `parser_c::parse_obu` (`av1.cpp:414-512`): the `obu_forbidden_bit` aborts the walk, `frame_found` is set when an `OBU_FRAME` or non-redundant `OBU_FRAME_HEADER` header is read *before* the truncation check (`av1.cpp:431`), OBUs outside the first operating point are skipped before metadata retention or parsing (`av1.cpp:463-471`), and when a declared payload exceeds the remaining bytes the OBU body is **not** parsed and the walk stops (`av1.cpp:434-436`). Redundant frame headers are ignored for the frame requirement, so they also do not stop pre-frame metadata retention. A truncated sequence header is therefore never decoded (PARSER-245), while a truncated real frame still counts as a frame, exactly as upstream.
 
 The reader surfaces the metadata mkvmerge's AV1 packetizer would write (PARSER-246):
 
@@ -33,12 +33,8 @@ flowchart TD
   E --> F["MediaMetadata"]
 ```
 
-Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
+Important structures are `ObuHeader`, `SequenceHeader`, `ColorDescription`, and the internal OBU extension/layer filter.
 
 ## Gaps and Handling
 
-The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation, operating-point filtering, and packet muxing remain mkvmerge's concern.
-
-## Open Issues
-
-- `PARSER-378` - the raw OBU walker does not apply mkvtoolnix's first-operating-point layer filter before retaining metadata OBUs. Upstream stores `operating_point_idc` from the first operating point in `parse_sequence_header_obu` and, for non-sequence/non-temporal-delimiter OBUs with extension headers, drops OBUs whose temporal/spatial ids are outside that operating point before keeping or parsing them (`common/av1.cpp:277-286`, `common/av1.cpp:463-471`). The Rust `scan_obus` keeps every pre-frame metadata OBU and `read_headers` uses those bodies for AV1C and Dolby Vision block-addition metadata, so out-of-layer metadata can be surfaced locally while mkvtoolnix ignores it.
+The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation and packet muxing remain mkvmerge's concern.

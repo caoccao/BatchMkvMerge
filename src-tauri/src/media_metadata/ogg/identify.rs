@@ -160,9 +160,13 @@ fn make_track(
     tags,
   };
   if metadata.track_type == TrackType::Subtitles {
+    let encoding = match metadata.codec_id.as_str() {
+      "S_KATE" | "S_OGM_TEXT" => Some("UTF-8".to_string()),
+      _ => None,
+    };
     properties.subtitle = Some(SubtitleTrackProperties {
       text_subtitles: true,
-      encoding: None,
+      encoding,
       variant: Some(metadata.codec_name.clone()),
       teletext_page: None,
     });
@@ -472,7 +476,28 @@ mod tests {
     assert_eq!(t.track_type, TrackType::Subtitles);
     let sub = t.properties.subtitle.as_ref().unwrap();
     assert!(sub.text_subtitles);
+    assert_eq!(sub.encoding.as_deref(), Some("UTF-8"));
     assert_eq!(sub.variant.as_deref(), Some("Kate"));
+  }
+
+  #[test]
+  fn ogm_text_subtitle_track_gets_utf8_encoding() {
+    let metadata = BitstreamMetadata::subtitle("S_OGM_TEXT", "OGM Text");
+    let state = BitstreamState {
+      serial: 4,
+      first_packet: Vec::new(),
+      header_packets: vec![b"ogm-text-header".to_vec()],
+      metadata: Some(metadata),
+      vorbis_tags: Vec::new(),
+      comment_language: None,
+      vendor: None,
+      headers_complete: false,
+    };
+    let mut m = MediaMetadata::new("clip.ogm", 0);
+    finalise(vec![state], &mut m);
+    let sub = m.tracks[0].properties.subtitle.as_ref().unwrap();
+    assert!(sub.text_subtitles);
+    assert_eq!(sub.encoding.as_deref(), Some("UTF-8"));
   }
 
   #[test]

@@ -280,6 +280,20 @@ mod tests {
   }
 
   #[test]
+  fn renamed_vobsub_manifest_without_vobsub_extension_is_unrecognised() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("bmm-renamed-vobsub-{}.txt", std::process::id()));
+    std::fs::write(
+      &path,
+      b"# VobSub index file, v7\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 0\n",
+    )
+    .unwrap();
+    let result = parse(&path, ParseOptions::default());
+    let _ = std::fs::remove_file(&path);
+    assert!(matches!(result, Err(ParseError::Unrecognised)));
+  }
+
+  #[test]
   fn empty_non_subtitle_extension_is_still_unrecognised() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("bmm-empty-other-{}.mkv", std::process::id()));

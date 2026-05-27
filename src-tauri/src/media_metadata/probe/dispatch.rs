@@ -45,8 +45,7 @@ use crate::media_metadata::ogg::OggReader;
 use crate::media_metadata::reader::Reader;
 use crate::media_metadata::realmedia::RealMediaReader;
 use crate::media_metadata::subtitles::{
-  HdmvTextStReader, MicroDvdReader, PgsReader, SrtReader, SsaReader, UsfReader, VobButtonReader, VobSubReader,
-  WebVttReader,
+  HdmvTextStReader, MicroDvdReader, PgsReader, SrtReader, SsaReader, UsfReader, VobButtonReader, WebVttReader,
 };
 
 /// Describes what the cascade did and why. `Claimed` means a reader's
@@ -167,7 +166,7 @@ const UNAMBIGUOUS_READERS: &[&str] = &[
   "coreaudio",
   "dirac",
 ];
-const TEXT_READERS: &[&str] = &["webvtt", "srt", "ssa", "vobsub", "usf", "microdvd"];
+const TEXT_READERS: &[&str] = &["webvtt", "srt", "ssa", "usf", "microdvd"];
 const STRICT_ELEMENTARY_READERS: &[&str] = &["avc", "hevc"];
 const RAW_AUDIO_EIGHT_FRAME_READERS: &[&str] = &["mp3", "ac3", "aac"];
 const AMBIGUOUS_CONTAINER_READERS: &[&str] = &["dts", "mpeg_ts", "mpeg_ps", "obu"];
@@ -284,15 +283,16 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
   static DV: DvReader = DvReader;
   static OBU: ObuReader = ObuReader;
 
-  // Subtitle readers.  Image / segment-based formats (PGS, TextST, VobSub,
-  // VobButton) probe first because their magic bytes are unambiguous; the
+  // Subtitle readers.  Image / segment-based formats (PGS, TextST, VobButton)
+  // probe first because their magic bytes are unambiguous; VobSub is handled
+  // by the path-aware `.idx`/`.sub` opener before this content cascade because
+  // mkvtoolnix rejects other extensions before reading the banner.  The
   // text-based formats (SRT, SSA, WebVTT, USF, MicroDVD) probe last so they
   // don't claim binary streams whose decoded UTF-8 happens to look like a
   // valid timecode line.
   static PGS: PgsReader = PgsReader;
   static HDMV_TEXTST: HdmvTextStReader = HdmvTextStReader;
   static VOBBTN: VobButtonReader = VobButtonReader;
-  static VOBSUB: VobSubReader = VobSubReader;
   static WEBVTT: WebVttReader = WebVttReader;
   static USF: UsfReader = UsfReader;
   static SSA: SsaReader = SsaReader;
@@ -325,7 +325,6 @@ pub fn registered_readers() -> &'static [&'static (dyn Reader + Send + Sync)] {
     &PGS,
     &HDMV_TEXTST,
     &VOBBTN,
-    &VOBSUB,
     &WEBVTT,
     &USF,
     &SSA,
