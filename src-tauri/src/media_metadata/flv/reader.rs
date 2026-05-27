@@ -65,7 +65,6 @@ struct AudioState {
   codec_name: Option<&'static str>,
   sample_rate: Option<u32>,
   channels: Option<u32>,
-  bit_depth: Option<u32>,
   headers_read: bool,
   codec_private: Option<Vec<u8>>,
   codec_config: Option<AudioCodecConfig>,
@@ -272,7 +271,7 @@ fn build_audio_track(track_id: i64, audio: &AudioState) -> Track {
   let ap = AudioTrackProperties {
     sampling_frequency: audio.sample_rate.map(|r| r as f64),
     channels: audio.channels,
-    bit_depth: audio.bit_depth,
+    bit_depth: None,
     output_sampling_frequency: audio.codec_config.as_ref().and_then(|cfg| {
       if cfg.aac_sbr_present == Some(true) {
         audio.sample_rate.map(|r| (r * 2) as f64)
@@ -311,17 +310,10 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
       state.codec_id.get_or_insert("A_MPEG/L3");
       state.codec_name.get_or_insert("MP3");
       if state.sample_rate.is_none() {
-        state.sample_rate = if flags.format == 14 {
-          Some(8_000)
-        } else {
-          flags.sample_rate()
-        };
+        state.sample_rate = flags.sample_rate();
       }
       if state.channels.is_none() {
         state.channels = Some(flags.channels());
-      }
-      if state.bit_depth.is_none() {
-        state.bit_depth = Some(flags.bits_per_sample() as u32);
       }
       state.headers_read = true;
     }
@@ -339,9 +331,6 @@ fn read_audio_payload(src: &mut FileSource, data_size: u32, state: &mut AudioSta
       }
       if state.channels.is_none() {
         state.channels = Some(flags.channels());
-      }
-      if state.bit_depth.is_none() {
-        state.bit_depth = Some(flags.bits_per_sample() as u32);
       }
       if payload.get(1) == Some(&0) && payload.len() > 2 {
         let asc = &payload[2..];
@@ -381,7 +370,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
     }
     match cid {
       VideoCodecId::H264 => {
-        if payload.get(1) == Some(&0) && payload.len() > 5 {
+        if payload.get(1) == Some(&0) && payload.len() >= 5 {
           let private = &payload[5..];
           let parsed = parse_avcc(private);
           state.codec_private = Some(private.to_vec());
@@ -395,7 +384,7 @@ fn read_video_payload(src: &mut FileSource, data_size: u32, state: &mut VideoSta
         }
       }
       VideoCodecId::H265 => {
-        if payload.get(1) == Some(&0) && payload.len() > 5 {
+        if payload.get(1) == Some(&0) && payload.len() >= 5 {
           let private = &payload[5..];
           let parsed = parse_hvcc(private);
           state.codec_private = Some(private.to_vec());
@@ -922,7 +911,7 @@ mod tests {
     let audio = track.properties.audio.as_ref().unwrap();
     assert_eq!(audio.sampling_frequency, Some(44_100.0));
     assert_eq!(audio.channels, Some(2));
-    assert_eq!(audio.bit_depth, Some(16));
+    assert_eq!(audio.bit_depth, None);
     assert!(audio.codec_config.is_none());
   }
 
@@ -986,6 +975,25 @@ mod tests {
   }
 
   #[test]
+  fn empty_avc_sequence_header_still_emits_track() {
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let video_payload = vec![(1 << 4) | 7, 0, 0, 0, 0];
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("empty-avcc.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 1);
+    let v = &out.tracks[0];
+    assert_eq!(v.codec.id, "V_MPEG4/ISO/AVC");
+    assert_eq!(v.codec.codec_private.as_ref().unwrap().hex, "");
+    assert_eq!(v.properties.video.as_ref().unwrap().default_duration_ns, Some(40_000_000));
+  }
+
+  #[test]
   fn incomplete_hevc_config_still_emits_track() {
     // PARSER-275 mirror for HEVC: keep the track and private bytes even when
     // the hvcC record is too short to contain VPS/SPS/PPS arrays.
@@ -1010,6 +1018,25 @@ mod tests {
   }
 
   #[test]
+  fn empty_hevc_sequence_header_still_emits_track() {
+    let mut blob = build_header(1, TYPE_FLAG_VIDEO);
+    let video_payload = vec![(1 << 4) | 12, 0, 0, 0, 0];
+    blob.extend(build_tag(TAG_VIDEO, &video_payload));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("empty-hvcc.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 1);
+    let v = &out.tracks[0];
+    assert_eq!(v.codec.id, "V_MPEGH/ISO/HEVC");
+    assert_eq!(v.codec.codec_private.as_ref().unwrap().hex, "");
+    assert_eq!(v.properties.video.as_ref().unwrap().default_duration_ns, Some(40_000_000));
+  }
+
+  #[test]
   fn read_headers_handles_audio_only_files() {
     let mut blob = build_header(1, TYPE_FLAG_AUDIO);
     let audio_byte = (2 << 4) | (3 << 2);
@@ -1021,6 +1048,27 @@ mod tests {
       .unwrap();
     assert_eq!(out.tracks.len(), 1);
     assert_eq!(out.tracks[0].codec.id, "A_MPEG/L3");
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.bit_depth, None);
+  }
+
+  #[test]
+  fn mp3_8khz_format_uses_flv_rate_bits() {
+    let mut blob = build_header(1, TYPE_FLAG_AUDIO);
+    let audio_byte = (14 << 4) | (3 << 2) | (1 << 1) | 1;
+    blob.extend(build_tag(TAG_AUDIO, &[audio_byte, 0]));
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("mp3-8k-name.flv", 0);
+    FlvReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_MPEG/L3");
+    let audio = out.tracks[0].properties.audio.as_ref().unwrap();
+    assert_eq!(audio.sampling_frequency, Some(44_100.0));
+    assert_eq!(audio.bit_depth, None);
   }
 
   #[test]
