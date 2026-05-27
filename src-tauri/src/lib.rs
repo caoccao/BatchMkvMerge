@@ -18,7 +18,7 @@
 mod config;
 mod constants;
 mod controller;
-mod extract;
+mod merge;
 pub mod media_metadata;
 mod mkvtoolnix;
 mod protocol;
@@ -82,18 +82,18 @@ async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<protoc
 }
 
 #[tauri::command]
-async fn enqueue_extract(file: String, args: Vec<String>) -> Result<(), String> {
-  extract::enqueue(file, args).map_err(convert_error)
+async fn enqueue_merge(file: String, args: Vec<String>) -> Result<(), String> {
+  merge::enqueue(file, args).map_err(convert_error)
 }
 
 #[tauri::command]
-async fn cancel_extract(file: String) -> Result<(), String> {
-  extract::cancel(file).map_err(convert_error)
+async fn cancel_merge(file: String) -> Result<(), String> {
+  merge::cancel(file).map_err(convert_error)
 }
 
 #[tauri::command]
-async fn get_extract_status() -> Result<protocol::ExtractSnapshot, String> {
-  Ok(extract::snapshot())
+async fn get_merge_status() -> Result<protocol::MergeSnapshot, String> {
+  Ok(merge::snapshot())
 }
 
 #[tauri::command]
@@ -160,14 +160,14 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![
-      cancel_extract,
+      cancel_merge,
       check_output_path_writable,
       detect_better_media_info,
       ensure_output_path,
-      enqueue_extract,
+      enqueue_merge,
       get_about,
       get_config,
-      get_extract_status,
+      get_merge_status,
       get_launch_args,
       get_media_files,
       get_media_metadata,
@@ -179,7 +179,7 @@ pub fn run() {
     ])
     .setup(|app| {
       use tauri::Manager;
-      extract::init_app_handle(app.handle().clone());
+      merge::init_app_handle(app.handle().clone());
       let window = app.get_webview_window("main").unwrap();
       window.set_title(&format!("BatchMkvMerge v{}", env!("CARGO_PKG_VERSION")))?;
 

@@ -42,7 +42,7 @@ export interface MediaTrack {
   type: string;
   /** Human-readable codec name. For attachments this is the mime subtype. */
   codec: string;
-  /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Drives the extract extension lookup. */
+  /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Drives the track extension lookup. */
   codecId: string;
   /** Optional friendly track name (TrackName). Empty for synthetic rows. */
   trackName: string;

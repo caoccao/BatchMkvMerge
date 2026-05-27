@@ -110,7 +110,7 @@ function App() {
     for (const item of items) {
       if (item.status === QueueItemStatus.Waiting) {
         hasActive = true;
-      } else if (item.status === QueueItemStatus.Extracting) {
+      } else if (item.status === QueueItemStatus.Merging) {
         hasActive = true;
         progressSum += item.progress;
       } else {

@@ -75,7 +75,7 @@ jobs:
       run: cargo test -r
 
     # Coverage gate: every media_metadata parser sub-module is held to >= 90%
-    # line coverage. Top-level Tauri glue (lib.rs, extract.rs, etc.) is
+    # line coverage. Top-level Tauri glue (lib.rs, merge.rs, etc.) is
     # excluded because it isn't unit-test covered.
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@v2
@@ -86,7 +86,7 @@ jobs:
       working-directory: src-tauri
       run: |
         cargo llvm-cov --summary-only --fail-under-lines 90 \
-          --ignore-filename-regex 'src/(config|constants|controller|extract|lib|main|mkvtoolnix|protocol)\.rs|build\.rs'
+          --ignore-filename-regex 'src/(config|constants|controller|merge|lib|main|mkvtoolnix|protocol)\.rs|build\.rs'
 
     - name: Build BatchMkvMerge
       run: pnpm tauri build

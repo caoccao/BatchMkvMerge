@@ -31,7 +31,7 @@ import {
 } from "@mui/material";
 import CancelIcon from "@mui/icons-material/Cancel";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import ContentCutIcon from "@mui/icons-material/ContentCut";
+import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import betterMediaInfoIcon from "../assets/bettermediainfo.png";
@@ -39,9 +39,9 @@ import { dirname } from "@tauri-apps/api/path";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
-  cancelExtraction,
+  cancelMerge,
   enqueueSelectedTracksForFile,
-} from "../actions/extractionActions";
+} from "../actions/mergeActions";
 import {
   buildCommandString,
   formatHMS,
@@ -82,32 +82,32 @@ function isMediaMetadataError(value: unknown): value is MediaMetadataError {
 /**
  * Map a `get_media_metadata` rejection to a human-readable string. Backend
  * categorises every failure into one of the [`MediaMetadataError`] tagged
- * variants; the i18n keys live under `extract.error.parser.*`. Unrecognised
+ * variants; the i18n keys live under `merge.error.parser.*`. Unrecognised
  * values fall back to `String(err)` so debug output is never silently lost.
  */
 function formatMetadataError(err: unknown, t: TranslateFn): string {
   if (isMediaMetadataError(err)) {
     switch (err.kind) {
       case "io":
-        return t("extract.error.parser.io", { detail: err.detail });
+        return t("merge.error.parser.io", { detail: err.detail });
       case "unexpectedEof":
-        return t("extract.error.parser.unexpectedEof", { detail: err.detail });
+        return t("merge.error.parser.unexpectedEof", { detail: err.detail });
       case "unrecognised":
-        return t("extract.error.parser.unrecognised", { detail: err.detail });
+        return t("merge.error.parser.unrecognised", { detail: err.detail });
       case "timeout":
-        return t("extract.error.parser.timeout", {
+        return t("merge.error.parser.timeout", {
           budgetMs: err.budgetMs,
           stage: err.stage,
           detail: err.detail,
         });
       case "malformed":
-        return t("extract.error.parser.malformed", { detail: err.detail });
+        return t("merge.error.parser.malformed", { detail: err.detail });
       case "oversizedElement":
-        return t("extract.error.parser.oversizedElement", {
+        return t("merge.error.parser.oversizedElement", {
           detail: err.detail,
         });
       case "internal":
-        return t("extract.error.parser.internal", { detail: err.detail });
+        return t("merge.error.parser.internal", { detail: err.detail });
     }
   }
   return String(err);
@@ -143,9 +143,9 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     );
   });
 
-  const isExtracting = entry?.status === QueueItemStatus.Extracting;
+  const isMerging = entry?.status === QueueItemStatus.Merging;
   const isQueued = entry?.status === QueueItemStatus.Waiting;
-  const isActive = isExtracting || isQueued;
+  const isActive = isMerging || isQueued;
 
   const [loading, setLoading] = useState<boolean>(
     () => cachedTracks === undefined,
@@ -251,7 +251,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       }
       await writeText(command);
       setSnackbar({
-        message: t("extract.commandCopied"),
+        message: t("merge.commandCopied"),
         severity: "success",
       });
     } catch (err) {
@@ -259,7 +259,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     }
   };
 
-  const handleExtract = async () => {
+  const handleMerge = async () => {
     if (!hasSelection || isActive || !activeProfile) {
       return;
     }
@@ -276,7 +276,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   };
 
   const handleCancel = async () => {
-    await cancelExtraction(path, (err) =>
+    await cancelMerge(path, (err) =>
       setSnackbar({ message: String(err), severity: "error" }),
     );
   };
@@ -314,13 +314,13 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
 
   const handleDelete = async () => {
     const current = useMkvStore.getState().queueItems[path];
-    if (current?.status === QueueItemStatus.Extracting) {
+    if (current?.status === QueueItemStatus.Merging) {
       return;
     }
     if (current?.status === QueueItemStatus.Waiting) {
-      await cancelExtraction(path);
+      await cancelMerge(path);
       const later = useMkvStore.getState().queueItems[path];
-      if (later?.status === QueueItemStatus.Extracting) {
+      if (later?.status === QueueItemStatus.Merging) {
         return;
       }
       useMkvStore.getState().removeFromQueue(path);
@@ -340,7 +340,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
 
   const actionContent = (
     <Box sx={{ display: "flex", gap: 0.5 }}>
-      <Tooltip title={t("extract.setOutputPath")}>
+      <Tooltip title={t("merge.setOutputPath")}>
         <span>
           <IconButton
             size="small"
@@ -352,7 +352,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
         </span>
       </Tooltip>
       {betterMediaInfoAvailable && (
-        <Tooltip title={t("extract.openInBetterMediaInfo")}>
+        <Tooltip title={t("merge.openInBetterMediaInfo")}>
           <span>
             <IconButton size="small" onClick={handleOpenInBetterMediaInfo}>
               <Box
@@ -365,7 +365,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           </span>
         </Tooltip>
       )}
-      <Tooltip title={t("extract.copyCommand")}>
+      <Tooltip title={t("merge.copyCommand")}>
         <span>
           <IconButton
             size="small"
@@ -379,19 +379,19 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       <Button
         variant="outlined"
         size="small"
-        startIcon={<ContentCutIcon />}
+        startIcon={<HubIcon />}
         disabled={!hasSelection || isActive}
-        onClick={handleExtract}
+        onClick={handleMerge}
         sx={{ textTransform: "none", whiteSpace: "nowrap" }}
       >
-        {t("extract.extract")}
+        {t("merge.merge")}
       </Button>
       <Tooltip title={t("list.delete")}>
         <span>
           <IconButton
             size="small"
             color="error"
-            disabled={isExtracting}
+            disabled={isMerging}
             onClick={handleDelete}
           >
             <DeleteIcon fontSize="small" />
@@ -402,12 +402,12 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   );
 
   const progress = entry?.progress ?? 0;
-  const startedAt = entry?.extractionStartedAt ?? null;
+  const startedAt = entry?.mergeStartedAt ?? null;
   const elapsedMs =
-    isExtracting && startedAt !== null ? Date.now() - startedAt : 0;
-  const elapsedStr = isExtracting ? formatHMS(elapsedMs) : "--:--:--";
+    isMerging && startedAt !== null ? Date.now() - startedAt : 0;
+  const elapsedStr = isMerging ? formatHMS(elapsedMs) : "--:--:--";
   const etaStr =
-    isExtracting && progress > 0 && progress < 100
+    isMerging && progress > 0 && progress < 100
       ? formatHMS((elapsedMs * (100 - progress)) / progress)
       : "--:--:--";
 
@@ -444,7 +444,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
             mt: 1,
           }}
         >
-          {isExtracting ? (
+          {isMerging ? (
             <>
               <LinearProgress
                 variant="determinate"
@@ -474,7 +474,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           ) : (
             <Box sx={{ flex: 1 }} />
           )}
-          <Tooltip title={t("extract.cancel")}>
+          <Tooltip title={t("merge.cancel")}>
             <IconButton size="small" color="error" onClick={handleCancel}>
               <CancelIcon fontSize="small" />
             </IconButton>
@@ -488,14 +488,14 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           disabled={isActive}
           loading={loading}
           errorText={error}
-          emptyText={t("extract.noTracks")}
+          emptyText={t("merge.noTracks")}
           headers={{
-            id: t("extract.header.id"),
-            number: t("extract.header.number"),
-            type: t("extract.header.type"),
-            codec: t("extract.header.codec"),
-            trackName: t("extract.header.trackName"),
-            language: t("extract.header.language"),
+            id: t("merge.header.id"),
+            number: t("merge.header.number"),
+            type: t("merge.header.type"),
+            codec: t("merge.header.codec"),
+            trackName: t("merge.header.trackName"),
+            language: t("merge.header.language"),
           }}
           onToggleAll={toggleAll}
           onToggleOne={toggleOne}

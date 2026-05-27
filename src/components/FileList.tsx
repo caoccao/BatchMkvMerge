@@ -21,9 +21,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
 import { formatHMS, getParentDir } from "../merge";
-import type { ExtractionFinishedEvent } from "../protocol";
+import type { MergeFinishedEvent } from "../protocol";
 import { QueueItemStatus } from "../protocol";
-import { getExtractStatus, getMediaFiles } from "../service";
+import { getMergeStatus, getMediaFiles } from "../service";
 import { useMkvStore } from "../store";
 import { GroupCard } from "./GroupCard";
 import { MkvFileCard } from "./MkvFileCard";
@@ -33,13 +33,13 @@ type RenderEntry =
   | { kind: "single"; file: string }
   | { kind: "group"; key: string; files: string[] };
 
-const EXTRACT_POLL_INTERVAL_MS = 200;
+const MERGE_POLL_INTERVAL_MS = 200;
 
 export default function FileList() {
   const { t } = useTranslation();
   const files = useMkvStore((s) => s.files);
   const addFiles = useMkvStore((s) => s.addFiles);
-  const applyExtractSnapshot = useMkvStore((s) => s.applyExtractSnapshot);
+  const applyMergeSnapshot = useMkvStore((s) => s.applyMergeSnapshot);
   const recordFinishedOutcome = useMkvStore((s) => s.recordFinishedOutcome);
   const showNotification = useMkvStore((s) => s.showNotification);
   const groupByFile = useMkvStore((s) => s.groupByFile);
@@ -88,31 +88,31 @@ export default function FileList() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const snap = await getExtractStatus();
+        const snap = await getMergeStatus();
         if (!cancelled) {
-          applyExtractSnapshot(snap.entries);
+          applyMergeSnapshot(snap.entries);
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("Failed to fetch extract status", err);
+          console.error("Failed to fetch merge status", err);
         }
       }
     };
     poll();
-    const id = setInterval(poll, EXTRACT_POLL_INTERVAL_MS);
+    const id = setInterval(poll, MERGE_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [applyExtractSnapshot]);
+  }, [applyMergeSnapshot]);
 
   useEffect(() => {
-    const unlistenPromise = listen<ExtractionFinishedEvent>(
-      "extraction-finished",
+    const unlistenPromise = listen<MergeFinishedEvent>(
+      "merge-finished",
       (event) => {
         const { file, outcome, error } = event.payload;
         const existing = useMkvStore.getState().queueItems[file];
-        const startedAt = existing?.extractionStartedAt ?? null;
+        const startedAt = existing?.mergeStartedAt ?? null;
         recordFinishedOutcome(file, outcome, error);
         if (outcome === QueueItemStatus.Completed) {
           const elapsedMs = startedAt !== null ? Date.now() - startedAt : 0;

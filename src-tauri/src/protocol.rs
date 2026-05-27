@@ -93,19 +93,19 @@ impl MediaMetadataErrorPayload {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ExtractEntry {
+pub struct MergeEntry {
   pub file: String,
   pub status: String,
   pub progress: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ExtractSnapshot {
-  pub entries: Vec<ExtractEntry>,
+pub struct MergeSnapshot {
+  pub entries: Vec<MergeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtractionFinishedEvent {
+pub struct MergeFinishedEvent {
   pub file: String,
   pub outcome: String,
   pub error: Option<String>,

@@ -1,7 +1,7 @@
 [package]
 name = "BatchMkvMerge"
 version = "0.1.0"
-description = "A tool to batch extract tracks from MKV files using mkvmerge."
+description = "A tool to batch merge media files to MKV files using mkvmerge."
 authors = ["Sam Cao"]
 edition = "2024"
 

@@ -32,7 +32,7 @@ export function FileStatusIcon({ status, size = 18 }: Props) {
   }
   const iconSx = { fontSize: size };
   switch (status) {
-    case QueueItemStatus.Extracting:
+    case QueueItemStatus.Merging:
       return (
         <Box
           sx={{

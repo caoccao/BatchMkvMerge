@@ -15,11 +15,15 @@
  *   limitations under the License.
  */
 
-import { buildExtractArgs, resolveOutputDir, trackKey } from "../merge";
+import { buildMergeArgs, resolveOutputDir, trackKey } from "../merge";
 import type { MediaTrack } from "../media-metadata";
 import type { Config, ConfigProfile } from "../protocol";
 import { QueueItemStatus } from "../protocol";
-import { cancelExtract, ensureOutputPath, enqueueExtract } from "../service";
+import {
+  cancelMerge as invokeCancelMerge,
+  ensureOutputPath,
+  enqueueMerge,
+} from "../service";
 import { useMkvStore } from "../store";
 
 type TranslateFn = (
@@ -31,7 +35,7 @@ type MkvStoreState = ReturnType<typeof useMkvStore.getState>;
 
 function isActiveStatus(status: QueueItemStatus | undefined): boolean {
   return (
-    status === QueueItemStatus.Waiting || status === QueueItemStatus.Extracting
+    status === QueueItemStatus.Waiting || status === QueueItemStatus.Merging
   );
 }
 
@@ -95,27 +99,27 @@ export async function enqueueSelectedTracksForFile(
     );
     return false;
   }
-  const args = await buildExtractArgs(file, outputDir, selectedTracks, profile);
-  await enqueueExtract(file, args);
+  const args = await buildMergeArgs(file, outputDir, selectedTracks, profile);
+  await enqueueMerge(file, args);
   state.addToQueue(file);
   return true;
 }
 
-export async function cancelExtraction(
+export async function cancelMerge(
   file: string,
   onError?: (error: unknown, file: string) => void,
 ): Promise<void> {
   useMkvStore.getState().markCancelRequested(file);
   try {
-    await cancelExtract(file);
+    await invokeCancelMerge(file);
   } catch (error) {
     onError?.(error, file);
   }
 }
 
-export async function cancelExtractions(
+export async function cancelMerges(
   files: string[],
   onError?: (error: unknown, file: string) => void,
 ): Promise<void> {
-  await Promise.all(files.map((file) => cancelExtraction(file, onError)));
+  await Promise.all(files.map((file) => cancelMerge(file, onError)));
 }

@@ -207,34 +207,34 @@ export type MediaMetadataError =
 
 export enum QueueItemStatus {
   Waiting = "Waiting",
-  Extracting = "Extracting",
+  Merging = "Merging",
   Completed = "Completed",
   Cancelled = "Cancelled",
   Failed = "Failed",
 }
 
-export type ExtractActiveStatus =
+export type MergeActiveStatus =
   | QueueItemStatus.Waiting
-  | QueueItemStatus.Extracting;
+  | QueueItemStatus.Merging;
 
-export type ExtractOutcome =
+export type MergeOutcome =
   | QueueItemStatus.Completed
   | QueueItemStatus.Cancelled
   | QueueItemStatus.Failed;
 
-export interface ExtractEntry {
+export interface MergeEntry {
   file: string;
-  status: ExtractActiveStatus;
+  status: MergeActiveStatus;
   progress: number;
 }
 
-export interface ExtractSnapshot {
-  entries: ExtractEntry[];
+export interface MergeSnapshot {
+  entries: MergeEntry[];
 }
 
-export interface ExtractionFinishedEvent {
+export interface MergeFinishedEvent {
   file: string;
-  outcome: ExtractOutcome;
+  outcome: MergeOutcome;
   error: string | null;
 }
 

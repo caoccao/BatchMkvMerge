@@ -28,7 +28,7 @@ import {
 } from "@mui/material";
 import CancelIcon from "@mui/icons-material/Cancel";
 import CheckIcon from "@mui/icons-material/Check";
-import ContentCutIcon from "@mui/icons-material/ContentCut";
+import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
 import FolderCopyIcon from "@mui/icons-material/FolderCopy";
 import InfoIcon from "@mui/icons-material/Info";
@@ -36,11 +36,11 @@ import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { useTranslation } from "react-i18next";
 import {
-  cancelExtractions,
+  cancelMerges,
   enqueueSelectedTracksForFile,
   getActiveProfile,
   getSelectedTracksForFile,
-} from "../actions/extractionActions";
+} from "../actions/mergeActions";
 import { QueueItemStatus } from "../protocol";
 import { useMkvStore } from "../store";
 
@@ -56,14 +56,14 @@ export default function Toolbar() {
 
   const hasFiles = files.length > 0;
   const fileSelectedIdsMap = useMkvStore((s) => s.fileSelectedIds);
-  const canExtractAll = files.some(
+  const canMergeAll = files.some(
     (f) => (fileSelectedIdsMap[f]?.length ?? 0) > 0,
   );
   const queueItems = useMkvStore((s) => s.queueItems);
   const hasActiveJobs = Object.values(queueItems).some(
     (item) =>
       item.status === QueueItemStatus.Waiting ||
-      item.status === QueueItemStatus.Extracting,
+      item.status === QueueItemStatus.Merging,
   );
   const canClear = hasFiles && !hasActiveJobs;
   const groupByFile = useMkvStore((s) => s.groupByFile);
@@ -87,15 +87,15 @@ export default function Toolbar() {
       .filter(
         (item) =>
           item.status === QueueItemStatus.Waiting ||
-          item.status === QueueItemStatus.Extracting,
+          item.status === QueueItemStatus.Merging,
       )
       .map((item) => item.file);
-    await cancelExtractions(activeFiles, (err, file) => {
+    await cancelMerges(activeFiles, (err, file) => {
       console.error("Cancel failed for", file, err);
     });
   }, []);
 
-  const runExtractAll = useCallback(async () => {
+  const runMergeAll = useCallback(async () => {
     const state = useMkvStore.getState();
     const profile = getActiveProfile(state.config);
     if (!profile) {
@@ -114,7 +114,7 @@ export default function Toolbar() {
           t: tRef.current,
         });
       } catch (err) {
-        console.error("Extract All failed for", file, err);
+        console.error("Merge All failed for", file, err);
       }
     }
   }, []);
@@ -146,7 +146,7 @@ export default function Toolbar() {
         const hasActive = Object.values(state.queueItems).some(
           (item) =>
             item.status === QueueItemStatus.Waiting ||
-            item.status === QueueItemStatus.Extracting,
+            item.status === QueueItemStatus.Merging,
         );
         if (state.files.length > 0 && !hasActive) {
           clearFiles();
@@ -163,7 +163,7 @@ export default function Toolbar() {
         if (
           state.files.some((f) => (state.fileSelectedIds[f]?.length ?? 0) > 0)
         ) {
-          runExtractAll();
+          runMergeAll();
         }
       } else if (
         !event.ctrlKey &&
@@ -178,7 +178,7 @@ export default function Toolbar() {
         ).some(
           (item) =>
             item.status === QueueItemStatus.Waiting ||
-            item.status === QueueItemStatus.Extracting,
+            item.status === QueueItemStatus.Merging,
         );
         if (hasActive) {
           runCancelAll();
@@ -220,7 +220,7 @@ export default function Toolbar() {
     };
   }, [
     clearFiles,
-    runExtractAll,
+    runMergeAll,
     runCancelAll,
     openProfileMenu,
     openSettings,
@@ -241,14 +241,14 @@ export default function Toolbar() {
   return (
     <Box sx={{ mx: 1, my: 0, display: "flex", gap: 1 }}>
       <ButtonGroup variant="outlined" size="small">
-        <Tooltip title={t("toolbar.extractAll")}>
+        <Tooltip title={t("toolbar.mergeAll")}>
           <span>
             <IconButton
               sx={buttonSx}
-              disabled={!canExtractAll}
-              onClick={runExtractAll}
+              disabled={!canMergeAll}
+              onClick={runMergeAll}
             >
-              <ContentCutIcon fontSize="small" />
+              <HubIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>

@@ -20,7 +20,7 @@ import type {
   About,
   BetterMediaInfoStatus,
   Config,
-  ExtractSnapshot,
+  MergeSnapshot,
   MediaMetadata,
   MkvToolNixStatus,
   UpdateCheckResult,
@@ -60,19 +60,19 @@ export async function getMediaMetadata(file: string): Promise<MediaMetadata> {
   return await invoke<MediaMetadata>("get_media_metadata", { file });
 }
 
-export async function enqueueExtract(
+export async function enqueueMerge(
   file: string,
   args: string[],
 ): Promise<void> {
-  return await invoke<void>("enqueue_extract", { file, args });
+  return await invoke<void>("enqueue_merge", { file, args });
 }
 
-export async function cancelExtract(file: string): Promise<void> {
-  return await invoke<void>("cancel_extract", { file });
+export async function cancelMerge(file: string): Promise<void> {
+  return await invoke<void>("cancel_merge", { file });
 }
 
-export async function getExtractStatus(): Promise<ExtractSnapshot> {
-  return await invoke<ExtractSnapshot>("get_extract_status");
+export async function getMergeStatus(): Promise<MergeSnapshot> {
+  return await invoke<MergeSnapshot>("get_merge_status");
 }
 
 export async function checkOutputPathWritable(path: string): Promise<boolean> {

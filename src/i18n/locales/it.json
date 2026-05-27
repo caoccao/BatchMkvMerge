@@ -5,9 +5,9 @@
   "list": {
     "delete": "Elimina"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "Comando copia",
-    "extract": "Estrai",
+    "merge": "Unisci",
     "cancel": "Annulla",
     "ok": "OK",
     "browse": "Sfoglia",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "Apri in BetterMediaInfo",
     "outputPathNotWritable": "Il percorso destinazione non è scrivibile. Scegli un altro percorso.",
     "commandCopied": "Comando copiato negli appunti.",
-    "extractionComplete": "Estrazione completata.",
+    "mergeComplete": "Unione completata.",
     "noTracks": "Nessuna traccia trovata.",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "Estrai tutto (F3)",
+    "mergeAll": "Unisci tutto (F3)",
     "cancelAll": "Interrompi tutto (F4)",
     "clear": "Cancella (Ctrl + Q)",
     "groupByFile": "Modo gruppo (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "Copia tutti i comandi",
-    "extractAll": "Estrai tutto",
+    "mergeAll": "Unisci tutto",
     "clearAll": "Cancella tutto"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "In attesa",
-      "extracting": "Estrazione",
+      "merging": "Unione",
       "completed": "Completato",
       "cancelled": "Annullato",
       "failed": "Fallito"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "Esci",
-    "exitMessage": "Ci sono estrazioni in corso. Vuoi uscire?",
+    "exitMessage": "Ci sono unioni in corso. Vuoi uscire?",
     "yes": "Sì",
     "no": "No"
   },

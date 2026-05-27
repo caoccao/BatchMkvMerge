@@ -23,8 +23,8 @@ import type {
   About,
   Config,
   ConfigProfile,
-  ExtractEntry,
-  ExtractOutcome,
+  MergeEntry,
+  MergeOutcome,
   MediaMetadata,
 } from "./protocol";
 import {
@@ -58,8 +58,8 @@ export interface QueueItem {
   drive: string;
   status: QueueItemStatus;
   progress: number;
-  extractionStartedAt: number | null;
-  extractionEndedAt: number | null;
+  mergeStartedAt: number | null;
+  mergeEndedAt: number | null;
   cancelRequested: boolean;
   error: string | null;
 }
@@ -109,13 +109,13 @@ interface MkvStore {
   deleteActiveProfile: () => Promise<void>;
   setActiveProfile: (name: string) => Promise<void>;
   resetActiveProfileTemplates: () => Promise<void>;
-  applyExtractSnapshot: (entries: ExtractEntry[]) => void;
+  applyMergeSnapshot: (entries: MergeEntry[]) => void;
   addToQueue: (file: string) => void;
   removeFromQueue: (file: string) => void;
   markCancelRequested: (file: string) => void;
   recordFinishedOutcome: (
     file: string,
-    outcome: ExtractOutcome,
+    outcome: MergeOutcome,
     error: string | null,
   ) => void;
   clearCompletedInDrive: (drive: string) => void;
@@ -307,7 +307,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     set({ groupByFile: fresh.defaultGroupMode });
     await get().updateConfig({ profiles });
   },
-  applyExtractSnapshot: (entries) => {
+  applyMergeSnapshot: (entries) => {
     const now = Date.now();
     const snap = new Map(entries.map((e) => [e.file, e]));
     const prev = get().queueItems;
@@ -323,28 +323,28 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
           drive: getDriveKey(entry.file),
           status: entry.status,
           progress: entry.progress,
-          extractionStartedAt:
-            entry.status === QueueItemStatus.Extracting ? now : null,
-          extractionEndedAt: null,
+          mergeStartedAt:
+            entry.status === QueueItemStatus.Merging ? now : null,
+          mergeEndedAt: null,
           cancelRequested: false,
           error: null,
         };
         nextOrder.push(entry.file);
       } else {
         const wasTerminal = isTerminalStatus(existing.status);
-        let startedAt = wasTerminal ? null : existing.extractionStartedAt;
-        const endedAt = wasTerminal ? null : existing.extractionEndedAt;
+        let startedAt = wasTerminal ? null : existing.mergeStartedAt;
+        const endedAt = wasTerminal ? null : existing.mergeEndedAt;
         const cancelRequested = wasTerminal ? false : existing.cancelRequested;
         const error = wasTerminal ? null : existing.error;
-        if (entry.status === QueueItemStatus.Extracting && startedAt === null) {
+        if (entry.status === QueueItemStatus.Merging && startedAt === null) {
           startedAt = now;
         }
         nextItems[entry.file] = {
           ...existing,
           status: entry.status,
           progress: entry.progress,
-          extractionStartedAt: startedAt,
-          extractionEndedAt: endedAt,
+          mergeStartedAt: startedAt,
+          mergeEndedAt: endedAt,
           cancelRequested,
           error,
         };
@@ -360,7 +360,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         nextItems[file] = {
           ...item,
           status: fallback,
-          extractionEndedAt: item.extractionEndedAt ?? now,
+          mergeEndedAt: item.mergeEndedAt ?? now,
           progress:
             fallback === QueueItemStatus.Completed ? 100 : item.progress,
         };
@@ -375,7 +375,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     if (
       existing &&
       (existing.status === QueueItemStatus.Waiting ||
-        existing.status === QueueItemStatus.Extracting)
+        existing.status === QueueItemStatus.Merging)
     ) {
       return;
     }
@@ -384,8 +384,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       drive: getDriveKey(file),
       status: QueueItemStatus.Waiting,
       progress: 0,
-      extractionStartedAt: null,
-      extractionEndedAt: null,
+      mergeStartedAt: null,
+      mergeEndedAt: null,
       cancelRequested: false,
       error: null,
     };
@@ -439,8 +439,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
               drive: getDriveKey(file),
               status: outcome,
               progress: outcome === QueueItemStatus.Completed ? 100 : 0,
-              extractionStartedAt: null,
-              extractionEndedAt: now,
+              mergeStartedAt: null,
+              mergeEndedAt: now,
               cancelRequested: false,
               error,
             },
@@ -454,7 +454,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
           [file]: {
             ...existing,
             status: outcome,
-            extractionEndedAt: existing.extractionEndedAt ?? now,
+            mergeEndedAt: existing.mergeEndedAt ?? now,
             progress:
               outcome === QueueItemStatus.Completed ? 100 : existing.progress,
             error,

@@ -255,7 +255,7 @@ pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<std::process::Child
     .stderr(std::process::Stdio::piped());
   cmd
     .spawn()
-    .map_err(|e| anyhow::anyhow!("MKVEXTRACT_NOT_AVAILABLE:{}: {}", mkvmerge_path.display(), e))
+    .map_err(|e| anyhow::anyhow!("MKVMERGE_NOT_AVAILABLE:{}: {}", mkvmerge_path.display(), e))
 }
 
 fn mkvtoolnix_gui_process_name() -> &'static str {

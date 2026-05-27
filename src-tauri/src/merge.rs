@@ -21,14 +21,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
 use crate::mkvtoolnix;
-use crate::protocol::{ExtractEntry, ExtractSnapshot, ExtractionFinishedEvent};
+use crate::protocol::{MergeEntry, MergeSnapshot, MergeFinishedEvent};
 
 const STATUS_WAITING: &str = "Waiting";
-const STATUS_EXTRACTING: &str = "Extracting";
+const STATUS_MERGING: &str = "Merging";
 const OUTCOME_COMPLETED: &str = "Completed";
 const OUTCOME_CANCELLED: &str = "Cancelled";
 const OUTCOME_FAILED: &str = "Failed";
-const EVENT_EXTRACTION_FINISHED: &str = "extraction-finished";
+const EVENT_MERGE_FINISHED: &str = "merge-finished";
 
 enum WorkerOutcome {
   Completed,
@@ -44,7 +44,7 @@ pub fn init_app_handle(handle: AppHandle) {
 
 enum TaskStatus {
   Queued,
-  Extracting,
+  Merging,
 }
 
 struct TaskState {
@@ -56,17 +56,17 @@ struct TaskState {
 
 #[derive(Default)]
 struct DriveState {
-  extracting: Option<String>,
+  merging: Option<String>,
   queued: Vec<String>,
 }
 
-struct ExtractState {
+struct MergeState {
   tasks: HashMap<String, TaskState>,
   drives: HashMap<String, DriveState>,
   children: HashMap<String, Arc<Mutex<std::process::Child>>>,
 }
 
-impl ExtractState {
+impl MergeState {
   fn new() -> Self {
     Self {
       tasks: HashMap::new(),
@@ -76,10 +76,10 @@ impl ExtractState {
   }
 }
 
-static STATE: OnceLock<Mutex<ExtractState>> = OnceLock::new();
+static STATE: OnceLock<Mutex<MergeState>> = OnceLock::new();
 
-fn state() -> &'static Mutex<ExtractState> {
-  STATE.get_or_init(|| Mutex::new(ExtractState::new()))
+fn state() -> &'static Mutex<MergeState> {
+  STATE.get_or_init(|| Mutex::new(MergeState::new()))
 }
 
 fn get_drive_key(file: &str) -> String {
@@ -117,10 +117,10 @@ pub fn enqueue(file: String, args: Vec<String>) -> Result<()> {
       },
     );
     let drive = st.drives.entry(drive_key.clone()).or_default();
-    if drive.extracting.is_none() {
-      drive.extracting = Some(file.clone());
+    if drive.merging.is_none() {
+      drive.merging = Some(file.clone());
       if let Some(t) = st.tasks.get_mut(&file) {
-        t.status = TaskStatus::Extracting;
+        t.status = TaskStatus::Merging;
       }
       should_start = true;
     } else {
@@ -138,11 +138,11 @@ pub fn cancel(file: String) -> Result<()> {
   let child_to_kill: Option<Arc<Mutex<std::process::Child>>>;
   {
     let mut st = state().lock().unwrap();
-    let is_extracting = match st.tasks.get(&file) {
-      Some(t) => matches!(t.status, TaskStatus::Extracting),
+    let is_merging = match st.tasks.get(&file) {
+      Some(t) => matches!(t.status, TaskStatus::Merging),
       None => return Ok(()),
     };
-    if !is_extracting {
+    if !is_merging {
       st.tasks.remove(&file);
       let drive_key = get_drive_key(&file);
       if let Some(drive) = st.drives.get_mut(&drive_key) {
@@ -163,21 +163,21 @@ pub fn cancel(file: String) -> Result<()> {
   Ok(())
 }
 
-pub fn snapshot() -> ExtractSnapshot {
+pub fn snapshot() -> MergeSnapshot {
   let st = state().lock().unwrap();
-  let entries: Vec<ExtractEntry> = st
+  let entries: Vec<MergeEntry> = st
     .tasks
     .iter()
-    .map(|(file, task)| ExtractEntry {
+    .map(|(file, task)| MergeEntry {
       file: file.clone(),
       status: match task.status {
         TaskStatus::Queued => STATUS_WAITING.to_owned(),
-        TaskStatus::Extracting => STATUS_EXTRACTING.to_owned(),
+        TaskStatus::Merging => STATUS_MERGING.to_owned(),
       },
       progress: task.progress,
     })
     .collect();
-  ExtractSnapshot { entries }
+  MergeSnapshot { entries }
 }
 
 fn emit_finished(file: &str, outcome: &WorkerOutcome) {
@@ -189,13 +189,13 @@ fn emit_finished(file: &str, outcome: &WorkerOutcome) {
     WorkerOutcome::Cancelled => (OUTCOME_CANCELLED, None),
     WorkerOutcome::Failed(msg) => (OUTCOME_FAILED, Some(msg.clone())),
   };
-  let payload = ExtractionFinishedEvent {
+  let payload = MergeFinishedEvent {
     file: file.to_string(),
     outcome: outcome_str.to_string(),
     error,
   };
-  if let Err(err) = handle.emit(EVENT_EXTRACTION_FINISHED, payload) {
-    log::error!("Failed to emit extraction-finished event: {}", err);
+  if let Err(err) = handle.emit(EVENT_MERGE_FINISHED, payload) {
+    log::error!("Failed to emit merge-finished event: {}", err);
   }
 }
 
@@ -272,15 +272,15 @@ fn on_worker_finished(file: &str, outcome: WorkerOutcome) {
     st.tasks.remove(file);
     let drive_key = get_drive_key(file);
     let drive = st.drives.entry(drive_key).or_default();
-    if drive.extracting.as_deref() == Some(file) {
-      drive.extracting = None;
+    if drive.merging.as_deref() == Some(file) {
+      drive.merging = None;
     }
     drive.queued.retain(|f| f != file);
-    if drive.extracting.is_none() && !drive.queued.is_empty() {
+    if drive.merging.is_none() && !drive.queued.is_empty() {
       let next = drive.queued.remove(0);
-      drive.extracting = Some(next.clone());
+      drive.merging = Some(next.clone());
       if let Some(t) = st.tasks.get_mut(&next) {
-        t.status = TaskStatus::Extracting;
+        t.status = TaskStatus::Merging;
         t.progress = 0;
       }
       Some(next)

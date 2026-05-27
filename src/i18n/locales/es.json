@@ -5,9 +5,9 @@
   "list": {
     "delete": "Eliminar"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "Copiar comando",
-    "extract": "Extraer",
+    "merge": "Combinar",
     "cancel": "Cancelar",
     "ok": "Aceptar",
     "browse": "Examinar",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "Abrir en BetterMediaInfo",
     "outputPathNotWritable": "La ruta de salida no se puede escribir. Elige otra ruta.",
     "commandCopied": "Comando copiado al portapapeles.",
-    "extractionComplete": "Extracción completada.",
+    "mergeComplete": "Combinación completada.",
     "noTracks": "No se encontraron pistas.",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "Extraer todo (F3)",
+    "mergeAll": "Combinar todo (F3)",
     "cancelAll": "Cancelar todo (F4)",
     "clear": "Limpiar (Ctrl + Q)",
     "groupByFile": "Modo de grupo (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "Copiar todos los comandos",
-    "extractAll": "Extraer todo",
+    "mergeAll": "Combinar todo",
     "clearAll": "Quitar todo"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "En espera",
-      "extracting": "Extrayendo",
+      "merging": "Combinando",
       "completed": "Completado",
       "cancelled": "Cancelado",
       "failed": "Fallido"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "Salir",
-    "exitMessage": "Hay extracciones en curso. ¿Seguro que quieres salir?",
+    "exitMessage": "Hay combinaciones en curso. ¿Seguro que quieres salir?",
     "yes": "Sí",
     "no": "No"
   },

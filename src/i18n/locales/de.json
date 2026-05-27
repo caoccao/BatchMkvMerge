@@ -5,9 +5,9 @@
   "list": {
     "delete": "Löschen"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "Befehl kopieren",
-    "extract": "Extrahieren",
+    "merge": "Zusammenführen",
     "cancel": "Abbrechen",
     "ok": "OK",
     "browse": "Durchsuchen",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "In BetterMediaInfo öffnen",
     "outputPathNotWritable": "Der Ausgabepfad ist nicht beschreibbar. Bitte wähle einen anderen Pfad.",
     "commandCopied": "Befehl in die Zwischenablage kopiert.",
-    "extractionComplete": "Extraktion abgeschlossen.",
+    "mergeComplete": "Zusammenführung abgeschlossen.",
     "noTracks": "Keine Spuren gefunden.",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "Alle extrahieren (F3)",
+    "mergeAll": "Alle zusammenführen (F3)",
     "cancelAll": "Alle abbrechen (F4)",
     "clear": "Leeren (Strg + Q)",
     "groupByFile": "Gruppenmodus (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "Alle Befehle kopieren",
-    "extractAll": "Alle extrahieren",
+    "mergeAll": "Alle zusammenführen",
     "clearAll": "Alle entfernen"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "Wartend",
-      "extracting": "Extrahiere",
+      "merging": "Zusammenführen",
       "completed": "Fertig",
       "cancelled": "Abgebrochen",
       "failed": "Fehlgeschlagen"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "Beenden",
-    "exitMessage": "Es laufen noch Extraktionen. Möchten Sie wirklich beenden?",
+    "exitMessage": "Es laufen noch Zusammenführungen. Möchten Sie wirklich beenden?",
     "yes": "Ja",
     "no": "Nein"
   },

@@ -79,7 +79,7 @@ export function OutputPathDialog({
     try {
       const ok = await checkOutputPathWritable(trimmed);
       if (!ok) {
-        setError(t("extract.outputPathNotWritable"));
+        setError(t("merge.outputPathNotWritable"));
         return;
       }
     } catch (err) {
@@ -103,13 +103,13 @@ export function OutputPathDialog({
       fullWidth
       maxWidth="sm"
     >
-      <DialogTitle>{t("extract.setOutputPath")}</DialogTitle>
+      <DialogTitle>{t("merge.setOutputPath")}</DialogTitle>
       <DialogContent>
         <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
           <TextField
             fullWidth
             size="small"
-            label={t("extract.outputPath")}
+            label={t("merge.outputPath")}
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
@@ -122,7 +122,7 @@ export function OutputPathDialog({
             onClick={handleBrowse}
             sx={{ whiteSpace: "nowrap", textTransform: "none" }}
           >
-            {t("extract.browse")}
+            {t("merge.browse")}
           </Button>
         </Stack>
         {error ? (
@@ -133,14 +133,14 @@ export function OutputPathDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} sx={{ textTransform: "none" }}>
-          {t("extract.cancel")}
+          {t("merge.cancel")}
         </Button>
         <Button
           onClick={handleConfirm}
           variant="contained"
           sx={{ textTransform: "none" }}
         >
-          {t("extract.ok")}
+          {t("merge.ok")}
         </Button>
       </DialogActions>
     </Dialog>

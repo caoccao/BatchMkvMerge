@@ -35,12 +35,12 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { useTranslation } from "react-i18next";
 import {
-  cancelExtraction,
-  cancelExtractions,
+  cancelMerge,
+  cancelMerges,
   enqueueSelectedTracksForFile,
   getActiveProfile,
   getSelectedTracksForFile,
-} from "../actions/extractionActions";
+} from "../actions/mergeActions";
 import { formatHMS } from "../merge";
 import type { QueueItem } from "../store";
 import { QueueItemStatus, useMkvStore } from "../store";
@@ -49,7 +49,7 @@ const TICK_INTERVAL_MS = 200;
 
 function statusColor(status: QueueItemStatus): string {
   switch (status) {
-    case QueueItemStatus.Extracting:
+    case QueueItemStatus.Merging:
       return "success.main";
     case QueueItemStatus.Completed:
       return "text.secondary";
@@ -65,24 +65,24 @@ function statusColor(status: QueueItemStatus): string {
 function elapsed(item: QueueItem, now: number): string {
   if (
     item.status === QueueItemStatus.Waiting ||
-    item.extractionStartedAt === null
+    item.mergeStartedAt === null
   ) {
     return "--:--:--";
   }
-  const end = item.extractionEndedAt ?? now;
-  return formatHMS(end - item.extractionStartedAt);
+  const end = item.mergeEndedAt ?? now;
+  return formatHMS(end - item.mergeStartedAt);
 }
 
 function eta(item: QueueItem, now: number): string {
   if (
-    item.status !== QueueItemStatus.Extracting ||
-    item.extractionStartedAt === null ||
+    item.status !== QueueItemStatus.Merging ||
+    item.mergeStartedAt === null ||
     item.progress <= 0 ||
     item.progress >= 100
   ) {
     return "--:--:--";
   }
-  const elapsedMs = now - item.extractionStartedAt;
+  const elapsedMs = now - item.mergeStartedAt;
   const etaMs = (elapsedMs * (100 - item.progress)) / item.progress;
   return formatHMS(etaMs);
 }
@@ -103,8 +103,8 @@ export default function Queue() {
   const clearCompletedInDrive = useMkvStore((s) => s.clearCompletedInDrive);
 
   const handleCancel = async (file: string) => {
-    await cancelExtraction(file, (err) => {
-      console.error("Failed to cancel extraction", err);
+    await cancelMerge(file, (err) => {
+      console.error("Failed to cancel merge", err);
     });
   };
   const [now, setNow] = useState(() => Date.now());
@@ -143,7 +143,7 @@ export default function Queue() {
         const hasActiveInDrive = items.some(
           (i) =>
             i.status === QueueItemStatus.Waiting ||
-            i.status === QueueItemStatus.Extracting,
+            i.status === QueueItemStatus.Merging,
         );
         const hasResumable = items.some(
           (i) =>
@@ -155,10 +155,10 @@ export default function Queue() {
             .filter(
               (i) =>
                 i.status === QueueItemStatus.Waiting ||
-                i.status === QueueItemStatus.Extracting,
+                i.status === QueueItemStatus.Merging,
             )
             .map((i) => i.file);
-          await cancelExtractions(activeFiles, (err, file) => {
+          await cancelMerges(activeFiles, (err, file) => {
             console.error("Cancel failed for", file, err);
           });
         };
@@ -256,21 +256,21 @@ export default function Queue() {
                       </TableCell>
                       <TableCell sx={{ color: statusColor(item.status) }}>
                         {statusLabel(item.status)}
-                        {item.status === QueueItemStatus.Extracting
+                        {item.status === QueueItemStatus.Merging
                           ? ` ${item.progress}%`
                           : ""}
                       </TableCell>
                       <TableCell>
-                        {formatClockTime(item.extractionStartedAt)}
+                        {formatClockTime(item.mergeStartedAt)}
                       </TableCell>
                       <TableCell>
-                        {formatClockTime(item.extractionEndedAt)}
+                        {formatClockTime(item.mergeEndedAt)}
                       </TableCell>
                       <TableCell>{elapsed(item, now)}</TableCell>
                       <TableCell>{eta(item, now)}</TableCell>
                       <TableCell padding="checkbox">
-                        {item.status === QueueItemStatus.Extracting && (
-                          <Tooltip title={t("extract.cancel")}>
+                        {item.status === QueueItemStatus.Merging && (
+                          <Tooltip title={t("merge.cancel")}>
                             <IconButton
                               size="small"
                               color="error"

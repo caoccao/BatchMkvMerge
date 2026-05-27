@@ -5,9 +5,9 @@
   "list": {
     "delete": "刪除"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "複製指令",
-    "extract": "擷取",
+    "merge": "合併",
     "cancel": "取消",
     "ok": "確定",
     "browse": "瀏覽",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "在 BetterMediaInfo 中開啟",
     "outputPathNotWritable": "輸出路徑無法寫入。請選擇其他路徑。",
     "commandCopied": "指令已複製到剪貼簿。",
-    "extractionComplete": "擷取完成。",
+    "mergeComplete": "合併完成。",
     "noTracks": "找不到軌道。",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "全部擷取 (F3)",
+    "mergeAll": "全部合併 (F3)",
     "cancelAll": "全部取消 (F4)",
     "clear": "清空 (Ctrl + Q)",
     "groupByFile": "分組模式 (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "複製全部指令",
-    "extractAll": "全部擷取",
+    "mergeAll": "全部合併",
     "clearAll": "全部清除"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "等待中",
-      "extracting": "擷取中",
+      "merging": "合併中",
       "completed": "已完成",
       "cancelled": "已取消",
       "failed": "失敗"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "結束",
-    "exitMessage": "目前有擷取作業進行中。確定要結束嗎?",
+    "exitMessage": "目前有合併作業進行中。確定要結束嗎?",
     "yes": "是",
     "no": "否"
   },

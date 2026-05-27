@@ -27,7 +27,7 @@ The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.94.0**
 
 ### Tests
 
-The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90`. The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `extract.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90`. The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `merge.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
 
 ```bash
 cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
@@ -44,12 +44,12 @@ The non-regen run of that test fails with a line-by-line diff when the checked-i
 
 ### Frontend ↔ Backend split
 
-React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, extract events, the structured `MediaMetadataErrorPayload`).
+React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
 
 The Tauri command surface for files / metadata is:
 
 - `get_media_files(paths)` — recursive directory walk filtered by `media_metadata::probe::extension_hint::is_supported_media_path`.
-- `get_media_metadata(file)` — wraps `media_metadata::parse` with `ParseOptions` built by `controller::parser_options_from_config`. The persisted `config.parser.timeoutMs` wins over the legacy `BMM_PARSER_BUDGET_MS` env override; env only applies when the user has not pinned a value through Settings. Failures arrive on the frontend as a tagged `MediaMetadataError` (`io | unexpectedEof | unrecognised | timeout | malformed | oversizedElement | internal`); `MkvFileCard.formatMetadataError` maps each kind to an `extract.error.parser.*` i18n key.
+- `get_media_metadata(file)` — wraps `media_metadata::parse` with `ParseOptions` built by `controller::parser_options_from_config`. The persisted `config.parser.timeoutMs` wins over the legacy `BMM_PARSER_BUDGET_MS` env override; env only applies while the config still holds the default timeout. The timeout is no longer exposed in the UI — edit the config file to change it. Failures arrive on the frontend as a tagged `MediaMetadataError` (`io | unexpectedEof | unrecognised | timeout | malformed | oversizedElement | internal`); `MkvFileCard.formatMetadataError` maps each kind to a `merge.error.parser.*` i18n key.
 
 The old `get_mkv_files` / `get_mkv_tracks` commands and the `MkvTrack` wire struct were removed in Phase 11; the MKV-only `is_mkv` predicate is replaced by `is_supported_media_path` (Phase 11), so the drag-drop accept-list now covers every extension `mkvmerge -J` recognises.
 
@@ -57,42 +57,40 @@ The old `get_mkv_files` / `get_mkv_tracks` commands and the `MkvTrack` wire stru
 
 `src/store.ts` owns:
 - the dropped file list,
-- the extraction queue (grouped per-drive on Windows — single bucket on Linux/macOS), with per-item status, progress, timestamps, cancel flag, and error,
+- the merge queue (grouped per-drive on Windows — single bucket on Linux/macOS), with per-item status, progress, timestamps, cancel flag, and error,
 - the persisted config (theme, language, profiles, mkvtoolnix path, window geometry),
-- a registry of per-card extract handlers and selection flags that the Toolbar consumes for Extract All,
+- a registry of per-card merge handlers and selection flags that the Toolbar consumes for Merge All,
 - per-file parser results in two parallel maps: `fileMetadata: Record<string, MediaMetadata>` (the raw parser output, kept for future detail panels) and `fileTracks: Record<string, MediaTrack[]>` (the flattened rows the selection table renders, derived by `metadataToMediaTracks` in `src/media-metadata.ts`). `setFileMetadata` writes both maps and the per-kind count summary in one shot. The `MediaTrack` adapter shape, the `MediaTrackType` row-kind enum (`"track" | "chapters" | "attachment"`), and the `mediaTrackCounts` helper all live in `src/media-metadata.ts` — keep new UI-row logic there, not in `src/merge.ts`.
 
 **Important:** `updateConfig` applies the patch optimistically and discards the backend's response. Don't re-add a post-await `set({ config: saved })` — it re-introduces a race condition where rapid typing reverts edits (older async responses land on top of newer optimistic state). The backend also doesn't transform the config inside `set_config`, so the response would be identical anyway.
 
 ### Status state machine
 
-`QueueItemStatus` is a string enum in `src/protocol.ts`: `Waiting | Extracting | Completed | Cancelled | Failed`. Backend snapshots only ever carry `Waiting` / `Extracting`; terminal states are set on the frontend:
+`QueueItemStatus` is a string enum in `src/protocol.ts`: `Waiting | Merging | Completed | Cancelled | Failed`. Backend snapshots only ever carry `Waiting` / `Merging`; terminal states are set on the frontend:
 
-1. The backend emits an `extraction-finished` event when the worker exits, carrying the authoritative outcome (`Completed`, `Cancelled`, or `Failed`) — `FileList.tsx` listens and calls `recordFinishedOutcome` which sets the status directly.
-2. As a fallback, `applyExtractSnapshot` transitions any item that's disappeared from the backend snapshot to `Completed` (or `Cancelled` if `cancelRequested` was flagged). This handles races where the event arrives after the next poll.
-3. The terminal-status check in `applyExtractSnapshot` skips items already in a terminal state, so the event-driven update is never overwritten.
+1. The backend emits a `merge-finished` event when the worker exits, carrying the authoritative outcome (`Completed`, `Cancelled`, or `Failed`) — `FileList.tsx` listens and calls `recordFinishedOutcome` which sets the status directly.
+2. As a fallback, `applyMergeSnapshot` transitions any item that's disappeared from the backend snapshot to `Completed` (or `Cancelled` if `cancelRequested` was flagged). This handles races where the event arrives after the next poll.
+3. The terminal-status check in `applyMergeSnapshot` skips items already in a terminal state, so the event-driven update is never overwritten.
 
-Polling runs every **200 ms** from `FileList.tsx` via `get_extract_status`.
+Polling runs every **200 ms** from `FileList.tsx` via `get_merge_status`.
 
-### Per-drive extraction queue (backend)
+### Per-drive merge queue (backend)
 
-`src-tauri/src/extract.rs` owns all live extraction state via a module-level `OnceLock<Mutex<ExtractState>>`:
+`src-tauri/src/merge.rs` owns all live merge state via a module-level `OnceLock<Mutex<MergeState>>`:
 
 - `tasks: HashMap<file, TaskState>` — metadata (status, progress, args, cancel flag).
-- `drives: HashMap<drive_key, DriveState>` — per-drive `extracting + queued`.
+- `drives: HashMap<drive_key, DriveState>` — per-drive `merging + queued`.
 - `children: HashMap<file, Arc<Mutex<Child>>>` — kept separately so `cancel()` can `kill()` from a different call site.
 
-`get_drive_key` returns the Windows path `Prefix` component (`C:`, `\\server\share`) uppercased, else `"default"`. When a file is enqueued and the drive's `extracting` slot is free, it's promoted immediately and a worker is `std::thread::spawn`'d. When a worker finishes, `on_worker_finished` emits the event, drops the task, and pops the next file for the same drive.
+`get_drive_key` returns the Windows path `Prefix` component (`C:`, `\\server\share`) uppercased, else `"default"`. When a file is enqueued and the drive's `merging` slot is free, it's promoted immediately and a worker is `std::thread::spawn`'d. When a worker finishes, `on_worker_finished` emits the event, drops the task, and pops the next file for the same drive.
 
-The tokio runtime is intentionally capped at 4 workers (see `lib.rs` → `tauri::async_runtime::set(runtime.handle().clone())` with `worker_threads(4)`). The actual extraction work runs on dedicated `std::thread::spawn` threads, not on those 4 workers, so the polling endpoint stays responsive under load.
+The tokio runtime is intentionally capped at 4 workers (see `lib.rs` → `tauri::async_runtime::set(runtime.handle().clone())` with `worker_threads(4)`). The actual merge work runs on dedicated `std::thread::spawn` threads, not on those 4 workers, so the polling endpoint stays responsive under load.
 
-### Profiles and filename templates
+### Profiles
 
-Profiles live in the persisted config (one `ConfigProfile` per entry, with a shared `activeProfile` pointer). Each profile carries three templates (video / audio / subtitle) and three auto-select flags. The `Default` profile auto-selects subtitle tracks.
+Profiles live in the persisted config (one `ConfigProfile` per entry, with a shared `activeProfile` pointer). Each profile carries per-track-type auto-select flags plus language filters (video / audio / subtitle). The `Default` profile auto-selects subtitle tracks. (The per-stream filename templates were removed — the app merges files rather than naming per-track outputs.)
 
-Templates are expanded by `merge.ts::renderTemplate`, a **single-pass character scanner** (not regex-based — don't regress this). It supports `{file_name}`, `{track_id}`, `{track_number}`, `{language}`, `{codec_name}`, `{track_name}`. `{{` / `}}` escape to literal braces; unknown placeholders are emitted verbatim so typos are visible. `{codec_name}` and `{track_name}` are sanitized for filesystem-unsafe characters before substitution.
-
-The active profile is consumed both on track auto-select (once per card, guarded by `autoSelectedRef`) and at extract time (passed into `buildExtractArgs` / `buildCommandString`).
+The active profile is consumed both on track auto-select (once per card, guarded by `autoSelectedRef`) and at merge time (passed into `buildMergeArgs` / `buildCommandString`).
 
 ### Window flicker
 
@@ -108,7 +106,7 @@ Config is stored per-OS:
 Detection lives in `src-tauri/src/config.rs::get_config_dir`. Old config files from earlier schema versions still load because every new field has `#[serde(default = "...")]`. Notable nested blocks:
 
 - `config.externalTools` — MKVToolNix + BetterMediaInfo paths.
-- `config.parser.timeoutMs` — per-file parse budget for the native parser (default 1000, clamped to 100–60000 ms by `ConfigParser::effective_timeout_ms`). Exposed in Settings → Parser tab.
+- `config.parser.timeoutMs` — per-file parse budget for the native parser (default 10000, clamped to 100–60000 ms by `ConfigParser::effective_timeout_ms`). Not exposed in the UI — edit the config file to change it.
 
 ### i18n
 
@@ -218,13 +216,13 @@ The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 
 The TypeScript counterpart `src/protocol.generated.ts` is **auto-generated by specta** from the model structs and **must be regenerated** any time a model struct changes (`BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`). The non-regen run of the same test asserts the checked-in file matches what specta would emit, so CI catches drift. Don't edit it by hand.
 
-**Configurable timeout** (see [[feedback_parser_timeout]] memory): the per-file budget comes from `config.parser.timeoutMs` (default 1000, clamped 100–60000). On expiry the parser returns `Err(ParseError::Timeout { budget_ms, stage })` immediately — no partial result. The `BMM_PARSER_BUDGET_MS` env var is kept as a dev-only override; the persisted config wins when both are set.
+**Configurable timeout** (see [[feedback_parser_timeout]] memory): the per-file budget comes from `config.parser.timeoutMs` (default 10000, clamped 100–60000). It is not surfaced in the UI — edit the config file to change it. On expiry the parser returns `Err(ParseError::Timeout { budget_ms, stage })` immediately — no partial result. The `BMM_PARSER_BUDGET_MS` env var is kept as a dev-only override; the persisted config wins when both are set.
 
 ### External tools
 
 Two optional external binaries are integrated, both opt-in via Settings:
 
-- **MKVToolNix** (`mkvmerge`, `mkvmerge`) — required for the core extraction flow; the app shells out to them.
+- **MKVToolNix** (`mkvmerge`, `mkvmerge`) — required for the core merge flow; the app shells out to them.
 - **BetterMediaInfo** — optional; when its path is configured, the "Open in BetterMediaInfo" entry becomes available on each card.
 
 Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfoPath`). Backend probe commands return `MkvToolNixStatus` / `BetterMediaInfoStatus` (`src-tauri/src/protocol.rs`) with auto-detected directories — see `controller.rs` for the per-OS search paths (Windows registry / `Program Files`, macOS `/Applications`, Linux `$PATH`). The shared **`src/components/settings/ExternalToolPathRow.tsx`** + **`useToolPathDetection.ts`** drive the Browse/Detect UI for both tools — change them once and both settings rows update.
@@ -232,9 +230,9 @@ Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfo
 ## Project conventions
 
 - **Copyright headers** use `2026` only (e.g. `Copyright (c) 2026. caoccao.com Sam Cao`, `© Copyright 2026`). Don't reintroduce ranges like `2024-2026` — this project started in 2026; the range is a template-copy artifact from other caoccao projects.
-- Status labels in the UI use **PascalCase enum values** (`Waiting`, `Extracting`, …). i18n keys that back them are lowercase (`queue.status.waiting`, …); the `statusLabel` helper in `Queue.tsx` bridges with `.toLowerCase()`.
+- Status labels in the UI use **PascalCase enum values** (`Waiting`, `Merging`, …). i18n keys that back them are lowercase (`queue.status.waiting`, …); the `statusLabel` helper in `Queue.tsx` bridges with `.toLowerCase()`.
 - macOS `Stack` alignment must use `sx={{ alignItems: "center" }}`, not the `alignItems` prop — MUI v9 dropped the prop.
-- When cards register their `handleExtract` into `fileExtractHandlers`, the signature is `() => Promise<void>`. The toolbar's Extract All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
+- When cards register their `handleMerge` into `fileMergeHandlers`, the signature is `() => Promise<void>`. The toolbar's Merge All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
 - All `if-else` must have braces.
 - Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase.
 - When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.

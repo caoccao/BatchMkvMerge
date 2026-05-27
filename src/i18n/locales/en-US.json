@@ -5,9 +5,9 @@
   "list": {
     "delete": "Delete"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "Copy Command",
-    "extract": "Extract",
+    "merge": "Merge",
     "cancel": "Cancel",
     "ok": "OK",
     "browse": "Browse",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "Open in BetterMediaInfo",
     "outputPathNotWritable": "The output path is not writable. Please choose another path.",
     "commandCopied": "Command copied to clipboard.",
-    "extractionComplete": "Extraction complete.",
+    "mergeComplete": "Merge complete.",
     "noTracks": "No tracks found.",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "Extract All (F3)",
+    "mergeAll": "Merge All (F3)",
     "cancelAll": "Cancel All (F4)",
     "clear": "Clear (Ctrl + Q)",
     "groupByFile": "Group Mode (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "Copy All Commands",
-    "extractAll": "Extract All",
+    "mergeAll": "Merge All",
     "clearAll": "Clear All"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "Waiting",
-      "extracting": "Extracting",
+      "merging": "Merging",
       "completed": "Completed",
       "cancelled": "Cancelled",
       "failed": "Failed"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "Exit",
-    "exitMessage": "There are extractions in progress. Are you sure you want to exit?",
+    "exitMessage": "There are merges in progress. Are you sure you want to exit?",
     "yes": "Yes",
     "no": "No"
   },

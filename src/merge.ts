@@ -297,7 +297,7 @@ async function buildModeSegments(
   return result;
 }
 
-export async function buildExtractArgs(
+export async function buildMergeArgs(
   file: string,
   outputDir: string,
   tracks: MediaTrack[],

@@ -31,16 +31,16 @@ import {
 } from "@mui/material";
 import CancelIcon from "@mui/icons-material/Cancel";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import ContentCutIcon from "@mui/icons-material/ContentCut";
+import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import betterMediaInfoIcon from "../assets/bettermediainfo.png";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
-  cancelExtraction,
+  cancelMerge,
   enqueueSelectedTracksForFile,
-} from "../actions/extractionActions";
+} from "../actions/mergeActions";
 import {
   buildCommandString,
   formatHMS,
@@ -173,13 +173,13 @@ export function GroupCard({ files }: GroupCardProps) {
     const status = queueItems[f]?.status;
     return (
       status === QueueItemStatus.Waiting ||
-      status === QueueItemStatus.Extracting
+      status === QueueItemStatus.Merging
     );
   });
   const hasWaitingInGroup = files.some(
     (f) => queueItems[f]?.status === QueueItemStatus.Waiting,
   );
-  const canExtractAll = hasSelection && !hasActiveInGroup;
+  const canMergeAll = hasSelection && !hasActiveInGroup;
   const canCopyAll = hasSelection;
   const canClearAll = files.length > 0 && !hasActiveInGroup;
 
@@ -268,7 +268,7 @@ export function GroupCard({ files }: GroupCardProps) {
       }
       await writeText(commands.join("\n"));
       setSnackbar({
-        message: t("extract.commandCopied"),
+        message: t("merge.commandCopied"),
         severity: "success",
       });
     } catch (err) {
@@ -276,7 +276,7 @@ export function GroupCard({ files }: GroupCardProps) {
     }
   };
 
-  const handleExtractAll = async () => {
+  const handleMergeAll = async () => {
     if (!activeProfile || !hasSelection) {
       return;
     }
@@ -300,17 +300,17 @@ export function GroupCard({ files }: GroupCardProps) {
   };
 
   const handleCancel = async (file: string) => {
-    await cancelExtraction(file);
+    await cancelMerge(file);
   };
 
   const handleClearAll = async () => {
     for (const file of [...files]) {
       const current = useMkvStore.getState().queueItems[file];
-      if (current?.status === QueueItemStatus.Extracting) {
+      if (current?.status === QueueItemStatus.Merging) {
         continue;
       }
       if (current?.status === QueueItemStatus.Waiting) {
-        await cancelExtraction(file);
+        await cancelMerge(file);
       }
       removeFromQueue(file);
       removeFile(file);
@@ -347,7 +347,7 @@ export function GroupCard({ files }: GroupCardProps) {
             outputPath={groupOutputDir}
           />
         </Box>
-        <Tooltip title={t("extract.setOutputPath")}>
+        <Tooltip title={t("merge.setOutputPath")}>
           <span>
             <IconButton
               size="small"
@@ -359,7 +359,7 @@ export function GroupCard({ files }: GroupCardProps) {
           </span>
         </Tooltip>
         {betterMediaInfoAvailable && (
-          <Tooltip title={t("extract.openInBetterMediaInfo")}>
+          <Tooltip title={t("merge.openInBetterMediaInfo")}>
             <span>
               <IconButton size="small" onClick={handleOpenInBetterMediaInfo}>
                 <Box
@@ -383,17 +383,17 @@ export function GroupCard({ files }: GroupCardProps) {
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={t("group.extractAll")}>
+        <Tooltip title={t("group.mergeAll")}>
           <span>
             <Button
               variant="outlined"
               size="small"
-              startIcon={<ContentCutIcon />}
-              disabled={!canExtractAll}
-              onClick={handleExtractAll}
+              startIcon={<HubIcon />}
+              disabled={!canMergeAll}
+              onClick={handleMergeAll}
               sx={{ textTransform: "none", whiteSpace: "nowrap" }}
             >
-              {t("group.extractAll")}
+              {t("group.mergeAll")}
             </Button>
           </span>
         </Tooltip>
@@ -424,16 +424,16 @@ export function GroupCard({ files }: GroupCardProps) {
           <List dense>
             {files.map((file) => {
               const entry = queueItems[file];
-              const isExtracting = entry?.status === QueueItemStatus.Extracting;
-              const startedAt = entry?.extractionStartedAt ?? null;
+              const isMerging = entry?.status === QueueItemStatus.Merging;
+              const startedAt = entry?.mergeStartedAt ?? null;
               const elapsedMs =
-                isExtracting && startedAt !== null ? now - startedAt : 0;
+                isMerging && startedAt !== null ? now - startedAt : 0;
               const progressPct = entry?.progress ?? 0;
-              const elapsedStr = isExtracting
+              const elapsedStr = isMerging
                 ? formatHMS(elapsedMs)
                 : "--:--:--";
               const etaStr =
-                isExtracting && progressPct > 0 && progressPct < 100
+                isMerging && progressPct > 0 && progressPct < 100
                   ? formatHMS((elapsedMs * (100 - progressPct)) / progressPct)
                   : "--:--:--";
               return (
@@ -462,7 +462,7 @@ export function GroupCard({ files }: GroupCardProps) {
                       {getFileName(file)}
                     </Typography>
                   </Box>
-                  {isExtracting ? (
+                  {isMerging ? (
                     <>
                       <Box
                         sx={{
@@ -497,7 +497,7 @@ export function GroupCard({ files }: GroupCardProps) {
                         >
                           {entry?.progress ?? 0}%
                         </Typography>
-                        <Tooltip title={t("extract.cancel")}>
+                        <Tooltip title={t("merge.cancel")}>
                           <IconButton
                             size="small"
                             color="error"
@@ -541,14 +541,14 @@ export function GroupCard({ files }: GroupCardProps) {
             tracks={tracks}
             selectedIds={selectedIds}
             disabled={hasActiveInGroup}
-            emptyText={t("extract.noTracks")}
+            emptyText={t("merge.noTracks")}
             headers={{
-              id: t("extract.header.id"),
-              number: t("extract.header.number"),
-              type: t("extract.header.type"),
-              codec: t("extract.header.codec"),
-              trackName: t("extract.header.trackName"),
-              language: t("extract.header.language"),
+              id: t("merge.header.id"),
+              number: t("merge.header.number"),
+              type: t("merge.header.type"),
+              codec: t("merge.header.codec"),
+              trackName: t("merge.header.trackName"),
+              language: t("merge.header.language"),
             }}
             onToggleAll={toggleAll}
             onToggleOne={toggleOne}

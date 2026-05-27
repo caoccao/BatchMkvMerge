@@ -26,7 +26,7 @@ import {
 } from "@mui/material";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
-import { cancelExtractions } from "../actions/extractionActions";
+import { cancelMerges } from "../actions/mergeActions";
 import { QueueItemStatus } from "../protocol";
 import { useMkvStore } from "../store";
 
@@ -41,7 +41,7 @@ export function CloseGuard() {
       const hasActive = items.some(
         (i) =>
           i.status === QueueItemStatus.Waiting ||
-          i.status === QueueItemStatus.Extracting,
+          i.status === QueueItemStatus.Merging,
       );
       if (hasActive) {
         event.preventDefault();
@@ -63,10 +63,10 @@ export function CloseGuard() {
       .filter(
         (i) =>
           i.status === QueueItemStatus.Waiting ||
-          i.status === QueueItemStatus.Extracting,
+          i.status === QueueItemStatus.Merging,
       )
       .map((i) => i.file);
-    await cancelExtractions(activeFiles, (err, file) => {
+    await cancelMerges(activeFiles, (err, file) => {
       console.error("Cancel failed for", file, err);
     });
     setOpen(false);

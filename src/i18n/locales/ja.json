@@ -5,9 +5,9 @@
   "list": {
     "delete": "削除"
   },
-  "extract": {
+  "merge": {
     "copyCommand": "コマンドをコピー",
-    "extract": "抽出",
+    "merge": "結合",
     "cancel": "キャンセル",
     "ok": "OK",
     "browse": "参照",
@@ -16,7 +16,7 @@
     "openInBetterMediaInfo": "BetterMediaInfo で開く",
     "outputPathNotWritable": "出力先に書き込めません。別のパスを選択してください。",
     "commandCopied": "コマンドをクリップボードにコピーしました。",
-    "extractionComplete": "抽出が完了しました。",
+    "mergeComplete": "結合が完了しました。",
     "noTracks": "トラックが見つかりません。",
     "header": {
       "id": "ID",
@@ -41,7 +41,7 @@
     }
   },
   "toolbar": {
-    "extractAll": "すべて抽出 (F3)",
+    "mergeAll": "すべて結合 (F3)",
     "cancelAll": "すべてキャンセル (F4)",
     "clear": "クリア (Ctrl + Q)",
     "groupByFile": "グループモード (F8)",
@@ -51,7 +51,7 @@
   },
   "group": {
     "copyAllCommands": "すべてのコマンドをコピー",
-    "extractAll": "すべて抽出",
+    "mergeAll": "すべて結合",
     "clearAll": "すべて削除"
   },
   "tabs": {
@@ -76,7 +76,7 @@
     },
     "status": {
       "waiting": "待機中",
-      "extracting": "抽出中",
+      "merging": "結合中",
       "completed": "完了",
       "cancelled": "キャンセル済み",
       "failed": "失敗"
@@ -160,7 +160,7 @@
   },
   "confirm": {
     "exitTitle": "終了",
-    "exitMessage": "抽出処理が実行中です。終了してもよろしいですか?",
+    "exitMessage": "結合処理が実行中です。終了してもよろしいですか?",
     "yes": "はい",
     "no": "いいえ"
   },
