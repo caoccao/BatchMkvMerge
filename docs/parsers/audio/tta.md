@@ -31,3 +31,7 @@ flowchart TD
 ## Gaps and Handling
 
 Like mkvmerge's identification path, the reader no longer validates the seek table, so damaged files that still carry a valid fixed header are identified rather than rejected. The seek-table walk and its trailing-tag accounting (`tag_present_at_end`) are muxing-time concerns outside this header-only parser.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and declared tag-size semantics are not propagated as mkvtoolnix's `-1`/`0`/size result. TTA can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, changing probe and header behavior.

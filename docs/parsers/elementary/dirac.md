@@ -29,3 +29,7 @@ The internal `SequenceHeader` contains pixel dimensions, interlace/top-field-fir
 ## Gaps and Handling
 
 The clean-area width/height and left/top offsets are parsed for bit alignment but not surfaced, matching the packetizer, which derives display dimensions from the sample aspect ratio rather than the clean area. Granule-position timing reconstruction and packet muxing remain mkvmerge's concern.
+
+## Open Issues
+
+- `PARSER-360` - Raw Dirac accepts a lone sequence-header parse unit at EOF. mkvtoolnix's `es_parser_c` only marks a sequence header available after a later parse-info sync/`next_parse_offset` boundary lets it deliver a complete unit, while `parse_sequence_header` decodes from the first sequence-header payload to EOF with no following boundary.

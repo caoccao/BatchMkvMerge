@@ -32,3 +32,7 @@ Key structures include `Header`, `DtsType`, internal `Asset`, and helper enums f
 ## Gaps and Handling
 
 Only the first DTS-HD `STRMDATA` payload is used for metadata. Upstream keeps richer packet-era state for selecting core versus extension payloads while muxing, which is not needed for the native metadata parser. DTS-HD chunk discovery now mirrors mkvtoolnix's identify behavior by walking the chunk chain to EOF and treating a missing stream-data chunk as unrecognised.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and a declared tag size beyond the bounded probe bytes can leave callers slicing past the bytes actually read. DTS can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, or panic instead of returning `Unrecognised`.

@@ -38,3 +38,7 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). Raw probing and the first-usable-frame search also match upstream, so short mid-file sync runs are rejected, later ambiguous windows are considered, and a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and a declared tag size beyond the bounded probe bytes can leave callers slicing past the bytes actually read. AAC can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, or panic instead of returning `Unrecognised`.

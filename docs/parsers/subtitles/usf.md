@@ -44,3 +44,7 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice.
+
+## Open Issues
+
+- `PARSER-361` - Invalid USF `<language code="">` values are emitted as explicit `und` languages. mkvtoolnix parses the code with `language_c::parse` and only stores it when `is_valid()`, so invalid default or per-track language metadata is ignored instead of repaired into `und`.

@@ -32,3 +32,7 @@ flowchart TD
 ## Gaps and Handling
 
 Upstream identification does not expose much more than codec, channels, and sampling frequency, so parity is complete for the header-level metadata surface. The Rust model naming is shaped for `MediaMetadata` rather than mkvmerge's exact display strings, but the staged probe windows and underlying codec selection follow the same layer-based behavior.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and a declared tag size beyond the bounded probe bytes can leave callers slicing past the bytes actually read. MP3 can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, or panic instead of returning `Unrecognised`.

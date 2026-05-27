@@ -48,3 +48,9 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header and keeps up to the 5 MiB probe horizon, AVC/HEVC probes use complete mkvtoolnix-style elementary-stream gates, Teletext/TextST subtitle rows keep `textSubtitles: false` like mkvtoolnix's TS identification path, PMT program descriptors are not rewritten as track metadata, and in-stream sync loss is recovered with a bounded resync scan.
+
+## Open Issues
+
+- `PARSER-364` - Invalid descriptor language codes are emitted as explicit `und` languages. mkvtoolnix's `parse_iso639_language_from` assigns a track language only when `language_c::parse(value).has_valid_iso639_code()`; invalid ISO-639, teletext, or DVB-subtitle descriptor bytes leave the language absent instead of being repaired.
+- `PARSER-365` - DVB subtitling descriptors are expanded into one `S_DVBSUB` row per 8-byte descriptor entry. The upstream `parse_subtitling_pmt_descriptor` reads only the first entry from the descriptor, creates one subtitle track, and ignores any remaining entries in the same descriptor.
+- `PARSER-366` - Teletext descriptor entries with non-BCD page nibbles are dropped. mkvtoolnix does not validate those nibbles; it computes `tens * 10 + units` directly and still records or creates the page, so the Rust parser can lose malformed-but-upstream-visible teletext tracks.

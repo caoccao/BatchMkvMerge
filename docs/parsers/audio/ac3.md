@@ -34,3 +34,7 @@ Key structures are `Ac3Frame` and `Ac3Variant`. Bit-level parsing uses the share
 The parser now folds dependent-frame channel maps into the effective channel count and uses mkvtoolnix's staged raw-probe windows, including the later ambiguous 64-frame and 20-frame passes. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
 
 Packetizer behavior, sync repair during muxing, and checksum validation are not part of this header-only parser.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and a declared tag size beyond the bounded probe bytes can leave callers slicing past the bytes actually read. AC-3/E-AC-3 can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, or panic instead of returning `Unrecognised`.

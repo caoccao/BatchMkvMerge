@@ -42,3 +42,7 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded per-page payload reads and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus variable-length Kate headers are assembled until their codec-level terminators, and damaged capture patterns are resynchronised to later `OggS` pages. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+- `PARSER-367` - Invalid Ogg/OGM language hints are emitted as explicit `und` languages. mkvtoolnix only copies a VorbisComment `LANGUAGE` value when the converted language has a valid ISO-639 code, and Kate identification leaves an invalid parsed language invalid; the Rust finaliser resolves any non-empty hint with `default_eng = false`, turning invalid comment or Kate language text into `und`.

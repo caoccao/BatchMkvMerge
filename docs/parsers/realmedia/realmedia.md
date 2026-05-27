@@ -38,3 +38,7 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 ## Gaps and Handling
 
 Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or perform packet output. Video dimensions come from the MDPR header during identification, matching mkvtoolnix; the deadline-checked DATA packet walk is retained only for `dnet` BSID refinement. Other late packet-derived refinements remain out of scope. The parser records reliable header metadata and the bounded packet-prefix improvements needed for identification.
+
+## Open Issues
+
+- `PARSER-362` - Known `PROP`, `CONT`, and `MDPR` object sizes are honored as skip bounds, but librmff reads those objects field-by-field and does not seek to the declared object end before reading the next header. Extra trailing bytes inside a known object therefore make mkvtoolnix fail on the next object header, while the Rust parser skips the padding and accepts the repaired header chain.

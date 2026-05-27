@@ -34,3 +34,7 @@ The central structures are `FlacMetadata`, `FlacStreaminfo`, and `FlacPicture`.
 ## Gaps and Handling
 
 The MIME-to-extension table for pictures is intentionally small and practical. The Rust parser does not run libFLAC frame validation, and attachment payloads are represented by metadata rather than loading full image data into the model. Native FLAC metadata block sizes are 24-bit, so kept blocks are read at their declared size under the shared parser element budget while PICTURE image data stays skipped.
+
+## Open Issues
+
+- `PARSER-359` - The shared ID3v2 skipper does not match `mtx::id3::skip_v2_tag`: invalid version or synchsafe size bytes are masked and accepted, and declared tag-size semantics are not propagated as mkvtoolnix's `-1`/`0`/size result. FLAC can therefore skip malformed `ID3`-looking prefixes that mkvtoolnix treats as payload, changing both probe and header behavior.
