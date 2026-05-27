@@ -32,3 +32,7 @@ Key structures include `Header`, `DtsType`, internal `Asset`, and helper enums f
 ## Gaps and Handling
 
 Only the first DTS-HD `STRMDATA` payload is used for metadata. Upstream keeps richer packet-era state for selecting core versus extension payloads while muxing, which is not needed for the native metadata parser. DTS-HD chunk discovery now mirrors mkvtoolnix's identify behavior by walking the chunk chain to EOF and treating a missing stream-data chunk as unrecognised.
+
+## Open Issues
+
+- `PARSER-386` - the reader's loose DTS probe is active during mkvtoolnix's early start-only DTS phase. Upstream calls `dts_reader_c` with `require_headers_at_start=true` before MPEG-TS/MPEG-PS/OBU, and runs the loose DTS probe only after those container probes (`reader_detection_and_creation.cpp`). `dts_reader_c::probe_file` skips its loose `detect()` path when that flag is set and accepts the strict phase only when the consecutive-header run starts at byte zero (`r_dts.cpp`). The Rust dispatch has no phase parameters and calls `DtsReader::probe`, which accepts `detect(bytes)` or any five-frame run, in the early phase as well; a container carrying DTS frames can therefore be claimed as raw DTS before mkvtoolnix would allow that.

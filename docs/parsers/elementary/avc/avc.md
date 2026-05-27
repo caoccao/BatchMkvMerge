@@ -35,3 +35,7 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Rust now uses the same bounded chunk horizon, MPEG-TS first-byte guard, and configuration-ready NAL evidence as mkvtoolnix for header discovery. The PAR and VUI default-duration are derived to match mkvmerge; what remains out of scope is the muxing-time "most often used duration" heuristic (which corrects field/frame-rate conventions from actual frame timestamps) — header-only identification reports the SPS-declared value directly.
+
+## Open Issues
+
+- `PARSER-387` - the strict elementary AVC phase uses the same loose long-scan probe as the late phase. Upstream runs AVC with `require_headers_at_start=true` before raw-audio and container probes, then retries loose elementary streams much later (`reader_detection_and_creation.cpp`). The Rust `STRICT_ELEMENTARY_READERS` entry calls `AvcReader::probe` without a start-required mode; that probe reads up to the bounded long prefix and accepts SPS/PPS plus access-unit evidence wherever it appears, apart from a first-byte TS-sync guard. Files with leading junk or container-like prefixes can therefore be claimed as raw AVC before mkvtoolnix would run its loose AVC pass.

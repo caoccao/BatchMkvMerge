@@ -38,3 +38,7 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). Raw probing and the first-usable-frame search also match upstream, so short mid-file sync runs are rejected, later ambiguous windows are considered, and a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+- `PARSER-386` - the reader's loose mid-file probe is active during mkvtoolnix's early strict raw-audio phase. Upstream first tries AAC with `probe_range_info { probe_size: 128 KiB, num_headers: 8, require_headers_at_start: true }`, then runs DTS and MPEG-TS/PS/OBU, and only later tries the 64-frame and 20-frame loose raw-audio scans (`reader_detection_and_creation.cpp`). The Rust dispatch calls the same reader `probe()` in every phase, and this probe already includes the later loose windows, so a container file with a mid-file AAC frame run can be claimed as raw AAC before the container readers get their upstream chance.

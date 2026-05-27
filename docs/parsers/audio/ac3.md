@@ -34,3 +34,7 @@ Key structures are `Ac3Frame` and `Ac3Variant`. Bit-level parsing uses the share
 The parser now folds dependent-frame channel maps into the effective channel count and uses mkvtoolnix's staged raw-probe windows, including the later ambiguous 64-frame and 20-frame passes. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
 
 Packetizer behavior, sync repair during muxing, and checksum validation are not part of this header-only parser.
+
+## Open Issues
+
+- `PARSER-386` - the reader's loose mid-file probe is active during mkvtoolnix's early strict raw-audio phase. Upstream first tries AC-3 with `probe_range_info { probe_size: 128 KiB, num_headers: 8, require_headers_at_start: true }`, then runs DTS and MPEG-TS/PS/OBU, and only later tries the 64-frame and 20-frame loose raw-audio scans (`reader_detection_and_creation.cpp`). The Rust dispatch calls the same reader `probe()` in every phase, and this probe already includes the later loose windows, so a container file with a mid-file AC-3 frame run can be claimed as raw AC-3 before the container readers get their upstream chance.
