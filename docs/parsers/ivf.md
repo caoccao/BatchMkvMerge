@@ -35,3 +35,7 @@ Key structures are `FileHeader`, `IvfCodec`, and the internal Dolby Vision confi
 ## Gaps and Handling
 
 Upstream frame payload handling and keyframe logic are muxing concerns and are not implemented. For identify metadata, the parser is otherwise aligned with upstream and adds a bounded AV1 Dolby Vision extraction path; that path parses only the RPU header subset required for mkvmerge-compatible `dvvC` configuration records while honoring the declared IVF first-frame size.
+
+## Open Issues
+
+- `PARSER-379` - the AV1 Dolby Vision first-frame path uses a local OBU walk that does not mirror mkvtoolnix's operating-point filter. `ivf_reader_c::parse_first_av1_frame` feeds the frame to `mtx::av1::parser_c`, whose metadata retention is filtered by the first operating point (`r_ivf.cpp:126-143`, `common/av1.cpp:463-471`). The Rust `av1_dovi_config_from_frame` / `walk_av1_obus` accepts any metadata OBU in the first frame, so a Dolby Vision RPU carried only on an out-of-operating-point layer can produce a local `dvvC` mapping that upstream would not create.

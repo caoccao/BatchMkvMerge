@@ -38,3 +38,7 @@ Important structures are `ObuHeader`, `SequenceHeader`, and `ColorDescription`.
 ## Gaps and Handling
 
 The Dolby Vision path decodes only the bounded RPU header fields needed for identification and `dvvC` construction; full RPU validation, operating-point filtering, and packet muxing remain mkvmerge's concern.
+
+## Open Issues
+
+- `PARSER-378` - the raw OBU walker does not apply mkvtoolnix's first-operating-point layer filter before retaining metadata OBUs. Upstream stores `operating_point_idc` from the first operating point in `parse_sequence_header_obu` and, for non-sequence/non-temporal-delimiter OBUs with extension headers, drops OBUs whose temporal/spatial ids are outside that operating point before keeping or parsing them (`common/av1.cpp:277-286`, `common/av1.cpp:463-471`). The Rust `scan_obus` keeps every pre-frame metadata OBU and `read_headers` uses those bodies for AV1C and Dolby Vision block-addition metadata, so out-of-layer metadata can be surfaced locally while mkvtoolnix ignores it.

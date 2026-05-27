@@ -42,3 +42,8 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded per-page payload reads and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus variable-length Kate headers are assembled until their codec-level terminators, damaged capture patterns are resynchronised to later `OggS` pages, BOS-only files are rejected before finalisation, and invalid language hints are omitted. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+- `PARSER-380` - `read_headers` waits for `pages_consumed > 4` after the first non-BOS page before stopping on complete headers, which can harvest late BOS pages that mkvtoolnix would never include. Upstream sets `bos_pages_read` on the first non-BOS page, processes header packets, and exits immediately once all active demuxers have `headers_read` (`r_ogm.cpp:599-633`). The Rust grace period intentionally tolerates non-conforming late BOS pages, but this is a parser repair: a malformed file can gain extra local streams/tags after upstream has closed the BOS run.
+- `PARSER-381` - OGM text and Kate subtitle tracks are missing the UTF-8 encoding property. mkvtoolnix's identify path adds both `text_subtitles=true` and `encoding="UTF-8"` for `ogm_s_text_demuxer_c` and `ogm_s_kate_demuxer_c` (`r_ogm.cpp:697-700`), while `identify.rs::make_track` sets `encoding: None` for every Ogg subtitle track.

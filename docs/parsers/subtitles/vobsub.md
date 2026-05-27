@@ -45,3 +45,8 @@ Codec private is built from the filtered `idx_data`: the per-track control lines
 ## Gaps and Handling
 
 Header-only: the `.sub` MPEG-PS payload is never demuxed, so per-entry SPU durations and `spu_size`/`overhead` accounting from `extract_one_spu_packet` are not computed. The `.idx` manifest itself is parsed through EOF, matching mkvtoolnix's line loop.
+
+## Open Issues
+
+- `PARSER-382` - invalid `delay:` timestamps are silently ignored. mkvtoolnix treats a malformed delay line as a hard error via `mxerror_fn` when `mtx::string::parse_timestamp` fails (`r_vobsub.cpp:239-253`), but the Rust `parse_idx` branch only applies the delay when `parse_idx_timestamp` returns `Some` and otherwise continues. That repairs malformed manifests instead of rejecting them.
+- `PARSER-383` - the fallback content registry can claim renamed VobSub manifests without a `.idx` or `.sub` extension. Upstream `vobsub_reader_c::probe_file` returns false before reading the banner unless the input extension is `.idx` or `.sub` (`r_vobsub.cpp:81-86`). The Rust path-aware opener has that gate, but `VobSubReader` remains in the unconditional content cascade and its `probe` checks only the banner, so a `.txt`/`.bin` file starting with `# VobSub index file, v` can be recognised locally while mkvtoolnix would not select the VobSub reader.
