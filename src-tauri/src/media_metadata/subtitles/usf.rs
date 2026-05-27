@@ -53,8 +53,9 @@ use crate::media_metadata::reader::Reader as MediaReader;
 
 use super::encoding;
 
-/// Upstream caps `mtx::xml::load_file` at 10 MiB for USF (r_usf.cpp line 45).
-const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
+/// Upstream caps `mtx::xml::load_file` at 10 MiB during `probe_file`
+/// (`r_usf.cpp` line 45), but `read_headers` reloads the full document.
+const PROBE_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 
 /// `usf_reader_c::probe_file` only accumulates leading lines until the buffer
 /// reaches ~1000 characters before searching for the `<?xml` / `<!--` marker
@@ -75,17 +76,28 @@ pub struct UsfDocument {
   pub codec_private: String,
 }
 
-/// Read the document bytes (capped at 10 MiB) and decode them to a UTF-8
+/// Read the probe document bytes (capped at 10 MiB) and decode them to a UTF-8
 /// string, BOM-stripped, for the XML parser.
-fn read_document(src: &mut FileSource) -> Result<(Vec<u8>, String), ParseError> {
+fn read_probe_document(src: &mut FileSource) -> Result<(Vec<u8>, String), ParseError> {
   src.seek_to(0)?;
-  let len = src.length().map(|l| l as usize).unwrap_or(MAX_DOCUMENT_BYTES);
-  let cap = len.min(MAX_DOCUMENT_BYTES);
+  let len = src
+    .length()
+    .map(|l| l.min(PROBE_DOCUMENT_BYTES as u64) as usize)
+    .unwrap_or(PROBE_DOCUMENT_BYTES);
+  let cap = len.min(PROBE_DOCUMENT_BYTES);
   let mut buf = vec![0u8; cap];
   let read = src.read_at_most(&mut buf)?;
   buf.truncate(read);
   let text = encoding::decode_lossy(&buf);
   Ok((buf, text))
+}
+
+/// Read the full USF document for `read_headers`.  Unlike `probe_file`,
+/// mkvtoolnix does not apply the 10 MiB XML cap on this pass (`r_usf.cpp:53`).
+fn read_header_document(src: &mut FileSource, deadline: &Deadline) -> Result<(Vec<u8>, String), ParseError> {
+  let bytes = super::read_source_to_end(src, Some(deadline), "usf::read_document")?;
+  let text = encoding::decode_lossy(&bytes);
+  Ok((bytes, text))
 }
 
 /// Returns true when the leading ~1000-character window carries the `<?xml` or
@@ -298,7 +310,7 @@ impl MediaReader for UsfReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let (_bytes, text) = read_document(src)?;
+    let (_bytes, text) = read_probe_document(src)?;
     src.seek_to(0)?;
     if !has_xml_marker(&text) {
       return Ok(false);
@@ -316,7 +328,7 @@ impl MediaReader for UsfReader {
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     deadline.check("usf::read_headers")?;
-    let (bytes, text) = read_document(src)?;
+    let (bytes, text) = read_header_document(src, deadline)?;
     if !has_xml_marker(&text) {
       return Err(ParseError::Unrecognised);
     }
@@ -450,6 +462,33 @@ mod tests {
     );
     assert!(out.tracks[0].codec.codec_private.is_some());
     assert_eq!(out.tracks[0].codec.id, "S_TEXT/USF");
+  }
+
+  #[test]
+  fn read_headers_loads_full_document_beyond_probe_cap() {
+    // PARSER-374: only probe_file applies the 10 MiB cap; read_headers reloads
+    // the full XML document and must still see later direct-child subtitles.
+    let mut blob = b"<?xml version=\"1.0\"?><USFSubtitles>\
+      <subtitles><language code=\"eng\"/></subtitles>"
+      .to_vec();
+    blob.resize(PROBE_DOCUMENT_BYTES + 1024, b' ');
+    blob.extend_from_slice(b"<subtitles><language code=\"fra\"/></subtitles></USFSubtitles>");
+
+    let mut src = FileSource::from_reader_for_test(Cursor::new(blob.clone()));
+    let mut out = MediaMetadata::new("large.usf", blob.len() as u64);
+    UsfReader
+      .read_headers(&mut src, &Deadline::new(60_000), &mut out)
+      .unwrap();
+
+    assert_eq!(out.tracks.len(), 2);
+    assert_eq!(
+      out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
+      "eng"
+    );
+    assert_eq!(
+      out.tracks[1].properties.common.language.as_ref().unwrap().iso639_2,
+      "fra"
+    );
   }
 
   #[test]

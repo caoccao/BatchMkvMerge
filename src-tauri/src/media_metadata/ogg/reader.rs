@@ -123,6 +123,14 @@ impl Reader for OggReader {
       }
     }
 
+    if !past_bos_run && !states.is_empty() {
+      return Err(ParseError::Malformed {
+        format: "ogg",
+        offset: src.position(),
+        reason: "header scan ended before the first non-BOS page".to_string(),
+      });
+    }
+
     identify::finalise(states, out);
     Ok(())
   }
@@ -809,8 +817,8 @@ mod tests {
     ));
     comment_pkt.push(0x01);
     let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
-    // OGM audio header_packet_target is 1, so the BOS alone keeps it; the
-    // second packet is the comment packet we want decoded.
+    // OGM audio header_packet_target is 1, so the BOS packet satisfies the
+    // stream once the non-BOS comment page ends the BOS run.
     bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogm", 0);
@@ -850,7 +858,8 @@ mod tests {
     // PARSER-180: FLAC-in-Ogg is excluded from generic comment parsing
     // (r_ogm.cpp:827 skips A_FLAC).  Even though its second packet looks like a
     // VorbisComment block, no tags/language must be harvested.  FLAC's
-    // header_packet_target is 1, so the BOS alone keeps the track.
+    // header_packet_target is 1, so the BOS packet satisfies the stream once
+    // the non-BOS comment page ends the BOS run.
     let bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
     let mut comment_pkt = vec![0x04]; // native FLAC VORBIS_COMMENT block header
     comment_pkt.extend(build_block("reference libFLAC", &[("TITLE", "Song"), ("LANGUAGE", "eng")]));
@@ -872,15 +881,29 @@ mod tests {
     // PARSER-181: a Vorbis BOS with no comment/setup packets never reaches its
     // header_packet_target of 3, so finalise erases it (r_ogm.cpp:633's
     // `erase_if(!headers_read)`).  The result is zero tracks even though the
-    // BOS was identified.
+    // BOS was identified.  The empty non-BOS page marks the end of the BOS run,
+    // matching mkvtoolnix's `bos_pages_read` gate.
     let bos = vorbis::build_identification_packet(2, 44100);
-    let bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[]));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.ogg", 0);
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert!(out.tracks.is_empty());
     // Container is still recognised — only the incomplete stream is dropped.
     assert_eq!(out.container.format, ContainerFormat::Ogg);
+  }
+
+  #[test]
+  fn read_headers_rejects_bos_only_files() {
+    // PARSER-377: mkvtoolnix throws if EOF arrives before the first non-BOS
+    // page, even when the BOS packet itself is recognised.
+    let bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
+    let bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    let err = OggReader.read_headers(&mut s, &dl(), &mut out).unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { format: "ogg", .. }));
   }
 
   #[test]
@@ -937,7 +960,8 @@ mod tests {
     // PARSER-202: VP8-in-Ogg is recognised, reports V_VP8, pixel + display
     // dimensions, and a default duration derived from the frame rate.  The
     // optional comment packet (`0x03vorbis`) sits on the second page; VP8's
-    // header target is 1 so the BOS alone keeps the track.
+    // header target is 1 so the BOS packet satisfies the stream once that
+    // non-BOS page ends the BOS run.
     let bos = vp8::build_identification_packet(1280, 720, 0, 0, 30000, 1001);
     let mut comment_pkt = vec![0x03];
     comment_pkt.extend_from_slice(b"vorbis");
@@ -970,9 +994,10 @@ mod tests {
   #[test]
   fn read_headers_accepts_pre_1_1_1_bare_flac() {
     // PARSER-203: a stream whose first packet starts directly with `fLaC`
-    // (pre-1.1.1 mapping) is recognised as A_FLAC.
+    // (pre-1.1.1 mapping) is recognised as A_FLAC after the BOS run ends.
     let bos = flac::build_identification_packet_ex(44100, 2, 16, 1000, false, 0, true);
-    let bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    bytes.extend(build_page(0, 0, 1, 1, &[]));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.oga", 0);
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();

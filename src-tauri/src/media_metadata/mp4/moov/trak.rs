@@ -124,7 +124,7 @@ pub struct TrackBuilder {
   pub first_sample_size: Option<u64>,
   /// PARSER-183: bounded ordered list of the FIRST samples as
   /// `(file_offset, size)` pairs, reconstructed from `stsc` (sample-to-chunk
-  /// map) + `stco` / `co64` (chunk offsets) + `stsz` / `stz2` (sample sizes).
+  /// map) + `stco` / `co64` (chunk offsets) + `stsz` (sample sizes).
   /// Mirrors the prefix of mkvtoolnix's `m_index` so the reader's
   /// `read_first_bytes` can collect up to `MAX_FIRST_BYTES` across MULTIPLE
   /// samples (not just sample 0).  Capped so a tiny-sample stream never makes
