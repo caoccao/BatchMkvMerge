@@ -34,3 +34,7 @@ Key structures are `FlvHeader`, `FlvTagHeader`, `AudioTagFlags`, `VideoCodecId`,
 ## Gaps and Handling
 
 Rust extracts selected AMF fields and does not perform timestamp/min-offset work or packet muxing. AVC/HEVC now mirror upstream's SPS-timing-then-25-fps default-duration fallback and keep sequence-header tracks even when config parsing cannot recover dimensions. Unsupported Screen video codecs are dropped like upstream, encrypted payloads are skipped rather than parsed, and AAC discovery follows upstream's flag-derived fallback behavior.
+
+## Open Issues
+
+- `PARSER-373` - A one-byte AAC audio tag is accepted as a valid audio track. The Rust reader sets `A_AAC` and `headers_read` as soon as the FLV audio flags byte says AAC, and `AudioState::is_valid` only checks that flag for AAC. mkvtoolnix decrements the tag size after the audio flags byte, then `process_audio_tag_sound_format` returns before assigning the AAC FourCC if no AAC packet-type byte remains; `flv_track_c::is_valid` later erases the track because `m_fourcc` is still empty.

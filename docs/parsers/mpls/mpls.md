@@ -33,3 +33,7 @@ Key structures are `Playlist`, `PlayItem`, `SubPath`, `SubPlayItem`, `SubPlayIte
 ## Gaps and Handling
 
 Rust does not use CLPI metadata, does not implement true multi-file packet IO or timestamp continuity, and does not fully surface chapter names or angle/multiclip details. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing, but playlists with chapter marks now expose both playlist-specific chapter metadata and the standard chapter summary that mkvtoolnix reports during identification.
+
+## Open Issues
+
+- `PARSER-369` - MPLS playlist opening is gated on the `.mpls` extension hint. mkvtoolnix calls `mm_mpls_multi_file_io_c::open_multi(in)` for every input before the normal probe cascade, and that path validates the MPLS header/content rather than the filename extension. A valid Blu-ray playlist renamed without a `.mpls` extension, with resolvable `STREAM/*.m2ts` clips, is therefore handled by mkvtoolnix but falls through to the normal local dispatcher.

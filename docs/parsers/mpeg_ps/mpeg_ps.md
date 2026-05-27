@@ -39,3 +39,7 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader percentage-based scaling above the fixed probe floor, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. The fixed 10 MiB probe range is also the per-stream payload cap, so video evidence can be found anywhere inside the local probe window instead of being truncated by a smaller stream-local limit. PES depacketising handles both MPEG-1 and MPEG-2 optional-header layouts, codec probes block false-positive stream ids with mkvtoolnix-style AVC evidence, and output ordering follows mkvmerge's identification order.
+
+## Open Issues
+
+- `PARSER-370` - Program Stream Map entries with an overlong `elementary_stream_info_length` are dropped locally before their `(stream_id, stream_type)` mapping is recorded. mkvtoolnix writes `es_map[id] = type` immediately after reading the stream type and id, then clamps/skips the descriptor length. A malformed descriptor length can still influence upstream stream classification, while the Rust parser falls back to stream-id or payload probing.
