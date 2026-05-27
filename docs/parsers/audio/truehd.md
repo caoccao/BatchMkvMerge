@@ -32,3 +32,7 @@ Key structures are `Frame`, `Codec`, and `FrameType`.
 ## Gaps and Handling
 
 The Rust parser does not verify AC-3 checksums and does not expose less common debug or Atmos extension fields that upstream can inspect while muxing. The current metadata model records the stream identity and usable audio properties, which are the fields the UI consumes.
+
+## Open Issues
+
+- `PARSER-356` - The raw TrueHD/MLP reader probes and reads only 256 KiB, but mkvtoolnix invokes `truehd_reader_c` with a 512 KiB probe range and then scans that range for two non-AC-3 sync frames plus an optional coupled AC-3 frame. Streams whose second sync frame, authoritative MLP/TrueHD header, or AC-3 companion appears between 256 KiB and 512 KiB are missed or under-reported locally.

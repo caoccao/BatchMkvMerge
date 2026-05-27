@@ -37,3 +37,7 @@ Key structures are `HevcNalUnit`, `HevcSps`, `HevcTier`, `VpsSummary`, and the i
 ## Gaps and Handling
 
 The Rust parser now uses mkvtoolnix's bounded chunk horizon and MPEG-TS first-byte guard for header discovery. It does not fully cross-check SPS/VPS IDs, and Dolby Vision/RPU/enhancement-layer handling is still out of scope, but acceptance now requires parameter sets plus access-unit evidence and uncertain streams are treated as unrecognised. The VUI timing, sample aspect ratio, HRD skip path, and bitstream-restriction fields are extracted with the scaling-list / reference-picture-set structures consumed to reach them, and malformed tails reject the SPS instead of being defaulted away. The configuration record matches the hvcC byte layout (profile constraints, `min_spatial_segmentation_idc`, `parallelism_type`, chroma/bit-depth offsets, reserved high bits), and the `default_display_window` invalid-window workaround is mirrored.
+
+## Open Issues
+
+- `PARSER-351` - HEVC access-unit evidence is still weaker than upstream. The Rust helper accepts VPS/SPS/PPS plus any VCL-type NAL or an AUD immediately, but `mtx::hevc::es_parser_c::headers_parsed()` also requires `m_first_access_unit_parsed`, which is set only after slice parsing has begun and the first access unit is flushed by a following boundary. VPS/SPS/PPS/AUD-only data, and some first-slice-without-boundary prefixes, can be accepted locally while mkvtoolnix keeps probing or rejects them. This helper is also reused by MPEG-TS enrichment and MP4 HEVC Annex B salvage.

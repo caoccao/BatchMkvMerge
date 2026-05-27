@@ -34,3 +34,7 @@ Key structures are `Ac3Frame` and `Ac3Variant`. Bit-level parsing uses the share
 The parser now folds dependent-frame channel maps into the effective channel count. It still tracks only the fields the `MediaMetadata` model exposes — dialog normalization, checksum state, and Dolby Surround EX detection are read past but not surfaced.
 
 Packetizer behavior, sync repair during muxing, and checksum validation are not part of this header-only parser.
+
+## Open Issues
+
+- `PARSER-354` - The raw AC-3/E-AC-3 probe is collapsed to one 128 KiB scan for eight consecutive frames at any offset after ID3 trimming. mkvtoolnix first requires eight frames at the stream start, then retries ambiguous AC-3 probing with 64-frame and 20-frame windows up to 1 MiB and also has a one-frame-at-start phase. Native AC-3 can therefore over-claim short mid-file runs and miss valid streams found by the later upstream probe phases.

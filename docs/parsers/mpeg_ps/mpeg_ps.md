@@ -39,3 +39,7 @@ Key structures are `StartCode`, `PesHeader`, `ProgramStreamMap`, `PsmEntry`, and
 ## Gaps and Handling
 
 Upstream has broader percentage-based scaling above the fixed probe floor, timestamp-offset calculation, multi-file VOB opening, packet delivery, and more late-stream recovery. Rust keeps bounded discovery and payload enrichment so metadata extraction remains fast and deterministic. The fixed 10 MiB probe range is also the per-stream payload cap, so video evidence can be found anywhere inside the local probe window instead of being truncated by a smaller stream-local limit. PES depacketising handles both MPEG-1 and MPEG-2 optional-header layouts, codec probes block false-positive stream ids, and output ordering follows mkvmerge's identification order.
+
+## Open Issues
+
+- `PARSER-350` - Explicit AVC streams and MPEG-video-to-AVC promotion reuse the raw AVC helper whose access-unit gate does not mirror `es_parser_c::headers_parsed()`. AUD-only evidence after SPS/PPS can promote a PS stream locally, while upstream only uses AUD to flush an already-built frame; conversely, some upstream NAL evidence paths are not counted by the Rust helper.

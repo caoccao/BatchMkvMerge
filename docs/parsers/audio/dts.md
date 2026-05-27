@@ -32,3 +32,7 @@ Key structures include `Header`, `DtsType`, internal `Asset`, and helper enums f
 ## Gaps and Handling
 
 Only the first DTS-HD `STRMDATA` payload is used for metadata. Upstream keeps richer packet-era state for selecting core versus extension payloads while muxing, which is not needed for the native metadata parser. When DTS-HD chunk chains are malformed, Rust favors bounded, conservative extraction instead of attempting full recovery.
+
+## Open Issues
+
+- `PARSER-357` - DTS-HD chunk discovery stops after 1024 chunks and then falls back to byte 0 if no `STRMDATA` chunk was found. mkvtoolnix walks the DTS-HD chunk chain until EOF and rejects the file if no usable `STRMDATA` exists. Native DTS can miss a valid late `STRMDATA` chunk or treat a malformed DTS-HD file as a bare stream, diverging from upstream.

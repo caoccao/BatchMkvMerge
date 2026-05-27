@@ -33,3 +33,7 @@ Key structures are `Playlist`, `PlayItem`, `SubPath`, `SubPlayItem`, `SubPlayIte
 ## Gaps and Handling
 
 Rust does not use CLPI metadata, does not implement true multi-file packet IO or timestamp continuity, and does not fully surface chapter names or angle/multiclip details. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing.
+
+## Open Issues
+
+- `PARSER-353` - The playlist chapter count is recorded only in `container.properties.playlist.chapters`. mkvtoolnix also emits the standard chapter identification result through `id_result_chapters(m_mpls_chapters.size())`, so native callers that read `MediaMetadata.chapters` see zero entries for MPLS playlists that upstream reports as having chapters.

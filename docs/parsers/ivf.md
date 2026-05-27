@@ -35,3 +35,7 @@ Key structures are `FileHeader`, `IvfCodec`, and the internal Dolby Vision confi
 ## Gaps and Handling
 
 Upstream frame payload handling and keyframe logic are muxing concerns and are not implemented. For identify metadata, the parser is otherwise close to upstream and adds a bounded AV1 Dolby Vision extraction path; that path parses only the RPU header subset required for mkvmerge-compatible `dvvC` configuration records.
+
+## Open Issues
+
+- `PARSER-352` - AV1 Dolby Vision extraction drops the first IVF frame when its declared size is larger than 1 MiB. mkvtoolnix's `parse_first_av1_frame()` reads the declared first frame size with no IVF-local cap before parsing AV1 headers and Dolby Vision RPU metadata, so large but valid first frames can lose their `dvvC` block-addition mapping locally.

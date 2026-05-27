@@ -35,3 +35,7 @@ Key structures are `NalUnit`, `AvcSps`, and the internal `AvcHeaders` bundle.
 ## Gaps and Handling
 
 Upstream uses a fuller elementary-stream parser with broader access-unit validation. Rust now uses the same bounded chunk horizon and MPEG-TS first-byte guard for header discovery and requires parameter sets plus basic access-unit evidence before accepting a raw stream. The PAR and VUI default-duration are derived to match mkvmerge; what remains out of scope is the muxing-time "most often used duration" heuristic (which corrects field/frame-rate conventions from actual frame timestamps) — header-only identification reports the SPS-declared value directly.
+
+## Open Issues
+
+- `PARSER-350` - The current access-unit evidence gate does not match `mtx::avc::es_parser_c::headers_parsed()`. It treats an AUD NAL as sufficient after SPS/PPS even though upstream AUD handling only flushes an existing frame, and it misses some upstream evidence paths such as data-partition slice NALs and non-filler default-branch NALs that set the configuration record ready. Raw AVC, MPEG-TS AVC enrichment/sniffing, and MPEG-PS AVC promotion can therefore accept SPS/PPS/AUD-only data or reject SPS/PPS plus valid non-AUD evidence differently from mkvtoolnix.

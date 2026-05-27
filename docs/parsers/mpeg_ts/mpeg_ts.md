@@ -48,3 +48,8 @@ Important structures are `PacketHeader`, `SectionAssembler`, `Pat`, `Pmt`, `PmtS
 ## Gaps and Handling
 
 The scan is fixed and bounded, so metadata that appears very late can be missed. Upstream also performs timestamp continuity handling, CLPI-assisted source packet trimming, packet muxing, and a larger descriptor universe. Rust records the best available program/track metadata and avoids long-running payload walks. PAT/PMT now reject inactive and multi-section tables, per-PID PES accumulation strips every PES header and keeps up to the 5 MiB probe horizon, video probes use complete elementary-stream gates, Teletext/TextST subtitle rows keep `textSubtitles: false` like mkvtoolnix's TS identification path, PMT program descriptors are not rewritten as track metadata, and in-stream sync loss is recovered with a bounded resync scan.
+
+## Open Issues
+
+- `PARSER-350` - AVC PES enrichment and unlisted-PID sniffing use the raw AVC helper whose access-unit evidence does not match mkvtoolnix: AUD alone is too strong, while data-partition/default-branch NAL evidence is too narrow. TS AVC rows can therefore survive or fail differently from `new_stream_v_avc` and `es_parser_c::headers_parsed()`.
+- `PARSER-351` - HEVC PES enrichment and unlisted-PID sniffing use the raw HEVC helper that accepts AUD or an unflushed VCL prefix as complete access-unit evidence. mkvtoolnix requires the first HEVC access unit to be parsed and flushed before `headers_parsed()` succeeds, so some TS HEVC PIDs are false positives locally.

@@ -38,3 +38,7 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 ## Gaps and Handling
 
 Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or perform packet output. RV40 dimensions and `dnet` BSID hints are recovered from a deadline-checked DATA packet walk, but other late packet-derived refinements remain out of scope. The parser records reliable header metadata and the bounded packet-prefix improvements needed for identification.
+
+## Open Issues
+
+- `PARSER-355` - RV40 dimensions are decoded from the first raw DATA packet prefix during identification. mkvtoolnix identify reports the MDPR header dimensions; its RV40 frame-derived dimension update happens later, after `rmff_assemble_packed_video_frame()` during packet delivery. Native RealMedia can therefore over-report dimensions that upstream identify would not expose, and it can misread dimensions from unassembled packet fragments.

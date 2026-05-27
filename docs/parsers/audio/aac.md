@@ -38,3 +38,7 @@ Key local structures are `AacHeader`, `MultiplexType`, `LatmResult`, and the sma
 Upstream has broader AAC parser branches for less common object types and error-protection details, all of which are now mirrored (ELD/CELP/ER error-protection plus the GA extension-flag block). The first-usable-frame search also matches upstream (`drain_to_usable_header`), so a stream whose leading frame carries `channel_configuration == 0` without a PCE is reported from the first frame that actually carries the audio properties rather than with missing channels/rate.
 
 Packet framing and muxing are upstream responsibilities and are intentionally out of scope for this parser.
+
+## Open Issues
+
+- `PARSER-354` - The raw AAC probe is collapsed to one 128 KiB scan for eight consecutive frames at any offset after ID3 trimming. mkvtoolnix first requires eight frames at the stream start, then retries ambiguous AAC probing with 64-frame and 20-frame windows up to 1 MiB and also has a one-frame-at-start phase. Native AAC can therefore over-claim short mid-file runs and miss valid streams whose decisive confirmation appears only in the later upstream probe phases.
