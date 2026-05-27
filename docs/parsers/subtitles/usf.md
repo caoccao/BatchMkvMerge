@@ -44,3 +44,7 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice.
+
+## Open Issues
+
+- `PARSER-374` — the 10 MiB XML cap is applied to `read_headers` as well as probing. Upstream caps only `probe_file` (`load_file(..., 10 * 1024 * 1024)`) and then reloads the full document in `read_headers` without that size limit (`r_usf.cpp:45, 53`), so large USF files can lose later `<subtitles>` tracks or be rejected locally while mkvtoolnix parses the full header document.

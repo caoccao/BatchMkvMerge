@@ -42,3 +42,7 @@ Key structures are `PageHeader`, `PacketSpan`, `BitstreamState`, codec-specific 
 ## Gaps and Handling
 
 The Rust parser uses bounded per-page payload reads and does not perform full granule-position timing, packet muxing, or every upstream comment edge case. VP8-in-Ogg is recognised, both FLAC-in-Ogg wrappers plus variable-length Kate headers are assembled until their codec-level terminators, damaged capture patterns are resynchronised to later `OggS` pages, and invalid language hints are omitted. The parser reports the header metadata needed for listing streams and leaves timing reconstruction to mkvmerge.
+
+## Open Issues
+
+- `PARSER-377` — `read_headers` always finalises an Ogg container after EOF, even when the header scan never reaches a non-BOS page. mkvtoolnix keeps `bos_pages_read` false until the first non-BOS page and throws `header_parsing_x` when `read_headers_internal()` returns `0` (`r_ogm.cpp:599-635`, `296-303`). A file containing only BOS pages, or a single complete Ogg-FLAC BOS page, can therefore be recognised locally while upstream rejects the header parse.
