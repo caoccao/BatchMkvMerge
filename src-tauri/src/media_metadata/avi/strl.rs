@@ -174,14 +174,13 @@ pub struct WaveFormatEx {
   pub extra: Vec<u8>,
 }
 
-const MAX_STRF_BYTES: u64 = 64 * 1024;
-
 pub fn parse_strf(
   src: &mut FileSource,
   header: &ChunkHeader,
   stream: &StreamHeader,
+  payload_cap: u64,
 ) -> Result<StreamFormat, ParseError> {
-  let bytes = riff::read_payload(src, header, MAX_STRF_BYTES)?;
+  let bytes = riff::read_payload(src, header, payload_cap)?;
   match stream.kind {
     AviStreamKind::Video => parse_bitmapinfoheader(&bytes, header.start),
     AviStreamKind::Audio => parse_waveformatex(&bytes, header.start),
@@ -321,7 +320,7 @@ pub fn parse_strl(
       // Defer until we have the header (strh comes first by convention,
       // so this is just defensive).
       if let Some(h) = builder.header.clone() {
-        builder.format = Some(parse_strf(src, child, &h)?);
+        builder.format = Some(parse_strf(src, child, &h, deadline.max_element_size())?);
         Ok(ChildAction::Consumed)
       } else {
         deferred_strf_offset = Some(child.payload_start());
@@ -336,7 +335,7 @@ pub fn parse_strl(
       Ok(ChildAction::Consumed)
     }
     b"strd" => {
-      builder.private = Some(riff::read_payload(src, child, 64 * 1024)?);
+      builder.private = Some(riff::read_payload(src, child, deadline.max_element_size())?);
       Ok(ChildAction::Consumed)
     }
     b"vprp" => {
@@ -360,7 +359,7 @@ pub fn parse_strl(
         kind: *b"strf",
         size,
       };
-      builder.format = Some(parse_strf(src, &synthetic, &h)?);
+      builder.format = Some(parse_strf(src, &synthetic, &h, deadline.max_element_size())?);
     }
   }
   Ok(builder)
@@ -590,6 +589,29 @@ mod tests {
     payload.extend(strd);
     let b = parse_strl_payload(payload);
     assert_eq!(b.private.as_deref(), Some(&[1, 2, 3, 4][..]));
+  }
+
+  #[test]
+  fn strl_preserves_large_strf_and_strd_private_data() {
+    let strh = encode_chunk(b"strh", &build_strh_payload(b"vids", b"XVID", 1, 30, 0, 0));
+    let mut bmih = build_bitmapinfoheader(640, 360, 24, b"XVID");
+    let extra = vec![0x55u8; 70 * 1024];
+    bmih.extend_from_slice(&extra);
+    let strf = encode_chunk(b"strf", &bmih);
+    let strd_payload = vec![0x33u8; 70 * 1024];
+    let strd = encode_chunk(b"strd", &strd_payload);
+    let mut payload = strh;
+    payload.extend(strf);
+    payload.extend(strd);
+    let b = parse_strl_payload(payload);
+    match b.format.unwrap() {
+      StreamFormat::Video(parsed) => {
+        assert_eq!(parsed.raw.len(), 40 + extra.len());
+        assert_eq!(parsed.extra.len(), extra.len());
+      }
+      _ => panic!("expected video format"),
+    }
+    assert_eq!(b.private.as_ref().unwrap().len(), strd_payload.len());
   }
 
   #[test]

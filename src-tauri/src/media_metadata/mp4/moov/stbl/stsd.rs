@@ -208,11 +208,11 @@ fn parse_entry(
   // remaining sample-entry payload is preserved verbatim as codec private
   // (`priv.clone(mem, size)`), rather than walked for sub-boxes.
   if is_video && !is_known_priv_video_fourcc(&retained_sample_entry_kind) {
-    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
+    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining, deadline.max_element_size())?;
     return Ok(());
   }
   if is_subtitle && retained_sample_entry_kind != *b"mp4s" {
-    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining)?;
+    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining, deadline.max_element_size())?;
     return Ok(());
   }
 
@@ -252,14 +252,13 @@ fn capture_remaining_as_private(
   builder: &mut TrackBuilder,
   bytes_consumed: u64,
   remaining: u64,
+  payload_cap: u64,
 ) -> Result<(), ParseError> {
-  const PRIV_CAP: u64 = 64 * 1024;
   if remaining == 0 {
     return Ok(());
   }
   src.seek_to(entry.payload_start() + bytes_consumed)?;
-  let want = remaining.min(PRIV_CAP);
-  let bytes = src.read_vec_capped(want, PRIV_CAP)?;
+  let bytes = src.read_vec_capped(remaining, payload_cap)?;
   if !bytes.is_empty() {
     builder.codec_private_hex = Some(codec_specific::hex_encode(&bytes));
   }
@@ -421,26 +420,26 @@ fn walk_sample_entry_children(
       }
     }
     match &child.kind.0 {
-      b"avcC" => codec_specific::avcc::parse(src, &child, builder)?,
-      b"hvcC" => codec_specific::hvcc::parse(src, &child, builder)?,
+      b"avcC" => codec_specific::avcc::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
+      b"hvcC" => codec_specific::hvcc::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       // PARSER-077: AV1 codec configuration box.
-      b"av1C" => codec_specific::av1c::parse(src, &child, builder)?,
+      b"av1C" => codec_specific::av1c::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       b"esds" => codec_specific::esds::parse(src, &child, builder)?,
       b"colr" => codec_specific::colr::parse(src, &child, builder)?,
       b"pasp" => codec_specific::pasp::parse(src, &child, builder)?,
-      b"dvcC" | b"dvvC" => codec_specific::dvcc::parse(src, &child, builder)?,
+      b"dvcC" | b"dvvC" => codec_specific::dvcc::parse_with_cap(src, &child, builder, deadline.max_element_size())?,
       // PARSER-149: the `hvcE` Dolby Vision enhancement-layer config sits on
       // the same parser path as its `dvcC` / `dvvC` siblings
       // (r_qtmp4.cpp:3374-3378), but mkvtoolnix keeps it as opaque
       // block-addition data — it is not a DV configuration record — so we
       // preserve its bytes without fabricating a profile string.
-      b"hvcE" => parse_hvce(src, &child, builder)?,
+      b"hvcE" => parse_hvce(src, &child, builder, deadline.max_element_size())?,
       // QuickTime nests codec-config atoms (esds, dOps, ...) inside a
       // `wave` container (PARSER-044) — recurse into it.
       b"wave" => walk_sample_entry_children(src, &child, deadline, builder)?,
       // Opus / FLAC private boxes (PARSER-045).
       b"dOps" => parse_dops(src, &child, builder)?,
-      b"dfLa" => parse_dfla(src, &child, builder)?,
+      b"dfLa" => parse_dfla(src, &child, builder, deadline.max_element_size())?,
       // PARSER-148: ALAC magic cookie (ALACSpecificConfig) — refines the
       // channel / bit-depth / sample-rate placeholders left by the sample
       // entry (r_qtmp4.cpp:3705-3716).
@@ -505,8 +504,13 @@ fn parse_dops(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
 /// r_qtmp4.cpp:3246-3266) skips the four-byte FullBox version/flags header and
 /// stores only the FLAC metadata block chain as codec private data — it does
 /// not keep the FullBox header.
-fn parse_dfla(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
-  let payload = atom::read_payload(src, header, 64 * 1024)?;
+fn parse_dfla(
+  src: &mut FileSource,
+  header: &BoxHeader,
+  builder: &mut TrackBuilder,
+  payload_cap: u64,
+) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, payload_cap)?;
   if payload.len() <= 4 {
     return Ok(());
   }
@@ -578,8 +582,13 @@ fn parse_alac(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuild
 /// (PARSER-179).  Like `dvcC` / `dvvC`, mkvtoolnix records `hvcE` via
 /// `add_data_as_block_addition` (`r_qtmp4.cpp:3377-3378`) — opaque per-frame
 /// side data, not the codec-private decoder config.
-fn parse_hvce(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
-  let payload = atom::read_payload(src, header, 64 * 1024)?;
+fn parse_hvce(
+  src: &mut FileSource,
+  header: &BoxHeader,
+  builder: &mut TrackBuilder,
+  payload_cap: u64,
+) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, payload_cap)?;
   let fourcc: String = header.kind.0.iter().map(|b| *b as char).collect();
   builder.block_additions.push((fourcc, payload));
   Ok(())
@@ -849,6 +858,45 @@ mod tests {
     );
   }
 
+  #[test]
+  fn avcc_child_preserves_payload_larger_than_four_kib() {
+    let mut avcc_payload = crate::media_metadata::mp4::codec_specific::avcc::build_avcc_payload(
+      100,
+      40,
+      3,
+      &[&[0u8; 4]],
+      &[&[0u8; 2]],
+      Some((1, 2, 2)),
+    );
+    avcc_payload.extend_from_slice(&vec![0x42u8; 5 * 1024]);
+    let avcc = encode_box(b"avcC", &avcc_payload);
+    let entry = build_video_sample_entry(b"avc1", 1920, 1080, 24, &avcc);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_private_hex.as_ref().unwrap().len(), avcc_payload.len() * 2);
+    assert_eq!(
+      b.video_codec_config.as_ref().unwrap().raw_hex.as_ref().unwrap().len(),
+      avcc_payload.len() * 2
+    );
+  }
+
+  #[test]
+  fn hvcc_child_preserves_payload_larger_than_four_kib() {
+    let mut hvcc_payload = crate::media_metadata::mp4::codec_specific::hvcc::build_hvcc_payload(
+      2, true, 153, 1, 2, 2,
+    );
+    hvcc_payload.extend_from_slice(&vec![0x24u8; 5 * 1024]);
+    let hvcc = encode_box(b"hvcC", &hvcc_payload);
+    let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &hvcc);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_private_hex.as_ref().unwrap().len(), hvcc_payload.len() * 2);
+    assert_eq!(
+      b.video_codec_config.as_ref().unwrap().raw_hex.as_ref().unwrap().len(),
+      hvcc_payload.len() * 2
+    );
+  }
+
   // ---- PARSER-047: version-2 audio sample entry ------------------------
 
   #[test]
@@ -956,6 +1004,23 @@ mod tests {
     let bytes = hex_to_bytes(&hex);
     assert_eq!(bytes.len(), 4 + 34); // block header + STREAMINFO, no FullBox
     assert_eq!(&bytes[0..4], &[0x80, 0x00, 0x00, 34]); // STREAMINFO block header
+  }
+
+  #[test]
+  fn dfla_box_preserves_payload_larger_than_sixty_four_kib() {
+    let mut info = vec![0u8; 34];
+    let packed = (48_000u64 << 44) | ((1u64) << 41) | ((15u64) << 36);
+    info[10..18].copy_from_slice(&packed.to_be_bytes());
+    let mut dfla_payload = vec![0u8; 4]; // FullBox
+    dfla_payload.extend_from_slice(&[0x00, 0x00, 0x00, 34]);
+    dfla_payload.extend_from_slice(&info);
+    dfla_payload.extend_from_slice(&vec![0x5au8; 70 * 1024]);
+    let dfla = encode_box(b"dfLa", &dfla_payload);
+    let entry = build_audio_sample_entry_v0(b"fLaC", 0, 0, 0, &dfla);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"soun");
+    assert_eq!(b.codec_private_hex.as_ref().unwrap().len(), (dfla_payload.len() - 4) * 2);
+    assert_eq!(b.audio.unwrap().sampling_frequency, Some(48_000.0));
   }
 
   #[test]
@@ -1128,6 +1193,16 @@ mod tests {
     assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().width, 320);
   }
 
+  #[test]
+  fn unknown_video_fourcc_preserves_large_trailing_private_bytes() {
+    let private = vec![0xabu8; 70 * 1024];
+    let entry = build_video_sample_entry(b"rle ", 320, 240, 24, &private);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.codec_private_hex.as_ref().unwrap().len(), private.len() * 2);
+    assert_eq!(b.video.unwrap().pixel_dimensions.unwrap().height, 240);
+  }
+
   // Recognised video codecs still walk their dedicated child boxes rather
   // than swallowing them as raw private bytes.
   #[test]
@@ -1192,6 +1267,18 @@ mod tests {
     assert_eq!(b.block_additions[0].1, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
   }
 
+  #[test]
+  fn hvce_box_preserves_payload_larger_than_sixty_four_kib() {
+    let hvce_payload = vec![0x61u8; 70 * 1024];
+    let hvce = encode_box(b"hvcE", &hvce_payload);
+    let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &hvce);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
+    assert_eq!(b.block_additions.len(), 1);
+    assert_eq!(b.block_additions[0].0, "hvcE");
+    assert_eq!(b.block_additions[0].1.len(), hvce_payload.len());
+  }
+
   // r_qtmp4.cpp:3377-3378 records dvcC via add_data_as_block_addition, not as
   // the decoder configuration record.
   #[test]
@@ -1202,6 +1289,19 @@ mod tests {
     let payload = build_stsd_payload(&[entry]);
     let b = run(payload, *b"vide");
     assert!(b.video_codec_config.is_none());
+    assert_eq!(b.block_additions.len(), 1);
+    assert_eq!(b.block_additions[0].0, "dvcC");
+    assert_eq!(b.block_additions[0].1, dvcc_payload);
+  }
+
+  #[test]
+  fn dvcc_child_preserves_payload_larger_than_legacy_small_cap() {
+    let mut dvcc_payload = crate::media_metadata::mp4::codec_specific::dvcc::build_dvcc_payload(8, 6, true, true, true);
+    dvcc_payload.extend_from_slice(&vec![0x99u8; 1024]);
+    let dvcc = encode_box(b"dvcC", &dvcc_payload);
+    let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &dvcc);
+    let payload = build_stsd_payload(&[entry]);
+    let b = run(payload, *b"vide");
     assert_eq!(b.block_additions.len(), 1);
     assert_eq!(b.block_additions[0].0, "dvcC");
     assert_eq!(b.block_additions[0].1, dvcc_payload);

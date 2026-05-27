@@ -37,7 +37,6 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
-const PROBE_BYTES: usize = 64 * 1024;
 const SEGMENT_HEADER_LEN: usize = 3;
 pub const MAGIC: [u8; 6] = *b"TextST";
 
@@ -107,6 +106,32 @@ pub fn dialog_style_segment(bytes: &[u8]) -> Option<&[u8]> {
   bytes.get(pos..pos + SEGMENT_HEADER_LEN + seg_len)
 }
 
+fn read_dialog_style_segment(src: &mut FileSource) -> Result<Option<Vec<u8>>, ParseError> {
+  src.seek_to(0)?;
+  let mut prefix = [0u8; MAGIC.len() + SEGMENT_HEADER_LEN];
+  if src.read_at_most(&mut prefix)? < prefix.len() {
+    return Ok(None);
+  }
+  if prefix[..MAGIC.len()] != MAGIC {
+    return Ok(None);
+  }
+  let segment_header = &prefix[MAGIC.len()..];
+  if segment_header[0] != SEG_DIALOG_STYLE {
+    return Ok(None);
+  }
+  let seg_len = u16::from_be_bytes([segment_header[1], segment_header[2]]) as usize;
+  let mut private = segment_header.to_vec();
+  let old_len = private.len();
+  private.resize(old_len + seg_len, 0);
+  if seg_len != 0 {
+    let read = src.read_at_most(&mut private[old_len..])?;
+    if read != seg_len {
+      return Ok(None);
+    }
+  }
+  Ok(Some(private))
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HdmvTextStReader;
 
@@ -116,10 +141,9 @@ impl Reader for HdmvTextStReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
+    let recognised = read_dialog_style_segment(src)?.is_some();
     src.seek_to(0)?;
-    Ok(read >= SEGMENT_HEADER_LEN && count_segments(&buf[..read]).is_some())
+    Ok(recognised)
   }
 
   fn read_headers(
@@ -128,13 +152,9 @@ impl Reader for HdmvTextStReader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    if count_segments(&buf[..read]).is_none() {
+    let Some(private) = read_dialog_style_segment(src)? else {
       return Err(ParseError::Unrecognised);
-    }
-    let private = dialog_style_segment(&buf[..read]).ok_or(ParseError::Unrecognised)?;
+    };
 
     out.container.format = ContainerFormat::HdmvTextSt;
     out.container.recognized = true;
@@ -148,7 +168,7 @@ impl Reader for HdmvTextStReader {
       codec: CodecInfo {
         id: "S_HDMV/TEXTST".to_string(),
         name: Some("HDMV TextST".to_string()),
-        codec_private: Some(CodecPrivate::from_bytes(private)),
+        codec_private: Some(CodecPrivate::from_bytes(&private)),
       },
       properties: TrackProperties {
         common,
@@ -234,6 +254,26 @@ mod tests {
     let blob = build_clip(vec![build_segment(SEG_DIALOG_STYLE, &[0u8; 8])]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(HdmvTextStReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn read_headers_preserves_max_length_dialog_style_segment() {
+    let blob = build_clip(vec![build_segment(
+      SEG_DIALOG_STYLE,
+      &vec![0x7bu8; u16::MAX as usize],
+    )]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.clone()));
+    assert!(HdmvTextStReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.textst", 0);
+    HdmvTextStReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(
+      out.tracks[0].codec.codec_private.as_ref().unwrap().length,
+      (SEGMENT_HEADER_LEN + u16::MAX as usize) as u64
+    );
   }
 
   #[test]

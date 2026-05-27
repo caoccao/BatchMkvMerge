@@ -38,9 +38,6 @@ use crate::media_metadata::reader::Reader;
 
 use super::caf::{self, CAFF_MAGIC};
 
-const MAX_CHUNKS: usize = 4096;
-const MAX_CHUNK_READ: u64 = 16 * 1024 * 1024;
-
 #[derive(Debug, Clone)]
 struct Chunk {
   ctype: [u8; 4],
@@ -52,10 +49,11 @@ struct Chunk {
 /// file. mkvtoolnix treats a declared size of zero as a file-sized chunk; the
 /// later exact body read then fails because the body starts after the chunk
 /// header and cannot contain that many bytes.
-fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+fn scan_chunks(src: &mut FileSource, file_size: u64, deadline: &Deadline) -> Result<Vec<Chunk>, ParseError> {
   let mut chunks = Vec::new();
   let mut pos = 8u64; // after "caff" + version(2) + flags(2)
-  while chunks.len() < MAX_CHUNKS {
+  loop {
+    deadline.check("coreaudio::scan_chunks")?;
     src.seek_to(pos)?;
     let mut hdr = [0u8; 12];
     if src.read_at_most(&mut hdr)? < 12 {
@@ -64,7 +62,7 @@ fn scan_chunks(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, Parse
     let ctype = [hdr[0], hdr[1], hdr[2], hdr[3]];
     let raw_size = get_u64_be(&hdr[4..]);
     let data_pos = pos + 12;
-    let size = if raw_size == 0 { file_size } else { raw_size.min(file_size) };
+    let size = if raw_size == 0 { file_size } else { raw_size };
     chunks.push(Chunk { ctype, data_pos, size });
     let Some(next) = data_pos.checked_add(size) else {
       break;
@@ -97,15 +95,6 @@ fn read_chunk_body(src: &mut FileSource, chunk: &Chunk) -> Result<Vec<u8>, Parse
       reason: "zero-sized required chunk".to_string(),
     });
   }
-  if chunk.size > MAX_CHUNK_READ {
-    return Err(ParseError::OversizedElement {
-      format: "coreaudio",
-      id: u32::from_be_bytes(chunk.ctype) as u64,
-      size: chunk.size,
-      cap: MAX_CHUNK_READ,
-      offset: chunk.data_pos,
-    });
-  }
   src.seek_to(chunk.data_pos)?;
   let mut buf = vec![0u8; chunk.size as usize];
   src.read_exact(&mut buf)?;
@@ -130,7 +119,7 @@ impl Reader for CoreAudioReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
     src.seek_to(0)?;
@@ -139,7 +128,7 @@ impl Reader for CoreAudioReader {
       return Err(ParseError::Unrecognised);
     }
     let file_size = src.length().unwrap_or(u64::MAX);
-    let chunks = scan_chunks(src, file_size)?;
+    let chunks = scan_chunks(src, file_size, deadline)?;
 
     let desc_chunk = require_chunk(&chunks, b"desc", "desc")?;
     let desc_body = read_chunk_body(src, desc_chunk)?;
@@ -384,6 +373,43 @@ mod tests {
       .unwrap();
     assert!(out.container.supported);
     assert_eq!(out.tracks[0].properties.audio.as_ref().unwrap().channels, Some(2));
+  }
+
+  #[test]
+  fn scans_past_four_thousand_chunks_before_required_headers() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"caff");
+    bytes.extend_from_slice(&1u16.to_be_bytes());
+    bytes.extend_from_slice(&0u16.to_be_bytes());
+    for _ in 0..4096 {
+      bytes.extend_from_slice(b"free");
+      bytes.extend_from_slice(&1u64.to_be_bytes());
+      bytes.push(0);
+    }
+    bytes.extend_from_slice(b"desc");
+    bytes.extend_from_slice(&32u64.to_be_bytes());
+    bytes.extend_from_slice(&48_000.0f64.to_bits().to_be_bytes());
+    bytes.extend_from_slice(b"alac");
+    bytes.extend_from_slice(&[0u8; 12]);
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&16u32.to_be_bytes());
+    bytes.extend_from_slice(b"pakt");
+    bytes.extend_from_slice(&24u64.to_be_bytes());
+    bytes.extend_from_slice(&0u64.to_be_bytes());
+    bytes.extend_from_slice(&0u64.to_be_bytes());
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    bytes.extend_from_slice(&0u32.to_be_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&4u64.to_be_bytes());
+    bytes.extend_from_slice(&[0u8; 4]);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.caf", 0);
+    CoreAudioReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert!(out.container.supported);
+    assert_eq!(out.tracks[0].codec.id, "CAF/alac");
   }
 
   #[test]

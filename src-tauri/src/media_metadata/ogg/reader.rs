@@ -30,10 +30,6 @@ use super::comments;
 use super::identify::{self, BitstreamState};
 use super::page;
 
-/// Cap the number of pages we walk per parse — protects against pathological
-/// streams while still leaving plenty of room to collect VorbisComment blocks
-/// from every bitstream.
-const MAX_PAGES: usize = 2048;
 const PAGE_PAYLOAD_CAP: u64 = 256 * 1024;
 /// Cap on the running buffer used to reassemble multi-page packets
 /// (PARSER-078).  16 MiB is more than enough for any sane comment block.
@@ -76,9 +72,6 @@ impl Reader for OggReader {
 
     loop {
       deadline.check("ogg::reader")?;
-      if pages_consumed >= MAX_PAGES {
-        break;
-      }
       if let Some(end) = stream_end {
         if src.position() >= end {
           break;
@@ -119,8 +112,8 @@ impl Reader for OggReader {
       // Mirrors mkvtoolnix's `r_ogm.cpp:598-633` which terminates the header
       // read once `headers_read` is true for every active stream — it does
       // NOT wait for decoded comments (FLAC/Speex/Kate/OGM never decode any,
-      // so the old `all_streams_have_comments` gate ran to MAX_PAGES and
-      // weakened the 1 s contract).  The `pages_consumed > 4` guard keeps
+      // so the old `all_streams_have_comments` gate ran until the safety
+      // ceiling and weakened the 1 s contract).  The `pages_consumed > 4` guard keeps
       // non-conformant inputs that sandwich a late BOS page from being
       // truncated by an over-eager early break.
       if past_bos_run && pages_consumed > 4 && all_streams_have_headers(&states) {
@@ -1040,6 +1033,29 @@ mod tests {
       expected.extend_from_slice(block);
     }
     assert_eq!(private.length, expected.len() as u64);
+  }
+
+  #[test]
+  fn read_headers_keeps_flac_header_run_past_two_thousand_pages() {
+    let other_headers = 2050u16;
+    let bos = flac::build_identification_packet_ex(48_000, 2, 24, 0, true, other_headers, false);
+    let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
+    let mut expected_len = bos[9..].len();
+    for i in 0..other_headers {
+      let block = flac::build_metadata_block_packet(1, i + 1 == other_headers, &[i as u8]);
+      expected_len += block.len();
+      bytes.extend(build_page(0, 0, 1, i as u32 + 1, &[&block]));
+    }
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let mut out = MediaMetadata::new("clip.oga", 0);
+    OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
+    assert_eq!(out.tracks.len(), 1);
+    assert_eq!(out.tracks[0].codec.id, "A_FLAC");
+    assert_eq!(
+      out.tracks[0].codec.codec_private.as_ref().unwrap().length,
+      expected_len as u64
+    );
   }
 
   #[test]

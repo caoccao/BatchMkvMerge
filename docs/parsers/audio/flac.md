@@ -1,6 +1,6 @@
 # FLAC Parser
 
-Implementation progress: 96%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -12,7 +12,7 @@ The FLAC parser recognises native FLAC files, extracts STREAMINFO, Vorbis commen
 - Shared helper: `src-tauri/src/media_metadata/audio/id3v2.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_flac.cpp`, `../mkvtoolnix/src/input/r_flac.h`, `../mkvtoolnix/src/common/flac.cpp`, `../mkvtoolnix/src/common/flac.h`
 
-The parser skips leading ID3v2 data, checks `fLaC`, walks metadata blocks, decodes STREAMINFO, maps total samples to duration, turns Vorbis comments into tags, promotes title/language fields, and turns PICTURE blocks into attachment metadata.
+The parser skips leading ID3v2 data, checks `fLaC`, walks metadata blocks until the on-disk last-metadata-block flag, EOF/truncation, or the parser deadline, decodes STREAMINFO, maps total samples to duration, turns Vorbis comments into tags, promotes title/language fields, and turns PICTURE blocks into attachment metadata.
 
 The codec-private header is rebuilt exactly as `flac_reader_c::read_headers` does (`r_flac.cpp:57-89`): the `fLaC` magic followed by **every metadata block except PICTURE and PADDING** — so STREAMINFO, VORBIS_COMMENT, APPLICATION, SEEKTABLE, CUESHEET, and any unknown blocks are all preserved verbatim — with the "last metadata block" flag re-normalised so only the final kept block carries it. PICTURE blocks become attachments using the **declared** payload length read from the block header; the payload bytes themselves are never materialised, so cover art larger than the bounded 1 MiB header read is still surfaced (a block whose declared payload does not fit within the block, or extends past EOF, is dropped, matching libFLAC's all-or-nothing block read).
 
@@ -34,11 +34,3 @@ The central structures are `FlacMetadata`, `FlacStreaminfo`, and `FlacPicture`.
 ## Gaps and Handling
 
 The MIME-to-extension table for pictures is intentionally small and practical. The Rust parser does not run libFLAC frame validation, and attachment payloads are represented by metadata rather than loading full image data into the model. Each kept metadata block is read up to a 16 MiB bound (and the PICTURE header up to 1 MiB), so a pathologically large block body is capped; in practice STREAMINFO/SEEKTABLE/CUESHEET/APPLICATION blocks are well under that. Those choices keep parsing bounded and match the app's need to list tracks and attachments rather than remux FLAC packets.
-
-## Open Issues
-
-### PARSER-325: FLAC metadata walking still stops at a fixed block count
-
-`audio/flac.rs` increments `blocks` and breaks once more than `MAX_META_BLOCKS = 4096` metadata blocks have been seen. The FLAC metadata chain is instead delimited by the last-metadata-block flag; mkvtoolnix delegates identification to libFLAC's `FLAC__stream_decoder_process_until_end_of_metadata`, records every metadata callback in `m_metadata_block_info`, and rebuilds the kept header blocks from that complete list.
-
-A valid FLAC file with thousands of legal metadata blocks before a later VorbisComment, PICTURE, CUESHEET, APPLICATION, or final STREAMINFO-adjacent kept block can therefore lose tags, attachments, or codec-private blocks in the Rust parser. The same issue affects the final "last block" flag normalisation, because the parser may mark the last block it happened to keep rather than the last block mkvtoolnix would keep. The walk should continue until the on-disk last-block flag, EOF/truncation, or the parser deadline, without an arbitrary block-count ceiling.

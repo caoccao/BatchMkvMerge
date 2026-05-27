@@ -49,7 +49,6 @@ const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
 const WAVEFORMATEXTENSIBLE_SIZE: usize = 40;
 /// Byte offset of the SubFormat GUID `data1` field inside the fmt chunk.
 const SUBFORMAT_DATA1_OFFSET: usize = 24;
-const MAX_CHUNKS: usize = 4096;
 const FMT_READ_CAP: u64 = 4096;
 const PAYLOAD_PROBE_CAP: u64 = 128 * 1024;
 
@@ -134,10 +133,22 @@ fn determine_type(head: &[u8]) -> Option<WavType> {
 /// Walk the RIFF chunk list (`scan_chunks_wave`). mkvtoolnix's WAV scanner
 /// advances by the declared chunk length only; it does not consume a RIFF
 /// word-alignment pad byte after odd-sized chunks.
+#[cfg(test)]
 fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+  scan_chunks_riff_with_deadline(src, file_size, None)
+}
+
+fn scan_chunks_riff_with_deadline(
+  src: &mut FileSource,
+  file_size: u64,
+  deadline: Option<&Deadline>,
+) -> Result<Vec<Chunk>, ParseError> {
   let mut chunks: Vec<Chunk> = Vec::new();
   let mut pos = 12u64; // after RIFF id + size + WAVE id
-  while chunks.len() < MAX_CHUNKS {
+  loop {
+    if let Some(deadline) = deadline {
+      deadline.check("wav::scan_chunks_riff")?;
+    }
     src.seek_to(pos)?;
     let mut hdr = [0u8; 8];
     if src.read_at_most(&mut hdr)? != 8 {
@@ -173,10 +184,17 @@ fn scan_chunks_riff(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, 
 }
 
 /// Walk the Wave64 chunk list (`scan_chunks_wave64`).
-fn scan_chunks_wave64(src: &mut FileSource, file_size: u64) -> Result<Vec<Chunk>, ParseError> {
+fn scan_chunks_wave64_with_deadline(
+  src: &mut FileSource,
+  file_size: u64,
+  deadline: Option<&Deadline>,
+) -> Result<Vec<Chunk>, ParseError> {
   let mut chunks = Vec::new();
   let mut pos = W64_HEADER;
-  while chunks.len() < MAX_CHUNKS {
+  loop {
+    if let Some(deadline) = deadline {
+      deadline.check("wav::scan_chunks_wave64")?;
+    }
     src.seek_to(pos)?;
     let mut hdr = [0u8; W64_CHUNK_HEADER as usize];
     if src.read_at_most(&mut hdr)? != W64_CHUNK_HEADER as usize {
@@ -248,7 +266,15 @@ fn parse_fmt(bytes: &[u8]) -> Option<WaveFormat> {
 
 /// Full parse over a [`FileSource`]: determine type, scan chunks, read fmt and
 /// data. Mirrors `wav_reader_c::parse_file`.
+#[cfg(test)]
 fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError> {
+  parse_source_with_deadline(src, None)
+}
+
+fn parse_source_with_deadline(
+  src: &mut FileSource,
+  deadline: Option<&Deadline>,
+) -> Result<Option<WavMetadata>, ParseError> {
   src.seek_to(0)?;
   let mut head = [0u8; W64_HEADER as usize];
   let n = src.read_at_most(&mut head)?;
@@ -258,8 +284,8 @@ fn parse_source(src: &mut FileSource) -> Result<Option<WavMetadata>, ParseError>
   let file_size = src.length().unwrap_or(u64::MAX);
 
   let chunks = match wav_type {
-    WavType::Wave | WavType::Rf64 => scan_chunks_riff(src, file_size)?,
-    WavType::Wave64 => scan_chunks_wave64(src, file_size)?,
+    WavType::Wave | WavType::Rf64 => scan_chunks_riff_with_deadline(src, file_size, deadline)?,
+    WavType::Wave64 => scan_chunks_wave64_with_deadline(src, file_size, deadline)?,
   };
 
   // RF64: ds64 carries the real data size when the data chunk len is 0xFFFFFFFF.
@@ -392,10 +418,10 @@ impl Reader for WavReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let metadata = parse_source(src)?.ok_or(ParseError::Unrecognised)?;
+    let metadata = parse_source_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
 
     out.container.format = ContainerFormat::Wav;
     out.container.recognized = true;
@@ -605,6 +631,21 @@ mod tests {
     let m = parse_source(&mut s).unwrap().unwrap();
     assert_eq!(m.format.sample_rate, 44_100);
     assert_eq!(m.data_bytes, 4000);
+  }
+
+  #[test]
+  fn scans_past_four_thousand_chunks_before_fmt_and_data() {
+    let mut chunks: Vec<(&[u8; 4], Vec<u8>)> = Vec::new();
+    for _ in 0..4096 {
+      chunks.push((b"JUNK", Vec::new()));
+    }
+    chunks.push((b"fmt ", fmt_pcm(48_000, 2, 16)));
+    chunks.push((b"data", vec![0u8; 192_000]));
+    let bytes = riff_wrap(chunks);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let m = parse_source(&mut s).unwrap().unwrap();
+    assert_eq!(m.format.sample_rate, 48_000);
+    assert_eq!(m.data_bytes, 192_000);
   }
 
   #[test]

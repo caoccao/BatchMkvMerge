@@ -59,8 +59,6 @@ const BLOCK_TYPE_STREAMINFO: u8 = 0;
 const BLOCK_TYPE_PADDING: u8 = 1;
 const BLOCK_TYPE_VORBIS_COMMENT: u8 = 4;
 const BLOCK_TYPE_PICTURE: u8 = 6;
-/// Safety cap on the number of metadata blocks walked.
-const MAX_META_BLOCKS: usize = 4096;
 /// Cap on a single VORBIS_COMMENT block read.
 const MAX_COMMENT_BYTES: u64 = 16 * 1024 * 1024;
 /// Cap on any single metadata block read verbatim into the codec-private
@@ -100,6 +98,13 @@ fn payload_start(src: &mut FileSource) -> Result<u64, ParseError> {
 /// STREAMINFO are found regardless of how far into the file they sit
 /// (PARSER-024). Skips a leading ID3v2 tag (PARSER-023).
 pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseError> {
+  parse_source_with_deadline(src, None)
+}
+
+fn parse_source_with_deadline(
+  src: &mut FileSource,
+  deadline: Option<&Deadline>,
+) -> Result<Option<FlacMetadata>, ParseError> {
   let start = payload_start(src)?;
   src.seek_to(start)?;
   let mut magic = [0u8; 4];
@@ -114,12 +119,10 @@ pub fn parse_source(src: &mut FileSource) -> Result<Option<FlacMetadata>, ParseE
   // kept block gets the "last metadata block" flag set after the walk.
   let mut last_kept_offset: Option<usize> = None;
   let mut pos = start + 4;
-  let mut blocks = 0usize;
 
   loop {
-    blocks += 1;
-    if blocks > MAX_META_BLOCKS {
-      break;
+    if let Some(deadline) = deadline {
+      deadline.check("flac::metadata")?;
     }
     src.seek_to(pos)?;
     let mut header = [0u8; 4];
@@ -443,10 +446,10 @@ impl Reader for FlacReader {
   fn read_headers(
     &self,
     src: &mut FileSource,
-    _deadline: &Deadline,
+    deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let metadata = parse_source(src)?.ok_or(ParseError::Unrecognised)?;
+    let metadata = parse_source_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
     let streaminfo = metadata.streaminfo.ok_or(ParseError::Malformed {
       format: "flac",
       offset: 0,
@@ -704,6 +707,27 @@ mod tests {
     assert_eq!(common.track_name.as_deref(), Some("Song"));
     assert!(common.language.is_some());
     assert!(out.tracks[0].codec.codec_private.as_ref().unwrap().length > 42);
+  }
+
+  #[test]
+  fn metadata_walk_continues_past_four_thousand_blocks() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"fLaC");
+    let native = build_flac_native(48_000, 2, 24, 96_000);
+    let mut streaminfo = native[4..42].to_vec();
+    streaminfo[0] &= 0x7f;
+    bytes.extend_from_slice(&streaminfo);
+    for _ in 0..4096 {
+      bytes.extend(block_header(false, BLOCK_TYPE_PADDING, 0));
+    }
+    let comment = comments::build_block("ref enc", &[("TITLE", "Late")]);
+    bytes.extend(block_header(true, BLOCK_TYPE_VORBIS_COMMENT, comment.len()));
+    bytes.extend(comment);
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let m = parse_source(&mut s).unwrap().unwrap();
+    assert_eq!(m.tags.len(), 1);
+    assert_eq!(m.tags[0].value, "Late");
   }
 
   // ---- PARSER-023: ID3v2 prefix ----------------------------------------

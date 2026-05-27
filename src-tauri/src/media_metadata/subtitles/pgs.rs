@@ -38,7 +38,6 @@ use crate::media_metadata::model::track_properties_common::CommonTrackProperties
 use crate::media_metadata::model::track_properties_subtitle::SubtitleTrackProperties;
 use crate::media_metadata::reader::Reader;
 
-const PROBE_BYTES: usize = 64 * 1024;
 const SEGMENT_HEADER_LEN: usize = 13;
 pub const MAGIC: [u8; 2] = *b"PG";
 
@@ -65,6 +64,24 @@ pub fn count_segments(bytes: &[u8]) -> Option<usize> {
   if count >= 2 { Some(count) } else { None }
 }
 
+fn has_two_segment_headers(src: &mut FileSource) -> Result<bool, ParseError> {
+  src.seek_to(0)?;
+  let mut header = [0u8; SEGMENT_HEADER_LEN];
+  if src.read_at_most(&mut header)? < SEGMENT_HEADER_LEN {
+    return Ok(false);
+  }
+  if header[..2] != MAGIC {
+    return Ok(false);
+  }
+  let seg_len = u16::from_be_bytes([header[11], header[12]]) as u64;
+  let Some(next_pos) = (SEGMENT_HEADER_LEN as u64).checked_add(seg_len) else {
+    return Ok(false);
+  };
+  src.seek_to(next_pos)?;
+  let mut next_magic = [0u8; 2];
+  Ok(src.read_at_most(&mut next_magic)? == 2 && next_magic == MAGIC)
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PgsReader;
 
@@ -74,10 +91,9 @@ impl Reader for PgsReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
+    let recognised = has_two_segment_headers(src)?;
     src.seek_to(0)?;
-    Ok(read >= SEGMENT_HEADER_LEN && count_segments(&buf[..read]).is_some())
+    Ok(recognised)
   }
 
   fn read_headers(
@@ -86,10 +102,7 @@ impl Reader for PgsReader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    if count_segments(&buf[..read]).is_none() {
+    if !has_two_segment_headers(src)? {
       return Err(ParseError::Unrecognised);
     }
 
@@ -192,6 +205,21 @@ mod tests {
     let blob = build_two_segment_clip();
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(PgsReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_max_length_first_segment() {
+    let mut blob = build_segment(0x16, &vec![0u8; u16::MAX as usize]);
+    blob.extend(build_segment(0x80, &[]));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.clone()));
+    assert!(PgsReader.probe(&mut s).unwrap());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.sup", 0);
+    PgsReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.container.format, ContainerFormat::HdmvPgs);
   }
 
   #[test]

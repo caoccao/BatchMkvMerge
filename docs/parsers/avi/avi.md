@@ -1,6 +1,6 @@
 # AVI Parser
 
-Implementation progress: 93%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -22,7 +22,7 @@ The video track passes the same gate `avi_reader_c::verify_video_track` applies 
 
 `WAVE_FORMAT_EXTENSIBLE` audio is unwrapped only when the parsed extension is a complete 22-byte `alWAVEFORMATEXTENSION`, and the effective codec tag is read from the full 32-bit SubFormat GUID `data1`, matching mkvtoolnix's `get_uint32_le(&ext->extension.guid.data1)` path. Truncated or nonstandard extensible headers therefore remain `0xFFFE` instead of being repaired from partial GUID bytes (PARSER-311).
 
-Video codec-private data preserves the exact original `BITMAPINFOHEADER` bytes plus trailing extradata from `strf`. The parser still decodes the key fields into `BitmapInfoHeader` for identification, but the emitted private blob no longer reconstructs bytes 24..40 as zeroes, matching mkvtoolnix's clone of the avilib-owned header buffer (PARSER-312).
+Video codec-private data preserves the exact original `BITMAPINFOHEADER` bytes plus trailing extradata from `strf`, and `strd` private chunks are preserved under the shared parser element-size budget rather than a small AVI-local cap. The parser still decodes the key fields into `BitmapInfoHeader` for identification, but the emitted private blob no longer reconstructs bytes 24..40 as zeroes, matching mkvtoolnix's clone of the avilib-owned header buffer (PARSER-312).
 
 ## Data Structures
 
@@ -42,12 +42,4 @@ Important structures are `ChunkHeader`, `MainAviHeader`, `StreamHeader`, `Stream
 
 ## Gaps and Handling
 
-Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix, `WAVE_FORMAT_EXTENSIBLE` unwrapping requires a full extension, and video codec-private bytes preserve the original bitmap header.
-
-## Open Issues
-
-### PARSER-323: `strf` and `strd` codec-private chunks are capped at 64 KiB
-
-`strl.rs` reads every `strf` chunk through `riff::read_payload(..., MAX_STRF_BYTES)` with `MAX_STRF_BYTES = 64 * 1024`, and also caps `strd` at 64 KiB. `riff::read_payload` turns any larger chunk into `OversizedElement`. mkvtoolnix's avilib path allocates the declared video `strf` size, copies the full `BITMAPINFOHEADER + extradata`, stores `extradata_size = ck_size - sizeof(alBITMAPINFOHEADER)`, and later clones that full buffer as video private data. For audio, avilib reallocates `sizeof(alWAVEFORMATEX) + cb_size` and reads all advertised extra bytes before `r_avi.cpp` clones `wfe + 1` when `cb_size > 0`.
-
-Valid AVI files can therefore be rejected or lose codec private data when a video `strf`, audio `strf` (`18 + cb_size` can exceed 64 KiB by construction), or `strd` chunk is larger than the local cap. The parser should parse the required fixed header fields without rejecting the full chunk size, and should preserve the declared private payload under the global parser budget instead of applying a small AVI-local cap.
+Upstream's avilib path handles full indexes, payload reads, timestamp work, packetizer verification, and richer codec checks. Rust does not parse payload indexes. The parser handles this by reporting reliable header metadata and keeping muxing-derived state out of scope. MPEG-4 Part 2 frame PAR is now extracted from a bounded first-frame read; only the VOL header's `aspect_ratio_info` is decoded (the rest of the frame is not). The video-track verification gate matches `verify_video_track`, so malformed bitmap headers no longer produce false-positive video tracks. Top-level RIFF/Form magic checks are case-insensitive like mkvtoolnix, `WAVE_FORMAT_EXTENSIBLE` unwrapping requires a full extension, and codec-private bytes preserve the original bitmap/format/private chunks within the shared parser element-size budget.

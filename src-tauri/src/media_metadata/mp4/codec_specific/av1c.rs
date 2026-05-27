@@ -40,7 +40,16 @@ use crate::media_metadata::mp4::moov::trak::TrackBuilder;
 use super::hex_encode;
 
 pub fn parse(src: &mut FileSource, header: &BoxHeader, builder: &mut TrackBuilder) -> Result<(), ParseError> {
-  let payload = atom::read_payload(src, header, 64 * 1024)?;
+  parse_with_cap(src, header, builder, u64::MAX)
+}
+
+pub fn parse_with_cap(
+  src: &mut FileSource,
+  header: &BoxHeader,
+  builder: &mut TrackBuilder,
+  payload_cap: u64,
+) -> Result<(), ParseError> {
+  let payload = atom::read_payload(src, header, payload_cap)?;
   builder.codec_private_hex = Some(hex_encode(&payload));
   if payload.len() < 4 {
     return Ok(());
