@@ -189,6 +189,10 @@ fn parse_filepos(src: &str) -> Option<u64> {
 /// codec-private blob.  Direct port of `vobsub_reader_c::parse_headers`
 /// (`r_vobsub.cpp:193-352`).
 pub fn parse_idx(text: &str) -> Result<ParsedIdx, ParseError> {
+  parse_idx_with_deadline(text, None)
+}
+
+fn parse_idx_with_deadline(text: &str, deadline: Option<&Deadline>) -> Result<ParsedIdx, ParseError> {
   let mut tracks: Vec<VobSubTrack> = Vec::new();
   let mut current: Option<VobSubTrack> = None;
   let mut idx_data = String::new();
@@ -213,6 +217,9 @@ pub fn parse_idx(text: &str) -> Result<ParsedIdx, ParseError> {
   };
 
   for line in text.lines() {
+    if let Some(deadline) = deadline {
+      deadline.check("vobsub::parse_idx")?;
+    }
     // r_vobsub.cpp:209 — blank lines and comments are skipped.  The banner
     // line (first `#` comment) is therefore never captured into idx_data.
     if line.is_empty() || line.starts_with('#') {
@@ -454,12 +461,12 @@ pub fn idx_version(text: &str) -> Option<u32> {
 
 /// Populate `out` from the decoded `.idx` text.  Pushes one `S_VOBSUB` track
 /// per non-empty `id:` entry, sharing the filtered codec-private blob.
-fn populate_from_idx(text: &str, out: &mut MediaMetadata) -> Result<(), ParseError> {
+fn populate_from_idx(text: &str, deadline: Option<&Deadline>, out: &mut MediaMetadata) -> Result<(), ParseError> {
   out.container.format = ContainerFormat::VobSub;
   out.container.recognized = true;
   out.container.supported = true;
 
-  let parsed = parse_idx(text)?;
+  let parsed = parse_idx_with_deadline(text, deadline)?;
   let codec_private = CodecPrivate::from_bytes(parsed.codec_private.as_bytes());
 
   for (track_idx, track) in parsed.tracks.iter().enumerate() {
@@ -524,7 +531,7 @@ impl Reader for VobSubReader {
     // is a hard error, not "unrecognised".  The sibling `.sub` requirement is
     // enforced only on the path-aware entry points, which know the file path.
     require_supported_version(&text)?;
-    populate_from_idx(&text, out)?;
+    populate_from_idx(&text, Some(deadline), out)?;
     Ok(())
   }
 }
@@ -559,7 +566,8 @@ pub fn parse_idx_at_path(path: &Path) -> Result<MediaMetadata, ParseError> {
 ///
 /// Mirrors mkvtoolnix's probe accepting both `.idx`/`.sub` extensions and
 /// always resolving the `.idx` (r_vobsub.cpp:82-100).
-pub fn try_open_by_path(path: &Path, metadata: &mut MediaMetadata) -> Result<bool, ParseError> {
+pub fn try_open_by_path(path: &Path, deadline: &Deadline, metadata: &mut MediaMetadata) -> Result<bool, ParseError> {
+  deadline.check("vobsub::path")?;
   let idx_path = resolve_idx_path(path);
   // Only claim when the resolved `.idx` exists and carries the banner.  This
   // keeps `.sub` files that are *not* VobSub (e.g. MicroDVD text) flowing to
@@ -583,9 +591,9 @@ pub fn try_open_by_path(path: &Path, metadata: &mut MediaMetadata) -> Result<boo
   // unsupported version (PARSER-233) is a hard error, not a fall-through.
   let sub_path = require_sibling_sub(&idx_path)?;
   require_supported_version(&text)?;
-  let full = read_source_to_end(&mut src, None, "vobsub::path")?;
+  let full = read_source_to_end(&mut src, Some(deadline), "vobsub::path")?;
   let full_text = String::from_utf8_lossy(&full);
-  populate_from_idx(&full_text, metadata)?;
+  populate_from_idx(&full_text, Some(deadline), metadata)?;
   metadata
     .container
     .properties
@@ -742,6 +750,13 @@ timestamp: 00:00:01:000, filepos: 000000000
       }
       other => panic!("expected Malformed, got {other:?}"),
     }
+  }
+
+  #[test]
+  fn parse_idx_honours_deadline() {
+    let txt = "id: en, index: 0\ntimestamp: 00:00:01:000, filepos: 000000000\n";
+    let err = parse_idx_with_deadline(txt, Some(&Deadline::new(0))).unwrap_err();
+    assert!(matches!(err, ParseError::Timeout { stage, .. } if stage == "vobsub::parse_idx"));
   }
 
   #[test]
@@ -923,7 +938,7 @@ timestamp: 00:00:01:000, filepos: 000000000
 
     let mut m = MediaMetadata::new("clip.sub", 16);
     // Hand the *.sub* path — it must resolve to the sibling .idx.
-    let claimed = try_open_by_path(&sub_path, &mut m).unwrap();
+    let claimed = try_open_by_path(&sub_path, &Deadline::new(60_000), &mut m).unwrap();
     assert!(claimed);
     assert_eq!(m.container.format, ContainerFormat::VobSub);
     assert_eq!(m.tracks.len(), 1);
@@ -944,9 +959,26 @@ timestamp: 00:00:01:000, filepos: 000000000
       .write_all(b"# VobSub index file, v7\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 0\n")
       .unwrap();
     let mut m = MediaMetadata::new("clip.idx", 0);
-    let err = try_open_by_path(&idx_path, &mut m).unwrap_err();
+    let err = try_open_by_path(&idx_path, &Deadline::new(60_000), &mut m).unwrap_err();
     assert!(matches!(err, ParseError::Io { .. }), "expected Io error, got {err:?}");
     let _ = std::fs::remove_file(&idx_path);
+  }
+
+  #[test]
+  fn try_open_by_path_honours_deadline() {
+    let stem = temp_stem("deadline");
+    let idx_path = stem.with_extension("idx");
+    let sub_path = stem.with_extension("sub");
+    std::fs::File::create(&idx_path)
+      .unwrap()
+      .write_all(b"# VobSub index file, v7\nid: en, index: 0\ntimestamp: 00:00:01:000, filepos: 0\n")
+      .unwrap();
+    std::fs::File::create(&sub_path).unwrap().write_all(&[0u8; 16]).unwrap();
+    let mut m = MediaMetadata::new("clip.idx", 0);
+    let err = try_open_by_path(&idx_path, &Deadline::new(0), &mut m).unwrap_err();
+    assert!(matches!(err, ParseError::Timeout { stage, .. } if stage == "vobsub::path"));
+    let _ = std::fs::remove_file(&idx_path);
+    let _ = std::fs::remove_file(&sub_path);
   }
 
   #[test]
@@ -960,7 +992,7 @@ timestamp: 00:00:01:000, filepos: 000000000
       .write_all(b"{1}{125}Hello\n")
       .unwrap();
     let mut m = MediaMetadata::new("clip.sub", 14);
-    let claimed = try_open_by_path(&sub_path, &mut m).unwrap();
+    let claimed = try_open_by_path(&sub_path, &Deadline::new(60_000), &mut m).unwrap();
     assert!(!claimed);
     let _ = std::fs::remove_file(&sub_path);
   }

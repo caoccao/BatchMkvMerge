@@ -37,6 +37,13 @@ pub trait Reader {
   /// `Err(_)` is fatal (e.g. true I/O failure).
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError>;
 
+  /// Deadline-aware probe hook for readers whose probe does real parsing.
+  /// Most readers only sniff a tiny magic prefix, so the default delegates to
+  /// [`probe`](Self::probe).
+  fn probe_with_deadline(&self, src: &mut FileSource, _deadline: &Deadline) -> Result<bool, ParseError> {
+    self.probe(src)
+  }
+
   /// Parse headers and populate `out` in-place. The cursor on entry is at
   /// offset 0; on successful return the cursor position is unspecified.
   /// Returning `Ok(())` implies a successful parse — the caller stamps the

@@ -37,10 +37,8 @@ use crate::media_metadata::reader::Reader;
 
 use super::{encoding, read_source_to_end};
 
-// Upstream probes at most 100 lines, each read with a 1000-byte line buffer.
-// Reading that whole possible window avoids rejecting files whose first
-// meaningful section header sits past the old 16 KiB byte cap.
-const PROBE_BYTES: usize = 100 * 1000;
+const PROBE_LINES: usize = 100;
+const PROBE_LINE_CHARS: usize = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsaVariant {
@@ -95,6 +93,24 @@ fn probe_ssa(text: &str) -> bool {
     return matches_script_info(line) || matches_v4_styles(line).is_some();
   }
   false
+}
+
+fn probe_ssa_bounded(src: &mut FileSource) -> Result<bool, ParseError> {
+  let encoding = encoding::ProbeTextEncoding::detect_from_source(src)?;
+  let mut line_number = 0usize;
+  loop {
+    let Some(line) = encoding::read_bounded_text_line(src, encoding, PROBE_LINE_CHARS)? else {
+      return Ok(false);
+    };
+    line_number += 1;
+    if line_number > PROBE_LINES {
+      return Ok(false);
+    }
+    if is_ssa_comment_or_empty(&line) {
+      continue;
+    }
+    return Ok(matches_script_info(&line) || matches_v4_styles(&line).is_some());
+  }
 }
 
 /// Port of `ssa_parser_c::parse`'s `m_is_ass` detection.
@@ -434,10 +450,13 @@ impl Reader for SsaReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
-    src.seek_to(0)?;
-    Ok(read > 0 && classify(&encoding::decode_lossy(&buf[..read])).is_some())
+    let result = probe_ssa_bounded(src);
+    let rewind = src.seek_to(0);
+    match (result, rewind) {
+      (Err(e), _) => Err(e),
+      (Ok(_), Err(e)) => Err(e),
+      (Ok(v), Ok(())) => Ok(v),
+    }
   }
 
   fn read_headers(
@@ -592,6 +611,33 @@ mod tests {
     blob.push_str("[Script Info]\nScriptType: v4.00+\n");
     assert!(blob.len() > 16 * 1024);
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob.into_bytes()));
+    assert!(SsaReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_header_after_overlong_blank_line_exhausts_getline_window() {
+    let mut blob = " ".repeat(100_000);
+    blob.push('\n');
+    blob.push_str("[Script Info]\n");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.into_bytes()));
+    assert!(!SsaReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_accepts_utf16_header_past_hundred_kib_byte_window() {
+    let mut text = String::new();
+    for _ in 0..60 {
+      text.push(';');
+      text.push_str(&"x".repeat(900));
+      text.push('\n');
+    }
+    text.push_str("[Script Info]\nScriptType: v4.00+\n");
+    let mut blob = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+      blob.extend_from_slice(&unit.to_le_bytes());
+    }
+    assert!(blob.len() > 100 * 1000);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(SsaReader.probe(&mut s).unwrap());
   }
 
@@ -768,11 +814,13 @@ mod tests {
 
   // ---- PARSER-153: full-file header / font parsing (past 16 KiB) --------
 
+  const FORMER_PROBE_BYTES: usize = PROBE_LINES * PROBE_LINE_CHARS;
+
   fn build_large_ass_with_late_fonts() -> Vec<u8> {
     let mut s = String::new();
     s.push_str("[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\n");
-    // Pad the styles section past the 16 KiB probe window.
-    while s.len() < PROBE_BYTES + 4096 {
+    // Pad the styles section past the old byte-window probe model.
+    while s.len() < FORMER_PROBE_BYTES + 4096 {
       s.push_str("Style: Filler,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H80000000\n");
     }
     s.push_str("\n[Fonts]\nfontname: Late.ttf\nQUJDRA==\nRUZHSA==\n\n[Events]\nFormat: Layer, Start, End\n");
@@ -783,7 +831,7 @@ mod tests {
   fn read_headers_recovers_fonts_past_probe_window() {
     use crate::media_metadata::deadline::Deadline;
     let blob = build_large_ass_with_late_fonts();
-    assert!(blob.len() > PROBE_BYTES, "fixture must exceed the probe window");
+    assert!(blob.len() > FORMER_PROBE_BYTES, "fixture must exceed the old byte window");
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     let mut out = MediaMetadata::new("clip.ass", 0);
     SsaReader
@@ -796,6 +844,6 @@ mod tests {
     // The codec private (global header) includes the full styles section but
     // excludes the trailing [Fonts] block.
     let private = out.tracks[0].codec.codec_private.as_ref().unwrap();
-    assert!(private.length as usize > PROBE_BYTES);
+    assert!(private.length as usize > FORMER_PROBE_BYTES);
   }
 }

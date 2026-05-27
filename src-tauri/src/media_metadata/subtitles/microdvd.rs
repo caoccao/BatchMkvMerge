@@ -29,7 +29,8 @@ use crate::media_metadata::reader::Reader;
 
 use super::encoding;
 
-const PROBE_BYTES: usize = 16 * 1024;
+const PROBE_LINES: usize = 20;
+const PROBE_LINE_CHARS: usize = 50;
 
 pub fn looks_like_microdvd_line(line: &str) -> bool {
   let bytes = line.as_bytes();
@@ -87,6 +88,22 @@ pub fn has_microdvd_line(text: &str) -> bool {
   false
 }
 
+fn probe_microdvd_bounded(src: &mut FileSource) -> Result<bool, ParseError> {
+  let encoding = encoding::ProbeTextEncoding::detect_from_source(src)?;
+  let mut empty_lines = 0usize;
+  while empty_lines < PROBE_LINES {
+    let Some(line) = encoding::read_bounded_text_line(src, encoding, PROBE_LINE_CHARS)? else {
+      return Ok(false);
+    };
+    let trimmed = line.trim();
+    if !trimmed.is_empty() {
+      return Ok(looks_like_microdvd_line(trimmed));
+    }
+    empty_lines += 1;
+  }
+  Ok(false)
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MicroDvdReader;
 
@@ -96,10 +113,13 @@ impl Reader for MicroDvdReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
-    let read = src.read_at_most(&mut buf)?;
-    src.seek_to(0)?;
-    Ok(read > 0 && has_microdvd_line(&encoding::decode_lossy(&buf[..read])))
+    let result = probe_microdvd_bounded(src);
+    let rewind = src.seek_to(0);
+    match (result, rewind) {
+      (Err(e), _) => Err(e),
+      (Ok(_), Err(e)) => Err(e),
+      (Ok(v), Ok(())) => Ok(v),
+    }
   }
 
   fn read_headers(
@@ -108,11 +128,10 @@ impl Reader for MicroDvdReader {
     _deadline: &Deadline,
     out: &mut MediaMetadata,
   ) -> Result<(), ParseError> {
-    let mut buf = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
-    let read = src.read_at_most(&mut buf)?;
-    let text = encoding::decode_lossy(&buf[..read]);
-    if !has_microdvd_line(&text) {
+    let claimed = probe_microdvd_bounded(src)?;
+    src.seek_to(0)?;
+    if !claimed {
       return Err(ParseError::Unrecognised);
     }
 
@@ -190,6 +209,14 @@ mod tests {
     // down must not make native claim the file.
     let blob = b"This is just a text file.\n{1}{125}not really a subtitle\n";
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    assert!(!MicroDvdReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_candidate_after_overlong_blank_line_exhausts_window() {
+    let mut blob = vec![b' '; PROBE_LINES * PROBE_LINE_CHARS];
+    blob.extend_from_slice(b"\n{1}{125}Hello\n");
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(!MicroDvdReader.probe(&mut s).unwrap());
   }
 

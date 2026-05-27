@@ -123,7 +123,7 @@ fn parse_with_extension_fallback(
   // (r_vobsub.cpp:82-100).  `try_open_by_path` only claims when the resolved
   // `.idx` exists and carries the VobSub banner, so non-VobSub `.sub` files
   // (e.g. MicroDVD text) fall through to the normal cascade unchanged.
-  if is_vobsub_candidate_path(path) && subtitles::vobsub::try_open_by_path(path, metadata)? {
+  if is_vobsub_candidate_path(path) && subtitles::vobsub::try_open_by_path(path, deadline, metadata)? {
     return Ok(());
   }
 
@@ -135,7 +135,7 @@ fn parse_with_extension_fallback(
       // §210-237).  Mirror the SRT branch here — without it an empty
       // `.srt` file is reported as unrecognised even though mkvmerge
       // would happily mux it as an empty subtitle track.
-      if accept_empty_text_subtitle_by_extension(metadata, path)? {
+      if accept_empty_text_subtitle_by_extension(src, metadata, path)? {
         Ok(())
       } else {
         Err(ParseError::Unrecognised)
@@ -156,17 +156,31 @@ fn is_vobsub_candidate_path(path: &Path) -> bool {
     .unwrap_or(false)
 }
 
-fn accept_empty_text_subtitle_by_extension(metadata: &mut MediaMetadata, path: &Path) -> Result<bool, ParseError> {
+fn accept_empty_text_subtitle_by_extension(
+  src: &mut FileSource,
+  metadata: &mut MediaMetadata,
+  path: &Path,
+) -> Result<bool, ParseError> {
   use probe::extension_hint::{FileTypeHint, hints_for_path};
-  if metadata.file_size > 1 {
-    return Ok(false);
-  }
   let hints = hints_for_path(path);
   if hints.contains(&FileTypeHint::Srt) {
+    let payload_size = metadata.file_size.saturating_sub(subtitle_bom_length(src)? as u64);
+    if payload_size > 1 {
+      return Ok(false);
+    }
     subtitles::srt::populate_empty_srt(metadata);
     return Ok(true);
   }
   Ok(false)
+}
+
+fn subtitle_bom_length(src: &mut FileSource) -> Result<usize, ParseError> {
+  let pos = src.position();
+  src.seek_to(0)?;
+  let mut prefix = [0u8; 3];
+  let read = src.read_at_most(&mut prefix)?;
+  src.seek_to(pos)?;
+  Ok(subtitles::encoding::detect(&prefix[..read]).bom_length)
 }
 
 #[cfg(test)]
@@ -205,6 +219,27 @@ mod tests {
       m.tracks[0].track_type,
       crate::media_metadata::model::track::TrackType::Subtitles
     );
+  }
+
+  #[test]
+  fn bom_only_srt_file_is_accepted_by_extension() {
+    for (label, bytes) in [
+      ("utf8", vec![0xEFu8, 0xBB, 0xBF]),
+      ("utf16le", vec![0xFFu8, 0xFE]),
+      ("utf16be", vec![0xFEu8, 0xFF]),
+    ] {
+      let dir = std::env::temp_dir();
+      let path = dir.join(format!("bmm-bom-only-srt-{label}-{}.srt", std::process::id()));
+      std::fs::write(&path, bytes).unwrap();
+      let result = parse(&path, ParseOptions::default());
+      let _ = std::fs::remove_file(&path);
+      let m = result.unwrap();
+      assert_eq!(
+        m.container.format,
+        crate::media_metadata::model::container::ContainerFormat::Srt
+      );
+      assert_eq!(m.tracks.len(), 1);
+    }
   }
 
   // ---- PARSER-142: .mpls playlist parsed end-to-end -------------------

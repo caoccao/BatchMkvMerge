@@ -78,16 +78,33 @@ pub struct UsfDocument {
 
 /// Read the probe document bytes (capped at 10 MiB) and decode them to a UTF-8
 /// string, BOM-stripped, for the XML parser.
-fn read_probe_document(src: &mut FileSource) -> Result<(Vec<u8>, String), ParseError> {
+fn read_probe_document(src: &mut FileSource, deadline: Option<&Deadline>) -> Result<(Vec<u8>, String), ParseError> {
+  const CHUNK: usize = 64 * 1024;
+
   src.seek_to(0)?;
   let len = src
     .length()
     .map(|l| l.min(PROBE_DOCUMENT_BYTES as u64) as usize)
     .unwrap_or(PROBE_DOCUMENT_BYTES);
   let cap = len.min(PROBE_DOCUMENT_BYTES);
-  let mut buf = vec![0u8; cap];
-  let read = src.read_at_most(&mut buf)?;
-  buf.truncate(read);
+  let mut buf = Vec::with_capacity(cap);
+  let mut remaining = cap;
+  while remaining > 0 {
+    if let Some(deadline) = deadline {
+      deadline.check("usf::probe_document")?;
+    }
+    let wanted = remaining.min(CHUNK);
+    let mut chunk = vec![0u8; wanted];
+    let read = src.read_at_most(&mut chunk)?;
+    if read == 0 {
+      break;
+    }
+    buf.extend_from_slice(&chunk[..read]);
+    remaining -= read;
+    if read < wanted {
+      break;
+    }
+  }
   let text = encoding::decode_lossy(&buf);
   Ok((buf, text))
 }
@@ -310,15 +327,19 @@ impl MediaReader for UsfReader {
   }
 
   fn probe(&self, src: &mut FileSource) -> Result<bool, ParseError> {
-    let (_bytes, text) = read_probe_document(src)?;
+    // Probe has no caller-supplied budget; use a generous fixed one so a real
+    // XML parse can validate the root element (r_usf.cpp lines 45-46).
+    let deadline = Deadline::from_parts(std::time::Instant::now(), std::time::Duration::from_secs(60));
+    self.probe_with_deadline(src, &deadline)
+  }
+
+  fn probe_with_deadline(&self, src: &mut FileSource, deadline: &Deadline) -> Result<bool, ParseError> {
+    let (_bytes, text) = read_probe_document(src, Some(deadline))?;
     src.seek_to(0)?;
     if !has_xml_marker(&text) {
       return Ok(false);
     }
-    // Probe has no caller-supplied budget; use a generous fixed one so a real
-    // XML parse can validate the root element (r_usf.cpp lines 45-46).
-    let deadline = Deadline::from_parts(std::time::Instant::now(), std::time::Duration::from_secs(60));
-    Ok(parse_document(&text, &deadline)?.is_some())
+    Ok(parse_document(&text, deadline)?.is_some())
   }
 
   fn read_headers(
@@ -404,6 +425,14 @@ mod tests {
     let blob = b"<?xml version=\"1.0\"?>\n<USFSubtitles version=\"1.1\"></USFSubtitles>";
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
     assert!(UsfReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn deadline_aware_probe_uses_caller_budget() {
+    let blob = b"<?xml version=\"1.0\"?>\n<USFSubtitles version=\"1.1\"></USFSubtitles>";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    let err = <UsfReader as MediaReader>::probe_with_deadline(&UsfReader, &mut s, &Deadline::new(0)).unwrap_err();
+    assert!(matches!(err, ParseError::Timeout { stage, .. } if stage == "usf::probe_document"));
   }
 
   #[test]

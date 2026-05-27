@@ -26,6 +26,9 @@ use std::cell::RefCell;
 
 use encoding_rs::Encoding;
 
+use crate::media_metadata::error::ParseError;
+use crate::media_metadata::io::file_source::FileSource;
+
 thread_local! {
     /// Per-thread subtitle charset hint, set by `parse()` for the duration
     /// of a single call.  Empty string means "auto".
@@ -97,9 +100,162 @@ pub fn decode_lossy(bytes: &[u8]) -> String {
   decoded.into_owned()
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProbeTextEncoding {
+  Utf8Like,
+  Utf8Bom,
+  Utf16Le,
+  Utf16Be,
+}
+
+impl ProbeTextEncoding {
+  pub(crate) fn detect_from_source(src: &mut FileSource) -> Result<Self, ParseError> {
+    src.seek_to(0)?;
+    let mut prefix = [0u8; 3];
+    let read = src.read_at_most(&mut prefix)?;
+    let encoding = Self::from_prefix(&prefix[..read]);
+    src.seek_to(encoding.bom_length() as u64)?;
+    Ok(encoding)
+  }
+
+  fn from_prefix(prefix: &[u8]) -> Self {
+    if prefix.starts_with(&[0xEF, 0xBB, 0xBF]) {
+      Self::Utf8Bom
+    } else if prefix.starts_with(&[0xFF, 0xFE]) {
+      Self::Utf16Le
+    } else if prefix.starts_with(&[0xFE, 0xFF]) {
+      Self::Utf16Be
+    } else {
+      Self::Utf8Like
+    }
+  }
+
+  pub(crate) fn bom_length(self) -> usize {
+    match self {
+      Self::Utf8Like => 0,
+      Self::Utf8Bom => 3,
+      Self::Utf16Le | Self::Utf16Be => 2,
+    }
+  }
+}
+
+/// Read one decoded line with mkvtoolnix-style `mm_text_io_c::getline(max)`
+/// semantics: the BOM is expected to have been skipped already, line endings
+/// are consumed but not returned, and reaching `max_chars` leaves the rest of
+/// the physical line for the next call.
+pub(crate) fn read_bounded_text_line(
+  src: &mut FileSource,
+  encoding: ProbeTextEncoding,
+  max_chars: usize,
+) -> Result<Option<String>, ParseError> {
+  let mut line = String::new();
+  let mut chars_read = 0usize;
+  let mut previous_was_cr = false;
+
+  loop {
+    let previous_pos = src.position();
+    let Some(ch) = read_probe_char(src, encoding)? else {
+      return if line.is_empty() { Ok(None) } else { Ok(Some(line)) };
+    };
+
+    if ch == '\r' {
+      previous_was_cr = true;
+      continue;
+    }
+    if ch == '\n' {
+      return Ok(Some(line));
+    }
+    if previous_was_cr {
+      src.seek_to(previous_pos)?;
+      return Ok(Some(line));
+    }
+
+    previous_was_cr = false;
+    line.push(ch);
+    chars_read += 1;
+    if chars_read >= max_chars {
+      return Ok(Some(line));
+    }
+  }
+}
+
+fn read_probe_char(src: &mut FileSource, encoding: ProbeTextEncoding) -> Result<Option<char>, ParseError> {
+  match encoding {
+    ProbeTextEncoding::Utf8Like | ProbeTextEncoding::Utf8Bom => read_utf8_like_char(src),
+    ProbeTextEncoding::Utf16Le => read_utf16_char(src, true),
+    ProbeTextEncoding::Utf16Be => read_utf16_char(src, false),
+  }
+}
+
+fn read_utf8_like_char(src: &mut FileSource) -> Result<Option<char>, ParseError> {
+  let mut first = [0u8; 1];
+  if src.read_at_most(&mut first)? == 0 {
+    return Ok(None);
+  }
+  let expected = match first[0] {
+    0x00..=0x7F => 1,
+    0xC2..=0xDF => 2,
+    0xE0..=0xEF => 3,
+    0xF0..=0xF4 => 4,
+    _ => return Ok(Some(char::REPLACEMENT_CHARACTER)),
+  };
+  let mut bytes = vec![first[0]];
+  while bytes.len() < expected {
+    let mut next = [0u8; 1];
+    if src.read_at_most(&mut next)? == 0 {
+      return Ok(Some(char::REPLACEMENT_CHARACTER));
+    }
+    bytes.push(next[0]);
+  }
+  Ok(std::str::from_utf8(&bytes)
+    .ok()
+    .and_then(|s| s.chars().next())
+    .or(Some(char::REPLACEMENT_CHARACTER)))
+}
+
+fn read_utf16_char(src: &mut FileSource, little_endian: bool) -> Result<Option<char>, ParseError> {
+  let Some(first) = read_utf16_unit(src, little_endian)? else {
+    return Ok(None);
+  };
+  if !(0xD800..=0xDBFF).contains(&first) {
+    return Ok(Some(
+      char::decode_utf16([first])
+        .next()
+        .and_then(Result::ok)
+        .unwrap_or(char::REPLACEMENT_CHARACTER),
+    ));
+  }
+  let Some(second) = read_utf16_unit(src, little_endian)? else {
+    return Ok(Some(char::REPLACEMENT_CHARACTER));
+  };
+  Ok(Some(
+    char::decode_utf16([first, second])
+      .next()
+      .and_then(Result::ok)
+      .unwrap_or(char::REPLACEMENT_CHARACTER),
+  ))
+}
+
+fn read_utf16_unit(src: &mut FileSource, little_endian: bool) -> Result<Option<u16>, ParseError> {
+  let mut bytes = [0u8; 2];
+  let read = src.read_at_most(&mut bytes)?;
+  if read == 0 {
+    return Ok(None);
+  }
+  if read < 2 {
+    return Ok(Some(0xFFFD));
+  }
+  Ok(Some(if little_endian {
+    u16::from_le_bytes(bytes)
+  } else {
+    u16::from_be_bytes(bytes)
+  }))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::Cursor;
 
   #[test]
   fn detects_utf8_bom() {
@@ -190,5 +346,25 @@ mod tests {
     let d = detect(b"plain");
     assert_eq!(d.label, "UTF-8");
     set_subtitle_charset_hint(prev);
+  }
+
+  #[test]
+  fn bounded_line_leaves_remainder_after_character_cap() {
+    let mut src = FileSource::from_reader_for_test(Cursor::new(b"12345\nnext\n".to_vec()));
+    let enc = ProbeTextEncoding::detect_from_source(&mut src).unwrap();
+    assert_eq!(read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(), Some("123"));
+    assert_eq!(read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(), Some("45"));
+  }
+
+  #[test]
+  fn bounded_line_skips_utf16_bom_and_counts_units() {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "12345\n".encode_utf16() {
+      bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let enc = ProbeTextEncoding::detect_from_source(&mut src).unwrap();
+    assert_eq!(read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(), Some("123"));
+    assert_eq!(read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(), Some("45"));
   }
 }

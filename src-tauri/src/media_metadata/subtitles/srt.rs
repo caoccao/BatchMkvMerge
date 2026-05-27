@@ -95,12 +95,7 @@ pub fn looks_like_srt(text: &str) -> bool {
 }
 
 fn probe_srt_bounded(src: &mut FileSource) -> Result<bool, ParseError> {
-  src.seek_to(0)?;
-  let mut prefix = [0u8; 3];
-  let read = src.read_at_most(&mut prefix)?;
-  let encoding = ProbeEncoding::from_prefix(&prefix[..read]);
-  src.seek_to(0)?;
-
+  let encoding = encoding::ProbeTextEncoding::detect_from_source(src)?;
   let result = probe_srt_bounded_inner(src, encoding);
   let rewind = src.seek_to(0);
   match (result, rewind) {
@@ -110,7 +105,7 @@ fn probe_srt_bounded(src: &mut FileSource) -> Result<bool, ParseError> {
   }
 }
 
-fn probe_srt_bounded_inner(src: &mut FileSource, encoding: ProbeEncoding) -> Result<bool, ParseError> {
+fn probe_srt_bounded_inner(src: &mut FileSource, encoding: encoding::ProbeTextEncoding) -> Result<bool, ParseError> {
   let index_line = loop {
     let Some(line) = read_probe_line(src, encoding, 10)? else {
       return Ok(false);
@@ -136,93 +131,12 @@ fn probe_srt_bounded_inner(src: &mut FileSource, encoding: ProbeEncoding) -> Res
   Ok(true)
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ProbeEncoding {
-  Utf8Like,
-  Utf16Le,
-  Utf16Be,
-}
-
-impl ProbeEncoding {
-  fn from_prefix(prefix: &[u8]) -> Self {
-    if prefix.starts_with(&[0xFF, 0xFE]) {
-      Self::Utf16Le
-    } else if prefix.starts_with(&[0xFE, 0xFF]) {
-      Self::Utf16Be
-    } else {
-      Self::Utf8Like
-    }
-  }
-
-  fn line_byte_cap(self, max_chars: usize) -> usize {
-    match self {
-      Self::Utf8Like => max_chars + 3,
-      Self::Utf16Le | Self::Utf16Be => (max_chars + 1) * 2 + 2,
-    }
-  }
-}
-
 fn read_probe_line(
   src: &mut FileSource,
-  encoding: ProbeEncoding,
+  encoding: encoding::ProbeTextEncoding,
   max_chars: usize,
 ) -> Result<Option<String>, ParseError> {
-  let mut bytes = Vec::new();
-  let cap = encoding.line_byte_cap(max_chars);
-  while bytes.len() < cap {
-    let mut b = [0u8; 1];
-    let read = src.read_at_most(&mut b)?;
-    if read == 0 {
-      break;
-    }
-    bytes.push(b[0]);
-    if probe_line_has_newline(&bytes, encoding) {
-      break;
-    }
-  }
-  if bytes.is_empty() {
-    Ok(None)
-  } else {
-    Ok(Some(decode_probe_line(&bytes, encoding)))
-  }
-}
-
-fn probe_line_has_newline(bytes: &[u8], encoding: ProbeEncoding) -> bool {
-  match encoding {
-    ProbeEncoding::Utf8Like => bytes.last() == Some(&b'\n'),
-    ProbeEncoding::Utf16Le => bytes.ends_with(&[b'\n', 0]),
-    ProbeEncoding::Utf16Be => bytes.ends_with(&[0, b'\n']),
-  }
-}
-
-fn decode_probe_line(bytes: &[u8], encoding: ProbeEncoding) -> String {
-  match encoding {
-    ProbeEncoding::Utf8Like => {
-      let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-      String::from_utf8_lossy(bytes).into_owned()
-    }
-    ProbeEncoding::Utf16Le => decode_utf16_probe_line(bytes, true),
-    ProbeEncoding::Utf16Be => decode_utf16_probe_line(bytes, false),
-  }
-}
-
-fn decode_utf16_probe_line(bytes: &[u8], little_endian: bool) -> String {
-  let bytes = if little_endian {
-    bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes)
-  } else {
-    bytes.strip_prefix(&[0xFE, 0xFF]).unwrap_or(bytes)
-  };
-  let units: Vec<u16> = bytes
-    .chunks_exact(2)
-    .map(|chunk| {
-      if little_endian {
-        u16::from_le_bytes([chunk[0], chunk[1]])
-      } else {
-        u16::from_be_bytes([chunk[0], chunk[1]])
-      }
-    })
-    .collect();
-  String::from_utf16_lossy(&units)
+  encoding::read_bounded_text_line(src, encoding, max_chars)
 }
 
 /// Mirror of `mtx::string::parse_number` for the SRT cue index: the whole
@@ -512,6 +426,13 @@ mod tests {
     }
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     assert!(SrtReader.probe(&mut s).unwrap());
+  }
+
+  #[test]
+  fn probe_rejects_overlong_index_line_split_by_getline_cap() {
+    let blob = b"12345678901\n00:00:00,000 --> 00:00:02,500\nHello\n";
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob.to_vec()));
+    assert!(!SrtReader.probe(&mut s).unwrap());
   }
 
   #[test]

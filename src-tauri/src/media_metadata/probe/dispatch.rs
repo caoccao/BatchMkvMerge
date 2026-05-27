@@ -118,7 +118,7 @@ fn try_reader_by_name(
   // misbehaving probe from leaking position into the next phase.
   src.seek_to(0)?;
   deadline.check("probe")?;
-  if !probe_reader(src, reader, staged_reader.mode)? {
+  if !probe_reader(src, reader, staged_reader.mode, deadline)? {
     return Ok(None);
   }
   src.seek_to(0)?;
@@ -130,6 +130,7 @@ fn probe_reader(
   src: &mut FileSource,
   reader: &'static (dyn Reader + Send + Sync),
   mode: ProbeMode,
+  deadline: &Deadline,
 ) -> Result<bool, ParseError> {
   match (reader.name(), mode) {
     ("mp3", ProbeMode::RawAudioStrict) => Mp3Reader::probe_strict(src),
@@ -147,7 +148,7 @@ fn probe_reader(
     ("dts", ProbeMode::DtsStrict) => DtsReader::probe_strict(src),
     ("avc", ProbeMode::ElementaryStrict) => AvcReader::probe_strict(src),
     ("hevc", ProbeMode::ElementaryStrict) => HevcReader::probe_strict(src),
-    _ => reader.probe(src),
+    _ => reader.probe_with_deadline(src, deadline),
   }
 }
 

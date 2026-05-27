@@ -13,7 +13,7 @@ The USF parser recognises Universal Subtitle Format XML files and reports one te
 - XML engine: `quick-xml` (`=0.39.2`), the event-based stand-in for upstream's pugixml
 - Upstream basis: `../mkvtoolnix/src/input/r_usf.cpp`, `../mkvtoolnix/src/input/r_usf.h`
 
-Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): only the leading **~1000-character** window is inspected for an `<?xml` or `<!--` marker (upstream's `while (content.length() < 1000) getline2(...)` accumulation), then the document is parsed with a real XML engine and the document (root) element's **fully-qualified** name is validated to be exactly `USFSubtitles`. The qualified-name check keeps any namespace prefix, so a namespaced root such as `<usf:USFSubtitles>` is rejected — matching pugixml's `document_element().name()`. The probe document read is bounded at **10 MiB**, matching upstream's `mtx::xml::load_file(..., 10 * 1024 * 1024)` cap (r_usf.cpp line 45).
+Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): only the leading **~1000-character** window is inspected for an `<?xml` or `<!--` marker (upstream's `while (content.length() < 1000) getline2(...)` accumulation), then the document is parsed with a real XML engine and the document (root) element's **fully-qualified** name is validated to be exactly `USFSubtitles`. The qualified-name check keeps any namespace prefix, so a namespaced root such as `<usf:USFSubtitles>` is rejected — matching pugixml's `document_element().name()`. The probe document read is bounded at **10 MiB**, matching upstream's `mtx::xml::load_file(..., 10 * 1024 * 1024)` cap (r_usf.cpp line 45), and both the probe read and XML event walk use the caller's parser deadline when invoked through the dispatch cascade (PARSER-400).
 
 `read_headers` reloads the full XML document without the probe cap and performs the same three-step walk as upstream:
 
@@ -44,7 +44,3 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice. The 10 MiB XML cap belongs only to probing; the header pass reads the whole document with deadline checks so later `<subtitles>` elements remain visible.
-
-## Open Issues
-
-- `PARSER-400` - USF probing ignores the configured parser deadline. After reading up to the 10 MiB probe document, `UsfReader::probe` creates a hard-coded 60 second `Deadline` for XML parsing instead of using the caller's timeout; dispatch only checks the real deadline before entering the probe. Pathological USF-like XML can therefore block far beyond the default 1 second parser budget before the cascade continues.
