@@ -248,8 +248,11 @@ pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<std::process::Child
   let path = Path::new(file);
   validate_path_as_file(path)?;
   let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command("mkvmerge")?;
+  // `args` already carry the full mkvmerge merge invocation, including `-o
+  // <output>`, the per-file options and the source file in the correct
+  // position (per-file options must precede the input file).  `file` was only
+  // used above to validate the source exists — don't prepend it here.
   cmd
-    .arg(file)
     .args(args)
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped());

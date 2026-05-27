@@ -83,6 +83,18 @@ export async function ensureOutputPath(path: string): Promise<void> {
   return await invoke<void>("ensure_output_path", { path });
 }
 
+/** `<outputDir>/<sourceStem>.mkv`, with " (1)", " (2)", … appended when a file
+ *  with that name already exists, so merging never overwrites. */
+export async function resolveMergeOutputPath(
+  outputDir: string,
+  sourceFile: string,
+): Promise<string> {
+  return await invoke<string>("resolve_merge_output_path", {
+    outputDir,
+    sourceFile,
+  });
+}
+
 export async function detectBetterMediaInfo(
   path: string,
   checkRunning: boolean = false,

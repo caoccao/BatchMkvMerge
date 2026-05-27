@@ -146,6 +146,31 @@ pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
   }
 }
 
+/// Resolve a non-colliding merge output path: `<output_dir>/<stem>.mkv`,
+/// appending " (1)", " (2)", … when the candidate already exists.  Merging in
+/// place collides on the base name (it is the source file), so the increment
+/// kicks in automatically.
+pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
+  let dir = std::path::Path::new(&output_dir);
+  let stem = std::path::Path::new(&source_file)
+    .file_stem()
+    .and_then(|s| s.to_str())
+    .unwrap_or("output");
+  let mut counter: u32 = 0;
+  loop {
+    let name = if counter == 0 {
+      format!("{stem}.mkv")
+    } else {
+      format!("{stem} ({counter}).mkv")
+    };
+    let candidate = dir.join(&name);
+    if !candidate.exists() {
+      return candidate.to_string_lossy().into_owned();
+    }
+    counter += 1;
+  }
+}
+
 pub async fn check_output_path_writable(path: String) -> Result<bool> {
   let mut current = PathBuf::from(&path);
   loop {

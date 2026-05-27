@@ -51,7 +51,7 @@ import {
   trackKey,
 } from "../merge";
 import { QueueItemStatus } from "../protocol";
-import { launchBetterMediaInfo } from "../service";
+import { launchBetterMediaInfo, resolveMergeOutputPath } from "../service";
 import { useMkvStore } from "../store";
 import { CardSummary } from "./CardSummary";
 import { FileStatusIcon } from "./FileStatusIcon";
@@ -258,9 +258,10 @@ export function GroupCard({ files }: GroupCardProps) {
           continue;
         }
         const outputDir = await resolveOutputDir(file, fileOutputDirs[file]);
-        const command = await buildCommandString(
+        const outputPath = await resolveMergeOutputPath(outputDir, file);
+        const command = buildCommandString(
           file,
-          outputDir,
+          outputPath,
           mkvToolNixPath,
           selectedTracks,
           activeProfile,

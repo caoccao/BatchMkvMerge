@@ -54,6 +54,7 @@ import { QueueItemStatus } from "../protocol";
 import {
   getMediaMetadata,
   launchBetterMediaInfo,
+  resolveMergeOutputPath,
 } from "../service";
 import { useMkvStore } from "../store";
 import { CardSummary } from "./CardSummary";
@@ -238,9 +239,10 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       return null;
     }
     const outputDir = await resolveOutputDir(path, outputDirOverride);
-    return await buildCommandString(
+    const outputPath = await resolveMergeOutputPath(outputDir, path);
+    return buildCommandString(
       path,
-      outputDir,
+      outputPath,
       mkvToolNixPath,
       selectedTracks,
       activeProfile,

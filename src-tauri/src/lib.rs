@@ -114,6 +114,11 @@ async fn ensure_output_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
+  controller::resolve_merge_output_path(output_dir, source_file)
+}
+
+#[tauri::command]
 async fn detect_better_media_info(
   path: String,
   check_running: bool,
@@ -174,6 +179,7 @@ pub fn run() {
       get_update_result,
       is_mkvtoolnix_found,
       launch_better_media_info,
+      resolve_merge_output_path,
       set_config,
       skip_version
     ])

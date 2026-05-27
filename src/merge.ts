@@ -15,13 +15,7 @@
  *   limitations under the License.
  */
 
-import {
-  basename,
-  dirname,
-  extname,
-  join,
-  sep as getSep,
-} from "@tauri-apps/api/path";
+import { dirname, sep as getSep } from "@tauri-apps/api/path";
 import type { MediaTrack } from "./media-metadata";
 import type { ConfigProfile } from "./protocol";
 
@@ -37,10 +31,7 @@ function parseLanguageFilter(filter: string): Set<string> | null {
   return items.length === 0 ? null : new Set(items);
 }
 
-function matchesLanguage(
-  filter: Set<string> | null,
-  codes: string[],
-): boolean {
+function matchesLanguage(filter: Set<string> | null, codes: string[]): boolean {
   if (filter === null) {
     return true;
   }
@@ -83,21 +74,6 @@ export function makeTrackSelector(
   };
 }
 
-function attachmentExtension(codec: string): string {
-  const lower = codec.toLowerCase();
-  switch (lower) {
-    case "jpeg":
-      return "jpg";
-    case "x-truetype-font":
-      return "ttf";
-    case "x-opentype-font":
-    case "font-sfnt":
-      return "otf";
-    default:
-      return lower || "bin";
-  }
-}
-
 export function getParentDir(path: string): string {
   const lastSlash = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
   return lastSlash >= 0 ? path.slice(0, lastSlash) : "";
@@ -120,132 +96,6 @@ export function getDriveKey(path: string): string {
   return "default";
 }
 
-export function getTrackExtension(codecId: string, trackType: string): string {
-  if (codecId.startsWith("V_")) {
-    switch (codecId) {
-      case "V_MPEGH/ISO/HEVC":
-        return "h265";
-      case "V_MPEG4/ISO/AVC":
-        return "h264";
-      case "V_MPEG1":
-      case "V_MPEG2":
-        return "mpg";
-      case "V_MPEG4/ISO/SP":
-      case "V_MPEG4/ISO/ASP":
-      case "V_MPEG4/ISO/AP":
-      case "V_MPEG4/MS/V3":
-        return "mpeg4";
-      case "V_MS/VFW/FOURCC":
-        return "avi";
-      case "V_VP8":
-      case "V_VP9":
-      case "V_AV1":
-        return "ivf";
-      case "V_THEORA":
-        return "ogg";
-      case "V_PRORES":
-        return "prores";
-      case "V_FFV1":
-        return "ffv1";
-    }
-    if (codecId.startsWith("V_REAL/")) {
-      return "rm";
-    }
-    return "bin";
-  }
-  if (codecId.startsWith("A_")) {
-    switch (codecId) {
-      case "A_AC3":
-      case "A_AC3/BSID9":
-      case "A_AC3/BSID10":
-        return "ac3";
-      case "A_EAC3":
-        return "eac3";
-      case "A_TRUEHD":
-        return "thd";
-      case "A_MLP":
-        return "mlp";
-      case "A_MPEG/L1":
-        return "mp1";
-      case "A_MPEG/L2":
-        return "mp2";
-      case "A_MPEG/L3":
-        return "mp3";
-      case "A_FLAC":
-        return "flac";
-      case "A_VORBIS":
-        return "ogg";
-      case "A_OPUS":
-        return "opus";
-      case "A_WAVPACK4":
-        return "wv";
-      case "A_TTA1":
-        return "tta";
-      case "A_ALAC":
-        return "caf";
-      default:
-        if (codecId.startsWith("A_PCM/")) {
-          return "wav";
-        }
-        if (codecId.startsWith("A_AAC")) {
-          return "aac";
-        }
-        if (codecId.startsWith("A_DTS")) {
-          return "dts";
-        }
-        if (codecId.startsWith("A_REAL/")) {
-          return "rm";
-        }
-        return "bin";
-    }
-  }
-  if (codecId.startsWith("S_")) {
-    switch (codecId) {
-      case "S_TEXT/UTF8":
-      case "S_TEXT/ASCII":
-        return "srt";
-      case "S_TEXT/ASS":
-      case "S_ASS":
-        return "ass";
-      case "S_TEXT/SSA":
-      case "S_SSA":
-        return "ssa";
-      case "S_TEXT/WEBVTT":
-        return "vtt";
-      case "S_TEXT/USF":
-        return "usf";
-      case "S_VOBSUB":
-        return "sub";
-      case "S_HDMV/PGS":
-        return "sup";
-      case "S_HDMV/TEXTST":
-        return "textst";
-      case "S_KATE":
-        return "ogg";
-      default:
-        return "bin";
-    }
-  }
-  switch (trackType) {
-    case "video":
-    case "audio":
-      return "bin";
-    case "subtitles":
-      return "srt";
-    case "chapters":
-      return "xml";
-    case "attachment":
-      return attachmentExtension(codecId);
-    default:
-      return "bin";
-  }
-}
-
-export async function getFileNameWithoutExt(filePath: string): Promise<string> {
-  const ext = await extname(filePath);
-  return await basename(filePath, ext ? `.${ext}` : undefined);
-}
-
 export async function resolveOutputDir(
   file: string,
   override: string | undefined,
@@ -256,111 +106,113 @@ export async function resolveOutputDir(
   return await dirname(file);
 }
 
-export function buildOutputFileName(
-  fileNameWithoutExt: string,
-  track: MediaTrack,
-  _profile: ConfigProfile,
-): string {
-  const ext = getTrackExtension(track.codecId, track.type);
-  const hasLanguage =
-    track.type === "video" ||
-    track.type === "audio" ||
-    track.type === "subtitles";
-  const base = hasLanguage
-    ? `${fileNameWithoutExt}.${track.id}.${track.language}`
-    : `${fileNameWithoutExt}.${track.id}`;
-  return `${base}.${ext}`;
+/** Quote an argument for the copyable shell command (paths with spaces, …). */
+function shellQuote(value: string): string {
+  if (value.length > 0 && !/[\s"'\\]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-interface ModeSegments {
-  tracks: string[];
-  chapters: string[];
-  attachments: string[];
-}
-
-async function buildModeSegments(
-  outputDir: string,
-  fileNameWithoutExt: string,
+/**
+ * Build the mkvmerge argv that merges `sourceFile`'s selected `tracks` into a
+ * single Matroska file at `outputPath`. Everything before the source file is a
+ * per-file option; `--track-order` (global) trails it. Mirrors mkvtoolnix's own
+ * merge command (mkvtoolnix-gui `merge/track.cpp`):
+ *
+ *   mkvmerge -o <out> [-d/-a/-s <ids> | --no-video/audio/subtitles]
+ *     [--default-track-flag <id>:0|1] [--forced-display-flag <id>:0|1]
+ *     [--no-chapters] [--attachments <ids> | --no-attachments]
+ *     <input> --track-order 0:<id>,…
+ *
+ * `tracks` are the *selected* rows in the table's (possibly drag-reordered)
+ * order. The `_profile` is threaded for future merge tuning but unused today.
+ */
+export function buildMergeArgs(
+  sourceFile: string,
+  outputPath: string,
   tracks: MediaTrack[],
-  profile: ConfigProfile,
-  quote: (s: string) => string,
-): Promise<ModeSegments> {
-  const result: ModeSegments = { tracks: [], chapters: [], attachments: [] };
-  for (const track of tracks) {
-    const outFile = await join(
-      outputDir,
-      buildOutputFileName(fileNameWithoutExt, track, profile),
-    );
-    if (track.type === "chapters") {
-      result.chapters.push(quote(outFile));
-    } else if (track.type === "attachment") {
-      result.attachments.push(`${track.id}:${quote(outFile)}`);
+  _profile: ConfigProfile,
+): string[] {
+  const args: string[] = ["-o", outputPath];
+
+  // Per media type: keep the selected ids (`-d/-a/-s`), or drop the whole type
+  // (`--no-video/...`) when none are selected.
+  const selectByType = (
+    type: string,
+    selectFlag: string,
+    noFlag: string,
+  ): MediaTrack[] => {
+    const selected = tracks.filter((t) => t.type === type);
+    if (selected.length === 0) {
+      args.push(noFlag);
     } else {
-      result.tracks.push(`${track.id}:${quote(outFile)}`);
+      args.push(selectFlag, selected.map((t) => String(t.id)).join(","));
+    }
+    return selected;
+  };
+  const video = selectByType("video", "-d", "--no-video");
+  const audio = selectByType("audio", "-a", "--no-audio");
+  const subtitles = selectByType("subtitles", "-s", "--no-subtitles");
+
+  // Default / forced flags: emit only when explicitly set, so "unspecified"
+  // preserves the source track's own flag.
+  for (const track of [...video, ...audio, ...subtitles]) {
+    if (track.defaultTrack !== "unspecified") {
+      args.push(
+        "--default-track-flag",
+        `${track.id}:${track.defaultTrack === "true" ? 1 : 0}`,
+      );
+    }
+    if (track.forced !== "unspecified") {
+      args.push(
+        "--forced-display-flag",
+        `${track.id}:${track.forced === "true" ? 1 : 0}`,
+      );
     }
   }
-  return result;
+
+  // Chapters: keep only when the chapters row is selected.
+  if (!tracks.some((t) => t.type === "chapters")) {
+    args.push("--no-chapters");
+  }
+  // Attachments: keep only the selected ones, or none at all.
+  const attachmentIds = tracks
+    .filter((t) => t.type === "attachment")
+    .map((t) => String(t.id));
+  if (attachmentIds.length === 0) {
+    args.push("--no-attachments");
+  } else {
+    args.push("--attachments", attachmentIds.join(","));
+  }
+
+  // Source file — every per-file option above attaches to it.
+  args.push(sourceFile);
+
+  // Track order: the selected media tracks, in the table's order. The input
+  // file is file id 0.
+  const order = tracks
+    .filter(
+      (t) =>
+        t.type === "video" || t.type === "audio" || t.type === "subtitles",
+    )
+    .map((t) => `0:${t.id}`);
+  if (order.length > 0) {
+    args.push("--track-order", order.join(","));
+  }
+  return args;
 }
 
-export async function buildMergeArgs(
-  file: string,
-  outputDir: string,
-  tracks: MediaTrack[],
-  profile: ConfigProfile,
-): Promise<string[]> {
-  const fileNameWithoutExt = await getFileNameWithoutExt(file);
-  const segments = await buildModeSegments(
-    outputDir,
-    fileNameWithoutExt,
-    tracks,
-    profile,
-    (s) => s,
-  );
-  const results: string[] = [];
-  if (segments.tracks.length > 0) {
-    results.push("tracks");
-    results.push(...segments.tracks);
-  }
-  if (segments.chapters.length > 0) {
-    results.push("chapters");
-    results.push(segments.chapters[0]);
-  }
-  if (segments.attachments.length > 0) {
-    results.push("attachments");
-    results.push(...segments.attachments);
-  }
-  return results;
-}
-
-export async function buildCommandString(
-  file: string,
-  outputDir: string,
+export function buildCommandString(
+  sourceFile: string,
+  outputPath: string,
   mkvToolNixPath: string,
   tracks: MediaTrack[],
   profile: ConfigProfile,
-): Promise<string> {
-  const sep = getSep();
-  const mkvmergePath = `${mkvToolNixPath}${sep}mkvmerge`;
-  const fileNameWithoutExt = await getFileNameWithoutExt(file);
-  const quote = (s: string) => `"${s}"`;
-  const segments = await buildModeSegments(
-    outputDir,
-    fileNameWithoutExt,
-    tracks,
-    profile,
-    quote,
-  );
-  const parts: string[] = [];
-  if (segments.tracks.length > 0) {
-    parts.push("tracks", ...segments.tracks);
-  }
-  if (segments.chapters.length > 0) {
-    parts.push("chapters", segments.chapters[0]);
-  }
-  if (segments.attachments.length > 0) {
-    parts.push("attachments", ...segments.attachments);
-  }
-  return `"${mkvmergePath}" "${file}" ${parts.join(" ")}`;
+): string {
+  const mkvmergePath = `${mkvToolNixPath}${getSep()}mkvmerge`;
+  const args = buildMergeArgs(sourceFile, outputPath, tracks, profile);
+  return [mkvmergePath, ...args].map(shellQuote).join(" ");
 }
 
 export function formatHMS(ms: number): string {

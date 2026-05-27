@@ -23,6 +23,7 @@ import {
   cancelMerge as invokeCancelMerge,
   ensureOutputPath,
   enqueueMerge,
+  resolveMergeOutputPath,
 } from "../service";
 import { useMkvStore } from "../store";
 
@@ -99,7 +100,8 @@ export async function enqueueSelectedTracksForFile(
     );
     return false;
   }
-  const args = await buildMergeArgs(file, outputDir, selectedTracks, profile);
+  const outputPath = await resolveMergeOutputPath(outputDir, file);
+  const args = buildMergeArgs(file, outputPath, selectedTracks, profile);
   await enqueueMerge(file, args);
   state.addToQueue(file);
   return true;
