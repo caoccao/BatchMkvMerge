@@ -29,3 +29,7 @@ SRT is represented directly through the shared track model; helper functions per
 ## Gaps and Handling
 
 The probe now matches upstream's index-line-then-timestamp-line structure, so text files containing an incidental timestamp line are no longer misclassified as SRT. The timestamp grammar is a faithful port of upstream's `SRT_RE_TIMESTAMP_LINE` regex: each numeric field allows leading whitespace and an optional sign (`\s*(-?)\s*(\d+)`), the millisecond separator may be `,`, `.`, or `:`, and the arrow accepts any non-empty run of dashes/spaces before `>` (so `00:00:01,000-->00:00:02,000`, `00:00:01,000 -> 00:00:02,000`, and extra-spaced forms all match). The pattern is anchored at the start but not the end, so trailing content (e.g. coordinate annotations) is tolerated. Cue-level parsing and per-entry validation remain outside the current single-track model.
+
+## Open Issues
+
+- `PARSER-396` - SRT probing reads the entire file with no deadline, while mkvtoolnix's `srt_parser_c::probe` performs only bounded line reads: it skips leading blank lines with `getline(10)`, parses that first non-empty line as the cue number, reads one `getline(100)` timestamp line, reads one more line, and resets the file pointer. Large non-SRT files can therefore be fully loaded during the Rust probe phase before dispatch can continue or the parser timeout can be enforced.

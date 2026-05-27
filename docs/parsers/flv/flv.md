@@ -34,3 +34,9 @@ Key structures are `FlvHeader`, `FlvTagHeader`, `AudioTagFlags`, `VideoCodecId`,
 ## Gaps and Handling
 
 Rust extracts selected AMF fields and does not perform timestamp/min-offset work or packet muxing. AVC/HEVC now mirror upstream's SPS-timing-then-25-fps default-duration fallback and keep sequence-header tracks even when config parsing cannot recover dimensions. Unsupported Screen video codecs are dropped like upstream, encrypted payloads are skipped rather than parsed, and AAC discovery follows upstream's packet-type gate plus flag-derived fallback behavior.
+
+## Open Issues
+
+- `PARSER-393` - Empty AVC/HEVC sequence-header tags still do not establish a video track. The Rust reader only marks H.264/H.265 headers read when the FLV video payload has more than the five bytes used by the video tag header, packet type, and composition time. Mkvtoolnix's `process_video_tag_avc` / `process_video_tag_hevc` read the remaining private-data size even when it is zero, call `new_stream_v_avc` / `new_stream_v_hevc`, apply the 25 fps fallback, clone the empty private buffer, and mark the track headers read.
+- `PARSER-394` - FLV audio format 14 ("MP3 8 kHz") reports a hard-coded 8000 Hz sample rate. Mkvtoolnix only uses sound format 14 to choose the MP3 FourCC; `process_audio_tag` then fills `m_a_sample_rate` from the same rate-index table used by regular MP3 (`5512`, `11025`, `22050`, `44100`). Local format-14 files therefore report 8000 Hz even when the encoded FLV rate bits say otherwise.
+- `PARSER-395` - FLV audio reports bit depth from the SoundSize flag, but mkvtoolnix never assigns `m_a_bits_per_sample` while parsing supported FLV audio. The upstream reader logs the 8/16-bit size flag but leaves `m_a_bits_per_sample` at its constructor default, including for MP3, raw AAC, and AAC sequence headers. The Rust reader currently emits `audio.bit_depth` for both MP3 and AAC from that flag, inventing metadata that mkvmerge identification does not carry.
