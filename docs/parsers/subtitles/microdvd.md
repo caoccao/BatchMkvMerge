@@ -26,3 +26,7 @@ There are no parser-specific persistent structures.
 ## Gaps and Handling
 
 The probe now mirrors upstream's first-non-empty-line check within a 20-line window, so it no longer over-claims ordinary text that happens to contain a `{n}{m}...` line later in the file. Since the format remains unsupported, the practical outcome is a recognised unsupported container with no extractable tracks.
+
+## Open Issues
+
+- `PARSER-399` - The MicroDVD probe skips up to 20 logical blank lines from a decoded 16 KiB prefix, but mkvtoolnix performs 20 bounded `getline2(line, 50)` reads. A single very long blank line therefore consumes all upstream probe attempts before a later `{start}{end}text` line is reached, while the Rust probe counts it as one blank line and incorrectly claims the file as unsupported MicroDVD.

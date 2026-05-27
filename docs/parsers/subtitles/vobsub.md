@@ -45,3 +45,7 @@ Codec private is built from the filtered `idx_data`: the per-track control lines
 ## Gaps and Handling
 
 Header-only: the `.sub` MPEG-PS payload is never demuxed, so per-entry SPU durations and `spu_size`/`overhead` accounting from `extract_one_spu_packet` are not computed. The `.idx` manifest itself is parsed through EOF, matching mkvtoolnix's line loop.
+
+## Open Issues
+
+- `PARSER-401` - Path-aware VobSub parsing reads the whole resolved `.idx` manifest with no deadline. `parse_with_extension_fallback` calls `try_open_by_path` before dispatch without passing the caller's `Deadline`, and `try_open_by_path` then uses `read_source_to_end(..., None, "vobsub::path")` after the banner/version checks. A large banner-bearing `.idx` can bypass the configurable parser timeout while the manifest is loaded and parsed.

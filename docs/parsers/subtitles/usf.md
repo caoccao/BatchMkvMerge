@@ -44,3 +44,7 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice. The 10 MiB XML cap belongs only to probing; the header pass reads the whole document with deadline checks so later `<subtitles>` elements remain visible.
+
+## Open Issues
+
+- `PARSER-400` - USF probing ignores the configured parser deadline. After reading up to the 10 MiB probe document, `UsfReader::probe` creates a hard-coded 60 second `Deadline` for XML parsing instead of using the caller's timeout; dispatch only checks the real deadline before entering the probe. Pathological USF-like XML can therefore block far beyond the default 1 second parser budget before the cascade continues.
