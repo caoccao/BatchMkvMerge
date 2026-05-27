@@ -26,8 +26,8 @@
 //!          | (char3 + 0x60)
 //! ```
 //!
-//! Each character is mapped from 'a'..='z' to 1..=26.  All-zero is the
-//! "undetermined" form used by older muxers — we surface that as `und`.
+//! Each character is mapped from 'a'..='z' to 1..=26.  Invalid packed values
+//! are left absent instead of being repaired into a synthetic language.
 
 use crate::media_metadata::error::ParseError;
 use crate::media_metadata::io::file_source::FileSource;
@@ -39,7 +39,7 @@ pub struct MediaHeader {
   pub version: u8,
   pub timescale: u32,
   pub duration: u64,
-  pub language_iso_639_2: String,
+  pub language_iso_639_2: Option<String>,
 }
 
 pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MediaHeader, ParseError> {
@@ -83,7 +83,7 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MediaHeader, Pa
     });
   }
   let raw_language = src.read_u16_be()?;
-  let language = decode_packed_language(raw_language);
+  let language = decode_packed_language_opt(raw_language);
   // skip pre_defined (2 bytes)
   src.skip(2)?;
   Ok(MediaHeader {
@@ -96,19 +96,21 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<MediaHeader, Pa
 
 /// Decode the 15-bit packed ISO-639-2 language code (top bit is reserved).
 pub fn decode_packed_language(raw: u16) -> String {
+  decode_packed_language_opt(raw).unwrap_or_default()
+}
+
+/// Decode the 15-bit packed ISO-639-2 language code and keep only values whose
+/// three packed characters are lowercase ASCII letters.
+pub fn decode_packed_language_opt(raw: u16) -> Option<String> {
   let masked = raw & 0x7FFF;
   let c0 = ((masked >> 10) & 0x1F) as u8;
   let c1 = ((masked >> 5) & 0x1F) as u8;
   let c2 = (masked & 0x1F) as u8;
-  // 0 / 0x60 are the historic "undetermined" sentinel — fall back to "und".
-  if c0 == 0 && c1 == 0 && c2 == 0 {
-    return "und".to_string();
-  }
   let chars: [char; 3] = [decode_char(c0), decode_char(c1), decode_char(c2)];
   if chars.iter().any(|c| !c.is_ascii_lowercase()) {
-    return "und".to_string();
+    return None;
   }
-  chars.iter().collect()
+  Some(chars.iter().collect())
 }
 
 fn decode_char(packed: u8) -> char {
@@ -165,7 +167,7 @@ mod tests {
     assert_eq!(m.version, 0);
     assert_eq!(m.timescale, 48000);
     assert_eq!(m.duration, 1024);
-    assert_eq!(m.language_iso_639_2, "eng");
+    assert_eq!(m.language_iso_639_2.as_deref(), Some("eng"));
   }
 
   #[test]
@@ -184,12 +186,12 @@ mod tests {
     let m = parse(&mut s, &h).unwrap();
     assert_eq!(m.version, 1);
     assert_eq!(m.duration, 1u64 << 40);
-    assert_eq!(m.language_iso_639_2, "jpn");
+    assert_eq!(m.language_iso_639_2.as_deref(), Some("jpn"));
   }
 
   #[test]
-  fn all_zero_packed_language_becomes_und() {
-    assert_eq!(decode_packed_language(0), "und");
+  fn all_zero_packed_language_is_absent() {
+    assert!(decode_packed_language_opt(0).is_none());
   }
 
   #[test]
@@ -209,7 +211,7 @@ mod tests {
   #[test]
   fn non_letter_packed_returns_und() {
     // raw = 0x7FFF → every component is 0x1F = 31 → not a-z
-    assert_eq!(decode_packed_language(0x7FFF), "und");
+    assert!(decode_packed_language_opt(0x7FFF).is_none());
   }
 
   #[test]

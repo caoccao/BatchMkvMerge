@@ -43,6 +43,9 @@ pub fn skip_id3v2(bytes: &[u8]) -> Option<usize> {
   if bytes.len() < ID3V2_HEADER_SIZE || &bytes[..3] != b"ID3" {
     return None;
   }
+  if bytes[3] == 0xff || bytes[4] == 0xff || bytes[6] >= 0x80 || bytes[7] >= 0x80 || bytes[8] >= 0x80 {
+    return None;
+  }
   let flags = bytes[5];
   let size = synchsafe_to_u32(bytes[6], bytes[7], bytes[8], bytes[9]) as usize;
   let footer = if flags & 0x10 != 0 { ID3V2_FOOTER_SIZE } else { 0 };
@@ -65,7 +68,7 @@ pub fn synchsafe_to_u32(b0: u8, b1: u8, b2: u8, b3: u8) -> u32 {
 
 /// File size left for the audio payload after stripping both kinds of tags.
 pub fn payload_bounds(bytes: &[u8]) -> (usize, usize) {
-  let start = skip_id3v2(bytes).unwrap_or(0);
+  let start = skip_id3v2(bytes).unwrap_or(0).min(bytes.len());
   let end = if bytes.len() >= ID3V1_SIZE && has_id3v1_trailer(bytes) {
     bytes.len() - ID3V1_SIZE
   } else {
@@ -128,6 +131,20 @@ mod tests {
   }
 
   #[test]
+  fn skip_id3v2_rejects_invalid_version_marker() {
+    let mut tag = build_id3v2_tag(false, 16);
+    tag[3] = 0xff;
+    assert!(skip_id3v2(&tag).is_none());
+  }
+
+  #[test]
+  fn skip_id3v2_rejects_invalid_synchsafe_size_bytes() {
+    let mut tag = build_id3v2_tag(false, 16);
+    tag[8] = 0x80;
+    assert!(skip_id3v2(&tag).is_none());
+  }
+
+  #[test]
   fn has_id3v1_trailer_detects_tag_marker() {
     let mut bytes = vec![0u8; 1024];
     bytes[1024 - 128] = b'T';
@@ -168,5 +185,13 @@ mod tests {
     let (start, end) = payload_bounds(&tag);
     // Whole file is the tag — end should clamp to start, not go negative.
     assert!(end >= start);
+  }
+
+  #[test]
+  fn payload_bounds_clamps_oversized_declared_tag_to_buffer() {
+    let mut tag = build_id3v2_tag(false, 2048);
+    tag.truncate(10);
+    let (start, end) = payload_bounds(&tag);
+    assert_eq!((start, end), (10, 10));
   }
 }

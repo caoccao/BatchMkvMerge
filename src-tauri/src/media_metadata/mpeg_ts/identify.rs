@@ -279,7 +279,7 @@ fn make_track(id: i64, row: &StreamRow, enrichment: Option<&EsEnrichment>) -> Tr
   common.teletext_page = row.teletext_page;
   common.hearing_impaired = row.hearing_impaired;
   if let Some(lang) = &row.language {
-    common.language = Some(Language::resolve(None, Some(lang), false));
+    common.language = Language::from_valid_hint(lang);
   }
 
   let mut properties = TrackProperties {
@@ -499,6 +499,15 @@ mod tests {
     finalise(vec![r], &mut m);
     let lang = m.tracks[0].properties.common.language.as_ref().unwrap();
     assert_eq!(lang.iso639_2, "fra");
+  }
+
+  #[test]
+  fn invalid_language_is_omitted() {
+    let mut r = row(0x100, TrackKind::Audio, "A_AAC");
+    r.language = Some("zzz".to_string());
+    let mut m = MediaMetadata::new("clip.ts", 0);
+    finalise(vec![r], &mut m);
+    assert!(m.tracks[0].properties.common.language.is_none());
   }
 
   #[test]

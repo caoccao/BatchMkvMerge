@@ -62,7 +62,7 @@ fn scan_chunks(src: &mut FileSource, file_size: u64, deadline: &Deadline) -> Res
     let ctype = [hdr[0], hdr[1], hdr[2], hdr[3]];
     let raw_size = get_u64_be(&hdr[4..]);
     let data_pos = pos + 12;
-    let size = if raw_size == 0 { file_size } else { raw_size };
+    let size = if raw_size == 0 { file_size } else { raw_size.min(file_size) };
     chunks.push(Chunk { ctype, data_pos, size });
     let Some(next) = data_pos.checked_add(size) else {
       break;

@@ -43,7 +43,7 @@ pub fn parse(
         Ok(m) => {
           builder.media_timescale = Some(m.timescale);
           builder.media_duration_units = Some(m.duration);
-          builder.language_iso_639_2 = Some(m.language_iso_639_2);
+          builder.language_iso_639_2 = m.language_iso_639_2;
         }
         Err(ParseError::Malformed { .. }) => {
           builder.media_invalid = true;

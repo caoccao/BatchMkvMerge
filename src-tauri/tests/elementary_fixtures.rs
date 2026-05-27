@@ -141,6 +141,7 @@ fn build_dirac_sequence_header() -> Vec<u8> {
   w.write_bit(false); // aspect_ratio_flag
   w.write_bit(false); // clean_area_flag
   bytes.extend(w.into_bytes());
+  bytes.extend_from_slice(b"BBCD");
   bytes
 }
 

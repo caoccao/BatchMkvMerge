@@ -79,8 +79,8 @@ fn canonical_codec_id(stream_type: u8) -> Option<&'static str> {
 }
 
 /// Build one or more rows per `PmtStreamEntry`, applying descriptor overrides
-/// where applicable.  Returns multiple rows when a teletext or DVB subtitling
-/// descriptor declares multiple per-language subtitle pages (PARSER-091..092).
+/// where applicable. Returns multiple rows for teletext subtitle pages; DVB
+/// subtitling descriptors mirror mkvtoolnix by using only the first entry.
 pub fn build_rows(
   pid: u16,
   program_number: u16,
@@ -150,12 +150,10 @@ pub fn build_rows(
   // the HEVC descriptor (and emit no noncanonical `V_HEVC`).
 
   // PARSER-091: DVB subtitling descriptor (0x59) on a private PES stream
-  // creates one S_DVBSUB track per language entry.
+  // creates one S_DVBSUB track from the first descriptor entry.
   if entry.stream_type == 0x06 && !stream_desc.subtitling_entries.is_empty() {
-    return stream_desc
-      .subtitling_entries
-      .iter()
-      .map(|sub| StreamRow {
+    if let Some(sub) = stream_desc.subtitling_entries.first() {
+      return vec![StreamRow {
         pid,
         stream_type: entry.stream_type,
         program_number,
@@ -169,8 +167,8 @@ pub fn build_rows(
         hearing_impaired: None,
         dovi_profile: None,
         dovi_base_layer_pid: None,
-      })
-      .collect();
+      }];
+    }
   }
 
   // PARSER-092: teletext descriptor (0x56) — emit one S_TELETEXT track
@@ -456,23 +454,18 @@ mod tests {
   // ---- PARSER-091: DVB subtitling descriptor --------------------------
 
   #[test]
-  fn subtitling_descriptor_creates_one_track_per_language() {
+  fn subtitling_descriptor_uses_first_entry_only() {
     let mut body = Vec::new();
     body.extend_from_slice(&[b'e', b'n', b'g', 0x10, 0x00, 0x01, 0x00, 0x02]);
     body.extend_from_slice(&[b'd', b'e', b'u', 0x20, 0x00, 0x03, 0x00, 0x04]);
     let descs = build_descriptor(super::super::descriptors::TAG_SUBTITLING, &body);
     let rows = build_rows(0x1234, 1, &entry(0x06, descs), &DescriptorSummary::default());
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].language.as_deref(), Some("eng"));
     assert_eq!(rows[0].codec_id, "S_DVBSUB");
     assert_eq!(
       rows[0].codec_private.as_deref(),
       Some(&[0x00u8, 0x01, 0x00, 0x02, 0x10][..])
-    );
-    assert_eq!(rows[1].language.as_deref(), Some("deu"));
-    assert_eq!(
-      rows[1].codec_private.as_deref(),
-      Some(&[0x00u8, 0x03, 0x00, 0x04, 0x20][..])
     );
   }
 

@@ -158,10 +158,49 @@ fn starts_with_sync(bytes: &[u8]) -> bool {
 }
 
 fn parse_sequence_header(bytes: &[u8]) -> Option<SequenceHeader> {
-  let pos = bytes
-    .windows(5)
-    .position(|w| w[..4] == PARSE_INFO_MAGIC && w[4] == SEQUENCE_HEADER_CODE)?;
-  let payload = bytes.get(pos..)?;
+  let mut search_from = 0usize;
+  while search_from + 5 <= bytes.len() {
+    let rel = bytes[search_from..]
+      .windows(5)
+      .position(|w| w[..4] == PARSE_INFO_MAGIC && w[4] == SEQUENCE_HEADER_CODE)?;
+    let pos = search_from + rel;
+    let Some(payload) = complete_parse_unit(bytes, pos) else {
+      search_from = pos + 1;
+      continue;
+    };
+    if let Some(sequence) = parse_sequence_header_unit(payload) {
+      return Some(sequence);
+    }
+    search_from = pos + 1;
+  }
+  None
+}
+
+fn complete_parse_unit(bytes: &[u8], pos: usize) -> Option<&[u8]> {
+  if pos + PARSE_INFO_HEADER_LEN > bytes.len() || bytes.get(pos..pos + 4)? != PARSE_INFO_MAGIC {
+    return None;
+  }
+  let next_parse_offset = u32::from_be_bytes([
+    bytes[pos + 5],
+    bytes[pos + 6],
+    bytes[pos + 7],
+    bytes[pos + 8],
+  ]) as usize;
+  let mut search_from = pos + 4;
+  while search_from + 4 <= bytes.len() {
+    let rel = bytes[search_from..]
+      .windows(4)
+      .position(|w| w == PARSE_INFO_MAGIC)?;
+    let next_sync = search_from + rel;
+    if next_parse_offset == 0 || pos.checked_add(next_parse_offset).is_some_and(|end| end <= next_sync) {
+      return bytes.get(pos..next_sync);
+    }
+    search_from = next_sync + 1;
+  }
+  None
+}
+
+fn parse_sequence_header_unit(payload: &[u8]) -> Option<SequenceHeader> {
   if payload.len() < PARSE_INFO_HEADER_LEN {
     return None;
   }
@@ -341,6 +380,7 @@ pub(crate) fn build_dirac_stream() -> Vec<u8> {
   writer.write_bit(false); // aspect_ratio_flag
   writer.write_bit(false); // clean_area_flag
   bytes.extend(writer.into_bytes());
+  bytes.extend_from_slice(&PARSE_INFO_MAGIC);
   bytes
 }
 
@@ -364,6 +404,7 @@ pub(crate) fn build_dirac_base_format(base: u32) -> Vec<u8> {
   writer.write_bit(false); // aspect ratio
   writer.write_bit(false); // clean area
   bytes.extend(writer.into_bytes());
+  bytes.extend_from_slice(&PARSE_INFO_MAGIC);
   bytes
 }
 
@@ -391,6 +432,7 @@ pub(crate) fn build_dirac_custom(width: u32, height: u32, frame_rate_index: u32,
   writer.write_uint(aspect_ratio_index);
   writer.write_bit(false); // clean area
   bytes.extend(writer.into_bytes());
+  bytes.extend_from_slice(&PARSE_INFO_MAGIC);
   bytes
 }
 
@@ -521,6 +563,14 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap_err();
     assert!(matches!(err, ParseError::Unrecognised));
+  }
+
+  #[test]
+  fn probe_rejects_unflushed_sequence_header_at_eof() {
+    let mut bytes = build_dirac_stream();
+    bytes.truncate(bytes.len() - PARSE_INFO_MAGIC.len());
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    assert!(!DiracReader.probe(&mut s).unwrap());
   }
 
   // ---- PARSER-242: full standard-format table + overrides ---------------

@@ -1,6 +1,6 @@
 # USF Parser
 
-Implementation progress: 93%
+Implementation progress: 96%
 
 ## Purpose
 
@@ -21,7 +21,7 @@ Probing mirrors `usf_reader_c::probe_file` (r_usf.cpp lines 35-47): only the lea
 - `parse_subtitles` (r_usf.cpp lines 93-137) — one `S_TEXT/USF` track per direct-child `<subtitles>` element of the root; each track's language comes from a child `<language code="">`.
 - `create_codec_private` (r_usf.cpp lines 140-148) — every `<subtitles>` subtree is removed from the document, and the remainder is re-serialized as the single shared codec-private blob handed to every track.
 
-The default-language fallback for tracks lacking a valid language mirrors the loop in `usf_reader_c::read_headers` (r_usf.cpp lines 64-65). Language codes are resolved through `Language::resolve`; invalid codes fall back to `und`.
+The default-language fallback for tracks lacking a valid language mirrors the loop in `usf_reader_c::read_headers` (r_usf.cpp lines 64-65). Language codes are only stored when they resolve to a valid language; invalid default or per-track codes are ignored instead of being repaired to `und` (PARSER-361).
 
 ## Data Structures
 
@@ -44,7 +44,3 @@ flowchart TD
 ## Gaps and Handling
 
 The reader is header-only: it does not decode subtitle entry text, timestamps, or byte sizes (these only matter to the upstream packetizer/extraction path, not identification). An unbalanced/malformed document is rejected as `Unrecognised`. The root element is matched against its fully-qualified name, so namespaced roots are rejected exactly as upstream does; the deeper `<subtitles>` / `<language>` / `<metadata>` walk still uses local names, which is harmless because those elements appear unprefixed in practice.
-
-## Open Issues
-
-- `PARSER-361` - Invalid USF `<language code="">` values are emitted as explicit `und` languages. mkvtoolnix parses the code with `language_c::parse` and only stores it when `is_valid()`, so invalid default or per-track language metadata is ignored instead of repaired into `und`.

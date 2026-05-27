@@ -101,30 +101,34 @@ impl Reader for RealMediaReader {
         });
       }
       let payload_len = chunk.size as usize - COMMON_HEADER_LEN;
-      let next_pos = src.position() + payload_len as u64;
+      let payload_start = src.position();
       if chunk.id == ID_PROP {
         let payload = read_payload(src, payload_len)?;
-        prop = Some(PropChunk::parse(&payload).ok_or(ParseError::Malformed {
+        let (parsed, consumed) = PropChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
-          offset: next_pos.saturating_sub(payload_len as u64),
+          offset: payload_start,
           reason: "PROP chunk is truncated".to_string(),
-        })?);
+        })?;
+        prop = Some(parsed);
+        src.seek_to(payload_start + consumed as u64)?;
       } else if chunk.id == ID_CONT {
         let payload = read_payload(src, payload_len)?;
-        let c = ContChunk::parse(&payload).ok_or(ParseError::Malformed {
+        let (c, consumed) = ContChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
-          offset: next_pos.saturating_sub(payload_len as u64),
+          offset: payload_start,
           reason: "CONT chunk is truncated".to_string(),
         })?;
         apply_content_metadata(out, &c);
+        src.seek_to(payload_start + consumed as u64)?;
       } else if chunk.id == ID_MDPR {
         let payload = read_payload(src, payload_len)?;
-        let m = MdprChunk::parse(&payload).ok_or(ParseError::Malformed {
+        let (m, consumed) = MdprChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
-          offset: next_pos.saturating_sub(payload_len as u64),
+          offset: payload_start,
           reason: "MDPR chunk is truncated".to_string(),
         })?;
         tracks.push(m);
+        src.seek_to(payload_start + consumed as u64)?;
       } else if chunk.id == ID_DATA {
         break read_first_data_packets(src, payload_len, &tracks, deadline)?;
       } else {
@@ -134,7 +138,6 @@ impl Reader for RealMediaReader {
           reason: format!("unknown RealMedia chunk {}", String::from_utf8_lossy(&chunk.id)),
         });
       }
-      src.seek_to(next_pos)?;
     };
 
     let Some(p) = &prop else {
@@ -865,6 +868,24 @@ mod tests {
       .unwrap();
     assert_eq!(out.container.properties.title.as_deref(), Some("My Movie"));
     assert_eq!(out.container.properties.writing_app.as_deref(), Some("Some Author"));
+  }
+
+  #[test]
+  fn read_headers_rejects_trailing_bytes_inside_known_object() {
+    let mut blob = build_rmf_header();
+    let mut prop = build_prop_chunk(0);
+    let new_size = (prop.len() + 4) as u32;
+    prop[4..8].copy_from_slice(&new_size.to_be_bytes());
+    prop.extend_from_slice(b"JUNK");
+    blob.extend(prop);
+    blob.extend(build_data_chunk());
+
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    let err = RealMediaReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap_err();
+    assert!(matches!(err, ParseError::Malformed { .. }));
   }
 
   #[test]

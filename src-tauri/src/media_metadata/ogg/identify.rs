@@ -137,7 +137,7 @@ fn make_track(
   common.stream_id = Some(serial);
   let language_hint = comment_language.or(metadata.language.clone());
   if let Some(lang) = language_hint {
-    common.language = Some(Language::resolve(Some(&lang), None, false));
+    common.language = Language::from_valid_hint(&lang);
   }
   // PARSER-082 / PARSER-165: a TITLE Vorbis comment becomes the track name —
   // except for MS-compatible OGM video, where mkvtoolnix promotes it to the
@@ -338,6 +338,15 @@ mod tests {
     assert_eq!(common.language.as_ref().unwrap().iso639_2, "eng");
     // VENDOR + TITLE tags
     assert_eq!(t.properties.tags.len(), 2);
+  }
+
+  #[test]
+  fn finalise_omits_invalid_language_hint() {
+    let mut state = state_with_vorbis();
+    state.comment_language = Some("zzz".to_string());
+    let mut m = MediaMetadata::new("clip.ogg", 0);
+    finalise(vec![state], &mut m);
+    assert!(m.tracks[0].properties.common.language.is_none());
   }
 
   #[test]

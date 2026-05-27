@@ -165,9 +165,7 @@ fn build_track(
   let mut common = CommonTrackProperties::default();
   common.number = builder.track_id.map(|id| id as u64);
   common.track_name = builder.handler_name;
-  common.language = builder.language_iso_639_2.as_deref().and_then(|code| {
-    Some(Language::resolve(None, Some(code), /*default_eng=*/ false))
-  });
+  common.language = builder.language_iso_639_2.as_deref().and_then(Language::from_valid_hint);
   if let Some(enabled) = builder.enabled {
     common.enabled = crate::media_metadata::model::track_properties_common::TrackFlag::from_bool(enabled);
   }

@@ -340,7 +340,7 @@ impl MediaReader for UsfReader {
         .as_deref()
         .or(doc.default_language.as_deref());
       if let Some(code) = language_code {
-        common.language = Some(Language::resolve(Some(code), Some(code), false));
+        common.language = Language::from_valid_hint(code);
       }
       out.tracks.push(Track {
         id: idx as i64,
@@ -490,15 +490,12 @@ mod tests {
   }
 
   #[test]
-  fn invalid_language_code_falls_back_to_undetermined() {
+  fn invalid_language_code_is_omitted() {
     let blob = b"<?xml version=\"1.0\"?><USFSubtitles>\
       <subtitles><language code=\"zzz\"/></subtitles></USFSubtitles>";
     let (_, out) = run(blob);
     assert_eq!(out.tracks.len(), 1);
-    assert_eq!(
-      out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
-      "und"
-    );
+    assert!(out.tracks[0].properties.common.language.is_none());
   }
 
   // ---- PARSER-236: marker window + exact root name --------------------

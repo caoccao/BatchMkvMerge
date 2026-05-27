@@ -21,6 +21,8 @@
 //! audio_type)`.  We keep only the first language (mkvmerge identification
 //! also drops the rest).
 
+use crate::media_metadata::language::iso_639;
+
 pub fn decode(body: &[u8]) -> Option<String> {
   if body.len() < 3 {
     return None;
@@ -33,7 +35,7 @@ pub fn decode(body: &[u8]) -> Option<String> {
     return None;
   }
   let code: String = lang_bytes.iter().map(|b| b.to_ascii_lowercase() as char).collect();
-  Some(code)
+  iso_639::is_valid(&code).then_some(code)
 }
 
 #[cfg(test)]
@@ -53,6 +55,11 @@ mod tests {
   #[test]
   fn rejects_non_letter_payload() {
     assert!(decode(b"12\xAA\x00").is_none());
+  }
+
+  #[test]
+  fn rejects_unknown_iso_code() {
+    assert!(decode(b"zzz\x00").is_none());
   }
 
   #[test]

@@ -65,11 +65,15 @@ impl PropChunk {
   pub const PAYLOAD_LEN: usize = 4 * 9 + 2 * 2;
 
   pub fn parse(payload: &[u8]) -> Option<Self> {
+    Self::parse_with_consumed(payload).map(|(chunk, _)| chunk)
+  }
+
+  pub fn parse_with_consumed(payload: &[u8]) -> Option<(Self, usize)> {
     if payload.len() < Self::PAYLOAD_LEN {
       return None;
     }
     let r = ChunkReader::new(payload);
-    Some(Self {
+    Some((Self {
       max_bit_rate: r.u32(0),
       avg_bit_rate: r.u32(4),
       max_packet_size: r.u32(8),
@@ -81,7 +85,7 @@ impl PropChunk {
       data_offset: r.u32(32),
       num_streams: r.u16(36),
       flags: r.u16(38),
-    })
+    }, Self::PAYLOAD_LEN))
   }
 }
 
@@ -95,13 +99,18 @@ pub struct ContChunk {
 
 impl ContChunk {
   pub fn parse(payload: &[u8]) -> Option<Self> {
+    Self::parse_with_consumed(payload).map(|(chunk, _)| chunk)
+  }
+
+  pub fn parse_with_consumed(payload: &[u8]) -> Option<(Self, usize)> {
     let mut r = ChunkReader::new(payload);
-    Some(Self {
+    let chunk = Self {
       title: r.length_prefixed_string_u16()?,
       author: r.length_prefixed_string_u16()?,
       copyright: r.length_prefixed_string_u16()?,
       comment: r.length_prefixed_string_u16()?,
-    })
+    };
+    Some((chunk, r.position()))
   }
 }
 
@@ -122,6 +131,10 @@ pub struct MdprChunk {
 
 impl MdprChunk {
   pub fn parse(payload: &[u8]) -> Option<Self> {
+    Self::parse_with_consumed(payload).map(|(chunk, _)| chunk)
+  }
+
+  pub fn parse_with_consumed(payload: &[u8]) -> Option<(Self, usize)> {
     let mut r = ChunkReader::new(payload);
     let stream_number = r.read_u16()?;
     let max_bit_rate = r.read_u32()?;
@@ -135,7 +148,7 @@ impl MdprChunk {
     let mime_type = r.length_prefixed_string_u8()?;
     let ts_len = r.read_u32()? as usize;
     let type_specific_data = r.read_bytes(ts_len)?.to_vec();
-    Some(Self {
+    let chunk = Self {
       stream_number,
       max_bit_rate,
       avg_bit_rate,
@@ -147,7 +160,8 @@ impl MdprChunk {
       stream_name,
       mime_type,
       type_specific_data,
-    })
+    };
+    Some((chunk, r.position()))
   }
 }
 
@@ -207,6 +221,10 @@ impl<'a> ChunkReader<'a> {
     let slice = &self.bytes[self.pos..self.pos + n];
     self.pos += n;
     Some(slice)
+  }
+
+  pub(crate) fn position(&self) -> usize {
+    self.pos
   }
 
   fn length_prefixed_string_u8(&mut self) -> Option<String> {

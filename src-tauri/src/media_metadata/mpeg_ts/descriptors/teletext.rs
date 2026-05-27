@@ -49,7 +49,8 @@ impl TeletextEntry {
 }
 
 /// Decode every 5-byte entry in the descriptor body.  Truncated trailers are
-/// dropped silently; the BCD page check rejects malformed page bytes.
+/// dropped silently; page nibbles are used directly, matching mkvtoolnix even
+/// when they are not valid BCD digits.
 pub fn decode_all(body: &[u8]) -> Vec<TeletextEntry> {
   let mut out = Vec::new();
   let mut pos = 0usize;
@@ -63,9 +64,6 @@ pub fn decode_all(body: &[u8]) -> Vec<TeletextEntry> {
     let tens = ((page_byte >> 4) & 0x0F) as u32;
     let units = (page_byte & 0x0F) as u32;
     pos += 5;
-    if tens > 9 || units > 9 {
-      continue;
-    }
     let page = mag_norm * 100 + tens * 10 + units;
     let language_iso_639_2 = String::from_utf8_lossy(lang_bytes)
       .trim_end_matches('\0')
@@ -131,9 +129,11 @@ mod tests {
   }
 
   #[test]
-  fn rejects_non_bcd_page() {
+  fn keeps_non_bcd_page_nibbles() {
     let body = [b'e', b'n', b'g', 0x00, 0xAB];
-    assert!(decode_all(&body).is_empty());
+    let v = decode_all(&body);
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].page, 911);
   }
 
   #[test]

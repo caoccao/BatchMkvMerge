@@ -88,6 +88,24 @@ impl Language {
     })
   }
 
+  /// Construct a language only when the source hint maps to a known ISO-639
+  /// code. Invalid hints return `None` so callers can omit language metadata
+  /// instead of manufacturing `und`.
+  pub fn from_valid_hint(hint: &str) -> Option<Self> {
+    if hint.is_empty() {
+      return None;
+    }
+    if let Some(lang) = Self::from_ietf(hint) {
+      if lang.name.is_some() {
+        return Some(lang);
+      }
+    }
+    if iso_639::is_valid(hint) {
+      return Some(Self::from_iso_639_2(hint));
+    }
+    None
+  }
+
   /// The `"und"` sentinel — used when both fields are absent or invalid.
   pub fn undetermined() -> Self {
     Self {
@@ -193,6 +211,17 @@ mod tests {
   fn from_ietf_garbage_is_none() {
     assert!(Language::from_ietf("not a tag").is_none());
     assert!(Language::from_ietf("").is_none());
+  }
+
+  #[test]
+  fn from_valid_hint_rejects_unknown_primary_subtag() {
+    assert!(Language::from_valid_hint("zzz").is_none());
+  }
+
+  #[test]
+  fn from_valid_hint_accepts_iso_and_ietf_values() {
+    assert_eq!(Language::from_valid_hint("eng").unwrap().iso639_2, "eng");
+    assert_eq!(Language::from_valid_hint("fr-FR").unwrap().iso639_2, "fra");
   }
 
   #[test]
