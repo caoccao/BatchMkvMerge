@@ -120,7 +120,7 @@ export interface ConfigParser {
   timeoutMs: number;
 }
 
-export const PARSER_DEFAULT_TIMEOUT_MS = 1000;
+export const PARSER_DEFAULT_TIMEOUT_MS = 10000;
 export const PARSER_MIN_TIMEOUT_MS = 100;
 export const PARSER_MAX_TIMEOUT_MS = 60000;
 

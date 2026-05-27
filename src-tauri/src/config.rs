@@ -77,8 +77,8 @@ impl Default for Config {
 /// User-tunable parser settings.  See [[feedback-parser-timeout]].
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfigParser {
-  /// Per-file parse budget in milliseconds.  Default 1000.  Clamped to the
-  /// supported range when read.
+  /// Per-file parse budget in milliseconds.  Default 10000.  Clamped to the
+  /// supported range when read.  Not exposed in the UI — persisted in config only.
   #[serde(rename = "timeoutMs", default = "ConfigParser::default_timeout_ms")]
   pub timeout_ms: u64,
   /// Fallback charset used to decode BOM-less SRT / SSA / USF / MicroDVD
@@ -91,7 +91,7 @@ pub struct ConfigParser {
 
 impl ConfigParser {
   /// Default parser timeout in ms.
-  pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
+  pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
   /// Minimum allowed timeout — small enough for ridiculous test runs but
   /// large enough that a real file's headers can be read.
   pub const MIN_TIMEOUT_MS: u64 = 100;
@@ -476,10 +476,10 @@ mod tests {
   use super::*;
 
   #[test]
-  fn parser_defaults_to_one_second() {
+  fn parser_defaults_to_ten_seconds() {
     let p = ConfigParser::default();
-    assert_eq!(p.timeout_ms, 1000);
-    assert_eq!(p.effective_timeout_ms(), 1000);
+    assert_eq!(p.timeout_ms, 10_000);
+    assert_eq!(p.effective_timeout_ms(), 10_000);
   }
 
   #[test]
@@ -534,7 +534,7 @@ mod tests {
   #[test]
   fn config_default_contains_parser_block() {
     let cfg = Config::default();
-    assert_eq!(cfg.parser.timeout_ms, 1000);
+    assert_eq!(cfg.parser.timeout_ms, 10_000);
   }
 
   #[test]
