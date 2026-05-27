@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-import type { MediaMetadata, Track, TrackType } from "./protocol";
+import type { MediaMetadata, Track, TrackFlag, TrackType } from "./protocol";
 
 /**
  * Which kind of row a [`MediaTrack`] represents. The parser's `Track`s are
@@ -52,6 +52,12 @@ export interface MediaTrack {
    *  lowercased, used for filter matching so "fre"/"fra"/"fr" all match. Empty
    *  for synthetic rows. */
   languageCodes: string[];
+  /** Raw `FlagDefault` tri-state ("true" | "false" | "unspecified"), shown as a
+   *  3-state control. "unspecified" for synthetic rows. */
+  defaultTrack: TrackFlag;
+  /** Raw `FlagForced` tri-state, shown as a 3-state control. "unspecified" for
+   *  synthetic rows. */
+  forced: TrackFlag;
 }
 
 /**
@@ -144,6 +150,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       trackName: track.properties.common.trackName ?? "",
       language: pickTrackLanguage(track),
       languageCodes: trackLanguageCodes(track),
+      defaultTrack: track.properties.common.default,
+      forced: track.properties.common.forced,
     });
   }
   if (meta.chapters && meta.chapters.numEntries > 0) {
@@ -157,6 +165,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       trackName: "",
       language: "",
       languageCodes: [],
+      defaultTrack: "unspecified",
+      forced: "unspecified",
     });
   }
   for (const attachment of meta.attachments) {
@@ -171,6 +181,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       trackName: attachment.fileName,
       language: "",
       languageCodes: [],
+      defaultTrack: "unspecified",
+      forced: "unspecified",
     });
   }
   return rows;

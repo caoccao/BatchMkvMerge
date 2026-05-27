@@ -16,7 +16,7 @@
  */
 
 import { create } from "zustand";
-import { getDriveKey } from "./merge";
+import { getDriveKey, trackKey } from "./merge";
 import type { MediaTrack } from "./media-metadata";
 import { mediaTrackCounts, metadataToMediaTracks } from "./media-metadata";
 import type {
@@ -26,7 +26,22 @@ import type {
   MergeEntry,
   MergeOutcome,
   MediaMetadata,
+  TrackFlag,
 } from "./protocol";
+
+/** Which track flag a `cycleTrackFlag` call targets. */
+export type TrackFlagKind = "default" | "forced";
+
+/** Cycle a tri-state flag: checked → unchecked → unspecified → checked. */
+function nextTrackFlag(flag: TrackFlag): TrackFlag {
+  if (flag === "true") {
+    return "false";
+  }
+  if (flag === "false") {
+    return "unspecified";
+  }
+  return "true";
+}
 import {
   DEFAULT_PROFILE_NAME,
   QueueItemStatus,
@@ -124,6 +139,14 @@ interface MkvStore {
   setFileTrackCounts: (file: string, counts: TrackCounts) => void;
   setFileSelectedIds: (file: string, ids: string[]) => void;
   setGroupSelectedIds: (files: string[], ids: string[]) => void;
+  /** Cycle the default/forced flag (true → false → unspecified → true) on the
+   *  matching track across all given files. */
+  cycleTrackFlag: (files: string[], key: string, kind: TrackFlagKind) => void;
+  /** Header action: set the first video/audio/subtitle track's default flag to
+   *  true and every other track's to false. */
+  setDefaultTrackByType: (files: string[]) => void;
+  /** Header action: reset the forced flag to unspecified on every track. */
+  clearForcedFlags: (files: string[]) => void;
   setFileOutputDir: (file: string, dir: string) => void;
   clearFileOutputDir: (file: string) => void;
   setGroupOutputDir: (files: string[], dir: string) => void;
@@ -504,6 +527,66 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         next[f] = ids;
       }
       return { fileSelectedIds: next };
+    }),
+  cycleTrackFlag: (files, key, kind) =>
+    set((state) => {
+      const field = kind === "default" ? "defaultTrack" : "forced";
+      const ref = (state.fileTracks[files[0]] ?? []).find(
+        (t) => trackKey(t) === key,
+      );
+      if (!ref) {
+        return {};
+      }
+      const value = nextTrackFlag(ref[field]);
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        fileTracks[file] = list.map((t) =>
+          trackKey(t) === key ? { ...t, [field]: value } : t,
+        );
+      }
+      return { fileTracks };
+    }),
+  setDefaultTrackByType: (files) =>
+    set((state) => {
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        const claimed = new Set<string>();
+        fileTracks[file] = list.map((t): MediaTrack => {
+          if (t.kind !== "track") {
+            return t;
+          }
+          const isPrimaryType =
+            t.type === "video" || t.type === "audio" || t.type === "subtitles";
+          if (isPrimaryType && !claimed.has(t.type)) {
+            claimed.add(t.type);
+            return { ...t, defaultTrack: "true" };
+          }
+          return { ...t, defaultTrack: "false" };
+        });
+      }
+      return { fileTracks };
+    }),
+  clearForcedFlags: (files) =>
+    set((state) => {
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        fileTracks[file] = list.map((t): MediaTrack =>
+          t.kind === "track" ? { ...t, forced: "unspecified" } : t,
+        );
+      }
+      return { fileTracks };
     }),
   setFileOutputDir: (file, dir) =>
     set((state) => ({

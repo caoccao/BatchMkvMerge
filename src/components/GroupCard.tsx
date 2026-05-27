@@ -131,6 +131,9 @@ export function GroupCard({ files }: GroupCardProps) {
   const removeFile = useMkvStore((s) => s.removeFile);
   const removeFromQueue = useMkvStore((s) => s.removeFromQueue);
   const setGroupSelectedIds = useMkvStore((s) => s.setGroupSelectedIds);
+  const cycleTrackFlag = useMkvStore((s) => s.cycleTrackFlag);
+  const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
+  const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
 
   const firstFile = files[0];
   const tracks = firstFile ? fileTracksMap[firstFile] ?? [] : [];
@@ -549,9 +552,14 @@ export function GroupCard({ files }: GroupCardProps) {
               codec: t("merge.header.codec"),
               trackName: t("merge.header.trackName"),
               language: t("merge.header.language"),
+              defaultTrack: t("merge.header.defaultTrack"),
+              forcedDisplay: t("merge.header.forcedDisplay"),
             }}
             onToggleAll={toggleAll}
             onToggleOne={toggleOne}
+            onCycleFlag={(key, kind) => cycleTrackFlag(files, key, kind)}
+            onDefaultHeaderClick={() => setDefaultTrackByType(files)}
+            onForcedHeaderClick={() => clearForcedFlags(files)}
           />
         </Box>
       </Box>

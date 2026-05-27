@@ -122,6 +122,9 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const entry = useMkvStore((s) => s.queueItems[path]);
   const setFileMetadata = useMkvStore((s) => s.setFileMetadata);
   const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
+  const cycleTrackFlag = useMkvStore((s) => s.cycleTrackFlag);
+  const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
+  const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
   const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
   const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
   const cachedTracks = useMkvStore((s) => s.fileTracks[path]);
@@ -496,9 +499,14 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
             codec: t("merge.header.codec"),
             trackName: t("merge.header.trackName"),
             language: t("merge.header.language"),
+            defaultTrack: t("merge.header.defaultTrack"),
+            forcedDisplay: t("merge.header.forcedDisplay"),
           }}
           onToggleAll={toggleAll}
           onToggleOne={toggleOne}
+          onCycleFlag={(key, kind) => cycleTrackFlag([path], key, kind)}
+          onDefaultHeaderClick={() => setDefaultTrackByType([path])}
+          onForcedHeaderClick={() => clearForcedFlags([path])}
         />
       </CardContent>
       <Snackbar

@@ -24,7 +24,9 @@
       "type": "種類",
       "codec": "コーデック",
       "trackName": "トラック名",
-      "language": "言語"
+      "language": "言語",
+      "defaultTrack": "既定のトラック",
+      "forcedDisplay": "強制表示"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge が使用できません。設定で MKVToolNix のパスを確認してください。{{detail}}",

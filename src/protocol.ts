@@ -184,6 +184,7 @@ export type {
   MediaMetadata,
   Track,
   TrackType,
+  TrackFlag,
   CodecInfo,
   TrackProperties,
   CommonTrackProperties,

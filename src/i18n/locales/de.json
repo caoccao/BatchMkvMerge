@@ -24,7 +24,9 @@
       "type": "Typ",
       "codec": "Codec",
       "trackName": "Spurname",
-      "language": "Sprache"
+      "language": "Sprache",
+      "defaultTrack": "Standardspur",
+      "forcedDisplay": "Erzwungene Anzeige"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge ist nicht verfügbar. Bitte MKVToolNix-Pfad in den Einstellungen prüfen. {{detail}}",

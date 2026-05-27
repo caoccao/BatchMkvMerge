@@ -24,7 +24,9 @@
       "type": "Type",
       "codec": "Codec",
       "trackName": "Track Name",
-      "language": "Language"
+      "language": "Language",
+      "defaultTrack": "Default Track",
+      "forcedDisplay": "Forced Display"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. {{detail}}",

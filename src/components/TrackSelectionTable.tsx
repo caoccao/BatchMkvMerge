@@ -19,17 +19,36 @@ import {
   Box,
   Checkbox,
   CircularProgress,
+  IconButton,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import CheckIcon from "@mui/icons-material/Check";
+import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
+import CloseIcon from "@mui/icons-material/Close";
+import CameraRollIcon from "@mui/icons-material/CameraRoll";
+import CycloneIcon from "@mui/icons-material/Cyclone";
 import { trackKey } from "../merge";
 import type { MediaTrack } from "../media-metadata";
+import type { TrackFlag } from "../protocol";
 import { TrackTypeIcon } from "./TrackTypeIcon";
+
+/** Render a tri-state flag as an icon: green check / red cross / blank square. */
+function flagIcon(flag: TrackFlag) {
+  if (flag === "true") {
+    return <CheckIcon fontSize="small" color="success" />;
+  }
+  if (flag === "false") {
+    return <CloseIcon fontSize="small" color="error" />;
+  }
+  return <CheckBoxOutlineBlankIcon fontSize="small" color="disabled" />;
+}
 
 interface TrackSelectionTableProps {
   tracks: MediaTrack[];
@@ -43,11 +62,21 @@ interface TrackSelectionTableProps {
     codec: string;
     trackName: string;
     language: string;
+    /** Tooltip text for the icon-only "default track" column. */
+    defaultTrack: string;
+    /** Tooltip text for the icon-only "forced display" column. */
+    forcedDisplay: string;
   };
   loading?: boolean;
   errorText?: string | null;
   onToggleAll: (checked: boolean) => void;
   onToggleOne: (key: string, checked: boolean) => void;
+  /** Cycle a track's default/forced flag (true → false → unspecified → true). */
+  onCycleFlag: (key: string, kind: "default" | "forced") => void;
+  /** Default Track header: make the first video/audio/subtitle track default. */
+  onDefaultHeaderClick: () => void;
+  /** Forced Display header: reset every track's forced flag. */
+  onForcedHeaderClick: () => void;
 }
 
 export function TrackSelectionTable({
@@ -60,6 +89,9 @@ export function TrackSelectionTable({
   errorText = null,
   onToggleAll,
   onToggleOne,
+  onCycleFlag,
+  onDefaultHeaderClick,
+  onForcedHeaderClick,
 }: TrackSelectionTableProps) {
   if (loading) {
     return (
@@ -99,11 +131,39 @@ export function TrackSelectionTable({
               />
             </TableCell>
             <TableCell>{headers.id}</TableCell>
-            <TableCell>{headers.number}</TableCell>
             <TableCell>{headers.type}</TableCell>
             <TableCell>{headers.codec}</TableCell>
             <TableCell>{headers.trackName}</TableCell>
             <TableCell>{headers.language}</TableCell>
+            <TableCell>{headers.number}</TableCell>
+            <TableCell padding="checkbox" align="center">
+              <Tooltip title={headers.defaultTrack}>
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={disabled}
+                    onClick={onDefaultHeaderClick}
+                    sx={{ p: 0.25 }}
+                  >
+                    <CameraRollIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </TableCell>
+            <TableCell padding="checkbox" align="center">
+              <Tooltip title={headers.forcedDisplay}>
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={disabled}
+                    onClick={onForcedHeaderClick}
+                    sx={{ p: 0.25 }}
+                  >
+                    <CycloneIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -130,13 +190,45 @@ export function TrackSelectionTable({
                   />
                 </TableCell>
                 <TableCell>{track.id}</TableCell>
-                <TableCell>{track.number}</TableCell>
                 <TableCell>
                   <TrackTypeIcon type={track.type} />
                 </TableCell>
                 <TableCell>{track.codec}</TableCell>
                 <TableCell>{track.trackName}</TableCell>
                 <TableCell>{track.language}</TableCell>
+                <TableCell>{track.number}</TableCell>
+                <TableCell
+                  padding="checkbox"
+                  align="center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {track.kind === "track" ? (
+                    <IconButton
+                      size="small"
+                      disabled={disabled}
+                      onClick={() => onCycleFlag(key, "default")}
+                      sx={{ p: 0.25 }}
+                    >
+                      {flagIcon(track.defaultTrack)}
+                    </IconButton>
+                  ) : null}
+                </TableCell>
+                <TableCell
+                  padding="checkbox"
+                  align="center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {track.kind === "track" ? (
+                    <IconButton
+                      size="small"
+                      disabled={disabled}
+                      onClick={() => onCycleFlag(key, "forced")}
+                      sx={{ p: 0.25 }}
+                    >
+                      {flagIcon(track.forced)}
+                    </IconButton>
+                  ) : null}
+                </TableCell>
               </TableRow>
             );
           })}
