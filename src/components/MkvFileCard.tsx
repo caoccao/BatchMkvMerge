@@ -269,7 +269,12 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   };
 
   const { cardActive, activate, selectedRowKeys, toggleRowSelection } =
-    useCardRowSelection(path, isActive, flipMergeSelection);
+    useCardRowSelection(
+      path,
+      isActive,
+      flipMergeSelection,
+      tracks.map((track) => trackKey(track)),
+    );
 
   // A per-row edit (checkbox, default/forced flags, language, name) applies to
   // every selected row when the edited row is part of the selection; otherwise

@@ -28,6 +28,7 @@ export function useCardRowSelection(
   cardId: string,
   disabled: boolean,
   flipMergeSelection: (keys: string[]) => void,
+  allRowKeys: string[],
 ) {
   const activeCard = useMkvStore((s) => s.activeCard);
   const setActiveCard = useMkvStore((s) => s.setActiveCard);
@@ -55,29 +56,48 @@ export function useCardRowSelection(
   flipRef.current = flipMergeSelection;
   const selectedRef = useRef(selectedRowKeys);
   selectedRef.current = selectedRowKeys;
+  const allKeysRef = useRef(allRowKeys);
+  allKeysRef.current = allRowKeys;
 
   useEffect(() => {
     if (!cardActive || disabled) {
       return;
     }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== " " && e.code !== "Space") {
-        return;
-      }
       const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        target.closest(
-          'input, textarea, button, select, [role="checkbox"], [contenteditable="true"]',
-        )
-      ) {
+      const inEditable = !!target?.closest(
+        'input, textarea, [contenteditable="true"]',
+      );
+
+      // Ctrl/Cmd+A selects all rows; Ctrl/Cmd+Shift+A deselects all. Skipped
+      // inside text fields so they keep their own select-all behaviour.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        if (inEditable) {
+          return;
+        }
+        e.preventDefault();
+        setSelectedRowKeys(
+          e.shiftKey ? new Set() : new Set(allKeysRef.current),
+        );
         return;
       }
-      if (selectedRef.current.size === 0) {
-        return;
+
+      // Space toggles the checkboxes of the selected rows.
+      if (e.key === " " || e.code === "Space") {
+        if (
+          target &&
+          target.closest(
+            'input, textarea, button, select, [role="checkbox"], [contenteditable="true"]',
+          )
+        ) {
+          return;
+        }
+        if (selectedRef.current.size === 0) {
+          return;
+        }
+        e.preventDefault();
+        flipRef.current([...selectedRef.current]);
       }
-      e.preventDefault();
-      flipRef.current([...selectedRef.current]);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);

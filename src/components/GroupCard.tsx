@@ -254,7 +254,12 @@ export function GroupCard({ files }: GroupCardProps) {
   };
 
   const { cardActive, activate, selectedRowKeys, toggleRowSelection } =
-    useCardRowSelection(cardId, hasActiveInGroup, flipMergeSelection);
+    useCardRowSelection(
+      cardId,
+      hasActiveInGroup,
+      flipMergeSelection,
+      tracks.map((track) => trackKey(track)),
+    );
 
   // A per-row edit (checkbox, default/forced flags, language, name) applies to
   // every selected row when the edited row is part of the selection; otherwise
