@@ -45,7 +45,6 @@
     "mergeAll": "Alle zusammenführen (F3)",
     "cancelAll": "Alle abbrechen (F4)",
     "clear": "Leeren (Strg + Q)",
-    "groupByFile": "Gruppenmodus (F8)",
     "profile": "Profil (F9)",
     "settings": "Einstellungen (F10)",
     "about": "Info"
@@ -54,6 +53,12 @@
     "copyAllCommands": "Alle Befehle kopieren",
     "mergeAll": "Alle zusammenführen",
     "clearAll": "Alle entfernen"
+  },
+  "groupMode": {
+    "title": "Gruppe",
+    "none": "Keine Gruppierung",
+    "trackCount": "Nach identischer Spuranzahl pro Typ gruppieren",
+    "trackCountAndLanguage": "Nach identischer Spuranzahl und Sprache pro Typ gruppieren"
   },
   "tabs": {
     "fileList": "Dateiliste",
@@ -141,7 +146,6 @@
     "attachments": "Anhänge",
     "autoSelectOnDrop": "Beim Hinzufügen automatisch auswählen",
     "onlyAutoSelectOnDropForLanguages": "Nur beim Hinzufügen automatisch auswählen für Sprachen",
-    "defaultGroupMode": "Standard-Gruppenmodus",
     "resetTemplates": "Auf Standard zurücksetzen"
   },
   "about": {

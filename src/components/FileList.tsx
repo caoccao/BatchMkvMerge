@@ -21,8 +21,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
 import { formatHMS, getParentDir } from "../merge";
+import type { MediaTrack } from "../media-metadata";
 import type { MergeFinishedEvent } from "../protocol";
-import { QueueItemStatus } from "../protocol";
+import { GroupMode, QueueItemStatus } from "../protocol";
 import { getMergeStatus, getMediaFiles } from "../service";
 import { useMkvStore } from "../store";
 import { GroupCard } from "./GroupCard";
@@ -35,6 +36,16 @@ type RenderEntry =
 
 const MERGE_POLL_INTERVAL_MS = 200;
 
+/** Sorted, comma-joined language list for one track type — used so two files
+ *  group together only when their per-type languages match (mode 3). */
+function languageSignature(tracks: MediaTrack[], type: string): string {
+  return tracks
+    .filter((t) => t.type === type)
+    .map((t) => t.language)
+    .sort()
+    .join(",");
+}
+
 export default function FileList() {
   const { t } = useTranslation();
   const files = useMkvStore((s) => s.files);
@@ -42,11 +53,14 @@ export default function FileList() {
   const applyMergeSnapshot = useMkvStore((s) => s.applyMergeSnapshot);
   const recordFinishedOutcome = useMkvStore((s) => s.recordFinishedOutcome);
   const showNotification = useMkvStore((s) => s.showNotification);
-  const groupByFile = useMkvStore((s) => s.groupByFile);
+  const groupMode = useMkvStore(
+    (s) => s.config?.groupMode ?? GroupMode.TrackCount,
+  );
   const fileTrackCounts = useMkvStore((s) => s.fileTrackCounts);
+  const fileTracks = useMkvStore((s) => s.fileTracks);
 
   const entries = useMemo<RenderEntry[]>(() => {
-    if (!groupByFile) {
+    if (groupMode === GroupMode.None) {
       return files.map((file) => ({ kind: "single", file }));
     }
     const buckets = new Map<string, string[]>();
@@ -58,7 +72,14 @@ export default function FileList() {
         ungroupable.push(file);
         continue;
       }
-      const key = `${getParentDir(file)}|v=${counts.video}|a=${counts.audio}|s=${counts.subtitles}|c=${counts.chapters}|t=${counts.attachments}`;
+      const dir = getParentDir(file);
+      let key: string;
+      if (groupMode === GroupMode.TrackCountAndLanguage) {
+        const tracks = fileTracks[file] ?? [];
+        key = `${dir}|v=${languageSignature(tracks, "video")}|a=${languageSignature(tracks, "audio")}|s=${languageSignature(tracks, "subtitles")}|c=${counts.chapters}|t=${counts.attachments}`;
+      } else {
+        key = `${dir}|v=${counts.video}|a=${counts.audio}|s=${counts.subtitles}|c=${counts.chapters}|t=${counts.attachments}`;
+      }
       let bucket = buckets.get(key);
       if (!bucket) {
         bucket = [];
@@ -82,7 +103,7 @@ export default function FileList() {
       result.push({ kind: "single", file });
     }
     return result;
-  }, [files, groupByFile, fileTrackCounts]);
+  }, [files, groupMode, fileTrackCounts, fileTracks]);
 
   useEffect(() => {
     let cancelled = false;

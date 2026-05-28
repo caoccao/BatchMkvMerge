@@ -24,9 +24,10 @@ import {
   FormControlLabel,
   MenuItem,
   Paper,
+  Radio,
+  RadioGroup,
   Select,
   Stack,
-  Switch,
   Tab,
   Tabs,
   TextField,
@@ -38,6 +39,7 @@ import BrightnessAutoIcon from "@mui/icons-material/BrightnessAuto";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import ExtensionIcon from "@mui/icons-material/Extension";
 import InfoIcon from "@mui/icons-material/Info";
+import PermMediaIcon from "@mui/icons-material/PermMedia";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import MovieIcon from "@mui/icons-material/Movie";
 import PaletteIcon from "@mui/icons-material/Palette";
@@ -56,6 +58,7 @@ import {
 
 enum SettingsTab {
   Appearance = "Appearance",
+  Group = "Group",
   Profiles = "Profiles",
   Integration = "Integration",
   Update = "Update",
@@ -318,6 +321,36 @@ export default function Settings() {
     </Box>
   );
 
+  const groupPanel = (
+    <Box>
+      <SectionHeader
+        icon={<PermMediaIcon fontSize="small" />}
+        title={t("groupMode.title")}
+      />
+      <FormControl>
+        <RadioGroup
+          value={config.groupMode}
+          onChange={(e) =>
+            updateConfig({ groupMode: e.target.value as Protocol.GroupMode })
+          }
+        >
+          {Protocol.getGroupModes().map((mode) => (
+            <FormControlLabel
+              key={mode}
+              value={mode}
+              control={<Radio size="small" />}
+              label={
+                <Typography variant="body2">
+                  {t(Protocol.groupModeLabelKey(mode))}
+                </Typography>
+              }
+            />
+          ))}
+        </RadioGroup>
+      </FormControl>
+    </Box>
+  );
+
   const profilesPanel = (() => {
     const activeProfile =
       config.profiles.find((p) => p.name === config.activeProfile) ??
@@ -485,17 +518,6 @@ export default function Settings() {
             </Box>
           ))}
         </Stack>
-        <SettingRow label={t("settings.defaultGroupMode")}>
-          <Switch
-            size="small"
-            checked={activeProfile.defaultGroupMode}
-            onChange={(e) =>
-              updateActiveProfile({
-                defaultGroupMode: e.target.checked,
-              })
-            }
-          />
-        </SettingRow>
         <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
           <Button
             variant="outlined"
@@ -644,6 +666,12 @@ export default function Settings() {
           label={t("settings.appearance")}
         />
         <Tab
+          value={SettingsTab.Group}
+          icon={<PermMediaIcon sx={{ fontSize: 18 }} />}
+          iconPosition="start"
+          label={t("groupMode.title")}
+        />
+        <Tab
           value={SettingsTab.Integration}
           icon={<ExtensionIcon sx={{ fontSize: 18 }} />}
           iconPosition="start"
@@ -673,6 +701,7 @@ export default function Settings() {
         }}
       >
         {tab === SettingsTab.Appearance && appearancePanel}
+        {tab === SettingsTab.Group && groupPanel}
         {tab === SettingsTab.Integration && integrationPanel}
         {tab === SettingsTab.Profiles && profilesPanel}
         {tab === SettingsTab.Update && updatePanel}

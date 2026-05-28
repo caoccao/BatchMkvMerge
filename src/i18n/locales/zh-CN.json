@@ -45,7 +45,6 @@
     "mergeAll": "全部合并 (F3)",
     "cancelAll": "全部取消 (F4)",
     "clear": "清空 (Ctrl + Q)",
-    "groupByFile": "分组模式 (F8)",
     "profile": "配置文件 (F9)",
     "settings": "设置 (F10)",
     "about": "关于"
@@ -54,6 +53,12 @@
     "copyAllCommands": "复制全部命令",
     "mergeAll": "全部合并",
     "clearAll": "全部清除"
+  },
+  "groupMode": {
+    "title": "分组",
+    "none": "不分组",
+    "trackCount": "按每种类型的相同轨道数分组",
+    "trackCountAndLanguage": "按每种类型的相同轨道数和语言分组"
   },
   "tabs": {
     "fileList": "文件列表",
@@ -141,7 +146,6 @@
     "attachments": "附件",
     "autoSelectOnDrop": "添加文件时自动选择",
     "onlyAutoSelectOnDropForLanguages": "仅在添加文件时按语言自动选择",
-    "defaultGroupMode": "默认分组模式",
     "resetTemplates": "恢复默认值"
   },
   "about": {

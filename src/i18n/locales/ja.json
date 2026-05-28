@@ -45,7 +45,6 @@
     "mergeAll": "すべて結合 (F3)",
     "cancelAll": "すべてキャンセル (F4)",
     "clear": "クリア (Ctrl + Q)",
-    "groupByFile": "グループモード (F8)",
     "profile": "プロファイル (F9)",
     "settings": "設定 (F10)",
     "about": "情報"
@@ -54,6 +53,12 @@
     "copyAllCommands": "すべてのコマンドをコピー",
     "mergeAll": "すべて結合",
     "clearAll": "すべて削除"
+  },
+  "groupMode": {
+    "title": "グループ",
+    "none": "グループ化しない",
+    "trackCount": "種類ごとのトラック数が同一のものをグループ化",
+    "trackCountAndLanguage": "種類ごとのトラック数と言語が同一のものをグループ化"
   },
   "tabs": {
     "fileList": "ファイル一覧",
@@ -141,7 +146,6 @@
     "attachments": "添付ファイル",
     "autoSelectOnDrop": "追加時に自動で選択",
     "onlyAutoSelectOnDropForLanguages": "追加時のみ言語で自動選択",
-    "defaultGroupMode": "既定のグループモード",
     "resetTemplates": "デフォルトに戻す"
   },
   "about": {

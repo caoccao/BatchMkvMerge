@@ -45,7 +45,6 @@
     "mergeAll": "Combinar todo (F3)",
     "cancelAll": "Cancelar todo (F4)",
     "clear": "Limpiar (Ctrl + Q)",
-    "groupByFile": "Modo de grupo (F8)",
     "profile": "Perfil (F9)",
     "settings": "Ajustes (F10)",
     "about": "Acerca de"
@@ -54,6 +53,12 @@
     "copyAllCommands": "Copiar todos los comandos",
     "mergeAll": "Combinar todo",
     "clearAll": "Quitar todo"
+  },
+  "groupMode": {
+    "title": "Grupo",
+    "none": "Sin agrupación",
+    "trackCount": "Agrupar por número de pistas idéntico por tipo",
+    "trackCountAndLanguage": "Agrupar por número de pistas e idioma idénticos por tipo"
   },
   "tabs": {
     "fileList": "Lista de archivos",
@@ -141,7 +146,6 @@
     "attachments": "Adjuntos",
     "autoSelectOnDrop": "Seleccionar automáticamente al añadir",
     "onlyAutoSelectOnDropForLanguages": "Solo seleccionar automáticamente al añadir para idiomas",
-    "defaultGroupMode": "Modo de grupo predeterminado",
     "resetTemplates": "Restablecer valores predeterminados"
   },
   "about": {

@@ -46,6 +46,8 @@ pub struct Config {
   pub update: ConfigUpdate,
   #[serde(default)]
   pub parser: ConfigParser,
+  #[serde(rename = "groupMode", default)]
+  pub group_mode: GroupMode,
 }
 
 impl Config {
@@ -70,7 +72,25 @@ impl Default for Config {
       window: Default::default(),
       update: Default::default(),
       parser: Default::default(),
+      group_mode: Default::default(),
     }
+  }
+}
+
+/// How the file list buckets dropped files into group cards.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum GroupMode {
+  /// Render every file on its own card.
+  None,
+  /// Group files that share the same track count per type.
+  TrackCount,
+  /// Group files that share the same track count *and* language per type.
+  TrackCountAndLanguage,
+}
+
+impl Default for GroupMode {
+  fn default() -> Self {
+    Self::TrackCount
   }
 }
 
@@ -174,8 +194,6 @@ pub struct ConfigProfile {
   pub audio_languages: String,
   #[serde(rename = "subtitleLanguages", default = "ConfigProfile::default_languages")]
   pub subtitle_languages: String,
-  #[serde(rename = "defaultGroupMode", default = "ConfigProfile::default_default_group_mode")]
-  pub default_group_mode: bool,
 }
 
 impl ConfigProfile {
@@ -198,10 +216,6 @@ impl ConfigProfile {
   fn default_languages() -> String {
     Self::DEFAULT_LANGUAGES.to_owned()
   }
-
-  fn default_default_group_mode() -> bool {
-    true
-  }
 }
 
 impl Default for ConfigProfile {
@@ -216,7 +230,6 @@ impl Default for ConfigProfile {
       video_languages: String::new(),
       audio_languages: Self::default_languages(),
       subtitle_languages: Self::default_languages(),
-      default_group_mode: true,
     }
   }
 }

@@ -86,6 +86,13 @@ export const UpdateCheckInterval = {
 export type UpdateCheckInterval =
   (typeof UpdateCheckInterval)[keyof typeof UpdateCheckInterval];
 
+export const GroupMode = {
+  None: "None",
+  TrackCount: "TrackCount",
+  TrackCountAndLanguage: "TrackCountAndLanguage",
+} as const;
+export type GroupMode = (typeof GroupMode)[keyof typeof GroupMode];
+
 export interface ConfigUpdate {
   checkInterval: UpdateCheckInterval;
   lastChecked: number;
@@ -113,7 +120,6 @@ export interface ConfigProfile {
   videoLanguages: string;
   audioLanguages: string;
   subtitleLanguages: string;
-  defaultGroupMode: boolean;
 }
 
 export interface ConfigParser {
@@ -138,6 +144,7 @@ export interface Config {
   window: ConfigWindow;
   update: ConfigUpdate;
   parser: ConfigParser;
+  groupMode: GroupMode;
 }
 
 export const DEFAULT_PROFILE_NAME = "Default";
@@ -155,7 +162,6 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile
     videoLanguages: "",
     audioLanguages: DEFAULT_LANGUAGES,
     subtitleLanguages: DEFAULT_LANGUAGES,
-    defaultGroupMode: isDefault,
   };
 }
 
@@ -249,6 +255,26 @@ export function getThemes(): Theme[] {
 
 export function getLanguages(): Language[] {
   return Object.values(Language);
+}
+
+export function getGroupModes(): GroupMode[] {
+  return [
+    GroupMode.None,
+    GroupMode.TrackCount,
+    GroupMode.TrackCountAndLanguage,
+  ];
+}
+
+/** i18n key for a group mode's human-readable label. */
+export function groupModeLabelKey(mode: GroupMode): string {
+  switch (mode) {
+    case GroupMode.None:
+      return "groupMode.none";
+    case GroupMode.TrackCountAndLanguage:
+      return "groupMode.trackCountAndLanguage";
+    default:
+      return "groupMode.trackCount";
+  }
 }
 
 const LANGUAGE_LABELS: Record<Language, string> = {

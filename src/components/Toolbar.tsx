@@ -30,8 +30,8 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import CheckIcon from "@mui/icons-material/Check";
 import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
-import FolderCopyIcon from "@mui/icons-material/FolderCopy";
 import InfoIcon from "@mui/icons-material/Info";
+import PermMediaIcon from "@mui/icons-material/PermMedia";
 import PersonIcon from "@mui/icons-material/Person";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { useTranslation } from "react-i18next";
@@ -41,8 +41,25 @@ import {
   getActiveProfile,
   getSelectedTracksForFile,
 } from "../actions/mergeActions";
-import { QueueItemStatus } from "../protocol";
+import {
+  GroupMode,
+  QueueItemStatus,
+  getGroupModes,
+  groupModeLabelKey,
+} from "../protocol";
 import { useMkvStore } from "../store";
+
+/** Icon colour for a group mode: gray when off, primary / success when on. */
+function groupModeColor(mode: GroupMode): string {
+  switch (mode) {
+    case GroupMode.None:
+      return "text.disabled";
+    case GroupMode.TrackCountAndLanguage:
+      return "success.main";
+    default:
+      return "primary.main";
+  }
+}
 
 export default function Toolbar() {
   const { t } = useTranslation();
@@ -66,18 +83,26 @@ export default function Toolbar() {
       item.status === QueueItemStatus.Merging,
   );
   const canClear = hasFiles && !hasActiveJobs;
-  const groupByFile = useMkvStore((s) => s.groupByFile);
-  const setGroupByFile = useMkvStore((s) => s.setGroupByFile);
   const config = useMkvStore((s) => s.config);
+  const updateConfig = useMkvStore((s) => s.updateConfig);
+  const groupMode = config?.groupMode ?? GroupMode.TrackCount;
   const setActiveProfile = useMkvStore((s) => s.setActiveProfile);
   const [profileAnchor, setProfileAnchor] = useState<null | HTMLElement>(null);
   const profileButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [groupAnchor, setGroupAnchor] = useState<null | HTMLElement>(null);
+  const groupButtonRef = useRef<HTMLButtonElement | null>(null);
   const profiles = config?.profiles ?? [];
   const activeProfileName = config?.activeProfile ?? "";
 
   const openProfileMenu = useCallback(() => {
     if (profileButtonRef.current) {
       setProfileAnchor(profileButtonRef.current);
+    }
+  }, []);
+
+  const openGroupMenu = useCallback(() => {
+    if (groupButtonRef.current) {
+      setGroupAnchor(groupButtonRef.current);
     }
   }, []);
 
@@ -191,7 +216,7 @@ export default function Toolbar() {
       ) {
         event.preventDefault();
         event.stopPropagation();
-        setGroupByFile(!useMkvStore.getState().groupByFile);
+        openGroupMenu();
       } else if (
         !event.ctrlKey &&
         !event.altKey &&
@@ -223,8 +248,8 @@ export default function Toolbar() {
     runMergeAll,
     runCancelAll,
     openProfileMenu,
+    openGroupMenu,
     openSettings,
-    setGroupByFile,
   ]);
 
   const buttonSx = {
@@ -275,12 +300,13 @@ export default function Toolbar() {
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={t("toolbar.groupByFile")}>
+        <Tooltip title={t(groupModeLabelKey(groupMode))}>
           <IconButton
-            sx={groupByFile ? activeButtonSx : buttonSx}
-            onClick={() => setGroupByFile(!groupByFile)}
+            ref={groupButtonRef}
+            sx={{ ...buttonSx, color: groupModeColor(groupMode) }}
+            onClick={(e) => setGroupAnchor(e.currentTarget)}
           >
-            <FolderCopyIcon fontSize="small" />
+            <PermMediaIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </ButtonGroup>
@@ -315,6 +341,34 @@ export default function Toolbar() {
           </IconButton>
         </Tooltip>
       </ButtonGroup>
+
+      <Menu
+        anchorEl={groupAnchor}
+        open={Boolean(groupAnchor)}
+        onClose={() => setGroupAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+      >
+        {getGroupModes().map((mode) => (
+          <MenuItem
+            key={mode}
+            selected={mode === groupMode}
+            onClick={() => {
+              updateConfig({ groupMode: mode });
+              setGroupAnchor(null);
+            }}
+          >
+            <ListItemIcon sx={{ minWidth: 28 }}>
+              {mode === groupMode && (
+                <CheckIcon fontSize="small" color="primary" />
+              )}
+            </ListItemIcon>
+            <ListItemText slotProps={{ primary: { variant: "body2" } }}>
+              {t(groupModeLabelKey(mode))}
+            </ListItemText>
+          </MenuItem>
+        ))}
+      </Menu>
 
       <Menu
         anchorEl={profileAnchor}

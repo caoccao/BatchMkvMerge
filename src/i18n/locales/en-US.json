@@ -45,7 +45,6 @@
     "mergeAll": "Merge All (F3)",
     "cancelAll": "Cancel All (F4)",
     "clear": "Clear (Ctrl + Q)",
-    "groupByFile": "Group Mode (F8)",
     "profile": "Profile (F9)",
     "settings": "Settings (F10)",
     "about": "About"
@@ -54,6 +53,12 @@
     "copyAllCommands": "Copy All Commands",
     "mergeAll": "Merge All",
     "clearAll": "Clear All"
+  },
+  "groupMode": {
+    "title": "Group",
+    "none": "No grouping",
+    "trackCount": "Group by identical track count per type",
+    "trackCountAndLanguage": "Group by identical track count and language per type"
   },
   "tabs": {
     "fileList": "File List",
@@ -141,7 +146,6 @@
     "attachments": "Attachments",
     "autoSelectOnDrop": "Auto-select on file add",
     "onlyAutoSelectOnDropForLanguages": "Only auto-select on file add for languages",
-    "defaultGroupMode": "Default group mode",
     "resetTemplates": "Reset to Defaults"
   },
   "about": {
