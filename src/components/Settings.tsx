@@ -15,13 +15,16 @@
  *   limitations under the License.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Box,
   Button,
   Checkbox,
+  Divider,
   FormControl,
   FormControlLabel,
+  IconButton,
+  InputAdornment,
   MenuItem,
   Paper,
   Radio,
@@ -33,9 +36,11 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import BrightnessAutoIcon from "@mui/icons-material/BrightnessAuto";
+import ClearIcon from "@mui/icons-material/Clear";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import ExtensionIcon from "@mui/icons-material/Extension";
 import InfoIcon from "@mui/icons-material/Info";
@@ -48,9 +53,11 @@ import UpdateIcon from "@mui/icons-material/Update";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import * as Protocol from "../protocol";
+import { MKV_LANGUAGES } from "../mkvLanguages";
 import { detectBetterMediaInfo, isMkvtoolnixFound } from "../service";
 import { useMkvStore } from "../store";
 import { ExternalToolPathRow } from "./settings/ExternalToolPathRow";
+import { LanguagePicker } from "./settings/LanguagePicker";
 import {
   DetectToolPath,
   useToolPathDetection,
@@ -62,6 +69,115 @@ enum SettingsTab {
   Profiles = "Profiles",
   Integration = "Integration",
   Update = "Update",
+}
+
+enum ProfileTab {
+  TrackSelection = "TrackSelection",
+  Languages = "Languages",
+  TrackNames = "TrackNames",
+}
+
+type LanguageTrackType = "video" | "audio" | "subtitles";
+
+/**
+ * Profile field backing tab 2's preferred-language picker. These are separate
+ * from the tab-1 track-selection language filters — the two tabs don't share
+ * data.
+ */
+const PREFERRED_LANGUAGES_KEY: Record<
+  LanguageTrackType,
+  | "preferredVideoLanguages"
+  | "preferredAudioLanguages"
+  | "preferredSubtitleLanguages"
+> = {
+  video: "preferredVideoLanguages",
+  audio: "preferredAudioLanguages",
+  subtitles: "preferredSubtitleLanguages",
+};
+
+/** Profile field backing tab 3's per-language track-name presets. */
+const TRACK_NAMES_KEY: Record<
+  LanguageTrackType,
+  "trackNamesVideo" | "trackNamesAudio" | "trackNamesSubtitle"
+> = {
+  video: "trackNamesVideo",
+  audio: "trackNamesAudio",
+  subtitles: "trackNamesSubtitle",
+};
+
+const LANGUAGE_LABEL_BY_CODE = new Map(
+  MKV_LANGUAGES.map((lang) => [lang.code, lang.label]),
+);
+const ALL_LANGUAGE_CODES = MKV_LANGUAGES.map((lang) => lang.code);
+
+function languageLabel(code: string): string {
+  return LANGUAGE_LABEL_BY_CODE.get(code) ?? code;
+}
+
+/** Parse a comma-separated language filter into an ordered code list. */
+function parseLanguageCodes(filter: string): string[] {
+  return filter
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Trailing clear (×) button for a text field — shown only when non-empty. */
+function ClearAdornment({
+  value,
+  onClear,
+  label,
+}: {
+  value: string;
+  onClear: () => void;
+  label: string;
+}) {
+  if (!value) {
+    return null;
+  }
+  return (
+    <InputAdornment position="end">
+      <Tooltip title={label}>
+        <IconButton size="small" aria-label={label} onClick={onClear} edge="end">
+          <ClearIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </InputAdornment>
+  );
+}
+
+/** Video / Audio / Subtitle selector shared by the Languages and Track Names tabs. */
+function TrackTypeToggle({
+  value,
+  onChange,
+}: {
+  value: LanguageTrackType;
+  onChange: (next: LanguageTrackType) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <ToggleButtonGroup
+      value={value}
+      exclusive
+      size="small"
+      onChange={(_e, next: LanguageTrackType | null) => {
+        if (next !== null) {
+          onChange(next);
+        }
+      }}
+      sx={{ mb: 1.5, "& .MuiToggleButton-root": { textTransform: "none" } }}
+    >
+      <ToggleButton value="video" sx={{ px: 1.5 }}>
+        <Typography variant="caption">{t("settings.video")}</Typography>
+      </ToggleButton>
+      <ToggleButton value="audio" sx={{ px: 1.5 }}>
+        <Typography variant="caption">{t("settings.audio")}</Typography>
+      </ToggleButton>
+      <ToggleButton value="subtitles" sx={{ px: 1.5 }}>
+        <Typography variant="caption">{t("settings.subtitles")}</Typography>
+      </ToggleButton>
+    </ToggleButtonGroup>
+  );
 }
 
 function SectionHeader({
@@ -122,6 +238,13 @@ export default function Settings() {
   );
   const [newProfileName, setNewProfileName] = useState("");
   const [tab, setTab] = useState<SettingsTab>(SettingsTab.Appearance);
+  const [profileTab, setProfileTab] = useState<ProfileTab>(
+    ProfileTab.TrackSelection,
+  );
+  const [langType, setLangType] = useState<LanguageTrackType>("audio");
+  const [trackNameFilter, setTrackNameFilter] = useState("");
+  const [selectedTrackNameLang, setSelectedTrackNameLang] = useState("");
+  const trackNameListRef = useRef<HTMLDivElement | null>(null);
 
   const updateExternalTools = useCallback(
     (patch: Partial<Protocol.ConfigExternalTools>) => {
@@ -363,7 +486,14 @@ export default function Settings() {
       trimmed.length > 0 && !config.profiles.some((p) => p.name === trimmed);
     const canDelete = config.activeProfile !== Protocol.DEFAULT_PROFILE_NAME;
     return (
-      <Box>
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
         <SectionHeader
           icon={<PersonIcon fontSize="small" />}
           title={t("settings.profiles")}
@@ -398,6 +528,17 @@ export default function Settings() {
             value={newProfileName}
             onChange={(e) => setNewProfileName(e.target.value)}
             sx={{ flex: 1 }}
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <ClearAdornment
+                    value={newProfileName}
+                    onClear={() => setNewProfileName("")}
+                    label={t("settings.clear")}
+                  />
+                ),
+              },
+            }}
           />
           <Button
             variant="outlined"
@@ -429,105 +570,348 @@ export default function Settings() {
           >
             {t("settings.deleteProfile")}
           </Button>
-        </Box>
-        <Stack spacing={1.5} sx={{ py: 1 }}>
-          {(
-            [
-              {
-                typeKey: "video" as const,
-                selectKey: "selectVideo" as const,
-                languagesKey: "videoLanguages" as const,
-                label: t("settings.video"),
-              },
-              {
-                typeKey: "audio" as const,
-                selectKey: "selectAudio" as const,
-                languagesKey: "audioLanguages" as const,
-                label: t("settings.audio"),
-              },
-              {
-                typeKey: "subtitles" as const,
-                selectKey: "selectSubtitle" as const,
-                languagesKey: "subtitleLanguages" as const,
-                label: t("settings.subtitles"),
-              },
-              {
-                typeKey: "chapters" as const,
-                selectKey: "selectChapters" as const,
-                languagesKey: null,
-                label: t("settings.chapters"),
-              },
-              {
-                typeKey: "attachments" as const,
-                selectKey: "selectAttachments" as const,
-                languagesKey: null,
-                label: t("settings.attachments"),
-              },
-            ] as const
-          ).map((row) => (
-            <Box key={row.typeKey}>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ fontWeight: 600 }}
-              >
-                {row.label}
-              </Typography>
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  mt: 0.5,
-                }}
-              >
-                <FormControlLabel
-                  sx={{ mr: 0 }}
-                  control={
-                    <Checkbox
-                      size="small"
-                      checked={activeProfile[row.selectKey]}
-                      onChange={(e) =>
-                        updateActiveProfile({
-                          [row.selectKey]: e.target.checked,
-                        })
-                      }
-                    />
-                  }
-                  label={
-                    <Typography variant="caption">
-                      {row.languagesKey
-                        ? t("settings.onlyAutoSelectOnDropForLanguages")
-                        : t("settings.autoSelectOnDrop")}
-                    </Typography>
-                  }
-                />
-                {row.languagesKey && (
-                  <TextField
-                    size="small"
-                    value={activeProfile[row.languagesKey] ?? ""}
-                    onChange={(e) =>
-                      updateActiveProfile({
-                        [row.languagesKey]: e.target.value,
-                      })
-                    }
-                    sx={{ flex: 1 }}
-                  />
-                )}
-              </Box>
-            </Box>
-          ))}
-        </Stack>
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
           <Button
             variant="outlined"
             size="small"
             onClick={() => resetActiveProfileTemplates()}
-            sx={{ textTransform: "none" }}
+            sx={{
+              height: 36,
+              textTransform: "none",
+              whiteSpace: "nowrap",
+            }}
           >
-            {t("settings.resetTemplates")}
+            {t("settings.reset")}
           </Button>
         </Box>
+        <Tabs
+          value={profileTab}
+          onChange={(_e, value: ProfileTab) => setProfileTab(value)}
+          sx={{
+            mt: 1,
+            minHeight: 40,
+            borderBottom: 1,
+            borderColor: "divider",
+            "& .MuiTab-root": { minHeight: 40, textTransform: "none" },
+          }}
+        >
+          <Tab
+            value={ProfileTab.TrackSelection}
+            label={t("settings.trackSelection")}
+          />
+          <Tab value={ProfileTab.Languages} label={t("settings.languages")} />
+          <Tab value={ProfileTab.TrackNames} label={t("settings.trackNames")} />
+        </Tabs>
+
+        {profileTab === ProfileTab.TrackSelection && (
+          <Stack spacing={1.5} sx={{ py: 2 }}>
+            {(
+              [
+                {
+                  typeKey: "video" as const,
+                  selectKey: "selectVideo" as const,
+                  languagesKey: "videoLanguagesForTrackSelection" as const,
+                  label: t("settings.video"),
+                },
+                {
+                  typeKey: "audio" as const,
+                  selectKey: "selectAudio" as const,
+                  languagesKey: "audioLanguagesForTrackSelection" as const,
+                  label: t("settings.audio"),
+                },
+                {
+                  typeKey: "subtitles" as const,
+                  selectKey: "selectSubtitle" as const,
+                  languagesKey: "subtitleLanguagesForTrackSelection" as const,
+                  label: t("settings.subtitles"),
+                },
+                {
+                  typeKey: "chapters" as const,
+                  selectKey: "selectChapters" as const,
+                  languagesKey: null,
+                  label: t("settings.chapters"),
+                },
+                {
+                  typeKey: "attachments" as const,
+                  selectKey: "selectAttachments" as const,
+                  languagesKey: null,
+                  label: t("settings.attachments"),
+                },
+              ] as const
+            ).map((row) => (
+              <Box key={row.typeKey}>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ fontWeight: 600 }}
+                >
+                  {row.label}
+                </Typography>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    mt: 0.5,
+                  }}
+                >
+                  <FormControlLabel
+                    sx={{ mr: 0 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={activeProfile[row.selectKey]}
+                        onChange={(e) =>
+                          updateActiveProfile({
+                            [row.selectKey]: e.target.checked,
+                          })
+                        }
+                      />
+                    }
+                    label={
+                      <Typography variant="caption">
+                        {row.languagesKey
+                          ? t("settings.onlyAutoSelectOnDropForLanguages")
+                          : t("settings.autoSelectOnDrop")}
+                      </Typography>
+                    }
+                  />
+                  {row.languagesKey && (
+                    <TextField
+                      size="small"
+                      value={activeProfile[row.languagesKey] ?? ""}
+                      onChange={(e) =>
+                        updateActiveProfile({
+                          [row.languagesKey]: e.target.value,
+                        })
+                      }
+                      sx={{ flex: 1 }}
+                      slotProps={{
+                        input: {
+                          endAdornment: (
+                            <ClearAdornment
+                              value={activeProfile[row.languagesKey] ?? ""}
+                              onClear={() =>
+                                updateActiveProfile({ [row.languagesKey]: "" })
+                              }
+                              label={t("settings.clear")}
+                            />
+                          ),
+                        },
+                      }}
+                    />
+                  )}
+                </Box>
+              </Box>
+            ))}
+          </Stack>
+        )}
+
+        {profileTab === ProfileTab.Languages && (
+          <Box
+            sx={{
+              py: 2,
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <TrackTypeToggle value={langType} onChange={setLangType} />
+            <LanguagePicker
+              key={langType}
+              availableLanguages={MKV_LANGUAGES}
+              preferredCodes={parseLanguageCodes(
+                activeProfile[PREFERRED_LANGUAGES_KEY[langType]] ?? "",
+              )}
+              onPreferredCodesChange={(codes) =>
+                updateActiveProfile({
+                  [PREFERRED_LANGUAGES_KEY[langType]]: codes.join(", "),
+                })
+              }
+            />
+          </Box>
+        )}
+
+        {profileTab === ProfileTab.TrackNames &&
+          (() => {
+            const preferredCodes = parseLanguageCodes(
+              activeProfile[PREFERRED_LANGUAGES_KEY[langType]] ?? "",
+            );
+            const preferredSet = new Set(preferredCodes);
+            const otherCodes = ALL_LANGUAGE_CODES.filter(
+              (code) => !preferredSet.has(code),
+            );
+            const f = trackNameFilter.trim().toLowerCase();
+            const matches = (code: string) =>
+              !f ||
+              languageLabel(code).toLowerCase().includes(f) ||
+              code.toLowerCase().includes(f);
+            const filteredPreferred = preferredCodes.filter(matches);
+            const filteredOther = otherCodes.filter(matches);
+            const trackNamesMap = activeProfile[TRACK_NAMES_KEY[langType]] ?? {};
+            const currentNames = selectedTrackNameLang
+              ? (trackNamesMap[selectedTrackNameLang] ?? "")
+              : "";
+
+            const visibleCodes = [...filteredPreferred, ...filteredOther];
+
+            const renderRow = (code: string) => (
+              <Box
+                key={code}
+                data-code={code}
+                onClick={() => {
+                  setSelectedTrackNameLang(code);
+                  trackNameListRef.current?.focus();
+                }}
+                sx={{
+                  px: 1,
+                  py: 0.5,
+                  cursor: "pointer",
+                  fontSize: "0.8125rem",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  bgcolor:
+                    selectedTrackNameLang === code
+                      ? "action.selected"
+                      : undefined,
+                  "&:hover": { bgcolor: "action.hover" },
+                }}
+              >
+                {languageLabel(code)}
+              </Box>
+            );
+
+            const handleListKeyDown = (
+              e: React.KeyboardEvent<HTMLDivElement>,
+            ) => {
+              if (e.key !== "ArrowDown" && e.key !== "ArrowUp") {
+                return;
+              }
+              e.preventDefault();
+              if (visibleCodes.length === 0) {
+                return;
+              }
+              const idx = visibleCodes.indexOf(selectedTrackNameLang);
+              let nextIdx: number;
+              if (e.key === "ArrowDown") {
+                nextIdx = idx < 0 ? 0 : Math.min(idx + 1, visibleCodes.length - 1);
+              } else {
+                nextIdx = idx < 0 ? visibleCodes.length - 1 : Math.max(idx - 1, 0);
+              }
+              const nextCode = visibleCodes[nextIdx];
+              setSelectedTrackNameLang(nextCode);
+              trackNameListRef.current
+                ?.querySelector(`[data-code="${nextCode}"]`)
+                ?.scrollIntoView({ block: "nearest" });
+            };
+
+            return (
+              <Box
+                sx={{
+                  py: 2,
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <TrackTypeToggle value={langType} onChange={setLangType} />
+                <Box sx={{ display: "flex", gap: 1, flex: 1, minHeight: 0 }}>
+                  <Box
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                    }}
+                  >
+                    <TextField
+                      size="small"
+                      placeholder={t("settings.filter")}
+                      value={trackNameFilter}
+                      onChange={(e) => setTrackNameFilter(e.target.value)}
+                      sx={{ mb: 1 }}
+                      slotProps={{
+                        input: {
+                          endAdornment: (
+                            <ClearAdornment
+                              value={trackNameFilter}
+                              onClear={() => setTrackNameFilter("")}
+                              label={t("settings.clear")}
+                            />
+                          ),
+                        },
+                      }}
+                    />
+                    <Box
+                      ref={trackNameListRef}
+                      tabIndex={0}
+                      onKeyDown={handleListKeyDown}
+                      sx={{
+                        flex: 1,
+                        overflow: "auto",
+                        border: 1,
+                        borderColor: "divider",
+                        borderRadius: 1,
+                        outline: "none",
+                      }}
+                    >
+                      {filteredPreferred.map(renderRow)}
+                      {filteredPreferred.length > 0 &&
+                        filteredOther.length > 0 && <Divider />}
+                      {filteredOther.map(renderRow)}
+                    </Box>
+                  </Box>
+                  <Box
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                    }}
+                  >
+                    {/* Invisible mirror of the left filter so the text box
+                        lines up exactly with the language list. */}
+                    <TextField
+                      size="small"
+                      disabled
+                      aria-hidden
+                      sx={{ mb: 1, visibility: "hidden" }}
+                    />
+                    <TextField
+                      multiline
+                      disabled={!selectedTrackNameLang}
+                      placeholder={t("settings.trackNamesHint")}
+                      value={currentNames}
+                      onChange={(e) => {
+                        const next = { ...trackNamesMap };
+                        if (e.target.value) {
+                          next[selectedTrackNameLang] = e.target.value;
+                        } else {
+                          delete next[selectedTrackNameLang];
+                        }
+                        updateActiveProfile({
+                          [TRACK_NAMES_KEY[langType]]: next,
+                        });
+                      }}
+                      sx={{
+                        flex: 1,
+                        "& .MuiInputBase-root": {
+                          height: "100%",
+                          alignItems: "flex-start",
+                        },
+                        "& .MuiInputBase-inputMultiline": {
+                          height: "100% !important",
+                          overflow: "auto !important",
+                        },
+                      }}
+                    />
+                  </Box>
+                </Box>
+              </Box>
+            );
+          })()}
       </Box>
     );
   })();

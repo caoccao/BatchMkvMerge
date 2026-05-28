@@ -43,9 +43,11 @@ function matchesLanguage(filter: Set<string> | null, codes: string[]): boolean {
 export function makeTrackSelector(
   profile: ConfigProfile,
 ): (track: MediaTrack) => boolean {
-  const videoLangs = parseLanguageFilter(profile.videoLanguages);
-  const audioLangs = parseLanguageFilter(profile.audioLanguages);
-  const subtitleLangs = parseLanguageFilter(profile.subtitleLanguages);
+  const videoLangs = parseLanguageFilter(profile.videoLanguagesForTrackSelection);
+  const audioLangs = parseLanguageFilter(profile.audioLanguagesForTrackSelection);
+  const subtitleLangs = parseLanguageFilter(
+    profile.subtitleLanguagesForTrackSelection,
+  );
   return (track: MediaTrack) => {
     switch (track.type) {
       // Video / audio / subtitle: unchecked selects every track of that type;

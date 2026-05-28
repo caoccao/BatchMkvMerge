@@ -17,6 +17,7 @@
 
 use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
@@ -188,12 +189,24 @@ pub struct ConfigProfile {
   pub select_chapters: bool,
   #[serde(rename = "selectAttachments", default)]
   pub select_attachments: bool,
-  #[serde(rename = "videoLanguages", default)]
-  pub video_languages: String,
-  #[serde(rename = "audioLanguages", default = "ConfigProfile::default_languages")]
-  pub audio_languages: String,
-  #[serde(rename = "subtitleLanguages", default = "ConfigProfile::default_languages")]
-  pub subtitle_languages: String,
+  #[serde(rename = "videoLanguagesForTrackSelection", default)]
+  pub video_languages_for_track_selection: String,
+  #[serde(rename = "audioLanguagesForTrackSelection", default = "ConfigProfile::default_languages")]
+  pub audio_languages_for_track_selection: String,
+  #[serde(rename = "subtitleLanguagesForTrackSelection", default = "ConfigProfile::default_languages")]
+  pub subtitle_languages_for_track_selection: String,
+  #[serde(rename = "preferredVideoLanguages", default = "ConfigProfile::default_languages")]
+  pub preferred_video_languages: String,
+  #[serde(rename = "preferredAudioLanguages", default = "ConfigProfile::default_languages")]
+  pub preferred_audio_languages: String,
+  #[serde(rename = "preferredSubtitleLanguages", default = "ConfigProfile::default_languages")]
+  pub preferred_subtitle_languages: String,
+  #[serde(rename = "trackNamesVideo", default = "ConfigProfile::default_track_names_video_audio")]
+  pub track_names_video: HashMap<String, String>,
+  #[serde(rename = "trackNamesAudio", default = "ConfigProfile::default_track_names_video_audio")]
+  pub track_names_audio: HashMap<String, String>,
+  #[serde(rename = "trackNamesSubtitle", default = "ConfigProfile::default_track_names_subtitle")]
+  pub track_names_subtitle: HashMap<String, String>,
 }
 
 impl ConfigProfile {
@@ -216,6 +229,28 @@ impl ConfigProfile {
   fn default_languages() -> String {
     Self::DEFAULT_LANGUAGES.to_owned()
   }
+
+  fn default_track_names_video_audio() -> HashMap<String, String> {
+    HashMap::from([
+      ("eng".to_owned(), "English".to_owned()),
+      ("chi".to_owned(), "Mandarin\nCantonese".to_owned()),
+      ("spa".to_owned(), "Spanish".to_owned()),
+      ("ger".to_owned(), "German".to_owned()),
+      ("fre".to_owned(), "French".to_owned()),
+      ("jpn".to_owned(), "Japanese".to_owned()),
+    ])
+  }
+
+  fn default_track_names_subtitle() -> HashMap<String, String> {
+    HashMap::from([
+      ("eng".to_owned(), "English".to_owned()),
+      ("chi".to_owned(), "Simplified Chinese\nTraditional Chinese".to_owned()),
+      ("spa".to_owned(), "Spanish".to_owned()),
+      ("ger".to_owned(), "German".to_owned()),
+      ("fre".to_owned(), "French".to_owned()),
+      ("jpn".to_owned(), "Japanese".to_owned()),
+    ])
+  }
 }
 
 impl Default for ConfigProfile {
@@ -227,9 +262,15 @@ impl Default for ConfigProfile {
       select_subtitle: true,
       select_chapters: true,
       select_attachments: false,
-      video_languages: String::new(),
-      audio_languages: Self::default_languages(),
-      subtitle_languages: Self::default_languages(),
+      video_languages_for_track_selection: String::new(),
+      audio_languages_for_track_selection: Self::default_languages(),
+      subtitle_languages_for_track_selection: Self::default_languages(),
+      preferred_video_languages: Self::default_languages(),
+      preferred_audio_languages: Self::default_languages(),
+      preferred_subtitle_languages: Self::default_languages(),
+      track_names_video: Self::default_track_names_video_audio(),
+      track_names_audio: Self::default_track_names_video_audio(),
+      track_names_subtitle: Self::default_track_names_subtitle(),
     }
   }
 }

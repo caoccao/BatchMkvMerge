@@ -146,7 +146,18 @@
     "attachments": "Allegati",
     "autoSelectOnDrop": "Seleziona automaticamente ad aggiunta file",
     "onlyAutoSelectOnDropForLanguages": "Seleziona automaticamente solo ad aggiunta file per lingua",
-    "resetTemplates": "Ripristina predefiniti"
+    "reset": "Ripristina",
+    "trackSelection": "Selezione tracce",
+    "languages": "Lingue",
+    "trackNames": "Nomi traccia",
+    "trackNamesHint": "Un nome traccia per riga",
+    "filter": "Filtra",
+    "clear": "Cancella",
+    "addAll": "Aggiungi tutto",
+    "removeAll": "Rimuovi tutto",
+    "available": "Disponibile",
+    "preferred": "Preferito",
+    "languagesInstruction": "Trascina le lingue tra le tabelle per aggiungerle o rimuoverle. Trascina all'interno della tabella di destra per riordinarle."
   },
   "about": {
     "title": "Info programma",

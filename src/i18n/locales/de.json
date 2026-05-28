@@ -146,7 +146,18 @@
     "attachments": "Anhänge",
     "autoSelectOnDrop": "Beim Hinzufügen automatisch auswählen",
     "onlyAutoSelectOnDropForLanguages": "Nur beim Hinzufügen automatisch auswählen für Sprachen",
-    "resetTemplates": "Auf Standard zurücksetzen"
+    "reset": "Zurücksetzen",
+    "trackSelection": "Spurauswahl",
+    "languages": "Sprachen",
+    "trackNames": "Spurnamen",
+    "trackNamesHint": "Ein Spurname pro Zeile",
+    "filter": "Filter",
+    "clear": "Löschen",
+    "addAll": "Alle hinzufügen",
+    "removeAll": "Alle entfernen",
+    "available": "Verfügbar",
+    "preferred": "Bevorzugt",
+    "languagesInstruction": "Sprachen zwischen den Tabellen ziehen, um sie hinzuzufügen oder zu entfernen. Innerhalb der rechten Tabelle ziehen, um die Reihenfolge zu ändern."
   },
   "about": {
     "title": "Info",

@@ -146,7 +146,18 @@
     "attachments": "Pièces jointes",
     "autoSelectOnDrop": "Sélectionner automatiquement à l'ajout",
     "onlyAutoSelectOnDropForLanguages": "Sélectionner automatiquement uniquement à l'ajout pour les langues",
-    "resetTemplates": "Rétablir les valeurs par défaut"
+    "reset": "Réinitialiser",
+    "trackSelection": "Sélection des pistes",
+    "languages": "Langues",
+    "trackNames": "Noms de piste",
+    "trackNamesHint": "Un nom de piste par ligne",
+    "filter": "Filtrer",
+    "clear": "Effacer",
+    "addAll": "Tout ajouter",
+    "removeAll": "Tout supprimer",
+    "available": "Disponible",
+    "preferred": "Préféré",
+    "languagesInstruction": "Glissez les langues entre les tables pour les ajouter ou les supprimer. Glissez dans la table de droite pour les réorganiser."
   },
   "about": {
     "title": "À propos",

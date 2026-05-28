@@ -117,9 +117,15 @@ export interface ConfigProfile {
   selectSubtitle: boolean;
   selectChapters: boolean;
   selectAttachments: boolean;
-  videoLanguages: string;
-  audioLanguages: string;
-  subtitleLanguages: string;
+  videoLanguagesForTrackSelection: string;
+  audioLanguagesForTrackSelection: string;
+  subtitleLanguagesForTrackSelection: string;
+  preferredVideoLanguages: string;
+  preferredAudioLanguages: string;
+  preferredSubtitleLanguages: string;
+  trackNamesVideo: Record<string, string>;
+  trackNamesAudio: Record<string, string>;
+  trackNamesSubtitle: Record<string, string>;
 }
 
 export interface ConfigParser {
@@ -150,6 +156,28 @@ export interface Config {
 export const DEFAULT_PROFILE_NAME = "Default";
 export const DEFAULT_LANGUAGES = "eng, chi, spa, ger, fre, jpn";
 
+/** Default per-language track-name presets (one name per line) for video and
+ *  audio tracks. */
+const DEFAULT_TRACK_NAMES_VIDEO_AUDIO: Record<string, string> = {
+  eng: "English",
+  chi: "Mandarin\nCantonese",
+  spa: "Spanish",
+  ger: "German",
+  fre: "French",
+  jpn: "Japanese",
+};
+
+/** Default per-language track-name presets for subtitle tracks (Chinese splits
+ *  into the written forms rather than the spoken ones). */
+const DEFAULT_TRACK_NAMES_SUBTITLE: Record<string, string> = {
+  eng: "English",
+  chi: "Simplified Chinese\nTraditional Chinese",
+  spa: "Spanish",
+  ger: "German",
+  fre: "French",
+  jpn: "Japanese",
+};
+
 export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile {
   const isDefault = name === DEFAULT_PROFILE_NAME;
   return {
@@ -159,9 +187,15 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile
     selectSubtitle: isDefault,
     selectChapters: isDefault,
     selectAttachments: false,
-    videoLanguages: "",
-    audioLanguages: DEFAULT_LANGUAGES,
-    subtitleLanguages: DEFAULT_LANGUAGES,
+    videoLanguagesForTrackSelection: "",
+    audioLanguagesForTrackSelection: DEFAULT_LANGUAGES,
+    subtitleLanguagesForTrackSelection: DEFAULT_LANGUAGES,
+    preferredVideoLanguages: DEFAULT_LANGUAGES,
+    preferredAudioLanguages: DEFAULT_LANGUAGES,
+    preferredSubtitleLanguages: DEFAULT_LANGUAGES,
+    trackNamesVideo: { ...DEFAULT_TRACK_NAMES_VIDEO_AUDIO },
+    trackNamesAudio: { ...DEFAULT_TRACK_NAMES_VIDEO_AUDIO },
+    trackNamesSubtitle: { ...DEFAULT_TRACK_NAMES_SUBTITLE },
   };
 }
 

@@ -146,7 +146,18 @@
     "attachments": "附件",
     "autoSelectOnDrop": "加入檔案時自動選取",
     "onlyAutoSelectOnDropForLanguages": "僅在加入檔案時依語言自動選取",
-    "resetTemplates": "還原預設值"
+    "reset": "重設",
+    "trackSelection": "軌道選擇",
+    "languages": "語言",
+    "trackNames": "軌道名稱",
+    "trackNamesHint": "每行一個軌道名稱",
+    "filter": "篩選",
+    "clear": "清除",
+    "addAll": "全部加入",
+    "removeAll": "全部移除",
+    "available": "可用",
+    "preferred": "偏好",
+    "languagesInstruction": "於兩個表格之間拖曳語言以新增或移除，於右側表格內拖曳以重新排序。"
   },
   "about": {
     "title": "關於",

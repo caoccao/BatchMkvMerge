@@ -146,7 +146,18 @@
     "attachments": "Attachments",
     "autoSelectOnDrop": "Auto-select on file add",
     "onlyAutoSelectOnDropForLanguages": "Only auto-select on file add for languages",
-    "resetTemplates": "Reset to Defaults"
+    "reset": "Reset",
+    "trackSelection": "Track Selection",
+    "languages": "Languages",
+    "trackNames": "Track Names",
+    "trackNamesHint": "One track name per line",
+    "filter": "Filter",
+    "clear": "Clear",
+    "addAll": "Add All",
+    "removeAll": "Remove All",
+    "available": "Available",
+    "preferred": "Preferred",
+    "languagesInstruction": "Drag languages between tables to add or remove them. Drag within the right table to reorder."
   },
   "about": {
     "title": "About",
