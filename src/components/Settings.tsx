@@ -17,6 +17,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import {
+  Autocomplete,
   Box,
   Button,
   Checkbox,
@@ -58,8 +59,8 @@ import { MKV_LANGUAGES } from "../mkvLanguages";
 import { detectBetterMediaInfo, isMkvtoolnixFound } from "../service";
 import { useMkvStore } from "../store";
 import {
-  LanguageAutocomplete,
   buildCombinedLanguageOptions,
+  languageLabel as fullLanguageLabel,
 } from "./TrackCellAutocomplete";
 import { TrackTypeIcon } from "./TrackTypeIcon";
 import { ExternalToolPathRow } from "./settings/ExternalToolPathRow";
@@ -923,6 +924,9 @@ export default function Settings() {
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
+                  color: (trackNamesMap[code] ?? "").trim()
+                    ? "success.main"
+                    : undefined,
                   bgcolor:
                     selectedTrackNameLang === code
                       ? "action.selected"
@@ -1112,20 +1116,45 @@ export default function Settings() {
                         </Typography>
                       }
                     />
-                    <Box sx={{ width: 200 }}>
-                      <LanguageAutocomplete
-                        value={automation.reset_und_language.language}
+                    <Box sx={{ width: 260 }}>
+                      <Autocomplete
+                        size="small"
+                        fullWidth
+                        disableClearable
                         options={langOptions.options}
-                        preferredOptionCount={langOptions.preferredCount}
-                        disabled={false}
-                        onChange={(value) =>
+                        filterOptions={(opts) => opts}
+                        value={automation.reset_und_language.language}
+                        getOptionLabel={(code) => fullLanguageLabel(code)}
+                        renderOption={(props, code, state) => {
+                          const { key, ...rest } = props;
+                          const isFirstRest =
+                            state.index === langOptions.preferredCount &&
+                            langOptions.preferredCount > 0 &&
+                            langOptions.preferredCount <
+                              langOptions.options.length;
+                          return (
+                            <Box
+                              component="li"
+                              key={key}
+                              {...rest}
+                              sx={{
+                                borderTop: isFirstRest ? 1 : 0,
+                                borderColor: "divider",
+                              }}
+                            >
+                              {fullLanguageLabel(code)}
+                            </Box>
+                          );
+                        }}
+                        onChange={(_e, code) =>
                           updateAutomation({
                             reset_und_language: {
                               ...automation.reset_und_language,
-                              language: value,
+                              language: code ?? "",
                             },
                           })
                         }
+                        renderInput={(params) => <TextField {...params} />}
                       />
                     </Box>
                   </Box>

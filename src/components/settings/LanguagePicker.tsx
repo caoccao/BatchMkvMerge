@@ -175,12 +175,14 @@ function DraggableAvailableRow({
   checked,
   onCheck,
   isActive,
+  preferred,
 }: {
   code: string;
   label: string;
   checked: boolean;
   onCheck: (next: boolean) => void;
   isActive: boolean;
+  preferred: boolean;
 }) {
   const { attributes, listeners, setNodeRef } = useDraggable({
     id: `R:${code}`,
@@ -194,7 +196,11 @@ function DraggableAvailableRow({
           onChange={(e) => onCheck(e.target.checked)}
         />
       </Box>
-      <Box sx={propCellSx}>{label}</Box>
+      <Box
+        sx={{ ...propCellSx, color: preferred ? "success.main" : undefined }}
+      >
+        {label}
+      </Box>
     </Box>
   );
 }
@@ -322,6 +328,10 @@ export function LanguagePicker({
   const getLanguageLabel = useCallback(
     (code: string) => labelByCode.get(code) ?? code,
     [labelByCode],
+  );
+  const preferredSet = useMemo(
+    () => new Set(preferredCodes),
+    [preferredCodes],
   );
 
   const [filter, setFilter] = useState("");
@@ -752,6 +762,7 @@ export function LanguagePicker({
                   checked={rightSelection.has(code)}
                   onCheck={(next) => handleToggleRight(code, next)}
                   isActive={activeId === `R:${code}`}
+                  preferred={preferredSet.has(code)}
                 />
               ))}
             </Box>

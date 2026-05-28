@@ -86,7 +86,7 @@ function toMkvCode(value: string): string {
   return MKV_CODE_BY_ANY.get(value.trim().toLowerCase()) ?? value.trim();
 }
 
-function languageLabel(code: string): string {
+export function languageLabel(code: string): string {
   return LABEL_BY_CODE.get(code) ?? code;
 }
 

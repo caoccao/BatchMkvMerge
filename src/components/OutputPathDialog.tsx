@@ -98,25 +98,32 @@ export function OutputPathDialog({
       open={dialogOpen}
       onClose={onClose}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
+        if (e.key === "Escape") {
           e.preventDefault();
-          handleConfirm();
+          onClose();
         }
       }}
-      fullWidth
-      maxWidth="sm"
+      sx={{ "& .MuiDialog-paper": { width: "60vw", maxWidth: "60vw" } }}
     >
       <DialogTitle>{title ?? t("merge.setOutputPath")}</DialogTitle>
       <DialogContent>
         <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
           <TextField
             fullWidth
+            autoFocus
             size="small"
             label={t("merge.outputPath")}
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
               setError(null);
+            }}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleConfirm();
+              }
             }}
           />
           <Button
@@ -134,16 +141,16 @@ export function OutputPathDialog({
           </Alert>
         ) : null}
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} sx={{ textTransform: "none" }}>
-          {t("merge.cancel")}
-        </Button>
+      <DialogActions sx={{ justifyContent: "center", mb: 1 }}>
         <Button
           onClick={handleConfirm}
           variant="contained"
           sx={{ textTransform: "none" }}
         >
           {t("merge.ok")}
+        </Button>
+        <Button onClick={onClose} sx={{ textTransform: "none" }}>
+          {t("merge.cancel")}
         </Button>
       </DialogActions>
     </Dialog>
