@@ -106,10 +106,10 @@ interface MkvStore {
   fileTrackCounts: Record<string, TrackCounts>;
   fileSelectedIds: Record<string, string[]>;
   fileOutputDirs: Record<string, string>;
-  /** Session-only default output dir for newly added files (not persisted).
-   *  Baked into each new file's output dir at add time; empty = use the input
-   *  file's own directory. Changing it never touches existing files. */
-  globalOutputDir: string;
+  /** Session-only default output dir (not persisted). Consulted dynamically at
+   *  merge/command-resolve time as the fallback when a card has no per-file
+   *  override; undefined = fall back to each input file's own directory. */
+  globalOutputDir: string | undefined;
   betterMediaInfoAvailable: boolean;
   /** Id of the currently active card (file path or group key); null = none. */
   activeCard: string | null;
@@ -198,7 +198,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileTrackCounts: {},
   fileSelectedIds: {},
   fileOutputDirs: {},
-  globalOutputDir: "",
+  globalOutputDir: undefined,
   betterMediaInfoAvailable: false,
   activeCard: null,
   notification: null,
@@ -206,17 +206,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     set((state) => {
       const existing = new Set(state.files);
       const toAdd = paths.filter((p) => !existing.has(p));
-      // Bake the current global output dir into each new file as its default
-      // override, so later global changes never affect already-added files.
-      const global = state.globalOutputDir;
-      let fileOutputDirs = state.fileOutputDirs;
-      if (global.length > 0 && toAdd.length > 0) {
-        fileOutputDirs = { ...state.fileOutputDirs };
-        for (const path of toAdd) {
-          fileOutputDirs[path] = global;
-        }
-      }
-      return { files: [...state.files, ...toAdd], fileOutputDirs };
+      return { files: [...state.files, ...toAdd] };
     }),
   removeFile: (path) =>
     set((state) => {
@@ -764,7 +754,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileOutputDirs: next };
     }),
-  setGlobalOutputDir: (dir) => set({ globalOutputDir: dir }),
+  setGlobalOutputDir: (dir) =>
+    set({ globalOutputDir: dir.length > 0 ? dir : undefined }),
   setBetterMediaInfoAvailable: (value) =>
     set({ betterMediaInfoAvailable: value }),
   setActiveCard: (id) => set({ activeCard: id }),

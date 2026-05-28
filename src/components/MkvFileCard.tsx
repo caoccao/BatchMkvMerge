@@ -140,6 +140,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const cachedTracks = useMkvStore((s) => s.fileTracks[path]);
   const storedSelectedIds = useMkvStore((s) => s.fileSelectedIds[path]);
   const outputDirOverride = useMkvStore((s) => s.fileOutputDirs[path]);
+  const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
   const trackCounts = useMkvStore((s) => s.fileTrackCounts[path]);
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
@@ -305,7 +306,11 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     if (!hasSelection || !activeProfile) {
       return null;
     }
-    const outputDir = await resolveOutputDir(path, outputDirOverride);
+    const outputDir = await resolveOutputDir(
+      path,
+      outputDirOverride,
+      globalOutputDir,
+    );
     const outputPath = await resolveMergeOutputPath(outputDir, path);
     return buildCommandString(
       path,

@@ -126,6 +126,7 @@ export function GroupCard({ files }: GroupCardProps) {
   const fileTracksMap = useMkvStore((s) => s.fileTracks);
   const fileSelectedIdsMap = useMkvStore((s) => s.fileSelectedIds);
   const fileOutputDirs = useMkvStore((s) => s.fileOutputDirs);
+  const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
   const fileTrackCounts = useMkvStore((s) => s.fileTrackCounts);
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
@@ -304,7 +305,11 @@ export function GroupCard({ files }: GroupCardProps) {
         if (selectedTracks.length === 0) {
           continue;
         }
-        const outputDir = await resolveOutputDir(file, fileOutputDirs[file]);
+        const outputDir = await resolveOutputDir(
+          file,
+          fileOutputDirs[file],
+          globalOutputDir,
+        );
         const outputPath = await resolveMergeOutputPath(outputDir, file);
         const command = buildCommandString(
           file,

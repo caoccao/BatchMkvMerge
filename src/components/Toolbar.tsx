@@ -413,7 +413,7 @@ export default function Toolbar() {
 
       <OutputPathDialog
         open={globalOutputDialogOpen}
-        initialValue={globalOutputDir}
+        initialValue={globalOutputDir ?? ""}
         title={t("toolbar.setGlobalOutputPath")}
         onConfirm={setGlobalOutputDir}
         onClose={() => setGlobalOutputDialogOpen(false)}

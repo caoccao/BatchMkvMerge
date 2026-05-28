@@ -101,9 +101,13 @@ export function getDriveKey(path: string): string {
 export async function resolveOutputDir(
   file: string,
   override: string | undefined,
+  globalDir: string | undefined,
 ): Promise<string> {
   if (override && override.length > 0) {
     return override;
+  }
+  if (globalDir && globalDir.length > 0) {
+    return globalDir;
   }
   return await dirname(file);
 }
