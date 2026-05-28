@@ -6,6 +6,7 @@
     "delete": "Delete"
   },
   "merge": {
+    "childCount": "{{count}} child file(s) merged into this output",
     "copyCommand": "Copy Command",
     "merge": "Merge",
     "cancel": "Cancel",
@@ -22,6 +23,7 @@
       "id": "ID",
       "type": "Type",
       "codec": "Codec",
+      "description": "Description",
       "size": "Size",
       "bitRate": "Bit Rate",
       "trackName": "Track Name",

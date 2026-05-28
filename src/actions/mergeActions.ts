@@ -15,7 +15,13 @@
  *   limitations under the License.
  */
 
-import { buildMergeArgs, resolveOutputDir, trackKey } from "../merge";
+import {
+  buildMergeArgs,
+  buildMergeArgsMulti,
+  resolveOutputDir,
+  trackKey,
+} from "../merge";
+import type { MergeInput } from "../merge";
 import type { MediaTrack } from "../media-metadata";
 import type { Config, ConfigProfile } from "../protocol";
 import { QueueItemStatus } from "../protocol";
@@ -108,6 +114,58 @@ export async function enqueueSelectedTracksForFile(
   const args = buildMergeArgs(file, outputPath, selectedTracks, profile);
   await enqueueMerge(file, args);
   state.addToQueue(file);
+  return true;
+}
+
+export interface EnqueueSelectedTracksForUnitOptions {
+  /** Root file of the merge tree — the queue key and the output base name. */
+  root: string;
+  /** Member files with their selected tracks, root first. Members with no
+   *  selected tracks are dropped so mkvmerge isn't handed a useless input. */
+  inputs: MergeInput[];
+  profile: ConfigProfile;
+  t: TranslateFn;
+  skipIfActive?: boolean;
+}
+
+/**
+ * Enqueue a multi-file merge tree as ONE output named after `root`. The whole
+ * tree's selected tracks are flattened into a single multi-input mkvmerge
+ * invocation ([`buildMergeArgsMulti`]); the queue is keyed by `root` (an
+ * existing file, so the backend's path validation passes).
+ */
+export async function enqueueSelectedTracksForUnit(
+  options: EnqueueSelectedTracksForUnitOptions,
+): Promise<boolean> {
+  const { root, inputs, profile, t, skipIfActive = true } = options;
+  const nonEmpty = inputs.filter((input) => input.tracks.length > 0);
+  if (nonEmpty.length === 0) {
+    return false;
+  }
+  const state = useMkvStore.getState();
+  const status = state.queueItems[root]?.status;
+  if (skipIfActive && isActiveStatus(status)) {
+    return false;
+  }
+  const outputDir = await resolveOutputDir(
+    root,
+    state.fileOutputDirs[root],
+    state.globalOutputDir,
+  );
+  try {
+    await ensureOutputPath(outputDir);
+  } catch {
+    state.showNotification(
+      "error",
+      root,
+      t("notification.failedCreateOutput", { path: outputDir }),
+    );
+    return false;
+  }
+  const outputPath = await resolveMergeOutputPath(outputDir, root);
+  const args = buildMergeArgsMulti(nonEmpty, outputPath, profile);
+  await enqueueMerge(root, args);
+  state.addToQueue(root);
   return true;
 }
 

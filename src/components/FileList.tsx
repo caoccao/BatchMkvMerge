@@ -21,6 +21,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
 import { formatHMS, getParentDir } from "../merge";
+import { buildForest, combineUnitTracks } from "../file-tree";
+import { mediaTrackCounts } from "../media-metadata";
 import type { MediaTrack } from "../media-metadata";
 import type { MergeFinishedEvent } from "../protocol";
 import { GroupMode, QueueItemStatus } from "../protocol";
@@ -31,8 +33,8 @@ import { MkvFileCard } from "./MkvFileCard";
 import Welcome from "./Welcome";
 
 type RenderEntry =
-  | { kind: "single"; file: string }
-  | { kind: "group"; key: string; files: string[] };
+  | { kind: "single"; members: string[] }
+  | { kind: "group"; key: string; units: string[][] };
 
 const MERGE_POLL_INTERVAL_MS = 200;
 
@@ -56,29 +58,47 @@ export default function FileList() {
   const groupMode = useMkvStore(
     (s) => s.config?.groupMode ?? GroupMode.TrackCount,
   );
+  const groupByFileName = useMkvStore(
+    (s) => s.config?.groupByFileName ?? true,
+  );
   const fileTrackCounts = useMkvStore((s) => s.fileTrackCounts);
   const fileTracks = useMkvStore((s) => s.fileTracks);
 
   const entries = useMemo<RenderEntry[]>(() => {
+    // The atomic unit is a merge tree: when grouping by file name it's a forest
+    // root plus its children; otherwise every file is its own one-member unit.
+    const units: string[][] = groupByFileName
+      ? buildForest(files).map((tree) => tree.members)
+      : files.map((file) => [file]);
+
     if (groupMode === GroupMode.None) {
-      return files.map((file) => ({ kind: "single", file }));
+      return units.map((members) => ({ kind: "single", members }));
     }
-    const buckets = new Map<string, string[]>();
+
+    // Track-count grouping is layered on top of the units: a unit's combined
+    // (flattened) tracks drive its grouping key. A unit whose members aren't all
+    // parsed yet has no key and stays a single card until they load.
+    const buckets = new Map<string, string[][]>();
     const bucketOrder: string[] = [];
-    const ungroupable: string[] = [];
-    for (const file of files) {
-      const counts = fileTrackCounts[file];
-      if (!counts) {
-        ungroupable.push(file);
+    const ungroupable: string[][] = [];
+    for (const members of units) {
+      const allLoaded = members.every(
+        (file) => fileTrackCounts[file] !== undefined,
+      );
+      if (!allLoaded) {
+        ungroupable.push(members);
         continue;
       }
-      const dir = getParentDir(file);
-      let key: string;
+      const combined = combineUnitTracks(members, fileTracks);
+      const counts = mediaTrackCounts(combined);
+      const dir = getParentDir(members[0]);
+      // Member count keeps differently-shaped trees apart so the group's
+      // per-position batch edits line up across units.
+      let key = `${dir}|n=${members.length}`;
       if (groupMode === GroupMode.TrackCountAndLanguage) {
-        const tracks = fileTracks[file] ?? [];
-        key = `${dir}|v=${languageSignature(tracks, "video")}|a=${languageSignature(tracks, "audio")}|s=${languageSignature(tracks, "subtitles")}|c=${counts.chapters}|t=${counts.attachments}`;
+        key += `|v=${languageSignature(combined, "video")}|a=${languageSignature(combined, "audio")}|s=${languageSignature(combined, "subtitles")}|c=${counts.chapters}|t=${counts.attachments}`;
       } else {
-        key = `${dir}|v=${counts.video}|a=${counts.audio}|s=${counts.subtitles}|c=${counts.chapters}|t=${counts.attachments}`;
+        key += `|v=${counts.video}|a=${counts.audio}|s=${counts.subtitles}|c=${counts.chapters}|t=${counts.attachments}`;
       }
       let bucket = buckets.get(key);
       if (!bucket) {
@@ -86,24 +106,24 @@ export default function FileList() {
         buckets.set(key, bucket);
         bucketOrder.push(key);
       }
-      bucket.push(file);
+      bucket.push(members);
     }
     const result: RenderEntry[] = [];
     for (const key of bucketOrder) {
-      const groupFiles = buckets.get(key) ?? [];
-      if (groupFiles.length >= 2) {
-        result.push({ kind: "group", key, files: groupFiles });
+      const groupUnits = buckets.get(key) ?? [];
+      if (groupUnits.length >= 2) {
+        result.push({ kind: "group", key, units: groupUnits });
       } else {
-        for (const file of groupFiles) {
-          result.push({ kind: "single", file });
+        for (const members of groupUnits) {
+          result.push({ kind: "single", members });
         }
       }
     }
-    for (const file of ungroupable) {
-      result.push({ kind: "single", file });
+    for (const members of ungroupable) {
+      result.push({ kind: "single", members });
     }
     return result;
-  }, [files, groupMode, fileTrackCounts, fileTracks]);
+  }, [files, groupByFileName, groupMode, fileTrackCounts, fileTracks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -189,9 +209,9 @@ export default function FileList() {
     <Box>
       {entries.map((entry) =>
         entry.kind === "single" ? (
-          <MkvFileCard key={entry.file} path={entry.file} />
+          <MkvFileCard key={entry.members[0]} memberFiles={entry.members} />
         ) : (
-          <GroupCard key={entry.key} files={entry.files} />
+          <GroupCard key={entry.key} units={entry.units} />
         ),
       )}
     </Box>

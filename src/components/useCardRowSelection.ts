@@ -37,8 +37,13 @@ export function useCardRowSelection(
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(
     () => new Set(),
   );
+  // The keyboard cursor — the "current row" drawn with a dotted outline. Arrow
+  // keys move it; a click moves it to the clicked row.
+  const [cursorKey, setCursorKey] = useState<string | null>(null);
+  const cursorRef = useRef<string | null>(cursorKey);
+  cursorRef.current = cursorKey;
 
-  const toggleRowSelection = useCallback((key: string) => {
+  const invertRowSelection = (key: string) =>
     setSelectedRowKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
@@ -48,6 +53,10 @@ export function useCardRowSelection(
       }
       return next;
     });
+
+  const toggleRowSelection = useCallback((key: string) => {
+    setCursorKey(key);
+    invertRowSelection(key);
   }, []);
 
   // Keep the latest selection / flip callback in refs so the Space listener
@@ -82,6 +91,30 @@ export function useCardRowSelection(
         return;
       }
 
+      // Arrow up/down move the cursor and invert the row selection of the row
+      // it lands on. The merge checkbox is untouched (Space toggles that).
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (inEditable) {
+          return;
+        }
+        const keys = allKeysRef.current;
+        if (keys.length === 0) {
+          return;
+        }
+        e.preventDefault();
+        const current = cursorRef.current;
+        let idx = current ? keys.indexOf(current) : -1;
+        if (e.key === "ArrowDown") {
+          idx = idx < 0 ? 0 : Math.min(keys.length - 1, idx + 1);
+        } else {
+          idx = idx < 0 ? keys.length - 1 : Math.max(0, idx - 1);
+        }
+        const nextKey = keys[idx];
+        setCursorKey(nextKey);
+        invertRowSelection(nextKey);
+        return;
+      }
+
       // Space toggles the checkboxes of the selected rows.
       if (e.key === " " || e.code === "Space") {
         if (
@@ -108,5 +141,11 @@ export function useCardRowSelection(
     [setActiveCard, cardId],
   );
 
-  return { cardActive, activate, selectedRowKeys, toggleRowSelection };
+  return {
+    cardActive,
+    activate,
+    selectedRowKeys,
+    toggleRowSelection,
+    cursorKey,
+  };
 }

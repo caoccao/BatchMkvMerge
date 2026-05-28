@@ -16,6 +16,7 @@
  */
 
 import { dirname, sep as getSep } from "@tauri-apps/api/path";
+import { trackTypeRank } from "./media-metadata";
 import type { MediaTrack } from "./media-metadata";
 import type { ConfigProfile } from "./protocol";
 
@@ -120,30 +121,30 @@ function shellQuote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-/**
- * Build the mkvmerge argv that merges `sourceFile`'s selected `tracks` into a
- * single Matroska file at `outputPath`. Everything before the source file is a
- * per-file option; `--track-order` (global) trails it. Mirrors mkvtoolnix's own
- * merge command (mkvtoolnix-gui `merge/track.cpp`):
- *
- *   mkvmerge -o <out> [-d/-a/-s <ids> | --no-video/audio/subtitles]
- *     [--default-track-flag <id>:0|1] [--forced-display-flag <id>:0|1]
- *     [--no-chapters] [--attachments <ids> | --no-attachments]
- *     <input> --track-order 0:<id>,…
- *
- * `tracks` are the *selected* rows in the table's (possibly drag-reordered)
- * order. The `_profile` is threaded for future merge tuning but unused today.
- */
-export function buildMergeArgs(
-  sourceFile: string,
-  outputPath: string,
-  tracks: MediaTrack[],
-  _profile: ConfigProfile,
-): string[] {
-  const args: string[] = ["-o", outputPath];
+/** One input file plus its selected tracks for a multi-input merge. */
+export interface MergeInput {
+  file: string;
+  tracks: MediaTrack[];
+}
 
-  // Per media type: keep the selected ids (`-d/-a/-s`), or drop the whole type
-  // (`--no-video/...`) when none are selected.
+/** `true` for the three media types that participate in `--track-order`. */
+function isOrderedType(type: string): boolean {
+  return type === "video" || type === "audio" || type === "subtitles";
+}
+
+/**
+ * Append one input file's per-file option block and the file path to `args`.
+ * Mirrors mkvtoolnix-gui's per-file options (`merge/source_file.cpp`): media
+ * type selection (`-d/-a/-s` or `--no-*`), per-track `--language/--track-name`
+ * and default/forced flags (only when explicitly set so "unspecified" keeps the
+ * source flag), chapters, attachments, then the file itself. Track ids are this
+ * file's own namespace, so the same helper serves every input.
+ */
+function appendInputOptions(
+  args: string[],
+  file: string,
+  tracks: MediaTrack[],
+): void {
   const selectByType = (
     type: string,
     selectFlag: string,
@@ -161,11 +162,6 @@ export function buildMergeArgs(
   const audio = selectByType("audio", "-a", "--no-audio");
   const subtitles = selectByType("subtitles", "-s", "--no-subtitles");
 
-  // Per-track language / name / flags. mkvmerge takes each as a `<id>:<value>`
-  // option attached to the source file (mirrors mkvtoolnix-gui's
-  // merge/track.cpp). Language and name are emitted whenever the track carries
-  // a value in the table; default / forced flags only when explicitly set so
-  // "unspecified" preserves the source track's own flag.
   for (const track of [...video, ...audio, ...subtitles]) {
     if (track.language) {
       args.push("--language", `${track.id}:${track.language}`);
@@ -187,11 +183,9 @@ export function buildMergeArgs(
     }
   }
 
-  // Chapters: keep only when the chapters row is selected.
   if (!tracks.some((t) => t.type === "chapters")) {
     args.push("--no-chapters");
   }
-  // Attachments: keep only the selected ones, or none at all.
   const attachmentIds = tracks
     .filter((t) => t.type === "attachment")
     .map((t) => String(t.id));
@@ -201,17 +195,82 @@ export function buildMergeArgs(
     args.push("--attachments", attachmentIds.join(","));
   }
 
-  // Source file — every per-file option above attaches to it.
-  args.push(sourceFile);
+  args.push(file);
+}
+
+/**
+ * Build the mkvmerge argv that merges `sourceFile`'s selected `tracks` into a
+ * single Matroska file at `outputPath`. Everything before the source file is a
+ * per-file option; `--track-order` (global) trails it. Mirrors mkvtoolnix's own
+ * merge command (mkvtoolnix-gui `merge/track.cpp`):
+ *
+ *   mkvmerge -o <out> [-d/-a/-s <ids> | --no-video/audio/subtitles]
+ *     [--default-track-flag <id>:0|1] [--forced-display-flag <id>:0|1]
+ *     [--no-chapters] [--attachments <ids> | --no-attachments]
+ *     <input> --track-order 0:<id>,…
+ *
+ * `tracks` are the *selected* rows in the table's (possibly drag-reordered)
+ * order, which `--track-order` preserves. The `_profile` is threaded for future
+ * merge tuning but unused today.
+ */
+export function buildMergeArgs(
+  sourceFile: string,
+  outputPath: string,
+  tracks: MediaTrack[],
+  _profile: ConfigProfile,
+): string[] {
+  const args: string[] = ["-o", outputPath];
+  appendInputOptions(args, sourceFile, tracks);
 
   // Track order: the selected media tracks, in the table's order. The input
   // file is file id 0.
   const order = tracks
-    .filter(
-      (t) =>
-        t.type === "video" || t.type === "audio" || t.type === "subtitles",
-    )
+    .filter((t) => isOrderedType(t.type))
     .map((t) => `0:${t.id}`);
+  if (order.length > 0) {
+    args.push("--track-order", order.join(","));
+  }
+  return args;
+}
+
+/**
+ * Build the mkvmerge argv that merges multiple `inputs` into one output. Each
+ * input emits its own per-file option block followed by its path (file index =
+ * position in `inputs`, root first), then a single global `--track-order` over
+ * every selected video/audio/subtitle track. The track order is type-major
+ * (video, then audio, then subtitle) and within a type follows input order then
+ * each file's own order — matching the flattened combined table the user sees.
+ * Mirrors mkvtoolnix-gui `merge/mux_config.cpp` (`buildMkvmergeOptions` +
+ * `buildTrackOrder`).
+ */
+export function buildMergeArgsMulti(
+  inputs: MergeInput[],
+  outputPath: string,
+  _profile: ConfigProfile,
+): string[] {
+  const args: string[] = ["-o", outputPath];
+  for (const input of inputs) {
+    appendInputOptions(args, input.file, input.tracks);
+  }
+
+  const ordered: { fileIndex: number; id: number; rank: number; seq: number }[] =
+    [];
+  inputs.forEach((input, fileIndex) => {
+    for (const track of input.tracks) {
+      if (isOrderedType(track.type)) {
+        ordered.push({
+          fileIndex,
+          id: track.id,
+          rank: trackTypeRank(track.type),
+          seq: ordered.length,
+        });
+      }
+    }
+  });
+  // Stable sort by type rank (seq breaks ties so input + within-file order is
+  // preserved) → the combined table order.
+  ordered.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.seq - b.seq));
+  const order = ordered.map((o) => `${o.fileIndex}:${o.id}`);
   if (order.length > 0) {
     args.push("--track-order", order.join(","));
   }
@@ -227,6 +286,17 @@ export function buildCommandString(
 ): string {
   const mkvmergePath = `${mkvToolNixPath}${getSep()}mkvmerge`;
   const args = buildMergeArgs(sourceFile, outputPath, tracks, profile);
+  return [mkvmergePath, ...args].map(shellQuote).join(" ");
+}
+
+export function buildCommandStringMulti(
+  inputs: MergeInput[],
+  outputPath: string,
+  mkvToolNixPath: string,
+  profile: ConfigProfile,
+): string {
+  const mkvmergePath = `${mkvToolNixPath}${getSep()}mkvmerge`;
+  const args = buildMergeArgsMulti(inputs, outputPath, profile);
   return [mkvmergePath, ...args].map(shellQuote).join(" ");
 }
 

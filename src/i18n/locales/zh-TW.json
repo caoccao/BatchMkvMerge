@@ -6,6 +6,7 @@
     "delete": "刪除"
   },
   "merge": {
+    "childCount": "{{count}} 個子檔案合併到此輸出",
     "copyCommand": "複製指令",
     "merge": "合併",
     "cancel": "取消",
@@ -22,6 +23,7 @@
       "id": "ID",
       "type": "類型",
       "codec": "編碼",
+      "description": "描述",
       "size": "大小",
       "bitRate": "位元率",
       "trackName": "軌道名稱",

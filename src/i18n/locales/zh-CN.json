@@ -6,6 +6,7 @@
     "delete": "删除"
   },
   "merge": {
+    "childCount": "{{count}} 个子文件合并到此输出",
     "copyCommand": "复制命令",
     "merge": "合并",
     "cancel": "取消",
@@ -22,6 +23,7 @@
       "id": "ID",
       "type": "类型",
       "codec": "编码",
+      "description": "描述",
       "size": "大小",
       "bitRate": "比特率",
       "trackName": "轨道名称",

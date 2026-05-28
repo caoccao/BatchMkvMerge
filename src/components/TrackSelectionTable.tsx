@@ -120,12 +120,15 @@ function SortableTableRow({
   id,
   disabled,
   selected,
+  cursor,
   onClick,
   children,
 }: {
   id: string;
   disabled: boolean;
   selected: boolean;
+  /** `true` for the keyboard-cursor row — drawn with a dotted outline. */
+  cursor: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -150,7 +153,13 @@ function SortableTableRow({
         transition,
         opacity: isDragging ? 0.4 : undefined,
       }}
-      sx={{ cursor: disabled ? "default" : "grab" }}
+      sx={{
+        cursor: disabled ? "default" : "grab",
+        ...(cursor && {
+          outline: (theme) => `2px dotted ${theme.palette.primary.main}`,
+          outlineOffset: "-2px",
+        }),
+      }}
     >
       {children}
     </TableRow>
@@ -162,6 +171,8 @@ interface TrackSelectionTableProps {
   selectedIds: Set<string>;
   /** UI row-selection (highlight) — independent of the merge checkboxes. */
   selectedRowKeys: Set<string>;
+  /** The keyboard cursor row key, drawn with a dotted outline. */
+  cursorKey?: string | null;
   /** Size / bit-rate display formatting (per stream kind). */
   formatting: ConfigFormatting | null;
   disabled: boolean;
@@ -170,6 +181,7 @@ interface TrackSelectionTableProps {
     id: string;
     type: string;
     codec: string;
+    description: string;
     size: string;
     bitRate: string;
     trackName: string;
@@ -181,6 +193,16 @@ interface TrackSelectionTableProps {
   };
   loading?: boolean;
   errorText?: string | null;
+  /** Row identity used for React keys, dnd ids and selection lookups. Defaults
+   *  to `trackKey`; the merge-tree combined table passes a member-qualified key
+   *  so rows from different source files don't collide. */
+  rowKey?: (track: MediaTrack) => string;
+  /** Label for the ID column. Defaults to the bare track id; the combined
+   *  merge-tree table shows `{fileId}:{trackId}` to disambiguate members. */
+  idLabel?: (track: MediaTrack) => ReactNode;
+  /** Disable drag-reorder (the combined merge-tree table has a fixed,
+   *  deterministic sort, so reordering is meaningless there). */
+  reorderDisabled?: boolean;
   onToggleAll: (checked: boolean) => void;
   onToggleOne: (key: string, checked: boolean) => void;
   /** Toggle a row's UI selection (click on the row, away from its controls). */
@@ -210,12 +232,16 @@ export function TrackSelectionTable({
   tracks,
   selectedIds,
   selectedRowKeys,
+  cursorKey = null,
   formatting,
   disabled,
   emptyText,
   headers,
   loading = false,
   errorText = null,
+  rowKey,
+  idLabel,
+  reorderDisabled = false,
   onToggleAll,
   onToggleOne,
   onToggleRowSelection,
@@ -228,13 +254,18 @@ export function TrackSelectionTable({
   onForcedHeaderClick,
   onReorder,
 }: TrackSelectionTableProps) {
+  const keyOf = rowKey ?? trackKey;
+  const idOf = idLabel ?? ((track: MediaTrack) => track.id);
   const sensors = useSensors(
     useSensor(InteractiveSafePointerSensor, {
       activationConstraint: { distance: 5 },
     }),
   );
-  const sortableIds = tracks.map((track) => trackKey(track));
+  const sortableIds = tracks.map((track) => keyOf(track));
   const handleDragEnd = (event: DragEndEvent) => {
+    if (reorderDisabled) {
+      return;
+    }
     const { active, over } = event;
     if (!over || active.id === over.id) {
       return;
@@ -291,6 +322,7 @@ export function TrackSelectionTable({
                 <TableCell>{headers.id}</TableCell>
                 <TableCell>{headers.type}</TableCell>
                 <TableCell>{headers.codec}</TableCell>
+                <TableCell>{headers.description}</TableCell>
                 <TableCell>{headers.size}</TableCell>
                 <TableCell>{headers.bitRate}</TableCell>
                 <TableCell>{headers.language}</TableCell>
@@ -327,13 +359,14 @@ export function TrackSelectionTable({
             </TableHead>
             <TableBody>
               {tracks.map((track) => {
-                const key = trackKey(track);
+                const key = keyOf(track);
                 return (
                   <SortableTableRow
                     key={key}
                     id={key}
-                    disabled={disabled}
+                    disabled={disabled || reorderDisabled}
                     selected={selectedRowKeys.has(key)}
+                    cursor={key === cursorKey}
                     onClick={() => onToggleRowSelection(key)}
                   >
                     <TableCell
@@ -347,11 +380,12 @@ export function TrackSelectionTable({
                         onChange={(e) => onToggleOne(key, e.target.checked)}
                       />
                     </TableCell>
-                    <TableCell>{track.id}</TableCell>
+                    <TableCell>{idOf(track)}</TableCell>
                     <TableCell>
                       <TrackTypeIcon type={track.type} />
                     </TableCell>
                     <TableCell>{track.codec}</TableCell>
+                    <TableCell>{track.description}</TableCell>
                     <TableCell>
                       {track.size != null
                         ? formatTrackSize(track.size, track.type, formatting)

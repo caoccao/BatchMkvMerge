@@ -6,6 +6,7 @@
     "delete": "Löschen"
   },
   "merge": {
+    "childCount": "{{count}} untergeordnete Datei(en) in diese Ausgabe zusammengeführt",
     "copyCommand": "Befehl kopieren",
     "merge": "Zusammenführen",
     "cancel": "Abbrechen",
@@ -22,6 +23,7 @@
       "id": "ID",
       "type": "Typ",
       "codec": "Codec",
+      "description": "Beschreibung",
       "size": "Größe",
       "bitRate": "Bitrate",
       "trackName": "Spurname",

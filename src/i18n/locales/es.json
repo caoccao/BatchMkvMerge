@@ -6,6 +6,7 @@
     "delete": "Eliminar"
   },
   "merge": {
+    "childCount": "{{count}} archivo(s) secundario(s) combinado(s) en esta salida",
     "copyCommand": "Copiar comando",
     "merge": "Combinar",
     "cancel": "Cancelar",
@@ -22,6 +23,7 @@
       "id": "ID",
       "type": "Tipo",
       "codec": "Códec",
+      "description": "Descripción",
       "size": "Tamaño",
       "bitRate": "Tasa de bits",
       "trackName": "Nombre de pista",

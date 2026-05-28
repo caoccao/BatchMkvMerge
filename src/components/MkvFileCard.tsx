@@ -15,9 +15,10 @@
  *   limitations under the License.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Badge,
   Box,
   Button,
   Card,
@@ -41,22 +42,31 @@ import { useTranslation } from "react-i18next";
 import {
   cancelMerge,
   enqueueSelectedTracksForFile,
+  enqueueSelectedTracksForUnit,
 } from "../actions/mergeActions";
 import {
   buildCommandString,
+  buildCommandStringMulti,
   formatHMS,
-  makeTrackSelector,
   resolveOutputDir,
   trackKey,
 } from "../merge";
-import type { MediaMetadataError } from "../protocol";
+import type { MergeInput } from "../merge";
+import {
+  applyUnitFlagAutomation,
+  combineUnitTracks,
+  parseRowKey,
+  rowKeyOf,
+} from "../file-tree";
+import type { CombinedTrack } from "../file-tree";
 import { QueueItemStatus } from "../protocol";
 import {
-  getMediaMetadata,
   launchBetterMediaInfo,
   resolveMergeOutputPath,
 } from "../service";
-import { useMkvStore } from "../store";
+import { mediaTrackCounts } from "../media-metadata";
+import { nextTrackFlag, useMkvStore } from "../store";
+import type { TrackFlagKind } from "../store";
 import { CardSummary } from "./CardSummary";
 import { FileStatusIcon } from "./FileStatusIcon";
 import { OutputPathDialog } from "./OutputPathDialog";
@@ -66,82 +76,37 @@ import {
   buildTrackNameOptions,
 } from "./TrackCellAutocomplete";
 import { useCardRowSelection } from "./useCardRowSelection";
+import { useFilesLoad } from "./useFilesLoad";
 
 interface MkvFileCardProps {
-  path: string;
+  /** The merge unit's member files, root first. A single-member unit is the
+   *  ordinary one-file card; a multi-member unit is a *Group by file name* tree
+   *  flattened into one combined table that merges into one output. */
+  memberFiles: string[];
 }
 
-type TranslateFn = (
-  key: string,
-  options?: Record<string, string | number>,
-) => string;
-
-function isMediaMetadataError(value: unknown): value is MediaMetadataError {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "kind" in value &&
-    typeof (value as { kind: unknown }).kind === "string"
-  );
-}
-
-/**
- * Map a `get_media_metadata` rejection to a human-readable string. Backend
- * categorises every failure into one of the [`MediaMetadataError`] tagged
- * variants; the i18n keys live under `merge.error.parser.*`. Unrecognised
- * values fall back to `String(err)` so debug output is never silently lost.
- */
-function formatMetadataError(err: unknown, t: TranslateFn): string {
-  if (isMediaMetadataError(err)) {
-    switch (err.kind) {
-      case "io":
-        return t("merge.error.parser.io", { detail: err.detail });
-      case "unexpectedEof":
-        return t("merge.error.parser.unexpectedEof", { detail: err.detail });
-      case "unrecognised":
-        return t("merge.error.parser.unrecognised", { detail: err.detail });
-      case "timeout":
-        return t("merge.error.parser.timeout", {
-          budgetMs: err.budgetMs,
-          stage: err.stage,
-          detail: err.detail,
-        });
-      case "malformed":
-        return t("merge.error.parser.malformed", { detail: err.detail });
-      case "oversizedElement":
-        return t("merge.error.parser.oversizedElement", {
-          detail: err.detail,
-        });
-      case "internal":
-        return t("merge.error.parser.internal", { detail: err.detail });
-    }
-  }
-  return String(err);
-}
-
-export function MkvFileCard({ path }: MkvFileCardProps) {
+export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const { t } = useTranslation();
+  const root = memberFiles[0];
+  const isMulti = memberFiles.length > 1;
+  const childCount = memberFiles.length - 1;
+
   const removeFile = useMkvStore((s) => s.removeFile);
   const mkvToolNixPath = useMkvStore(
     (s) => s.config?.externalTools?.mkvToolNixPath ?? "",
   );
-  const entry = useMkvStore((s) => s.queueItems[path]);
-  const setFileMetadata = useMkvStore((s) => s.setFileMetadata);
-  const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
-  const cycleTrackFlag = useMkvStore((s) => s.cycleTrackFlag);
-  const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
-  const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
-  const reorderTracks = useMkvStore((s) => s.reorderTracks);
+  const entry = useMkvStore((s) => s.queueItems[root]);
   const setTrackLanguage = useMkvStore((s) => s.setTrackLanguage);
   const setTrackName = useMkvStore((s) => s.setTrackName);
-  const applyAutomationToFile = useMkvStore((s) => s.applyAutomationToFile);
+  const setTrackFlag = useMkvStore((s) => s.setTrackFlag);
+  const reorderTracks = useMkvStore((s) => s.reorderTracks);
+  const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
   const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
   const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
-  const cachedTracks = useMkvStore((s) => s.fileTracks[path]);
-  const storedSelectedIds = useMkvStore((s) => s.fileSelectedIds[path]);
-  const outputDirOverride = useMkvStore((s) => s.fileOutputDirs[path]);
+  const fileTracksMap = useMkvStore((s) => s.fileTracks);
+  const fileSelectedIdsMap = useMkvStore((s) => s.fileSelectedIds);
+  const outputDirOverride = useMkvStore((s) => s.fileOutputDirs[root]);
   const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
-  const trackCounts = useMkvStore((s) => s.fileTrackCounts[path]);
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
   );
@@ -158,19 +123,12 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     );
   });
 
+  const { loading, error } = useFilesLoad(memberFiles, t);
+
   const isMerging = entry?.status === QueueItemStatus.Merging;
   const isQueued = entry?.status === QueueItemStatus.Waiting;
   const isActive = isMerging || isQueued;
 
-  const [loading, setLoading] = useState<boolean>(
-    () => cachedTracks === undefined,
-  );
-  const [error, setError] = useState<string | null>(null);
-  const tracks = cachedTracks ?? [];
-  const selectedIds = useMemo(
-    () => new Set<string>(storedSelectedIds ?? []),
-    [storedSelectedIds],
-  );
   const [snackbar, setSnackbar] = useState<{
     message: string;
     severity: "success" | "error";
@@ -178,145 +136,220 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const [outputDialogOpen, setOutputDialogOpen] = useState(false);
   const [outputDialogInitial, setOutputDialogInitial] = useState("");
 
-  useEffect(() => {
-    if (storedSelectedIds !== undefined) {
-      return;
-    }
-    if (tracks.length === 0 || !activeProfile) {
-      return;
-    }
-    const auto: string[] = [];
-    const selectTrack = makeTrackSelector(activeProfile);
-    for (const track of tracks) {
-      if (selectTrack(track)) {
-        auto.push(trackKey(track));
-      }
-    }
-    setFileSelectedIds(path, auto);
-  }, [path, tracks, activeProfile, storedSelectedIds, setFileSelectedIds]);
-
-  useEffect(() => {
-    if (useMkvStore.getState().fileTracks[path] !== undefined) {
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    getMediaMetadata(path)
-      .then((metadata) => {
-        if (cancelled) {
-          return;
-        }
-        setFileMetadata(path, metadata);
-        // Apply per-profile automation once, to this newly added file.
-        const cfg = useMkvStore.getState().config;
-        const profile = cfg
-          ? cfg.profiles.find((p) => p.name === cfg.activeProfile) ??
-            cfg.profiles[0] ??
-            null
-          : null;
-        const automation = profile?.automation;
-        if (
-          profile &&
-          automation &&
-          (automation.reset_und_language.enabled ||
-            automation.set_track_name.enabled ||
-            automation.reset_default_track.enabled ||
-            automation.reset_forced_display.enabled)
-        ) {
-          applyAutomationToFile(path, automation, (type, language) =>
-            buildTrackNameOptions(profile, type, language)[0],
-          );
-        }
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setError(formatMetadataError(err, t));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, t, setFileMetadata, applyAutomationToFile]);
-
-  const selectedTracks = tracks.filter((track) =>
-    selectedIds.has(trackKey(track)),
+  // The whole tree flattened into one stable, sorted track list.
+  const combined = useMemo<CombinedTrack[]>(
+    () => combineUnitTracks(memberFiles, fileTracksMap),
+    [memberFiles, fileTracksMap],
   );
-  const hasSelection = selectedTracks.length > 0;
+  const trackCounts = useMemo(() => mediaTrackCounts(combined), [combined]);
+  const allRowKeys = useMemo(() => combined.map(rowKeyOf), [combined]);
 
-  const toggleAll = (checked: boolean) => {
-    setFileSelectedIds(
-      path,
-      checked ? tracks.map((t) => trackKey(t)) : [],
-    );
-  };
+  // Selection lives per-file in the store; lift each member's bare keys into
+  // the combined `${memberIndex}:${type}:${id}` space the table renders.
+  const selectedIds = useMemo(() => {
+    const ids = new Set<string>();
+    memberFiles.forEach((file, memberIndex) => {
+      for (const bareKey of fileSelectedIdsMap[file] ?? []) {
+        ids.add(`${memberIndex}:${bareKey}`);
+      }
+    });
+    return ids;
+  }, [memberFiles, fileSelectedIdsMap]);
 
-  const flipMergeSelection = (keys: string[]) => {
-    const current = new Set(storedSelectedIds ?? []);
-    for (const key of keys) {
-      if (current.has(key)) {
-        current.delete(key);
+  const hasSelection = selectedIds.size > 0;
+
+  // Group a set of combined row keys by their source file → that file's bare
+  // keys, so a single logical edit fans out to the right per-file mutation.
+  const groupByFile = (rowKeys: string[]): Map<string, string[]> => {
+    const map = new Map<string, string[]>();
+    for (const rk of rowKeys) {
+      const { memberIndex, bareKey } = parseRowKey(rk);
+      const file = memberFiles[memberIndex];
+      if (!file) {
+        continue;
+      }
+      const arr = map.get(file);
+      if (arr) {
+        arr.push(bareKey);
       } else {
-        current.add(key);
+        map.set(file, [bareKey]);
       }
     }
-    setFileSelectedIds(path, [...current]);
+    return map;
   };
 
-  const { cardActive, activate, selectedRowKeys, toggleRowSelection } =
-    useCardRowSelection(
-      path,
-      isActive,
-      flipMergeSelection,
-      tracks.map((track) => trackKey(track)),
-    );
+  const {
+    cardActive,
+    activate,
+    selectedRowKeys,
+    toggleRowSelection,
+    cursorKey,
+  } = useCardRowSelection(
+    root,
+    isActive,
+    (keys) => flipMergeSelection(keys),
+    allRowKeys,
+  );
 
-  // A per-row edit (checkbox, default/forced flags, language, name) applies to
-  // every selected row when the edited row is part of the selection; otherwise
-  // just to itself. The clicked key stays first so flag-cycling reads its value.
   const resolveTargetRowKeys = (key: string): string[] =>
     selectedRowKeys.has(key)
       ? [key, ...[...selectedRowKeys].filter((k) => k !== key)]
       : [key];
 
-  const toggleOne = (key: string, checked: boolean) => {
-    const targets = resolveTargetRowKeys(key);
-    const current = storedSelectedIds ?? [];
-    if (checked) {
-      const existing = new Set(current);
-      setFileSelectedIds(path, [
-        ...current,
-        ...targets.filter((k) => !existing.has(k)),
-      ]);
-    } else {
-      const remove = new Set(targets);
-      setFileSelectedIds(
-        path,
-        current.filter((k) => !remove.has(k)),
-      );
+  function flipMergeSelection(rowKeys: string[]) {
+    for (const [file, bareKeys] of groupByFile(rowKeys)) {
+      const current = new Set(fileSelectedIdsMap[file] ?? []);
+      for (const k of bareKeys) {
+        if (current.has(k)) {
+          current.delete(k);
+        } else {
+          current.add(k);
+        }
+      }
+      setFileSelectedIds(file, [...current]);
+    }
+  }
+
+  const toggleAll = (checked: boolean) => {
+    memberFiles.forEach((file) => {
+      const tracks = fileTracksMap[file] ?? [];
+      setFileSelectedIds(file, checked ? tracks.map((tk) => trackKey(tk)) : []);
+    });
+  };
+
+  const toggleOne = (rowKey: string, checked: boolean) => {
+    for (const [file, bareKeys] of groupByFile(resolveTargetRowKeys(rowKey))) {
+      const current = fileSelectedIdsMap[file] ?? [];
+      if (checked) {
+        const existing = new Set(current);
+        setFileSelectedIds(file, [
+          ...current,
+          ...bareKeys.filter((k) => !existing.has(k)),
+        ]);
+      } else {
+        const remove = new Set(bareKeys);
+        setFileSelectedIds(
+          file,
+          current.filter((k) => !remove.has(k)),
+        );
+      }
     }
   };
+
+  const onTrackLanguageChange = (rowKey: string, value: string) => {
+    for (const [file, bareKeys] of groupByFile(resolveTargetRowKeys(rowKey))) {
+      setTrackLanguage([file], bareKeys, value);
+    }
+  };
+
+  const onTrackNameChange = (rowKey: string, value: string) => {
+    for (const [file, bareKeys] of groupByFile(resolveTargetRowKeys(rowKey))) {
+      setTrackName([file], bareKeys, value);
+    }
+  };
+
+  const onCycleFlag = (rowKey: string, kind: TrackFlagKind) => {
+    const clicked = combined.find((tk) => rowKeyOf(tk) === rowKey);
+    if (!clicked) {
+      return;
+    }
+    const current = kind === "default" ? clicked.defaultTrack : clicked.forced;
+    const value = nextTrackFlag(current);
+    for (const [file, bareKeys] of groupByFile(resolveTargetRowKeys(rowKey))) {
+      setTrackFlag([file], bareKeys, kind, value);
+    }
+  };
+
+  const onDefaultHeaderClick = () =>
+    applyUnitFlagAutomation(
+      memberFiles,
+      fileTracksMap,
+      fileSelectedIdsMap,
+      { resetDefault: true, resetForced: false },
+      setTrackFlag,
+    );
+
+  const onForcedHeaderClick = () =>
+    applyUnitFlagAutomation(
+      memberFiles,
+      fileTracksMap,
+      fileSelectedIdsMap,
+      { resetDefault: false, resetForced: true },
+      setTrackFlag,
+    );
+
+  const onReorder = (fromRowKey: string, toRowKey: string) => {
+    if (isMulti) {
+      return;
+    }
+    reorderTracks(
+      [root],
+      parseRowKey(fromRowKey).bareKey,
+      parseRowKey(toRowKey).bareKey,
+    );
+  };
+
+  // Apply the profile's default/forced automation once — only after the WHOLE
+  // unit (the flattened tree) is loaded and auto-selected, so it picks one
+  // default per type across the merged file rather than one per member.
+  const flagAutomationDone = useRef(false);
+  useEffect(() => {
+    if (flagAutomationDone.current || !activeProfile) {
+      return;
+    }
+    const ready = memberFiles.every(
+      (f) =>
+        fileTracksMap[f] !== undefined && fileSelectedIdsMap[f] !== undefined,
+    );
+    if (!ready) {
+      return;
+    }
+    flagAutomationDone.current = true;
+    applyUnitFlagAutomation(
+      memberFiles,
+      fileTracksMap,
+      fileSelectedIdsMap,
+      {
+        resetDefault: activeProfile.automation?.reset_default_track.enabled ?? false,
+        resetForced: activeProfile.automation?.reset_forced_display.enabled ?? false,
+      },
+      setTrackFlag,
+    );
+  }, [memberFiles, activeProfile, fileTracksMap, fileSelectedIdsMap, setTrackFlag]);
+
+  // Per-member selected tracks (in each file's own order) for the merge command.
+  const mergeInputs = (): MergeInput[] =>
+    memberFiles.map((file) => {
+      const sel = new Set(fileSelectedIdsMap[file] ?? []);
+      const tracks = (fileTracksMap[file] ?? []).filter((tk) =>
+        sel.has(trackKey(tk)),
+      );
+      return { file, tracks };
+    });
 
   const buildCurrentCommand = async (): Promise<string | null> => {
     if (!hasSelection || !activeProfile) {
       return null;
     }
     const outputDir = await resolveOutputDir(
-      path,
+      root,
       outputDirOverride,
       globalOutputDir,
     );
-    const outputPath = await resolveMergeOutputPath(outputDir, path);
+    const outputPath = await resolveMergeOutputPath(outputDir, root);
+    if (isMulti) {
+      return buildCommandStringMulti(
+        mergeInputs().filter((i) => i.tracks.length > 0),
+        outputPath,
+        mkvToolNixPath,
+        activeProfile,
+      );
+    }
     return buildCommandString(
-      path,
+      root,
       outputPath,
       mkvToolNixPath,
-      selectedTracks,
+      mergeInputs()[0]?.tracks ?? [],
       activeProfile,
     );
   };
@@ -328,10 +361,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
         return;
       }
       await writeText(command);
-      setSnackbar({
-        message: t("merge.commandCopied"),
-        severity: "success",
-      });
+      setSnackbar({ message: t("merge.commandCopied"), severity: "success" });
     } catch (err) {
       setSnackbar({ message: String(err), severity: "error" });
     }
@@ -342,19 +372,28 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       return;
     }
     try {
-      await enqueueSelectedTracksForFile({
-        file: path,
-        selectedTracks,
-        profile: activeProfile,
-        t,
-      });
+      if (isMulti) {
+        await enqueueSelectedTracksForUnit({
+          root,
+          inputs: mergeInputs(),
+          profile: activeProfile,
+          t,
+        });
+      } else {
+        await enqueueSelectedTracksForFile({
+          file: root,
+          selectedTracks: mergeInputs()[0]?.tracks ?? [],
+          profile: activeProfile,
+          t,
+        });
+      }
     } catch (err) {
       setSnackbar({ message: String(err), severity: "error" });
     }
   };
 
   const handleCancel = async () => {
-    await cancelMerge(path, (err) =>
+    await cancelMerge(root, (err) =>
       setSnackbar({ message: String(err), severity: "error" }),
     );
   };
@@ -365,7 +404,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       initial = outputDirOverride;
     } else {
       try {
-        initial = await dirname(path);
+        initial = await dirname(root);
       } catch {
         initial = "";
       }
@@ -376,7 +415,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
 
   const handleOpenInBetterMediaInfo = async () => {
     try {
-      await launchBetterMediaInfo([path]);
+      await launchBetterMediaInfo([root]);
     } catch (err) {
       setSnackbar({ message: String(err), severity: "error" });
     }
@@ -384,35 +423,60 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
 
   const handleOutputConfirm = (value: string) => {
     if (value.length === 0) {
-      clearFileOutputDir(path);
+      clearFileOutputDir(root);
     } else {
-      setFileOutputDir(path, value);
+      setFileOutputDir(root, value);
     }
   };
 
   const handleDelete = async () => {
-    const current = useMkvStore.getState().queueItems[path];
+    const current = useMkvStore.getState().queueItems[root];
     if (current?.status === QueueItemStatus.Merging) {
       return;
     }
     if (current?.status === QueueItemStatus.Waiting) {
-      await cancelMerge(path);
-      const later = useMkvStore.getState().queueItems[path];
+      await cancelMerge(root);
+      const later = useMkvStore.getState().queueItems[root];
       if (later?.status === QueueItemStatus.Merging) {
         return;
       }
-      useMkvStore.getState().removeFromQueue(path);
+      useMkvStore.getState().removeFromQueue(root);
     }
-    removeFile(path);
+    for (const file of memberFiles) {
+      removeFile(file);
+    }
   };
-
 
   const titleContent = (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
       <FileStatusIcon status={entry?.status} />
-      <Typography variant="body2" sx={{ wordBreak: "break-all" }}>
-        {path}
-      </Typography>
+      {isMulti ? (
+        <Badge
+          color="primary"
+          badgeContent={childCount}
+          max={999}
+          sx={{
+            "& .MuiBadge-badge": {
+              position: "static",
+              transform: "none",
+              fontSize: "0.6rem",
+              height: 15,
+              minWidth: 15,
+              px: 0.5,
+            },
+          }}
+        >
+          <Tooltip title={t("merge.childCount", { count: childCount })}>
+            <Typography variant="body2" sx={{ wordBreak: "break-all", mr: 1 }}>
+              {root}
+            </Typography>
+          </Tooltip>
+        </Badge>
+      ) : (
+        <Typography variant="body2" sx={{ wordBreak: "break-all" }}>
+          {root}
+        </Typography>
+      )}
     </Box>
   );
 
@@ -502,10 +566,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       <CardHeader
         title={titleContent}
         subheader={
-          <CardSummary
-            counts={trackCounts}
-            outputPath={outputDirOverride}
-          />
+          <CardSummary counts={trackCounts} outputPath={outputDirOverride} />
         }
         action={actionContent}
         sx={{
@@ -534,9 +595,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
                   height: 6,
                   borderRadius: 1,
                   bgcolor: "action.hover",
-                  "& .MuiLinearProgress-bar": {
-                    bgcolor: "success.main",
-                  },
+                  "& .MuiLinearProgress-bar": { bgcolor: "success.main" },
                 }}
               />
               <Typography
@@ -563,18 +622,27 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
       )}
       <CardContent sx={{ pt: 0, "&.MuiCardContent-root:last-child": { pb: 2 } }}>
         <TrackSelectionTable
-          tracks={tracks}
+          tracks={combined}
           selectedIds={selectedIds}
           selectedRowKeys={selectedRowKeys}
+          cursorKey={cursorKey}
           formatting={formatting}
           disabled={isActive}
           loading={loading}
           errorText={error}
+          rowKey={(tk) => rowKeyOf(tk as CombinedTrack)}
+          idLabel={
+            isMulti
+              ? (tk) => `${(tk as CombinedTrack).memberIndex}:${tk.id}`
+              : undefined
+          }
+          reorderDisabled={isMulti}
           emptyText={t("merge.noTracks")}
           headers={{
             id: t("merge.header.id"),
             type: t("merge.header.type"),
             codec: t("merge.header.codec"),
+            description: t("merge.header.description"),
             size: t("merge.header.size"),
             bitRate: t("merge.header.bitRate"),
             trackName: t("merge.header.trackName"),
@@ -589,18 +657,12 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           trackNameOptionsFor={(type, language) =>
             buildTrackNameOptions(activeProfile, type, language)
           }
-          onTrackLanguageChange={(key, value) =>
-            setTrackLanguage([path], resolveTargetRowKeys(key), value)
-          }
-          onTrackNameChange={(key, value) =>
-            setTrackName([path], resolveTargetRowKeys(key), value)
-          }
-          onCycleFlag={(key, kind) =>
-            cycleTrackFlag([path], resolveTargetRowKeys(key), kind)
-          }
-          onDefaultHeaderClick={() => setDefaultTrackByType([path])}
-          onForcedHeaderClick={() => clearForcedFlags([path])}
-          onReorder={(from, to) => reorderTracks([path], from, to)}
+          onTrackLanguageChange={onTrackLanguageChange}
+          onTrackNameChange={onTrackNameChange}
+          onCycleFlag={onCycleFlag}
+          onDefaultHeaderClick={onDefaultHeaderClick}
+          onForcedHeaderClick={onForcedHeaderClick}
+          onReorder={onReorder}
         />
       </CardContent>
       <Snackbar

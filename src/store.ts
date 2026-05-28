@@ -30,11 +30,11 @@ import type {
   TrackFlag,
 } from "./protocol";
 
-/** Which track flag a `cycleTrackFlag` call targets. */
+/** Which track flag a `setTrackFlag` call targets. */
 export type TrackFlagKind = "default" | "forced";
 
 /** Cycle a tri-state flag: checked → unchecked → unspecified → checked. */
-function nextTrackFlag(flag: TrackFlag): TrackFlag {
+export function nextTrackFlag(flag: TrackFlag): TrackFlag {
   if (flag === "true") {
     return "false";
   }
@@ -144,15 +144,17 @@ interface MkvStore {
   setFileMetadata: (file: string, metadata: MediaMetadata) => void;
   setFileTrackCounts: (file: string, counts: TrackCounts) => void;
   setFileSelectedIds: (file: string, ids: string[]) => void;
-  setGroupSelectedIds: (files: string[], ids: string[]) => void;
-  /** Cycle the default/forced flag (true → false → unspecified → true) on the
-   *  matching track across all given files. */
-  cycleTrackFlag: (files: string[], keys: string[], kind: TrackFlagKind) => void;
-  /** Header action: set the first video/audio/subtitle track's default flag to
-   *  true and every other track's to false. */
-  setDefaultTrackByType: (files: string[]) => void;
-  /** Header action: reset the forced flag to unspecified on every track. */
-  clearForcedFlags: (files: string[]) => void;
+  /** Set a track flag to an explicit value on matching keys across the given
+   *  files. Cards compute the next value (cycling true → false → unspecified)
+   *  from the clicked row, then apply it — the combined merge-tree table maps a
+   *  single logical edit to heterogeneous per-file keys, so a card-side cycle is
+   *  the only consistent option. */
+  setTrackFlag: (
+    files: string[],
+    keys: string[],
+    kind: TrackFlagKind,
+    value: TrackFlag,
+  ) => void;
   /** Drag-reorder: move the `fromKey` row to `toKey`'s position in every given
    *  file that contains both rows. The track `id` is intrinsic and unchanged —
    *  only the row order changes. */
@@ -161,12 +163,13 @@ interface MkvStore {
   setTrackLanguage: (files: string[], keys: string[], value: string) => void;
   /** Set the editable track name on every matching track key across all files. */
   setTrackName: (files: string[], keys: string[], value: string) => void;
-  /** Apply the active profile's automation to a freshly-parsed file's tracks
-   *  (run once per newly added file). Steps run in order: reset-und-language,
-   *  set-track-name (sees the updated language), reset-default-track,
-   *  reset-forced-display. `presetFor` resolves the per-language track-name
-   *  preset (passed in so the store doesn't depend on the UI's language
-   *  lookups). */
+  /** Apply the active profile's *language/name* automation to a freshly-parsed
+   *  file's tracks (run once per newly added file): reset-und-language then
+   *  set-track-name (which sees the updated language). The default/forced
+   *  automation is applied separately by [`applyFlagAutomationToFile`] *after*
+   *  auto-selection so it can be scoped to the checked tracks. `presetFor`
+   *  resolves the per-language track-name preset (passed in so the store
+   *  doesn't depend on the UI's language lookups). */
   applyAutomationToFile: (
     file: string,
     automation: ConfigAutomation,
@@ -544,30 +547,12 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     set((state) => ({
       fileSelectedIds: { ...state.fileSelectedIds, [file]: ids },
     })),
-  setGroupSelectedIds: (files, ids) =>
-    set((state) => {
-      const next = { ...state.fileSelectedIds };
-      for (const f of files) {
-        next[f] = ids;
-      }
-      return { fileSelectedIds: next };
-    }),
-  cycleTrackFlag: (files, keys, kind) =>
+  setTrackFlag: (files, keys, kind, value) =>
     set((state) => {
       if (keys.length === 0) {
         return {};
       }
       const field = kind === "default" ? "defaultTrack" : "forced";
-      // Cycle from the clicked row (first key) and apply that value to every
-      // target key, so a multi-row edit stays consistent.
-      const baseKey = keys[0];
-      const ref = (state.fileTracks[files[0]] ?? []).find(
-        (t) => trackKey(t) === baseKey,
-      );
-      if (!ref) {
-        return {};
-      }
-      const value = nextTrackFlag(ref[field]);
       const keySet = new Set(keys);
       const fileTracks = { ...state.fileTracks };
       for (const file of files) {
@@ -577,44 +562,6 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         }
         fileTracks[file] = list.map((t) =>
           keySet.has(trackKey(t)) ? { ...t, [field]: value } : t,
-        );
-      }
-      return { fileTracks };
-    }),
-  setDefaultTrackByType: (files) =>
-    set((state) => {
-      const fileTracks = { ...state.fileTracks };
-      for (const file of files) {
-        const list = fileTracks[file];
-        if (!list) {
-          continue;
-        }
-        const claimed = new Set<string>();
-        fileTracks[file] = list.map((t): MediaTrack => {
-          if (t.kind !== "track") {
-            return t;
-          }
-          const isPrimaryType =
-            t.type === "video" || t.type === "audio" || t.type === "subtitles";
-          if (isPrimaryType && !claimed.has(t.type)) {
-            claimed.add(t.type);
-            return { ...t, defaultTrack: "true" };
-          }
-          return { ...t, defaultTrack: "false" };
-        });
-      }
-      return { fileTracks };
-    }),
-  clearForcedFlags: (files) =>
-    set((state) => {
-      const fileTracks = { ...state.fileTracks };
-      for (const file of files) {
-        const list = fileTracks[file];
-        if (!list) {
-          continue;
-        }
-        fileTracks[file] = list.map((t): MediaTrack =>
-          t.kind === "track" ? { ...t, forced: "unspecified" } : t,
         );
       }
       return { fileTracks };
@@ -680,13 +627,13 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       const resetUnd = automation.reset_und_language;
       const setName = automation.set_track_name.enabled;
-      const resetDefault = automation.reset_default_track.enabled;
-      const resetForced = automation.reset_forced_display.enabled;
-      if (!resetUnd.enabled && !setName && !resetDefault && !resetForced) {
+      if (!resetUnd.enabled && !setName) {
         return {};
       }
-      // 1 & 2: per-track language then name (name sees the updated language).
-      let next = list.map((track): MediaTrack => {
+      // Per-track language then name (name sees the updated language). The
+      // default/forced steps live in `applyFlagAutomationToFile`, run after
+      // auto-selection so they can be scoped to the checked tracks.
+      const next = list.map((track): MediaTrack => {
         if (track.kind !== "track") {
           return track;
         }
@@ -702,30 +649,6 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         }
         return updated;
       });
-      // 3: reset default track — first video/audio/subtitle track on, rest off.
-      if (resetDefault) {
-        const claimed = new Set<string>();
-        next = next.map((track): MediaTrack => {
-          if (track.kind !== "track") {
-            return track;
-          }
-          const isPrimary =
-            track.type === "video" ||
-            track.type === "audio" ||
-            track.type === "subtitles";
-          if (isPrimary && !claimed.has(track.type)) {
-            claimed.add(track.type);
-            return { ...track, defaultTrack: "true" };
-          }
-          return { ...track, defaultTrack: "false" };
-        });
-      }
-      // 4: reset forced display — clear every track's forced flag.
-      if (resetForced) {
-        next = next.map((track): MediaTrack =>
-          track.kind === "track" ? { ...track, forced: "unspecified" } : track,
-        );
-      }
       return { fileTracks: { ...state.fileTracks, [file]: next } };
     }),
   setFileOutputDir: (file, dir) =>

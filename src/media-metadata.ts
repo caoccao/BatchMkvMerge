@@ -15,7 +15,15 @@
  *   limitations under the License.
  */
 
-import type { MediaMetadata, Track, TrackFlag, TrackType } from "./protocol";
+import type {
+  AudioTrackProperties,
+  MediaMetadata,
+  SubtitleTrackProperties,
+  Track,
+  TrackFlag,
+  TrackType,
+  VideoTrackProperties,
+} from "./protocol";
 
 /**
  * Which kind of row a [`MediaTrack`] represents. The parser's `Track`s are
@@ -44,6 +52,10 @@ export interface MediaTrack {
   codec: string;
   /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Drives the track extension lookup. */
   codecId: string;
+  /** Short human-readable summary of the track's domain properties: resolution
+   *  + frame rate (video), channel layout (audio), text/image + variant +
+   *  encoding (subtitles). Empty for synthetic rows. */
+  description: string;
   /** Payload size in bytes when the source exposes it (Matroska
    *  `NUMBER_OF_BYTES` statistics tag, or an attachment's stored size). Null
    *  when the parser has no value. */
@@ -65,6 +77,27 @@ export interface MediaTrack {
   /** Raw `FlagForced` tri-state, shown as a 3-state control. "unspecified" for
    *  synthetic rows. */
   forced: TrackFlag;
+}
+
+/**
+ * Canonical sort rank for the UI `type` string, used wherever tracks are shown
+ * or ordered: video, audio, subtitle, "menu"/buttons, then the synthetic
+ * chapters and attachment rows, then anything unknown. Shared by the combined
+ * merge-tree table (`file-tree.ts`) and the multi-input merge command
+ * (`merge.ts`) so both stay in lock-step.
+ */
+export const TRACK_TYPE_ORDER: Record<string, number> = {
+  video: 0,
+  audio: 1,
+  subtitles: 2,
+  buttons: 3,
+  chapters: 4,
+  attachment: 5,
+  unknown: 6,
+};
+
+export function trackTypeRank(type: string): number {
+  return TRACK_TYPE_ORDER[type] ?? TRACK_TYPE_ORDER.unknown;
 }
 
 /**
@@ -156,6 +189,110 @@ function attachmentSubtype(fileName: string, mimeType: string | null): string {
   return "";
 }
 
+/** Human label for a canonical channel-layout kind (`layout51` → "5.1"). */
+const CHANNEL_LAYOUT_LABELS: Record<string, string> = {
+  mono: "mono",
+  stereo: "stereo",
+  layout21: "2.1",
+  layout30: "3.0",
+  layout31: "3.1",
+  layout40: "4.0",
+  layout41: "4.1",
+  layout50: "5.0",
+  layout51: "5.1",
+  layout61: "6.1",
+  layout71: "7.1",
+  layout714: "7.1.4",
+};
+
+/** Frame rate from a per-frame duration in ns, e.g. 41708333 → "23.976fps". */
+function formatFrameRate(defaultDurationNs: number | null): string | null {
+  if (!defaultDurationNs || defaultDurationNs <= 0) {
+    return null;
+  }
+  const fps = 1e9 / defaultDurationNs;
+  return `${Math.round(fps * 1000) / 1000}fps`;
+}
+
+function videoDescription(video: VideoTrackProperties): string {
+  const parts: string[] = [];
+  const dim = video.pixelDimensions ?? video.displayDimensions;
+  if (dim) {
+    parts.push(`${dim.width}x${dim.height}`);
+  }
+  const fps = formatFrameRate(video.defaultDurationNs);
+  if (fps) {
+    parts.push(fps);
+  }
+  return parts.join(" ");
+}
+
+/** Sample rate in Hz formatted as kHz, e.g. 48000 → "48kHz", 44100 → "44.1kHz". */
+function formatSampleRate(hz: number | null): string | null {
+  if (!hz || hz <= 0) {
+    return null;
+  }
+  return `${Math.round((hz / 1000) * 1000) / 1000}kHz`;
+}
+
+function channelLabel(audio: AudioTrackProperties): string | null {
+  const kind = audio.channelLayout?.kind ?? null;
+  if (kind && CHANNEL_LAYOUT_LABELS[kind]) {
+    return CHANNEL_LAYOUT_LABELS[kind];
+  }
+  const channels = audio.channelLayout?.channels ?? audio.channels ?? null;
+  if (channels === 1) {
+    return "mono";
+  }
+  if (channels === 2) {
+    return "stereo";
+  }
+  return channels != null ? `${channels}ch` : null;
+}
+
+function audioDescription(audio: AudioTrackProperties): string {
+  const parts: string[] = [];
+  const channels = channelLabel(audio);
+  if (channels) {
+    parts.push(channels);
+  }
+  const sampleRate = formatSampleRate(audio.samplingFrequency);
+  if (sampleRate) {
+    parts.push(sampleRate);
+  }
+  return parts.join(" ");
+}
+
+function subtitleDescription(subtitle: SubtitleTrackProperties): string {
+  const parts: string[] = [subtitle.textSubtitles ? "Text" : "Image"];
+  if (subtitle.variant) {
+    parts.push(subtitle.variant);
+  }
+  if (subtitle.encoding) {
+    parts.push(subtitle.encoding);
+  }
+  if (subtitle.teletextPage != null) {
+    parts.push(`p${subtitle.teletextPage}`);
+  }
+  return parts.join(" ");
+}
+
+/** Short per-track summary for the table's Description column, derived from the
+ *  populated domain sub-tree (video / audio / subtitle). */
+function trackDescription(track: Track): string {
+  const props = track.properties;
+  if (props.video) {
+    return videoDescription(props.video);
+  }
+  if (props.audio) {
+    return audioDescription(props.audio);
+  }
+  if (props.subtitle) {
+    return subtitleDescription(props.subtitle);
+  }
+  return "";
+}
+
 /**
  * Flatten a parsed [`MediaMetadata`] into the synthetic row list the
  * selection table renders. Synthetic chapter and attachment rows are appended
@@ -171,6 +308,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: trackTypeToUiType(track.trackType),
       codec: track.codec.name ?? track.codec.id,
       codecId: track.codec.id,
+      description: trackDescription(track),
       size: statTagNumber(track, "NUMBER_OF_BYTES"),
       bitRate: statTagNumber(track, "BPS"),
       trackName: track.properties.common.trackName ?? "",
@@ -188,6 +326,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: "chapters",
       codec: "xml",
       codecId: "xml",
+      description: "",
       size: null,
       bitRate: null,
       trackName: "",
@@ -206,6 +345,7 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: "attachment",
       codec: subtype,
       codecId: subtype,
+      description: "",
       size: Number.isFinite(attachment.size) ? attachment.size : null,
       bitRate: null,
       trackName: attachment.fileName,
