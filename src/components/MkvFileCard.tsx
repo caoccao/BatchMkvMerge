@@ -144,6 +144,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
   );
+  const formatting = useMkvStore((s) => s.config?.formatting ?? null);
   const activeProfile = useMkvStore((s) => {
     const cfg = s.config;
     if (!cfg) {
@@ -220,14 +221,12 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           profile &&
           automation &&
           (automation.reset_und_language.enabled ||
-            automation.set_track_name.enabled)
+            automation.set_track_name.enabled ||
+            automation.reset_default_track.enabled ||
+            automation.reset_forced_display.enabled)
         ) {
-          applyAutomationToFile(
-            path,
-            automation.reset_und_language,
-            automation.set_track_name.enabled,
-            (type, language) =>
-              buildTrackNameOptions(profile, type, language)[0],
+          applyAutomationToFile(path, automation, (type, language) =>
+            buildTrackNameOptions(profile, type, language)[0],
           );
         }
         setLoading(false);
@@ -562,6 +561,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           tracks={tracks}
           selectedIds={selectedIds}
           selectedRowKeys={selectedRowKeys}
+          formatting={formatting}
           disabled={isActive}
           loading={loading}
           errorText={error}

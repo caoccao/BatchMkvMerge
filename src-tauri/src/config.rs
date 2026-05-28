@@ -49,6 +49,8 @@ pub struct Config {
   pub parser: ConfigParser,
   #[serde(rename = "groupMode", default)]
   pub group_mode: GroupMode,
+  #[serde(default)]
+  pub formatting: ConfigFormatting,
 }
 
 impl Config {
@@ -74,7 +76,97 @@ impl Default for Config {
       update: Default::default(),
       parser: Default::default(),
       group_mode: Default::default(),
+      formatting: Default::default(),
     }
+  }
+}
+
+/// Size / bit-rate display formatting, one [`ConfigStreamFormat`] per stream kind.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigFormatting {
+  #[serde(default)]
+  pub video: ConfigStreamFormat,
+  #[serde(default)]
+  pub audio: ConfigStreamFormat,
+  #[serde(default)]
+  pub subtitle: ConfigStreamFormat,
+}
+
+impl Default for ConfigFormatting {
+  fn default() -> Self {
+    Self {
+      video: Default::default(),
+      audio: Default::default(),
+      subtitle: Default::default(),
+    }
+  }
+}
+
+/// Per-stream-kind bit-rate + size formatting.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigStreamFormat {
+  #[serde(rename = "bitRate", default)]
+  pub bit_rate: ConfigFormatField,
+  #[serde(default)]
+  pub size: ConfigFormatField,
+}
+
+impl Default for ConfigStreamFormat {
+  fn default() -> Self {
+    Self {
+      bit_rate: Default::default(),
+      size: Default::default(),
+    }
+  }
+}
+
+/// Precision + unit for a single formatted numeric field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigFormatField {
+  #[serde(default)]
+  pub precision: FormatPrecision,
+  #[serde(default)]
+  pub unit: FormatUnit,
+}
+
+impl Default for ConfigFormatField {
+  fn default() -> Self {
+    Self {
+      precision: FormatPrecision::Two,
+      unit: FormatUnit::KMGT,
+    }
+  }
+}
+
+/// Number of fractional digits shown.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum FormatPrecision {
+  Zero,
+  One,
+  Two,
+}
+
+impl Default for FormatPrecision {
+  fn default() -> Self {
+    Self::Two
+  }
+}
+
+/// Unit ladder: `K*` use 1024-step divisors, `K*i` use 1000-step divisors.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum FormatUnit {
+  K,
+  KM,
+  KMG,
+  KMGT,
+  KMi,
+  KMiGi,
+  KMiGiTi,
+}
+
+impl Default for FormatUnit {
+  fn default() -> Self {
+    Self::KMGT
   }
 }
 
@@ -217,7 +309,11 @@ pub struct ConfigAutomation {
   #[serde(default)]
   pub reset_und_language: AutomationResetUndLanguage,
   #[serde(default)]
-  pub set_track_name: AutomationSetTrackName,
+  pub set_track_name: AutomationToggle,
+  #[serde(default)]
+  pub reset_default_track: AutomationToggle,
+  #[serde(default)]
+  pub reset_forced_display: AutomationToggle,
 }
 
 impl Default for ConfigAutomation {
@@ -225,6 +321,8 @@ impl Default for ConfigAutomation {
     Self {
       reset_und_language: Default::default(),
       set_track_name: Default::default(),
+      reset_default_track: Default::default(),
+      reset_forced_display: Default::default(),
     }
   }
 }
@@ -253,9 +351,10 @@ impl Default for AutomationResetUndLanguage {
   }
 }
 
-/// Set each track's name from the per-language presets automatically.
+/// A simple on/off automation toggle (set track name, reset default track,
+/// reset forced display).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct AutomationSetTrackName {
+pub struct AutomationToggle {
   #[serde(default)]
   pub enabled: bool,
 }

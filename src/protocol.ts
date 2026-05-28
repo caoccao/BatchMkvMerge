@@ -93,6 +93,41 @@ export const GroupMode = {
 } as const;
 export type GroupMode = (typeof GroupMode)[keyof typeof GroupMode];
 
+export const FormatPrecision = {
+  Zero: "Zero",
+  One: "One",
+  Two: "Two",
+} as const;
+export type FormatPrecision =
+  (typeof FormatPrecision)[keyof typeof FormatPrecision];
+
+export const FormatUnit = {
+  K: "K",
+  KM: "KM",
+  KMG: "KMG",
+  KMGT: "KMGT",
+  KMi: "KMi",
+  KMiGi: "KMiGi",
+  KMiGiTi: "KMiGiTi",
+} as const;
+export type FormatUnit = (typeof FormatUnit)[keyof typeof FormatUnit];
+
+export interface ConfigFormatField {
+  precision: FormatPrecision;
+  unit: FormatUnit;
+}
+
+export interface ConfigStreamFormat {
+  bitRate: ConfigFormatField;
+  size: ConfigFormatField;
+}
+
+export interface ConfigFormatting {
+  video: ConfigStreamFormat;
+  audio: ConfigStreamFormat;
+  subtitle: ConfigStreamFormat;
+}
+
 export interface ConfigUpdate {
   checkInterval: UpdateCheckInterval;
   lastChecked: number;
@@ -132,7 +167,9 @@ export interface ConfigProfile {
 /** Per-profile automation toggles. Snake_case keys mirror the persisted config. */
 export interface ConfigAutomation {
   reset_und_language: AutomationResetUndLanguage;
-  set_track_name: AutomationSetTrackName;
+  set_track_name: AutomationToggle;
+  reset_default_track: AutomationToggle;
+  reset_forced_display: AutomationToggle;
 }
 
 export interface AutomationResetUndLanguage {
@@ -140,7 +177,7 @@ export interface AutomationResetUndLanguage {
   language: string;
 }
 
-export interface AutomationSetTrackName {
+export interface AutomationToggle {
   enabled: boolean;
 }
 
@@ -167,6 +204,7 @@ export interface Config {
   update: ConfigUpdate;
   parser: ConfigParser;
   groupMode: GroupMode;
+  formatting: ConfigFormatting;
 }
 
 export const DEFAULT_PROFILE_NAME = "Default";
@@ -215,6 +253,8 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile
     automation: {
       reset_und_language: { enabled: false, language: "en" },
       set_track_name: { enabled: false },
+      reset_default_track: { enabled: false },
+      reset_forced_display: { enabled: false },
     },
   };
 }
@@ -309,6 +349,52 @@ export function getThemes(): Theme[] {
 
 export function getLanguages(): Language[] {
   return Object.values(Language);
+}
+
+export function getFormatPrecisions(): FormatPrecision[] {
+  return [FormatPrecision.Zero, FormatPrecision.One, FormatPrecision.Two];
+}
+
+export function getFormatUnits(): FormatUnit[] {
+  return [
+    FormatUnit.K,
+    FormatUnit.KM,
+    FormatUnit.KMG,
+    FormatUnit.KMGT,
+    FormatUnit.KMi,
+    FormatUnit.KMiGi,
+    FormatUnit.KMiGiTi,
+  ];
+}
+
+export function getFormatPrecisionLabel(precision: FormatPrecision): string {
+  switch (precision) {
+    case FormatPrecision.Zero:
+      return "#";
+    case FormatPrecision.One:
+      return "#.#";
+    default:
+      return "#.##";
+  }
+}
+
+export function getFormatUnitLabel(unit: FormatUnit): string {
+  switch (unit) {
+    case FormatUnit.K:
+      return "k";
+    case FormatUnit.KM:
+      return "k/M";
+    case FormatUnit.KMG:
+      return "k/M/G";
+    case FormatUnit.KMGT:
+      return "k/M/G/T";
+    case FormatUnit.KMi:
+      return "k/Mi";
+    case FormatUnit.KMiGi:
+      return "k/Mi/Gi";
+    default:
+      return "k/Mi/Gi/Ti";
+  }
 }
 
 export function getGroupModes(): GroupMode[] {

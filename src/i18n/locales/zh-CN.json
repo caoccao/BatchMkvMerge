@@ -44,6 +44,7 @@
     }
   },
   "toolbar": {
+    "setGlobalOutputPath": "设置全局输出路径",
     "mergeAll": "全部合并 (F3)",
     "cancelAll": "全部取消 (F4)",
     "clear": "清空 (Ctrl + Q)",
@@ -93,6 +94,11 @@
   "settings": {
     "title": "设置",
     "appearance": "外观",
+    "formatting": "格式",
+    "bitRate": "比特率",
+    "size": "大小",
+    "precision": "精度",
+    "unit": "单位",
     "mode": "模式",
     "autoMode": "自动",
     "lightMode": "浅色",
@@ -155,6 +161,8 @@
     "automation": "自动化",
     "automationResetUndLanguage": "自动将语言 und 设置为",
     "automationSetTrackName": "按语言自动设置轨道名称",
+    "automationResetDefaultTrack": "自动重置默认轨道",
+    "automationResetForcedDisplay": "自动重置强制显示",
     "trackNamesHint": "每行一个轨道名称",
     "filter": "筛选",
     "clear": "清除",

@@ -44,6 +44,7 @@
     }
   },
   "toolbar": {
+    "setGlobalOutputPath": "Establecer ruta de salida global",
     "mergeAll": "Combinar todo (F3)",
     "cancelAll": "Cancelar todo (F4)",
     "clear": "Limpiar (Ctrl + Q)",
@@ -93,6 +94,11 @@
   "settings": {
     "title": "Ajustes",
     "appearance": "Apariencia",
+    "formatting": "Formato",
+    "bitRate": "Tasa de bits",
+    "size": "Tamaño",
+    "precision": "Precisión",
+    "unit": "Unidad",
     "mode": "Modo",
     "autoMode": "Auto",
     "lightMode": "Claro",
@@ -155,6 +161,8 @@
     "automation": "Automatización",
     "automationResetUndLanguage": "Establecer automáticamente el idioma und en",
     "automationSetTrackName": "Establecer el nombre de pista automáticamente por idioma",
+    "automationResetDefaultTrack": "Restablecer automáticamente la pista predeterminada",
+    "automationResetForcedDisplay": "Restablecer automáticamente la visualización forzada",
     "trackNamesHint": "Un nombre de pista por línea",
     "filter": "Filtrar",
     "clear": "Limpiar",

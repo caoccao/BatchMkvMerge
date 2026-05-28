@@ -130,6 +130,7 @@ export function GroupCard({ files }: GroupCardProps) {
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
   );
+  const formatting = useMkvStore((s) => s.config?.formatting ?? null);
   const setGroupOutputDir = useMkvStore((s) => s.setGroupOutputDir);
   const clearGroupOutputDir = useMkvStore((s) => s.clearGroupOutputDir);
   const queueItems = useMkvStore((s) => s.queueItems);
@@ -593,6 +594,7 @@ export function GroupCard({ files }: GroupCardProps) {
             tracks={tracks}
             selectedIds={selectedIds}
             selectedRowKeys={selectedRowKeys}
+            formatting={formatting}
             disabled={hasActiveInGroup}
             emptyText={t("merge.noTracks")}
             headers={{

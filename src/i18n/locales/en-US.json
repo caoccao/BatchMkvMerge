@@ -44,6 +44,7 @@
     }
   },
   "toolbar": {
+    "setGlobalOutputPath": "Set global output path",
     "mergeAll": "Merge All (F3)",
     "cancelAll": "Cancel All (F4)",
     "clear": "Clear (Ctrl + Q)",
@@ -93,6 +94,11 @@
   "settings": {
     "title": "Settings",
     "appearance": "Appearance",
+    "formatting": "Formatting",
+    "bitRate": "Bit Rate",
+    "size": "Size",
+    "precision": "Precision",
+    "unit": "Unit",
     "mode": "Mode",
     "autoMode": "Auto",
     "lightMode": "Light",
@@ -155,6 +161,8 @@
     "automation": "Automation",
     "automationResetUndLanguage": "Automatically set language und to",
     "automationSetTrackName": "Automatically set track name per language",
+    "automationResetDefaultTrack": "Automatically reset default track",
+    "automationResetForcedDisplay": "Automatically reset forced display",
     "trackNamesHint": "One track name per line",
     "filter": "Filter",
     "clear": "Clear",

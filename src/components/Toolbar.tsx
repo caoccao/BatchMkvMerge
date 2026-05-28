@@ -30,6 +30,7 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import CheckIcon from "@mui/icons-material/Check";
 import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
+import FolderSpecialIcon from "@mui/icons-material/FolderSpecial";
 import InfoIcon from "@mui/icons-material/Info";
 import PermMediaIcon from "@mui/icons-material/PermMedia";
 import PersonIcon from "@mui/icons-material/Person";
@@ -48,6 +49,7 @@ import {
   groupModeLabelKey,
 } from "../protocol";
 import { useMkvStore } from "../store";
+import { OutputPathDialog } from "./OutputPathDialog";
 
 /** Icon colour for a group mode: gray when off, primary / success when on. */
 function groupModeColor(mode: GroupMode): string {
@@ -91,6 +93,9 @@ export default function Toolbar() {
   const profileButtonRef = useRef<HTMLButtonElement | null>(null);
   const [groupAnchor, setGroupAnchor] = useState<null | HTMLElement>(null);
   const groupButtonRef = useRef<HTMLButtonElement | null>(null);
+  const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
+  const setGlobalOutputDir = useMkvStore((s) => s.setGlobalOutputDir);
+  const [globalOutputDialogOpen, setGlobalOutputDialogOpen] = useState(false);
   const profiles = config?.profiles ?? [];
   const activeProfileName = config?.activeProfile ?? "";
 
@@ -266,6 +271,14 @@ export default function Toolbar() {
   return (
     <Box sx={{ mx: 1, my: 0, display: "flex", gap: 1 }}>
       <ButtonGroup variant="outlined" size="small">
+        <Tooltip title={t("toolbar.setGlobalOutputPath")}>
+          <IconButton
+            sx={globalOutputDir ? activeButtonSx : buttonSx}
+            onClick={() => setGlobalOutputDialogOpen(true)}
+          >
+            <FolderSpecialIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title={t("toolbar.mergeAll")}>
           <span>
             <IconButton
@@ -397,6 +410,14 @@ export default function Toolbar() {
           </MenuItem>
         ))}
       </Menu>
+
+      <OutputPathDialog
+        open={globalOutputDialogOpen}
+        initialValue={globalOutputDir}
+        title={t("toolbar.setGlobalOutputPath")}
+        onConfirm={setGlobalOutputDir}
+        onClose={() => setGlobalOutputDialogOpen(false)}
+      />
     </Box>
   );
 }

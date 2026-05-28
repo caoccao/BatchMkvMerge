@@ -238,34 +238,3 @@ export function formatHMS(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-/** Human-readable byte size using binary (1024) units. Empty string for
- *  missing / invalid values. */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return "";
-  }
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const text = unit === 0 ? String(value) : value.toFixed(2);
-  return `${text} ${units[unit]}`;
-}
-
-/** Human-readable bit rate (bits per second) using decimal (1000) units. Empty
- *  string for missing / invalid values. */
-export function formatBitRate(bps: number): string {
-  if (!Number.isFinite(bps) || bps < 0) {
-    return "";
-  }
-  if (bps >= 1_000_000) {
-    return `${(bps / 1_000_000).toFixed(2)} Mb/s`;
-  }
-  if (bps >= 1000) {
-    return `${Math.round(bps / 1000)} kb/s`;
-  }
-  return `${bps} b/s`;
-}

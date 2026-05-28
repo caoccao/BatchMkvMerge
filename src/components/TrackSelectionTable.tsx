@@ -51,9 +51,10 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { formatBitRate, formatBytes, trackKey } from "../merge";
+import { trackKey } from "../merge";
+import { formatTrackBitRate, formatTrackSize } from "../format";
 import type { MediaTrack } from "../media-metadata";
-import type { TrackFlag } from "../protocol";
+import type { ConfigFormatting, TrackFlag } from "../protocol";
 import {
   LanguageAutocomplete,
   TitleAutocomplete,
@@ -161,6 +162,8 @@ interface TrackSelectionTableProps {
   selectedIds: Set<string>;
   /** UI row-selection (highlight) — independent of the merge checkboxes. */
   selectedRowKeys: Set<string>;
+  /** Size / bit-rate display formatting (per stream kind). */
+  formatting: ConfigFormatting | null;
   disabled: boolean;
   emptyText: string;
   headers: {
@@ -207,6 +210,7 @@ export function TrackSelectionTable({
   tracks,
   selectedIds,
   selectedRowKeys,
+  formatting,
   disabled,
   emptyText,
   headers,
@@ -349,10 +353,18 @@ export function TrackSelectionTable({
                     </TableCell>
                     <TableCell>{track.codec}</TableCell>
                     <TableCell>
-                      {track.size != null ? formatBytes(track.size) : ""}
+                      {track.size != null
+                        ? formatTrackSize(track.size, track.type, formatting)
+                        : ""}
                     </TableCell>
                     <TableCell>
-                      {track.bitRate != null ? formatBitRate(track.bitRate) : ""}
+                      {track.bitRate != null
+                        ? formatTrackBitRate(
+                            track.bitRate,
+                            track.type,
+                            formatting,
+                          )
+                        : ""}
                     </TableCell>
                     <TableCell
                       onClick={(e) => e.stopPropagation()}

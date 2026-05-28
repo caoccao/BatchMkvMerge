@@ -22,6 +22,7 @@ import { mediaTrackCounts, metadataToMediaTracks } from "./media-metadata";
 import type {
   About,
   Config,
+  ConfigAutomation,
   ConfigProfile,
   MergeEntry,
   MergeOutcome,
@@ -105,6 +106,10 @@ interface MkvStore {
   fileTrackCounts: Record<string, TrackCounts>;
   fileSelectedIds: Record<string, string[]>;
   fileOutputDirs: Record<string, string>;
+  /** Session-only default output dir for newly added files (not persisted).
+   *  Baked into each new file's output dir at add time; empty = use the input
+   *  file's own directory. Changing it never touches existing files. */
+  globalOutputDir: string;
   betterMediaInfoAvailable: boolean;
   /** Id of the currently active card (file path or group key); null = none. */
   activeCard: string | null;
@@ -157,20 +162,22 @@ interface MkvStore {
   /** Set the editable track name on every matching track key across all files. */
   setTrackName: (files: string[], keys: string[], value: string) => void;
   /** Apply the active profile's automation to a freshly-parsed file's tracks
-   *  (run once per newly added file). Reset-und-language is applied before
-   *  set-track-name so the latter sees the updated language. `presetFor`
-   *  resolves the per-language track-name preset (passed in so the store
-   *  doesn't depend on the UI's language lookups). */
+   *  (run once per newly added file). Steps run in order: reset-und-language,
+   *  set-track-name (sees the updated language), reset-default-track,
+   *  reset-forced-display. `presetFor` resolves the per-language track-name
+   *  preset (passed in so the store doesn't depend on the UI's language
+   *  lookups). */
   applyAutomationToFile: (
     file: string,
-    resetUndLanguage: { enabled: boolean; language: string },
-    setTrackName: boolean,
+    automation: ConfigAutomation,
     presetFor: (trackType: string, language: string) => string | undefined,
   ) => void;
   setFileOutputDir: (file: string, dir: string) => void;
   clearFileOutputDir: (file: string) => void;
   setGroupOutputDir: (files: string[], dir: string) => void;
   clearGroupOutputDir: (files: string[]) => void;
+  /** Set the session-only global default output dir for new files. */
+  setGlobalOutputDir: (dir: string) => void;
   setBetterMediaInfoAvailable: (value: boolean) => void;
   setActiveCard: (id: string | null) => void;
   showNotification: (kind: NotificationKind, file: string, detail: string) => void;
@@ -191,6 +198,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileTrackCounts: {},
   fileSelectedIds: {},
   fileOutputDirs: {},
+  globalOutputDir: "",
   betterMediaInfoAvailable: false,
   activeCard: null,
   notification: null,
@@ -198,7 +206,17 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     set((state) => {
       const existing = new Set(state.files);
       const toAdd = paths.filter((p) => !existing.has(p));
-      return { files: [...state.files, ...toAdd] };
+      // Bake the current global output dir into each new file as its default
+      // override, so later global changes never affect already-added files.
+      const global = state.globalOutputDir;
+      let fileOutputDirs = state.fileOutputDirs;
+      if (global.length > 0 && toAdd.length > 0) {
+        fileOutputDirs = { ...state.fileOutputDirs };
+        for (const path of toAdd) {
+          fileOutputDirs[path] = global;
+        }
+      }
+      return { files: [...state.files, ...toAdd], fileOutputDirs };
     }),
   removeFile: (path) =>
     set((state) => {
@@ -664,40 +682,59 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileTracks };
     }),
-  applyAutomationToFile: (file, resetUndLanguage, setTrackName, presetFor) =>
+  applyAutomationToFile: (file, automation, presetFor) =>
     set((state) => {
       const list = state.fileTracks[file];
       if (!list) {
         return {};
       }
-      let changed = false;
-      const next = list.map((track) => {
+      const resetUnd = automation.reset_und_language;
+      const setName = automation.set_track_name.enabled;
+      const resetDefault = automation.reset_default_track.enabled;
+      const resetForced = automation.reset_forced_display.enabled;
+      if (!resetUnd.enabled && !setName && !resetDefault && !resetForced) {
+        return {};
+      }
+      // 1 & 2: per-track language then name (name sees the updated language).
+      let next = list.map((track): MediaTrack => {
         if (track.kind !== "track") {
           return track;
         }
         let updated = track;
-        // 1. Reset an undetermined language to the configured one.
-        if (
-          resetUndLanguage.enabled &&
-          resetUndLanguage.language &&
-          updated.language === "und"
-        ) {
-          updated = { ...updated, language: resetUndLanguage.language };
-          changed = true;
+        if (resetUnd.enabled && resetUnd.language && updated.language === "und") {
+          updated = { ...updated, language: resetUnd.language };
         }
-        // 2. Set the track name from the per-language preset (uses the
-        //    language as updated by step 1).
-        if (setTrackName) {
+        if (setName) {
           const preset = presetFor(updated.type, updated.language);
           if (preset) {
             updated = { ...updated, trackName: preset };
-            changed = true;
           }
         }
         return updated;
       });
-      if (!changed) {
-        return {};
+      // 3: reset default track — first video/audio/subtitle track on, rest off.
+      if (resetDefault) {
+        const claimed = new Set<string>();
+        next = next.map((track): MediaTrack => {
+          if (track.kind !== "track") {
+            return track;
+          }
+          const isPrimary =
+            track.type === "video" ||
+            track.type === "audio" ||
+            track.type === "subtitles";
+          if (isPrimary && !claimed.has(track.type)) {
+            claimed.add(track.type);
+            return { ...track, defaultTrack: "true" };
+          }
+          return { ...track, defaultTrack: "false" };
+        });
+      }
+      // 4: reset forced display — clear every track's forced flag.
+      if (resetForced) {
+        next = next.map((track): MediaTrack =>
+          track.kind === "track" ? { ...track, forced: "unspecified" } : track,
+        );
       }
       return { fileTracks: { ...state.fileTracks, [file]: next } };
     }),
@@ -727,6 +764,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileOutputDirs: next };
     }),
+  setGlobalOutputDir: (dir) => set({ globalOutputDir: dir }),
   setBetterMediaInfoAvailable: (value) =>
     set({ betterMediaInfoAvailable: value }),
   setActiveCard: (id) => set({ activeCard: id }),

@@ -49,6 +49,7 @@ import LightModeIcon from "@mui/icons-material/LightMode";
 import MovieIcon from "@mui/icons-material/Movie";
 import PaletteIcon from "@mui/icons-material/Palette";
 import PersonIcon from "@mui/icons-material/Person";
+import TuneIcon from "@mui/icons-material/Tune";
 import UpdateIcon from "@mui/icons-material/Update";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -60,6 +61,7 @@ import {
   LanguageAutocomplete,
   buildCombinedLanguageOptions,
 } from "./TrackCellAutocomplete";
+import { TrackTypeIcon } from "./TrackTypeIcon";
 import { ExternalToolPathRow } from "./settings/ExternalToolPathRow";
 import { LanguagePicker } from "./settings/LanguagePicker";
 import {
@@ -69,11 +71,14 @@ import {
 
 enum SettingsTab {
   Appearance = "Appearance",
+  Formatting = "Formatting",
   Group = "Group",
   Profiles = "Profiles",
   Integration = "Integration",
   Update = "Update",
 }
+
+type FormatStreamKind = "video" | "audio" | "subtitle";
 
 enum ProfileTab {
   TrackSelection = "TrackSelection",
@@ -172,16 +177,85 @@ function TrackTypeToggle({
       }}
       sx={{ mb: 1.5, "& .MuiToggleButton-root": { textTransform: "none" } }}
     >
-      <ToggleButton value="video" sx={{ px: 1.5 }}>
+      <ToggleButton value="video" sx={{ px: 1.5, gap: 0.5 }}>
+        <TrackTypeIcon type="video" />
         <Typography variant="caption">{t("settings.video")}</Typography>
       </ToggleButton>
-      <ToggleButton value="audio" sx={{ px: 1.5 }}>
+      <ToggleButton value="audio" sx={{ px: 1.5, gap: 0.5 }}>
+        <TrackTypeIcon type="audio" />
         <Typography variant="caption">{t("settings.audio")}</Typography>
       </ToggleButton>
-      <ToggleButton value="subtitles" sx={{ px: 1.5 }}>
+      <ToggleButton value="subtitles" sx={{ px: 1.5, gap: 0.5 }}>
+        <TrackTypeIcon type="subtitles" />
         <Typography variant="caption">{t("settings.subtitles")}</Typography>
       </ToggleButton>
     </ToggleButtonGroup>
+  );
+}
+
+/** Precision + unit selects for one formatted field (bit rate or size). */
+function FormatFieldControls({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: Protocol.ConfigFormatField;
+  onChange: (next: Protocol.ConfigFormatField) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Box>
+      <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
+        {label}
+      </Typography>
+      <Box sx={{ display: "flex", gap: 2 }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="caption" color="text.secondary">
+            {t("settings.precision")}
+          </Typography>
+          <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+            <Select
+              value={value.precision}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  precision: e.target.value as Protocol.FormatPrecision,
+                })
+              }
+            >
+              {Protocol.getFormatPrecisions().map((p) => (
+                <MenuItem key={p} value={p}>
+                  {Protocol.getFormatPrecisionLabel(p)}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="caption" color="text.secondary">
+            {t("settings.unit")}
+          </Typography>
+          <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
+            <Select
+              value={value.unit}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  unit: e.target.value as Protocol.FormatUnit,
+                })
+              }
+            >
+              {Protocol.getFormatUnits().map((u) => (
+                <MenuItem key={u} value={u}>
+                  {Protocol.getFormatUnitLabel(u)}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+      </Box>
+    </Box>
   );
 }
 
@@ -247,6 +321,8 @@ export default function Settings() {
     ProfileTab.TrackSelection,
   );
   const [langType, setLangType] = useState<LanguageTrackType>("audio");
+  const [formatStreamKind, setFormatStreamKind] =
+    useState<FormatStreamKind>("video");
   const [trackNameFilter, setTrackNameFilter] = useState("");
   const [selectedTrackNameLang, setSelectedTrackNameLang] = useState("");
   const trackNameListRef = useRef<HTMLDivElement | null>(null);
@@ -448,6 +524,73 @@ export default function Settings() {
       </SettingRow>
     </Box>
   );
+
+  const formattingPanel = (() => {
+    const formatting = config.formatting;
+    const stream = formatting[formatStreamKind];
+    const updateStream = (
+      field: "bitRate" | "size",
+      next: Protocol.ConfigFormatField,
+    ) =>
+      updateConfig({
+        formatting: {
+          ...formatting,
+          [formatStreamKind]: { ...stream, [field]: next },
+        },
+      });
+    return (
+      <Box>
+        <SectionHeader
+          icon={<TuneIcon fontSize="small" />}
+          title={t("settings.formatting")}
+        />
+        <Tabs
+          value={formatStreamKind}
+          onChange={(_e, value: FormatStreamKind) =>
+            setFormatStreamKind(value)
+          }
+          sx={{
+            mb: 2,
+            minHeight: 40,
+            borderBottom: 1,
+            borderColor: "divider",
+            "& .MuiTab-root": { minHeight: 40, textTransform: "none" },
+          }}
+        >
+          <Tab
+            value="video"
+            icon={<TrackTypeIcon type="video" />}
+            iconPosition="start"
+            label={t("settings.video")}
+          />
+          <Tab
+            value="audio"
+            icon={<TrackTypeIcon type="audio" />}
+            iconPosition="start"
+            label={t("settings.audio")}
+          />
+          <Tab
+            value="subtitle"
+            icon={<TrackTypeIcon type="subtitles" />}
+            iconPosition="start"
+            label={t("settings.subtitles")}
+          />
+        </Tabs>
+        <Stack spacing={2}>
+          <FormatFieldControls
+            label={t("settings.bitRate")}
+            value={stream.bitRate}
+            onChange={(next) => updateStream("bitRate", next)}
+          />
+          <FormatFieldControls
+            label={t("settings.size")}
+            value={stream.size}
+            onChange={(next) => updateStream("size", next)}
+          />
+        </Stack>
+      </Box>
+    );
+  })();
 
   const groupPanel = (
     <Box>
@@ -927,6 +1070,8 @@ export default function Settings() {
             const automation = activeProfile.automation ?? {
               reset_und_language: { enabled: false, language: "en" },
               set_track_name: { enabled: false },
+              reset_default_track: { enabled: false },
+              reset_forced_display: { enabled: false },
             };
             const langOptions = buildCombinedLanguageOptions(activeProfile);
             const updateAutomation = (
@@ -1004,6 +1149,54 @@ export default function Settings() {
                       label={
                         <Typography variant="caption">
                           {t("settings.automationSetTrackName")}
+                        </Typography>
+                      }
+                    />
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={automation.reset_default_track.enabled}
+                          onChange={(e) =>
+                            updateAutomation({
+                              reset_default_track: {
+                                ...automation.reset_default_track,
+                                enabled: e.target.checked,
+                              },
+                            })
+                          }
+                        />
+                      }
+                      label={
+                        <Typography variant="caption">
+                          {t("settings.automationResetDefaultTrack")}
+                        </Typography>
+                      }
+                    />
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={automation.reset_forced_display.enabled}
+                          onChange={(e) =>
+                            updateAutomation({
+                              reset_forced_display: {
+                                ...automation.reset_forced_display,
+                                enabled: e.target.checked,
+                              },
+                            })
+                          }
+                        />
+                      }
+                      label={
+                        <Typography variant="caption">
+                          {t("settings.automationResetForcedDisplay")}
                         </Typography>
                       }
                     />
@@ -1150,6 +1343,12 @@ export default function Settings() {
           label={t("settings.appearance")}
         />
         <Tab
+          value={SettingsTab.Formatting}
+          icon={<TuneIcon sx={{ fontSize: 18 }} />}
+          iconPosition="start"
+          label={t("settings.formatting")}
+        />
+        <Tab
           value={SettingsTab.Group}
           icon={<PermMediaIcon sx={{ fontSize: 18 }} />}
           iconPosition="start"
@@ -1185,6 +1384,7 @@ export default function Settings() {
         }}
       >
         {tab === SettingsTab.Appearance && appearancePanel}
+        {tab === SettingsTab.Formatting && formattingPanel}
         {tab === SettingsTab.Group && groupPanel}
         {tab === SettingsTab.Integration && integrationPanel}
         {tab === SettingsTab.Profiles && profilesPanel}

@@ -33,6 +33,8 @@ import { checkOutputPathWritable } from "../service";
 interface Props {
   open: boolean;
   initialValue: string;
+  /** Dialog title; defaults to the per-file "Set Output Path" label. */
+  title?: string;
   onConfirm: (value: string) => void;
   onClose: () => void;
 }
@@ -40,6 +42,7 @@ interface Props {
 export function OutputPathDialog({
   open: dialogOpen,
   initialValue,
+  title,
   onConfirm,
   onClose,
 }: Props) {
@@ -103,7 +106,7 @@ export function OutputPathDialog({
       fullWidth
       maxWidth="sm"
     >
-      <DialogTitle>{t("merge.setOutputPath")}</DialogTitle>
+      <DialogTitle>{title ?? t("merge.setOutputPath")}</DialogTitle>
       <DialogContent>
         <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
           <TextField

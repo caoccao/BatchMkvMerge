@@ -44,6 +44,7 @@
     }
   },
   "toolbar": {
+    "setGlobalOutputPath": "設定全域輸出路徑",
     "mergeAll": "全部合併 (F3)",
     "cancelAll": "全部取消 (F4)",
     "clear": "清空 (Ctrl + Q)",
@@ -93,6 +94,11 @@
   "settings": {
     "title": "設定",
     "appearance": "外觀",
+    "formatting": "格式",
+    "bitRate": "位元率",
+    "size": "大小",
+    "precision": "精度",
+    "unit": "單位",
     "mode": "模式",
     "autoMode": "自動",
     "lightMode": "淺色",
@@ -155,6 +161,8 @@
     "automation": "自動化",
     "automationResetUndLanguage": "自動將語言 und 設定為",
     "automationSetTrackName": "按語言自動設定軌道名稱",
+    "automationResetDefaultTrack": "自動重設預設軌道",
+    "automationResetForcedDisplay": "自動重設強制顯示",
     "trackNamesHint": "每行一個軌道名稱",
     "filter": "篩選",
     "clear": "清除",

@@ -44,6 +44,7 @@
     }
   },
   "toolbar": {
+    "setGlobalOutputPath": "グローバル出力先を設定",
     "mergeAll": "すべて結合 (F3)",
     "cancelAll": "すべてキャンセル (F4)",
     "clear": "クリア (Ctrl + Q)",
@@ -93,6 +94,11 @@
   "settings": {
     "title": "設定",
     "appearance": "外観",
+    "formatting": "フォーマット",
+    "bitRate": "ビットレート",
+    "size": "サイズ",
+    "precision": "精度",
+    "unit": "単位",
     "mode": "モード",
     "autoMode": "自動",
     "lightMode": "ライト",
@@ -155,6 +161,8 @@
     "automation": "自動化",
     "automationResetUndLanguage": "言語 und を次に自動設定",
     "automationSetTrackName": "トラック名を言語ごとに自動設定",
+    "automationResetDefaultTrack": "既定のトラックを自動的にリセット",
+    "automationResetForcedDisplay": "強制表示を自動的にリセット",
     "trackNamesHint": "1 行に 1 つのトラック名",
     "filter": "フィルター",
     "clear": "クリア",
