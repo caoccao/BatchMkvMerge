@@ -61,7 +61,8 @@
     "title": "Gruppe",
     "none": "Keine Gruppierung",
     "trackCount": "Nach identischer Spuranzahl pro Typ gruppieren",
-    "trackCountAndLanguage": "Nach identischer Spuranzahl und Sprache pro Typ gruppieren"
+    "trackCountAndLanguage": "Nach identischer Spuranzahl und Sprache pro Typ gruppieren",
+    "byFileName": "Nach Dateinamen gruppieren"
   },
   "tabs": {
     "fileList": "Dateiliste",

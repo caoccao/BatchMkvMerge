@@ -61,7 +61,8 @@
     "title": "グループ",
     "none": "グループ化しない",
     "trackCount": "種類ごとのトラック数が同一のものをグループ化",
-    "trackCountAndLanguage": "種類ごとのトラック数と言語が同一のものをグループ化"
+    "trackCountAndLanguage": "種類ごとのトラック数と言語が同一のものをグループ化",
+    "byFileName": "ファイル名でグループ化"
   },
   "tabs": {
     "fileList": "ファイル一覧",

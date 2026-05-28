@@ -61,7 +61,8 @@
     "title": "Gruppo",
     "none": "Nessun raggruppamento",
     "trackCount": "Raggruppa per numero di tracce identico per tipo",
-    "trackCountAndLanguage": "Raggruppa per numero di tracce e lingua identici per tipo"
+    "trackCountAndLanguage": "Raggruppa per numero di tracce e lingua identici per tipo",
+    "byFileName": "Raggruppa per nome file"
   },
   "tabs": {
     "fileList": "Elenco file",

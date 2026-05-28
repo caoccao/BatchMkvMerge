@@ -61,7 +61,8 @@
     "title": "分组",
     "none": "不分组",
     "trackCount": "按每种类型的相同轨道数分组",
-    "trackCountAndLanguage": "按每种类型的相同轨道数和语言分组"
+    "trackCountAndLanguage": "按每种类型的相同轨道数和语言分组",
+    "byFileName": "按文件名分组"
   },
   "tabs": {
     "fileList": "文件列表",

@@ -620,6 +620,22 @@ export default function Settings() {
           ))}
         </RadioGroup>
       </FormControl>
+      <Divider sx={{ my: 1.5 }} />
+      <FormControlLabel
+        sx={{ mr: 0 }}
+        control={
+          <Checkbox
+            size="small"
+            checked={config.groupByFileName}
+            onChange={(e) =>
+              updateConfig({ groupByFileName: e.target.checked })
+            }
+          />
+        }
+        label={
+          <Typography variant="body2">{t("groupMode.byFileName")}</Typography>
+        }
+      />
     </Box>
   );
 

@@ -61,7 +61,8 @@
     "title": "Group",
     "none": "No grouping",
     "trackCount": "Group by identical track count per type",
-    "trackCountAndLanguage": "Group by identical track count and language per type"
+    "trackCountAndLanguage": "Group by identical track count and language per type",
+    "byFileName": "Group by file name"
   },
   "tabs": {
     "fileList": "File List",

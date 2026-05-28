@@ -61,7 +61,8 @@
     "title": "Grupo",
     "none": "Sin agrupación",
     "trackCount": "Agrupar por número de pistas idéntico por tipo",
-    "trackCountAndLanguage": "Agrupar por número de pistas e idioma idénticos por tipo"
+    "trackCountAndLanguage": "Agrupar por número de pistas e idioma idénticos por tipo",
+    "byFileName": "Agrupar por nombre de archivo"
   },
   "tabs": {
     "fileList": "Lista de archivos",

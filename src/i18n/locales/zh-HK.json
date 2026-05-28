@@ -61,7 +61,8 @@
     "title": "分組",
     "none": "不分組",
     "trackCount": "按每種類型的相同軌道數分組",
-    "trackCountAndLanguage": "按每種類型的相同軌道數和語言分組"
+    "trackCountAndLanguage": "按每種類型的相同軌道數和語言分組",
+    "byFileName": "按檔案名稱分組"
   },
   "tabs": {
     "fileList": "檔案列表",

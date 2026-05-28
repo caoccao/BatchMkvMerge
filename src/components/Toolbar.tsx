@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   ButtonGroup,
+  Divider,
   IconButton,
   ListItemIcon,
   ListItemText,
@@ -30,6 +31,7 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import CheckIcon from "@mui/icons-material/Check";
 import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
+import FileCopyIcon from "@mui/icons-material/FileCopy";
 import FolderSpecialIcon from "@mui/icons-material/FolderSpecial";
 import InfoIcon from "@mui/icons-material/Info";
 import PermMediaIcon from "@mui/icons-material/PermMedia";
@@ -88,6 +90,7 @@ export default function Toolbar() {
   const config = useMkvStore((s) => s.config);
   const updateConfig = useMkvStore((s) => s.updateConfig);
   const groupMode = config?.groupMode ?? GroupMode.TrackCount;
+  const groupByFileName = config?.groupByFileName ?? true;
   const setActiveProfile = useMkvStore((s) => s.setActiveProfile);
   const [profileAnchor, setProfileAnchor] = useState<null | HTMLElement>(null);
   const profileButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -269,7 +272,7 @@ export default function Toolbar() {
   };
 
   return (
-    <Box sx={{ mx: 1, my: 0, display: "flex", gap: 1 }}>
+    <Box sx={{ my: 0, display: "flex", gap: 1 }}>
       <ButtonGroup variant="outlined" size="small">
         <Tooltip title={t("toolbar.setGlobalOutputPath")}>
           <IconButton
@@ -290,6 +293,7 @@ export default function Toolbar() {
             </IconButton>
           </span>
         </Tooltip>
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <Tooltip title={t("toolbar.cancelAll")}>
           <span>
             <IconButton
@@ -313,6 +317,7 @@ export default function Toolbar() {
             </IconButton>
           </span>
         </Tooltip>
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <Tooltip title={t(groupModeLabelKey(groupMode))}>
           <IconButton
             ref={groupButtonRef}
@@ -322,9 +327,16 @@ export default function Toolbar() {
             <PermMediaIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-      </ButtonGroup>
-
-      <ButtonGroup variant="outlined" size="small">
+        <Tooltip title={t("groupMode.byFileName")}>
+          <IconButton
+            sx={groupByFileName ? activeButtonSx : buttonSx}
+            onClick={() =>
+              updateConfig({ groupByFileName: !groupByFileName })
+            }
+          >
+            <FileCopyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title={t("toolbar.profile")}>
           <span>
             <IconButton
@@ -345,6 +357,7 @@ export default function Toolbar() {
             <SettingsIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <Tooltip title={t("toolbar.about")}>
           <IconButton
             sx={activeTab === "about" ? activeButtonSx : buttonSx}

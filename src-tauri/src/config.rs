@@ -49,6 +49,11 @@ pub struct Config {
   pub parser: ConfigParser,
   #[serde(rename = "groupMode", default)]
   pub group_mode: GroupMode,
+  #[serde(
+    rename = "groupByFileName",
+    default = "Config::default_group_by_file_name"
+  )]
+  pub group_by_file_name: bool,
   #[serde(default)]
   pub formatting: ConfigFormatting,
 }
@@ -60,6 +65,10 @@ impl Config {
 
   fn default_active_profile() -> String {
     ConfigProfile::DEFAULT_NAME.to_owned()
+  }
+
+  fn default_group_by_file_name() -> bool {
+    true
   }
 }
 
@@ -76,6 +85,7 @@ impl Default for Config {
       update: Default::default(),
       parser: Default::default(),
       group_mode: Default::default(),
+      group_by_file_name: Self::default_group_by_file_name(),
       formatting: Default::default(),
     }
   }

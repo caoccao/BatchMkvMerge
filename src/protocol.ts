@@ -204,6 +204,7 @@ export interface Config {
   update: ConfigUpdate;
   parser: ConfigParser;
   groupMode: GroupMode;
+  groupByFileName: boolean;
   formatting: ConfigFormatting;
 }
 
