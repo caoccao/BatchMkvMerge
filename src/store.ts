@@ -106,6 +106,8 @@ interface MkvStore {
   fileSelectedIds: Record<string, string[]>;
   fileOutputDirs: Record<string, string>;
   betterMediaInfoAvailable: boolean;
+  /** Id of the currently active card (file path or group key); null = none. */
+  activeCard: string | null;
   notification: Notification | null;
   addFiles: (paths: string[]) => void;
   removeFile: (path: string) => void;
@@ -140,7 +142,7 @@ interface MkvStore {
   setGroupSelectedIds: (files: string[], ids: string[]) => void;
   /** Cycle the default/forced flag (true → false → unspecified → true) on the
    *  matching track across all given files. */
-  cycleTrackFlag: (files: string[], key: string, kind: TrackFlagKind) => void;
+  cycleTrackFlag: (files: string[], keys: string[], kind: TrackFlagKind) => void;
   /** Header action: set the first video/audio/subtitle track's default flag to
    *  true and every other track's to false. */
   setDefaultTrackByType: (files: string[]) => void;
@@ -150,11 +152,27 @@ interface MkvStore {
    *  file that contains both rows. The track `id` is intrinsic and unchanged —
    *  only the row order changes. */
   reorderTracks: (files: string[], fromKey: string, toKey: string) => void;
+  /** Set the editable language code on every matching track key across all files. */
+  setTrackLanguage: (files: string[], keys: string[], value: string) => void;
+  /** Set the editable track name on every matching track key across all files. */
+  setTrackName: (files: string[], keys: string[], value: string) => void;
+  /** Apply the active profile's automation to a freshly-parsed file's tracks
+   *  (run once per newly added file). Reset-und-language is applied before
+   *  set-track-name so the latter sees the updated language. `presetFor`
+   *  resolves the per-language track-name preset (passed in so the store
+   *  doesn't depend on the UI's language lookups). */
+  applyAutomationToFile: (
+    file: string,
+    resetUndLanguage: { enabled: boolean; language: string },
+    setTrackName: boolean,
+    presetFor: (trackType: string, language: string) => string | undefined,
+  ) => void;
   setFileOutputDir: (file: string, dir: string) => void;
   clearFileOutputDir: (file: string) => void;
   setGroupOutputDir: (files: string[], dir: string) => void;
   clearGroupOutputDir: (files: string[]) => void;
   setBetterMediaInfoAvailable: (value: boolean) => void;
+  setActiveCard: (id: string | null) => void;
   showNotification: (kind: NotificationKind, file: string, detail: string) => void;
   dismissNotification: () => void;
 }
@@ -174,6 +192,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileSelectedIds: {},
   fileOutputDirs: {},
   betterMediaInfoAvailable: false,
+  activeCard: null,
   notification: null,
   addFiles: (paths) =>
     set((state) => {
@@ -193,6 +212,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       delete nextSelected[path];
       const nextOutputDirs = { ...state.fileOutputDirs };
       delete nextOutputDirs[path];
+      const nextQueueItems = { ...state.queueItems };
+      delete nextQueueItems[path];
       return {
         files: state.files.filter((f) => f !== path),
         fileMetadata: nextMetadata,
@@ -200,6 +221,9 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         fileTrackCounts: nextCounts,
         fileSelectedIds: nextSelected,
         fileOutputDirs: nextOutputDirs,
+        queueItems: nextQueueItems,
+        queueOrder: state.queueOrder.filter((f) => f !== path),
+        activeCard: state.activeCard === path ? null : state.activeCard,
       };
     }),
   clearFiles: () =>
@@ -210,6 +234,9 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       fileTrackCounts: {},
       fileSelectedIds: {},
       fileOutputDirs: {},
+      queueItems: {},
+      queueOrder: [],
+      activeCard: null,
     }),
   setActiveTab: (type) => set({ activeTab: type }),
   openSettings: () => set({ showSettings: true, activeTab: "settings" }),
@@ -517,16 +544,23 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileSelectedIds: next };
     }),
-  cycleTrackFlag: (files, key, kind) =>
+  cycleTrackFlag: (files, keys, kind) =>
     set((state) => {
+      if (keys.length === 0) {
+        return {};
+      }
       const field = kind === "default" ? "defaultTrack" : "forced";
+      // Cycle from the clicked row (first key) and apply that value to every
+      // target key, so a multi-row edit stays consistent.
+      const baseKey = keys[0];
       const ref = (state.fileTracks[files[0]] ?? []).find(
-        (t) => trackKey(t) === key,
+        (t) => trackKey(t) === baseKey,
       );
       if (!ref) {
         return {};
       }
       const value = nextTrackFlag(ref[field]);
+      const keySet = new Set(keys);
       const fileTracks = { ...state.fileTracks };
       for (const file of files) {
         const list = fileTracks[file];
@@ -534,7 +568,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
           continue;
         }
         fileTracks[file] = list.map((t) =>
-          trackKey(t) === key ? { ...t, [field]: value } : t,
+          keySet.has(trackKey(t)) ? { ...t, [field]: value } : t,
         );
       }
       return { fileTracks };
@@ -600,6 +634,73 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileTracks };
     }),
+  setTrackLanguage: (files, keys, value) =>
+    set((state) => {
+      const keySet = new Set(keys);
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        fileTracks[file] = list.map((t) =>
+          keySet.has(trackKey(t)) ? { ...t, language: value } : t,
+        );
+      }
+      return { fileTracks };
+    }),
+  setTrackName: (files, keys, value) =>
+    set((state) => {
+      const keySet = new Set(keys);
+      const fileTracks = { ...state.fileTracks };
+      for (const file of files) {
+        const list = fileTracks[file];
+        if (!list) {
+          continue;
+        }
+        fileTracks[file] = list.map((t) =>
+          keySet.has(trackKey(t)) ? { ...t, trackName: value } : t,
+        );
+      }
+      return { fileTracks };
+    }),
+  applyAutomationToFile: (file, resetUndLanguage, setTrackName, presetFor) =>
+    set((state) => {
+      const list = state.fileTracks[file];
+      if (!list) {
+        return {};
+      }
+      let changed = false;
+      const next = list.map((track) => {
+        if (track.kind !== "track") {
+          return track;
+        }
+        let updated = track;
+        // 1. Reset an undetermined language to the configured one.
+        if (
+          resetUndLanguage.enabled &&
+          resetUndLanguage.language &&
+          updated.language === "und"
+        ) {
+          updated = { ...updated, language: resetUndLanguage.language };
+          changed = true;
+        }
+        // 2. Set the track name from the per-language preset (uses the
+        //    language as updated by step 1).
+        if (setTrackName) {
+          const preset = presetFor(updated.type, updated.language);
+          if (preset) {
+            updated = { ...updated, trackName: preset };
+            changed = true;
+          }
+        }
+        return updated;
+      });
+      if (!changed) {
+        return {};
+      }
+      return { fileTracks: { ...state.fileTracks, [file]: next } };
+    }),
   setFileOutputDir: (file, dir) =>
     set((state) => ({
       fileOutputDirs: { ...state.fileOutputDirs, [file]: dir },
@@ -628,6 +729,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
     }),
   setBetterMediaInfoAvailable: (value) =>
     set({ betterMediaInfoAvailable: value }),
+  setActiveCard: (id) => set({ activeCard: id }),
   showNotification: (kind, file, detail) =>
     set((state) => ({
       notification: {

@@ -44,6 +44,13 @@ export interface MediaTrack {
   codec: string;
   /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Drives the track extension lookup. */
   codecId: string;
+  /** Payload size in bytes when the source exposes it (Matroska
+   *  `NUMBER_OF_BYTES` statistics tag, or an attachment's stored size). Null
+   *  when the parser has no value. */
+  size: number | null;
+  /** Bit rate in bits per second when available (Matroska `BPS` statistics
+   *  tag). Null when the parser has no value. */
+  bitRate: number | null;
   /** Optional friendly track name (TrackName). Empty for synthetic rows. */
   trackName: string;
   /** Resolved ISO-639-2 language ("eng", "und", ...). Empty for synthetic rows. */
@@ -81,18 +88,20 @@ function trackTypeToUiType(t: TrackType): string {
 }
 
 /**
- * The language code shown in the track table's Language column. Prefers the
- * bibliographic ISO 639-2/B form (fre/ger/chi) so the column reads in the same
- * convention as the language filter list; falls back to the terminologic code
- * (eng/spa/jpn have no B/T split) or "und". Filter *matching* uses
- * `trackLanguageCodes` below, which carries every equivalent form.
+ * The language code shown in the track table's Language column and emitted in
+ * the merge command. Prefers the ISO 639-1 alpha-2 form (`en`, `fr`, `zh`) to
+ * match the editable dropdown / mkvmerge convention, falling back to the
+ * bibliographic then terminologic ISO 639-2 code when no alpha-2 exists, else
+ * "und". Filter *matching* uses `trackLanguageCodes` below, which carries every
+ * equivalent form, so auto-select against the 3-letter settings lists still
+ * works.
  */
 function pickTrackLanguage(track: Track): string {
   const lang = track.properties.common.language ?? null;
   if (!lang) {
     return "und";
   }
-  return lang.iso639_2Bib || lang.iso639_2 || "und";
+  return lang.iso639_1 || lang.iso639_2Bib || lang.iso639_2 || "und";
 }
 
 /**
@@ -111,6 +120,21 @@ function trackLanguageCodes(track: Track): string[] {
     .filter((c): c is string => !!c && c.length > 0)
     .map((c) => c.toLowerCase());
   return codes.length > 0 ? Array.from(new Set(codes)) : ["und"];
+}
+
+/**
+ * Read a numeric Matroska statistics tag (e.g. `BPS`, `NUMBER_OF_BYTES`) off a
+ * track. mkvmerge writes these per-track; many files lack them, so callers get
+ * `null` when the tag is absent or non-numeric. Matched case-insensitively.
+ */
+function statTagNumber(track: Track, name: string): number | null {
+  const upper = name.toUpperCase();
+  const tag = track.properties.tags.find((t) => t.name.toUpperCase() === upper);
+  if (!tag) {
+    return null;
+  }
+  const value = Number(tag.value);
+  return Number.isFinite(value) ? value : null;
 }
 
 /**
@@ -147,6 +171,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: trackTypeToUiType(track.trackType),
       codec: track.codec.name ?? track.codec.id,
       codecId: track.codec.id,
+      size: statTagNumber(track, "NUMBER_OF_BYTES"),
+      bitRate: statTagNumber(track, "BPS"),
       trackName: track.properties.common.trackName ?? "",
       language: pickTrackLanguage(track),
       languageCodes: trackLanguageCodes(track),
@@ -162,6 +188,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: "chapters",
       codec: "xml",
       codecId: "xml",
+      size: null,
+      bitRate: null,
       trackName: "",
       language: "",
       languageCodes: [],
@@ -178,6 +206,8 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       type: "attachment",
       codec: subtype,
       codecId: subtype,
+      size: Number.isFinite(attachment.size) ? attachment.size : null,
+      bitRate: null,
       trackName: attachment.fileName,
       language: "",
       languageCodes: [],

@@ -61,6 +61,11 @@ import { CardSummary } from "./CardSummary";
 import { FileStatusIcon } from "./FileStatusIcon";
 import { OutputPathDialog } from "./OutputPathDialog";
 import { TrackSelectionTable } from "./TrackSelectionTable";
+import {
+  buildLanguageOptions,
+  buildTrackNameOptions,
+} from "./TrackCellAutocomplete";
+import { useCardRowSelection } from "./useCardRowSelection";
 
 interface MkvFileCardProps {
   path: string;
@@ -127,6 +132,9 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
   const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
   const reorderTracks = useMkvStore((s) => s.reorderTracks);
+  const setTrackLanguage = useMkvStore((s) => s.setTrackLanguage);
+  const setTrackName = useMkvStore((s) => s.setTrackName);
+  const applyAutomationToFile = useMkvStore((s) => s.applyAutomationToFile);
   const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
   const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
   const cachedTracks = useMkvStore((s) => s.fileTracks[path]);
@@ -200,6 +208,28 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           return;
         }
         setFileMetadata(path, metadata);
+        // Apply per-profile automation once, to this newly added file.
+        const cfg = useMkvStore.getState().config;
+        const profile = cfg
+          ? cfg.profiles.find((p) => p.name === cfg.activeProfile) ??
+            cfg.profiles[0] ??
+            null
+          : null;
+        const automation = profile?.automation;
+        if (
+          profile &&
+          automation &&
+          (automation.reset_und_language.enabled ||
+            automation.set_track_name.enabled)
+        ) {
+          applyAutomationToFile(
+            path,
+            automation.reset_und_language,
+            automation.set_track_name.enabled,
+            (type, language) =>
+              buildTrackNameOptions(profile, type, language)[0],
+          );
+        }
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -212,7 +242,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [path, t, setFileMetadata]);
+  }, [path, t, setFileMetadata, applyAutomationToFile]);
 
   const selectedTracks = tracks.filter((track) =>
     selectedIds.has(trackKey(track)),
@@ -226,12 +256,45 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
     );
   };
 
+  const flipMergeSelection = (keys: string[]) => {
+    const current = new Set(storedSelectedIds ?? []);
+    for (const key of keys) {
+      if (current.has(key)) {
+        current.delete(key);
+      } else {
+        current.add(key);
+      }
+    }
+    setFileSelectedIds(path, [...current]);
+  };
+
+  const { cardActive, activate, selectedRowKeys, toggleRowSelection } =
+    useCardRowSelection(path, isActive, flipMergeSelection);
+
+  // A per-row edit (checkbox, default/forced flags, language, name) applies to
+  // every selected row when the edited row is part of the selection; otherwise
+  // just to itself. The clicked key stays first so flag-cycling reads its value.
+  const resolveTargetRowKeys = (key: string): string[] =>
+    selectedRowKeys.has(key)
+      ? [key, ...[...selectedRowKeys].filter((k) => k !== key)]
+      : [key];
+
   const toggleOne = (key: string, checked: boolean) => {
+    const targets = resolveTargetRowKeys(key);
     const current = storedSelectedIds ?? [];
-    const next = checked
-      ? [...current, key]
-      : current.filter((v) => v !== key);
-    setFileSelectedIds(path, next);
+    if (checked) {
+      const existing = new Set(current);
+      setFileSelectedIds(path, [
+        ...current,
+        ...targets.filter((k) => !existing.has(k)),
+      ]);
+    } else {
+      const remove = new Set(targets);
+      setFileSelectedIds(
+        path,
+        current.filter((k) => !remove.has(k)),
+      );
+    }
   };
 
   const buildCurrentCommand = async (): Promise<string | null> => {
@@ -420,9 +483,11 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
   return (
     <Card
       variant="outlined"
+      onClickCapture={activate}
       sx={{
         mt: 1,
         bgcolor: isQueued ? "action.hover" : undefined,
+        borderColor: cardActive ? "primary.main" : undefined,
       }}
     >
       <CardHeader
@@ -491,6 +556,7 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
         <TrackSelectionTable
           tracks={tracks}
           selectedIds={selectedIds}
+          selectedRowKeys={selectedRowKeys}
           disabled={isActive}
           loading={loading}
           errorText={error}
@@ -499,6 +565,8 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
             id: t("merge.header.id"),
             type: t("merge.header.type"),
             codec: t("merge.header.codec"),
+            size: t("merge.header.size"),
+            bitRate: t("merge.header.bitRate"),
             trackName: t("merge.header.trackName"),
             language: t("merge.header.language"),
             defaultTrack: t("merge.header.defaultTrack"),
@@ -506,7 +574,20 @@ export function MkvFileCard({ path }: MkvFileCardProps) {
           }}
           onToggleAll={toggleAll}
           onToggleOne={toggleOne}
-          onCycleFlag={(key, kind) => cycleTrackFlag([path], key, kind)}
+          onToggleRowSelection={toggleRowSelection}
+          languageOptionsFor={(type) => buildLanguageOptions(activeProfile, type)}
+          trackNameOptionsFor={(type, language) =>
+            buildTrackNameOptions(activeProfile, type, language)
+          }
+          onTrackLanguageChange={(key, value) =>
+            setTrackLanguage([path], resolveTargetRowKeys(key), value)
+          }
+          onTrackNameChange={(key, value) =>
+            setTrackName([path], resolveTargetRowKeys(key), value)
+          }
+          onCycleFlag={(key, kind) =>
+            cycleTrackFlag([path], resolveTargetRowKeys(key), kind)
+          }
           onDefaultHeaderClick={() => setDefaultTrackByType([path])}
           onForcedHeaderClick={() => clearForcedFlags([path])}
           onReorder={(from, to) => reorderTracks([path], from, to)}

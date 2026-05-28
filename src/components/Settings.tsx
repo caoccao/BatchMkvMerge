@@ -56,6 +56,10 @@ import * as Protocol from "../protocol";
 import { MKV_LANGUAGES } from "../mkvLanguages";
 import { detectBetterMediaInfo, isMkvtoolnixFound } from "../service";
 import { useMkvStore } from "../store";
+import {
+  LanguageAutocomplete,
+  buildCombinedLanguageOptions,
+} from "./TrackCellAutocomplete";
 import { ExternalToolPathRow } from "./settings/ExternalToolPathRow";
 import { LanguagePicker } from "./settings/LanguagePicker";
 import {
@@ -75,6 +79,7 @@ enum ProfileTab {
   TrackSelection = "TrackSelection",
   Languages = "Languages",
   TrackNames = "TrackNames",
+  Automation = "Automation",
 }
 
 type LanguageTrackType = "video" | "audio" | "subtitles";
@@ -600,6 +605,10 @@ export default function Settings() {
           />
           <Tab value={ProfileTab.Languages} label={t("settings.languages")} />
           <Tab value={ProfileTab.TrackNames} label={t("settings.trackNames")} />
+          <Tab
+            value={ProfileTab.Automation}
+            label={t("settings.automation")}
+          />
         </Tabs>
 
         {profileTab === ProfileTab.TrackSelection && (
@@ -909,6 +918,97 @@ export default function Settings() {
                     />
                   </Box>
                 </Box>
+              </Box>
+            );
+          })()}
+
+        {profileTab === ProfileTab.Automation &&
+          (() => {
+            const automation = activeProfile.automation ?? {
+              reset_und_language: { enabled: false, language: "en" },
+              set_track_name: { enabled: false },
+            };
+            const langOptions = buildCombinedLanguageOptions(activeProfile);
+            const updateAutomation = (
+              patch: Partial<Protocol.ConfigAutomation>,
+            ) =>
+              updateActiveProfile({ automation: { ...automation, ...patch } });
+            return (
+              <Box sx={{ py: 2 }}>
+                <Typography
+                  variant="subtitle2"
+                  sx={{ fontWeight: 600, mb: 1.5 }}
+                >
+                  {t("settings.automation")}
+                </Typography>
+                <Stack spacing={1.5}>
+                  <Box
+                    sx={{ display: "flex", alignItems: "center", gap: 1 }}
+                  >
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={automation.reset_und_language.enabled}
+                          onChange={(e) =>
+                            updateAutomation({
+                              reset_und_language: {
+                                ...automation.reset_und_language,
+                                enabled: e.target.checked,
+                              },
+                            })
+                          }
+                        />
+                      }
+                      label={
+                        <Typography variant="caption">
+                          {t("settings.automationResetUndLanguage")}
+                        </Typography>
+                      }
+                    />
+                    <Box sx={{ width: 200 }}>
+                      <LanguageAutocomplete
+                        value={automation.reset_und_language.language}
+                        options={langOptions.options}
+                        preferredOptionCount={langOptions.preferredCount}
+                        disabled={false}
+                        onChange={(value) =>
+                          updateAutomation({
+                            reset_und_language: {
+                              ...automation.reset_und_language,
+                              language: value,
+                            },
+                          })
+                        }
+                      />
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={automation.set_track_name.enabled}
+                          onChange={(e) =>
+                            updateAutomation({
+                              set_track_name: {
+                                ...automation.set_track_name,
+                                enabled: e.target.checked,
+                              },
+                            })
+                          }
+                        />
+                      }
+                      label={
+                        <Typography variant="caption">
+                          {t("settings.automationSetTrackName")}
+                        </Typography>
+                      }
+                    />
+                  </Box>
+                </Stack>
               </Box>
             );
           })()}

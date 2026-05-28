@@ -57,6 +57,11 @@ import { CardSummary } from "./CardSummary";
 import { FileStatusIcon } from "./FileStatusIcon";
 import { OutputPathDialog } from "./OutputPathDialog";
 import { TrackSelectionTable } from "./TrackSelectionTable";
+import {
+  buildLanguageOptions,
+  buildTrackNameOptions,
+} from "./TrackCellAutocomplete";
+import { useCardRowSelection } from "./useCardRowSelection";
 
 interface GroupCardProps {
   files: string[];
@@ -135,6 +140,8 @@ export function GroupCard({ files }: GroupCardProps) {
   const setDefaultTrackByType = useMkvStore((s) => s.setDefaultTrackByType);
   const clearForcedFlags = useMkvStore((s) => s.clearForcedFlags);
   const reorderTracks = useMkvStore((s) => s.reorderTracks);
+  const setTrackLanguage = useMkvStore((s) => s.setTrackLanguage);
+  const setTrackName = useMkvStore((s) => s.setTrackName);
 
   const firstFile = files[0];
   const tracks = firstFile ? fileTracksMap[firstFile] ?? [] : [];
@@ -143,6 +150,7 @@ export function GroupCard({ files }: GroupCardProps) {
     () => new Set<string>(storedSelected ?? []),
     [storedSelected],
   );
+  const cardId = useMemo(() => files.join("\n"), [files]);
 
   useEffect(() => {
     if (!activeProfile) {
@@ -233,12 +241,45 @@ export function GroupCard({ files }: GroupCardProps) {
     );
   };
 
+  const flipMergeSelection = (keys: string[]) => {
+    const current = new Set(storedSelected ?? []);
+    for (const key of keys) {
+      if (current.has(key)) {
+        current.delete(key);
+      } else {
+        current.add(key);
+      }
+    }
+    setGroupSelectedIds(files, [...current]);
+  };
+
+  const { cardActive, activate, selectedRowKeys, toggleRowSelection } =
+    useCardRowSelection(cardId, hasActiveInGroup, flipMergeSelection);
+
+  // A per-row edit (checkbox, default/forced flags, language, name) applies to
+  // every selected row when the edited row is part of the selection; otherwise
+  // just to itself. The clicked key stays first so flag-cycling reads its value.
+  const resolveTargetRowKeys = (key: string): string[] =>
+    selectedRowKeys.has(key)
+      ? [key, ...[...selectedRowKeys].filter((k) => k !== key)]
+      : [key];
+
   const toggleOne = (key: string, checked: boolean) => {
+    const targets = resolveTargetRowKeys(key);
     const current = storedSelected ?? [];
-    const next = checked
-      ? [...current, key]
-      : current.filter((v) => v !== key);
-    setGroupSelectedIds(files, next);
+    if (checked) {
+      const existing = new Set(current);
+      setGroupSelectedIds(files, [
+        ...current,
+        ...targets.filter((k) => !existing.has(k)),
+      ]);
+    } else {
+      const remove = new Set(targets);
+      setGroupSelectedIds(
+        files,
+        current.filter((k) => !remove.has(k)),
+      );
+    }
   };
 
   const selectedTracksFor = (file: string) => {
@@ -325,10 +366,11 @@ export function GroupCard({ files }: GroupCardProps) {
   return (
     <Paper
       variant="outlined"
+      onClickCapture={activate}
       sx={{
         mt: 1,
         p: 1,
-        borderColor: "primary.main",
+        borderColor: cardActive ? "primary.main" : undefined,
         bgcolor: hasWaitingInGroup ? "action.hover" : undefined,
       }}
     >
@@ -545,12 +587,15 @@ export function GroupCard({ files }: GroupCardProps) {
           <TrackSelectionTable
             tracks={tracks}
             selectedIds={selectedIds}
+            selectedRowKeys={selectedRowKeys}
             disabled={hasActiveInGroup}
             emptyText={t("merge.noTracks")}
             headers={{
               id: t("merge.header.id"),
               type: t("merge.header.type"),
               codec: t("merge.header.codec"),
+              size: t("merge.header.size"),
+              bitRate: t("merge.header.bitRate"),
               trackName: t("merge.header.trackName"),
               language: t("merge.header.language"),
               defaultTrack: t("merge.header.defaultTrack"),
@@ -558,7 +603,22 @@ export function GroupCard({ files }: GroupCardProps) {
             }}
             onToggleAll={toggleAll}
             onToggleOne={toggleOne}
-            onCycleFlag={(key, kind) => cycleTrackFlag(files, key, kind)}
+            onToggleRowSelection={toggleRowSelection}
+            languageOptionsFor={(type) =>
+              buildLanguageOptions(activeProfile, type)
+            }
+            trackNameOptionsFor={(type, language) =>
+              buildTrackNameOptions(activeProfile, type, language)
+            }
+            onTrackLanguageChange={(key, value) =>
+              setTrackLanguage(files, resolveTargetRowKeys(key), value)
+            }
+            onTrackNameChange={(key, value) =>
+              setTrackName(files, resolveTargetRowKeys(key), value)
+            }
+            onCycleFlag={(key, kind) =>
+              cycleTrackFlag(files, resolveTargetRowKeys(key), kind)
+            }
             onDefaultHeaderClick={() => setDefaultTrackByType(files)}
             onForcedHeaderClick={() => clearForcedFlags(files)}
             onReorder={(from, to) => reorderTracks(files, from, to)}

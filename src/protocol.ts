@@ -126,6 +126,22 @@ export interface ConfigProfile {
   trackNamesVideo: Record<string, string>;
   trackNamesAudio: Record<string, string>;
   trackNamesSubtitle: Record<string, string>;
+  automation: ConfigAutomation;
+}
+
+/** Per-profile automation toggles. Snake_case keys mirror the persisted config. */
+export interface ConfigAutomation {
+  reset_und_language: AutomationResetUndLanguage;
+  set_track_name: AutomationSetTrackName;
+}
+
+export interface AutomationResetUndLanguage {
+  enabled: boolean;
+  language: string;
+}
+
+export interface AutomationSetTrackName {
+  enabled: boolean;
 }
 
 export interface ConfigParser {
@@ -196,6 +212,10 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): ConfigProfile
     trackNamesVideo: { ...DEFAULT_TRACK_NAMES_VIDEO_AUDIO },
     trackNamesAudio: { ...DEFAULT_TRACK_NAMES_VIDEO_AUDIO },
     trackNamesSubtitle: { ...DEFAULT_TRACK_NAMES_SUBTITLE },
+    automation: {
+      reset_und_language: { enabled: false, language: "en" },
+      set_track_name: { enabled: false },
+    },
   };
 }
 

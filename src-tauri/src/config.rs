@@ -207,6 +207,57 @@ pub struct ConfigProfile {
   pub track_names_audio: HashMap<String, String>,
   #[serde(rename = "trackNamesSubtitle", default = "ConfigProfile::default_track_names_subtitle")]
   pub track_names_subtitle: HashMap<String, String>,
+  #[serde(default)]
+  pub automation: ConfigAutomation,
+}
+
+/// Per-profile automation toggles.  Snake_case keys on the wire (per spec).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfigAutomation {
+  #[serde(default)]
+  pub reset_und_language: AutomationResetUndLanguage,
+  #[serde(default)]
+  pub set_track_name: AutomationSetTrackName,
+}
+
+impl Default for ConfigAutomation {
+  fn default() -> Self {
+    Self {
+      reset_und_language: Default::default(),
+      set_track_name: Default::default(),
+    }
+  }
+}
+
+/// Replace a track's "und" language with `language` automatically.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AutomationResetUndLanguage {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default = "AutomationResetUndLanguage::default_language")]
+  pub language: String,
+}
+
+impl AutomationResetUndLanguage {
+  fn default_language() -> String {
+    "en".to_owned()
+  }
+}
+
+impl Default for AutomationResetUndLanguage {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      language: Self::default_language(),
+    }
+  }
+}
+
+/// Set each track's name from the per-language presets automatically.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AutomationSetTrackName {
+  #[serde(default)]
+  pub enabled: bool,
 }
 
 impl ConfigProfile {
@@ -271,6 +322,7 @@ impl Default for ConfigProfile {
       track_names_video: Self::default_track_names_video_audio(),
       track_names_audio: Self::default_track_names_video_audio(),
       track_names_subtitle: Self::default_track_names_subtitle(),
+      automation: ConfigAutomation::default(),
     }
   }
 }

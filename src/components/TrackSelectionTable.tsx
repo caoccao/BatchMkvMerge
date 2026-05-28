@@ -51,9 +51,13 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { trackKey } from "../merge";
+import { formatBitRate, formatBytes, trackKey } from "../merge";
 import type { MediaTrack } from "../media-metadata";
 import type { TrackFlag } from "../protocol";
+import {
+  LanguageAutocomplete,
+  TitleAutocomplete,
+} from "./TrackCellAutocomplete";
 import { TrackTypeIcon } from "./TrackTypeIcon";
 
 /** Render a tri-state flag as an icon: green check / red cross / blank square. */
@@ -114,11 +118,13 @@ class InteractiveSafePointerSensor extends PointerSensor {
 function SortableTableRow({
   id,
   disabled,
+  selected,
   onClick,
   children,
 }: {
   id: string;
   disabled: boolean;
+  selected: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -134,6 +140,7 @@ function SortableTableRow({
     <TableRow
       ref={setNodeRef}
       hover
+      selected={selected}
       {...attributes}
       {...listeners}
       onClick={onClick}
@@ -152,12 +159,16 @@ function SortableTableRow({
 interface TrackSelectionTableProps {
   tracks: MediaTrack[];
   selectedIds: Set<string>;
+  /** UI row-selection (highlight) — independent of the merge checkboxes. */
+  selectedRowKeys: Set<string>;
   disabled: boolean;
   emptyText: string;
   headers: {
     id: string;
     type: string;
     codec: string;
+    size: string;
+    bitRate: string;
     trackName: string;
     language: string;
     /** Tooltip text for the icon-only "default track" column. */
@@ -169,6 +180,19 @@ interface TrackSelectionTableProps {
   errorText?: string | null;
   onToggleAll: (checked: boolean) => void;
   onToggleOne: (key: string, checked: boolean) => void;
+  /** Toggle a row's UI selection (click on the row, away from its controls). */
+  onToggleRowSelection: (key: string) => void;
+  /** Language dropdown options for a track type (preferred first + the rest). */
+  languageOptionsFor: (trackType: string) => {
+    options: string[];
+    preferredCount: number;
+  };
+  /** Track-name preset options for a track type + current language. */
+  trackNameOptionsFor: (trackType: string, language: string) => string[];
+  /** Commit an edited language code for a track row. */
+  onTrackLanguageChange: (key: string, value: string) => void;
+  /** Commit an edited track name for a track row. */
+  onTrackNameChange: (key: string, value: string) => void;
   /** Cycle a track's default/forced flag (true → false → unspecified → true). */
   onCycleFlag: (key: string, kind: "default" | "forced") => void;
   /** Default Track header: make the first video/audio/subtitle track default. */
@@ -182,6 +206,7 @@ interface TrackSelectionTableProps {
 export function TrackSelectionTable({
   tracks,
   selectedIds,
+  selectedRowKeys,
   disabled,
   emptyText,
   headers,
@@ -189,6 +214,11 @@ export function TrackSelectionTable({
   errorText = null,
   onToggleAll,
   onToggleOne,
+  onToggleRowSelection,
+  languageOptionsFor,
+  trackNameOptionsFor,
+  onTrackLanguageChange,
+  onTrackNameChange,
   onCycleFlag,
   onDefaultHeaderClick,
   onForcedHeaderClick,
@@ -257,6 +287,8 @@ export function TrackSelectionTable({
                 <TableCell>{headers.id}</TableCell>
                 <TableCell>{headers.type}</TableCell>
                 <TableCell>{headers.codec}</TableCell>
+                <TableCell>{headers.size}</TableCell>
+                <TableCell>{headers.bitRate}</TableCell>
                 <TableCell>{headers.language}</TableCell>
                 <TableCell>{headers.trackName}</TableCell>
                 <TableCell padding="checkbox" align="center">
@@ -297,12 +329,8 @@ export function TrackSelectionTable({
                     key={key}
                     id={key}
                     disabled={disabled}
-                    onClick={() => {
-                      if (disabled) {
-                        return;
-                      }
-                      onToggleOne(key, !selectedIds.has(key));
-                    }}
+                    selected={selectedRowKeys.has(key)}
+                    onClick={() => onToggleRowSelection(key)}
                   >
                     <TableCell
                       padding="checkbox"
@@ -320,8 +348,54 @@ export function TrackSelectionTable({
                       <TrackTypeIcon type={track.type} />
                     </TableCell>
                     <TableCell>{track.codec}</TableCell>
-                    <TableCell>{track.language}</TableCell>
-                    <TableCell>{track.trackName}</TableCell>
+                    <TableCell>
+                      {track.size != null ? formatBytes(track.size) : ""}
+                    </TableCell>
+                    <TableCell>
+                      {track.bitRate != null ? formatBitRate(track.bitRate) : ""}
+                    </TableCell>
+                    <TableCell
+                      onClick={(e) => e.stopPropagation()}
+                      sx={{ minWidth: 120 }}
+                    >
+                      {track.kind === "track" ? (
+                        (() => {
+                          const { options, preferredCount } =
+                            languageOptionsFor(track.type);
+                          return (
+                            <LanguageAutocomplete
+                              value={track.language}
+                              options={options}
+                              preferredOptionCount={preferredCount}
+                              disabled={disabled}
+                              onChange={(value) =>
+                                onTrackLanguageChange(key, value)
+                              }
+                            />
+                          );
+                        })()
+                      ) : (
+                        track.language
+                      )}
+                    </TableCell>
+                    <TableCell
+                      onClick={(e) => e.stopPropagation()}
+                      sx={{ minWidth: 140 }}
+                    >
+                      {track.kind === "track" ? (
+                        <TitleAutocomplete
+                          value={track.trackName}
+                          options={trackNameOptionsFor(
+                            track.type,
+                            track.language,
+                          )}
+                          disabled={disabled}
+                          onChange={(value) => onTrackNameChange(key, value)}
+                        />
+                      ) : (
+                        track.trackName
+                      )}
+                    </TableCell>
                     <TableCell
                       padding="checkbox"
                       align="center"

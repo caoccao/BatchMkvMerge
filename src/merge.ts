@@ -157,9 +157,18 @@ export function buildMergeArgs(
   const audio = selectByType("audio", "-a", "--no-audio");
   const subtitles = selectByType("subtitles", "-s", "--no-subtitles");
 
-  // Default / forced flags: emit only when explicitly set, so "unspecified"
-  // preserves the source track's own flag.
+  // Per-track language / name / flags. mkvmerge takes each as a `<id>:<value>`
+  // option attached to the source file (mirrors mkvtoolnix-gui's
+  // merge/track.cpp). Language and name are emitted whenever the track carries
+  // a value in the table; default / forced flags only when explicitly set so
+  // "unspecified" preserves the source track's own flag.
   for (const track of [...video, ...audio, ...subtitles]) {
+    if (track.language) {
+      args.push("--language", `${track.id}:${track.language}`);
+    }
+    if (track.trackName) {
+      args.push("--track-name", `${track.id}:${track.trackName}`);
+    }
     if (track.defaultTrack !== "unspecified") {
       args.push(
         "--default-track-flag",
@@ -227,4 +236,36 @@ export function formatHMS(ms: number): string {
   const s = total % 60;
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+/** Human-readable byte size using binary (1024) units. Empty string for
+ *  missing / invalid values. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "";
+  }
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const text = unit === 0 ? String(value) : value.toFixed(2);
+  return `${text} ${units[unit]}`;
+}
+
+/** Human-readable bit rate (bits per second) using decimal (1000) units. Empty
+ *  string for missing / invalid values. */
+export function formatBitRate(bps: number): string {
+  if (!Number.isFinite(bps) || bps < 0) {
+    return "";
+  }
+  if (bps >= 1_000_000) {
+    return `${(bps / 1_000_000).toFixed(2)} Mb/s`;
+  }
+  if (bps >= 1000) {
+    return `${Math.round(bps / 1000)} kb/s`;
+  }
+  return `${bps} b/s`;
 }
