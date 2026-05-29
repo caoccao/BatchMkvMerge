@@ -75,6 +75,7 @@ import {
   resolveOverriddenOutputPath,
 } from "../service";
 import { mediaTrackCounts } from "../media-metadata";
+import { formatFileSize } from "../format";
 import { nextTrackFlag, useMkvStore } from "../store";
 import type { TrackFlagKind } from "../store";
 import { CardSummary } from "./CardSummary";
@@ -94,6 +95,16 @@ interface MkvFileCardProps {
    *  ordinary one-file card; a multi-member unit is a *Group by file name* tree
    *  flattened into one combined table that merges into one output. */
   memberFiles: string[];
+}
+
+/** Render an ISO-8601 mux date in the user's locale; fall back to the raw value
+ *  if it isn't parseable. Returns undefined when there's no date. */
+function formatEncodedDate(dateUtc: string | null | undefined): string | undefined {
+  if (!dateUtc) {
+    return undefined;
+  }
+  const parsed = new Date(dateUtc);
+  return Number.isNaN(parsed.getTime()) ? dateUtc : parsed.toLocaleString();
 }
 
 /** Child-files dropdown becomes scrollable beyond this many rows. */
@@ -161,6 +172,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const clearFileOutputPath = useMkvStore((s) => s.clearFileOutputPath);
   const fileTracksMap = useMkvStore((s) => s.fileTracks);
   const fileSelectedIdsMap = useMkvStore((s) => s.fileSelectedIds);
+  const rootMetadata = useMkvStore((s) => s.fileMetadata[root]);
   const outputPathOverride = useMkvStore((s) => s.fileOutputPaths[root]);
   const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
   const betterMediaInfoAvailable = useMkvStore(
@@ -205,6 +217,16 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     [memberFiles, fileTracksMap],
   );
   const trackCounts = useMemo(() => mediaTrackCounts(combined), [combined]);
+
+  // Subtitle extras from the root file: file size (always present once parsed)
+  // plus parser-sourced encoded date / container title when available.
+  const fileSizeLabel = rootMetadata
+    ? formatFileSize(rootMetadata.fileSize)
+    : undefined;
+  const encodedLabel = formatEncodedDate(
+    rootMetadata?.container.properties.dateUtc,
+  );
+  const titleLabel = rootMetadata?.container.properties.title ?? undefined;
   const allRowKeys = useMemo(() => combined.map(rowKeyOf), [combined]);
 
   // Selection lives per-file in the store; lift each member's bare keys into
@@ -701,7 +723,13 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       <CardHeader
         title={titleContent}
         subheader={
-          <CardSummary counts={trackCounts} outputPath={outputPathOverride} />
+          <CardSummary
+            counts={trackCounts}
+            outputPath={outputPathOverride}
+            size={fileSizeLabel}
+            encoded={encodedLabel}
+            title={titleLabel}
+          />
         }
         action={actionContent}
         sx={{

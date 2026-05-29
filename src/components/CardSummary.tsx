@@ -22,9 +22,21 @@ import type { TrackCounts } from "../store";
 interface Props {
   counts?: TrackCounts;
   outputPath?: string;
+  /** Formatted whole-file size (e.g. "1.2GB"); omitted when unknown. */
+  size?: string;
+  /** Formatted encoded/mux date; omitted when the parser has none. */
+  encoded?: string;
+  /** Container title; omitted when the parser has none. */
+  title?: string;
 }
 
-export function CardSummary({ counts, outputPath }: Props) {
+export function CardSummary({
+  counts,
+  outputPath,
+  size,
+  encoded,
+  title,
+}: Props) {
   const { t } = useTranslation();
   const pieces: string[] = [];
   if (counts) {
@@ -50,6 +62,20 @@ export function CardSummary({ counts, outputPath }: Props) {
   }
   if (outputPath) {
     pieces.push(t("card.summary.toPath", { path: outputPath }));
+  }
+  // File size + parser-sourced encoded date / title, after the existing info.
+  const details: string[] = [];
+  if (size) {
+    details.push(t("card.summary.size", { size }));
+  }
+  if (encoded) {
+    details.push(t("card.summary.encoded", { date: encoded }));
+  }
+  if (title) {
+    details.push(t("card.summary.title", { title }));
+  }
+  if (details.length > 0) {
+    pieces.push(details.join(", "));
   }
   if (pieces.length === 0) {
     return null;

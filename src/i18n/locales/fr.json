@@ -205,7 +205,10 @@
   },
   "card": {
     "summary": {
-      "toPath": "Vers {{path}}"
+      "toPath": "Vers {{path}}",
+      "size": "Taille : {{size}}",
+      "encoded": "Encodé : {{date}}",
+      "title": "Titre : {{title}}"
     }
   },
   "update": {

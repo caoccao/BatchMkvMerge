@@ -205,7 +205,10 @@
   },
   "card": {
     "summary": {
-      "toPath": "出力先: {{path}}"
+      "toPath": "出力先: {{path}}",
+      "size": "サイズ: {{size}}",
+      "encoded": "エンコード: {{date}}",
+      "title": "タイトル: {{title}}"
     }
   },
   "update": {

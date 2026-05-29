@@ -205,7 +205,10 @@
   },
   "card": {
     "summary": {
-      "toPath": "Nel percorso {{path}}"
+      "toPath": "Nel percorso {{path}}",
+      "size": "Dimensione: {{size}}",
+      "encoded": "Codificato: {{date}}",
+      "title": "Titolo: {{title}}"
     }
   },
   "update": {

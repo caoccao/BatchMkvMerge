@@ -150,6 +150,11 @@ export function formatTrackSize(
   return formatValue(bytes, fieldFor(formatting, trackType, "size"), "B");
 }
 
+/** Human-readable whole-file byte count (KMGT ladder, 2 decimals, e.g. "1.2GB"). */
+export function formatFileSize(bytes: number): string {
+  return formatValue(bytes, DEFAULT_FIELD, "B");
+}
+
 /** Format a bit rate (bps) using the configured precision/unit for the type. */
 export function formatTrackBitRate(
   bps: number,
