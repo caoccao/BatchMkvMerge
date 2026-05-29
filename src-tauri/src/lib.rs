@@ -119,6 +119,11 @@ fn resolve_merge_output_path(output_dir: String, source_file: String) -> String 
 }
 
 #[tauri::command]
+fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
+  controller::resolve_overridden_output_path(output_path, source_file)
+}
+
+#[tauri::command]
 async fn detect_better_media_info(
   path: String,
   check_running: bool,
@@ -180,6 +185,7 @@ pub fn run() {
       is_mkvtoolnix_found,
       launch_better_media_info,
       resolve_merge_output_path,
+      resolve_overridden_output_path,
       set_config,
       skip_version
     ])

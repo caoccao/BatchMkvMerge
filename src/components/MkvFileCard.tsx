@@ -36,7 +36,7 @@ import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import betterMediaInfoIcon from "../assets/bettermediainfo.png";
-import { dirname } from "@tauri-apps/api/path";
+import { basename } from "@tauri-apps/api/path";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
@@ -63,6 +63,7 @@ import { QueueItemStatus } from "../protocol";
 import {
   launchBetterMediaInfo,
   resolveMergeOutputPath,
+  resolveOverriddenOutputPath,
 } from "../service";
 import { mediaTrackCounts } from "../media-metadata";
 import { nextTrackFlag, useMkvStore } from "../store";
@@ -101,11 +102,11 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const setTrackFlag = useMkvStore((s) => s.setTrackFlag);
   const reorderTracks = useMkvStore((s) => s.reorderTracks);
   const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
-  const setFileOutputDir = useMkvStore((s) => s.setFileOutputDir);
-  const clearFileOutputDir = useMkvStore((s) => s.clearFileOutputDir);
+  const setFileOutputPath = useMkvStore((s) => s.setFileOutputPath);
+  const clearFileOutputPath = useMkvStore((s) => s.clearFileOutputPath);
   const fileTracksMap = useMkvStore((s) => s.fileTracks);
   const fileSelectedIdsMap = useMkvStore((s) => s.fileSelectedIds);
-  const outputDirOverride = useMkvStore((s) => s.fileOutputDirs[root]);
+  const outputPathOverride = useMkvStore((s) => s.fileOutputPaths[root]);
   const globalOutputDir = useMkvStore((s) => s.globalOutputDir);
   const betterMediaInfoAvailable = useMkvStore(
     (s) => s.betterMediaInfoAvailable,
@@ -135,6 +136,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   } | null>(null);
   const [outputDialogOpen, setOutputDialogOpen] = useState(false);
   const [outputDialogInitial, setOutputDialogInitial] = useState("");
+  const [outputDialogDefaultName, setOutputDialogDefaultName] = useState("");
 
   // The whole tree flattened into one stable, sorted track list.
   const combined = useMemo<CombinedTrack[]>(
@@ -331,12 +333,13 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     if (!hasSelection || !activeProfile) {
       return null;
     }
-    const outputDir = await resolveOutputDir(
-      root,
-      outputDirOverride,
-      globalOutputDir,
-    );
-    const outputPath = await resolveMergeOutputPath(outputDir, root);
+    const outputPath =
+      outputPathOverride && outputPathOverride.length > 0
+        ? await resolveOverriddenOutputPath(outputPathOverride, root)
+        : await resolveMergeOutputPath(
+            await resolveOutputDir(root, undefined, globalOutputDir),
+            root,
+          );
     if (isMulti) {
       return buildCommandStringMulti(
         mergeInputs().filter((i) => i.tracks.length > 0),
@@ -397,15 +400,20 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   };
 
   const handleOpenOutputDialog = async () => {
-    let initial = "";
-    if (outputDirOverride && outputDirOverride.length > 0) {
-      initial = outputDirOverride;
-    } else {
+    let initial = outputPathOverride ?? "";
+    if (initial.length === 0) {
+      // Default to the full output file path that the merge would produce.
       try {
-        initial = await dirname(root);
+        const dir = await resolveOutputDir(root, undefined, globalOutputDir);
+        initial = await resolveMergeOutputPath(dir, root);
       } catch {
         initial = "";
       }
+    }
+    try {
+      setOutputDialogDefaultName(await basename(root));
+    } catch {
+      setOutputDialogDefaultName("");
     }
     setOutputDialogInitial(initial);
     setOutputDialogOpen(true);
@@ -421,9 +429,9 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
 
   const handleOutputConfirm = (value: string) => {
     if (value.length === 0) {
-      clearFileOutputDir(root);
+      clearFileOutputPath(root);
     } else {
-      setFileOutputDir(root, value);
+      setFileOutputPath(root, value);
     }
   };
 
@@ -564,7 +572,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       <CardHeader
         title={titleContent}
         subheader={
-          <CardSummary counts={trackCounts} outputPath={outputDirOverride} />
+          <CardSummary counts={trackCounts} outputPath={outputPathOverride} />
         }
         action={actionContent}
         sx={{
@@ -680,6 +688,8 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       <OutputPathDialog
         open={outputDialogOpen}
         initialValue={outputDialogInitial}
+        mode="file"
+        defaultFileName={outputDialogDefaultName}
         onConfirm={handleOutputConfirm}
         onClose={() => setOutputDialogOpen(false)}
       />

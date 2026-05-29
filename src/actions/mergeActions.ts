@@ -29,6 +29,7 @@ import {
   cancelMerge as invokeCancelMerge,
   enqueueMerge,
   resolveMergeOutputPath,
+  resolveOverriddenOutputPath,
 } from "../service";
 import { useMkvStore } from "../store";
 
@@ -70,6 +71,34 @@ export interface EnqueueSelectedTracksOptions {
   skipIfActive?: boolean;
 }
 
+/**
+ * Resolve the merge output path for a single-output card keyed by `file`.
+ * A full-path override (set by the file-mode output dialog on single-root
+ * cards) is honoured: if it names a file it's used verbatim (overwriting an
+ * existing file is fine — the OS save dialog already confirmed that); if it
+ * points at a directory the input file's original name is appended with no
+ * " (1)" dedup. Otherwise fall back to `<resolved dir>/<stem>.mkv` with the
+ * backend's auto-rename dedup.
+ *
+ * The app never creates the output directory — mkvmerge creates any missing
+ * path components when it writes the merged file.
+ */
+async function resolveMergeOutputFor(
+  state: MkvStoreState,
+  file: string,
+): Promise<string> {
+  const override = state.fileOutputPaths[file];
+  if (override && override.length > 0) {
+    return await resolveOverriddenOutputPath(override, file);
+  }
+  const outputDir = await resolveOutputDir(
+    file,
+    state.fileOutputDirs[file],
+    state.globalOutputDir,
+  );
+  return await resolveMergeOutputPath(outputDir, file);
+}
+
 export async function enqueueSelectedTracksForFile(
   options: EnqueueSelectedTracksOptions,
 ): Promise<boolean> {
@@ -82,14 +111,7 @@ export async function enqueueSelectedTracksForFile(
   if (skipIfActive && isActiveStatus(status)) {
     return false;
   }
-  const outputDir = await resolveOutputDir(
-    file,
-    state.fileOutputDirs[file],
-    state.globalOutputDir,
-  );
-  // The app never creates the output directory — mkvmerge creates any missing
-  // path components when it writes the merged file.
-  const outputPath = await resolveMergeOutputPath(outputDir, file);
+  const outputPath = await resolveMergeOutputFor(state, file);
   const args = buildMergeArgs(file, outputPath, selectedTracks, profile);
   await enqueueMerge(file, args);
   state.addToQueue(file);
@@ -125,14 +147,7 @@ export async function enqueueSelectedTracksForUnit(
   if (skipIfActive && isActiveStatus(status)) {
     return false;
   }
-  const outputDir = await resolveOutputDir(
-    root,
-    state.fileOutputDirs[root],
-    state.globalOutputDir,
-  );
-  // The app never creates the output directory — mkvmerge creates any missing
-  // path components when it writes the merged file.
-  const outputPath = await resolveMergeOutputPath(outputDir, root);
+  const outputPath = await resolveMergeOutputFor(state, root);
   const args = buildMergeArgsMulti(nonEmpty, outputPath, profile);
   await enqueueMerge(root, args);
   state.addToQueue(root);

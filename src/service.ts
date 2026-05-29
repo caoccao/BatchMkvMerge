@@ -95,6 +95,19 @@ export async function resolveMergeOutputPath(
   });
 }
 
+/** Resolve a single-root card's output-path override: when it points at a
+ *  directory, append the source file's original name verbatim (no " (1)"
+ *  dedup); otherwise use the override as-is. */
+export async function resolveOverriddenOutputPath(
+  outputPath: string,
+  sourceFile: string,
+): Promise<string> {
+  return await invoke<string>("resolve_overridden_output_path", {
+    outputPath,
+    sourceFile,
+  });
+}
+
 export async function detectBetterMediaInfo(
   path: string,
   checkRunning: boolean = false,

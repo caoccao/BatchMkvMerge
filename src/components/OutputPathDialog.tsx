@@ -31,7 +31,8 @@ import {
   Typography,
 } from "@mui/material";
 import ClearIcon from "@mui/icons-material/Clear";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { dirname } from "@tauri-apps/api/path";
 import { useTranslation } from "react-i18next";
 import { checkOutputPathWritable, outputPathExists } from "../service";
 
@@ -40,6 +41,12 @@ interface Props {
   initialValue: string;
   /** Dialog title; defaults to the per-file "Set Output Path" label. */
   title?: string;
+  /** "directory" (default) edits an output folder; "file" edits a full output
+   *  file path — Browse opens a save dialog and the existence warning targets
+   *  the parent directory rather than the (always-absent) output file. */
+  mode?: "directory" | "file";
+  /** Default file name for the save dialog in "file" mode (the input file). */
+  defaultFileName?: string;
   onConfirm: (value: string) => void;
   onClose: () => void;
 }
@@ -48,6 +55,8 @@ export function OutputPathDialog({
   open: dialogOpen,
   initialValue,
   title,
+  mode = "directory",
+  defaultFileName,
   onConfirm,
   onClose,
 }: Props) {
@@ -65,7 +74,9 @@ export function OutputPathDialog({
     }
   }, [dialogOpen, initialValue]);
 
-  // Debounced check: warn (non-blocking) when the typed path doesn't yet exist.
+  // Debounced check: warn (non-blocking) when the directory doesn't yet exist.
+  // In "file" mode the output file itself is always absent, so we check the
+  // parent directory instead.
   useEffect(() => {
     if (!dialogOpen) {
       return;
@@ -77,7 +88,10 @@ export function OutputPathDialog({
     }
     let cancelled = false;
     const handle = setTimeout(() => {
-      outputPathExists(trimmed)
+      const dirPromise =
+        mode === "file" ? dirname(trimmed) : Promise.resolve(trimmed);
+      dirPromise
+        .then((dir) => outputPathExists(dir))
         .then((exists) => {
           if (!cancelled) {
             setMissing(!exists);
@@ -93,10 +107,22 @@ export function OutputPathDialog({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [value, dialogOpen]);
+  }, [value, dialogOpen, mode]);
 
   const handleBrowse = async () => {
     try {
+      if (mode === "file") {
+        // The OS save dialog handles its own overwrite prompt when the user
+        // picks an existing file, so we just take whatever it returns.
+        const selected = await save({
+          defaultPath: value.trim() || defaultFileName || undefined,
+        });
+        if (typeof selected === "string" && selected.length > 0) {
+          setValue(selected);
+          setError(null);
+        }
+        return;
+      }
       const directory = await open({
         directory: true,
         defaultPath: value.trim() || undefined,

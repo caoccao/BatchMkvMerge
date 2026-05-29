@@ -171,6 +171,26 @@ pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> Str
   }
 }
 
+/// Resolve a user-set output-path override for a single-root card. When the
+/// override points at a directory (it exists as one, or ends with a path
+/// separator), the input file's original name is appended verbatim —
+/// `<override_dir>/<source file name>`, with NO " (1)" dedup, so the original
+/// name is preferred. Otherwise the override already names a file and is used
+/// as-is.
+pub fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
+  let path = std::path::Path::new(&output_path);
+  let looks_like_dir =
+    path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
+  if !looks_like_dir {
+    return output_path;
+  }
+  let name = std::path::Path::new(&source_file)
+    .file_name()
+    .and_then(|s| s.to_str())
+    .unwrap_or("output.mkv");
+  path.join(name).to_string_lossy().into_owned()
+}
+
 pub async fn check_output_path_writable(path: String) -> Result<bool> {
   let mut current = PathBuf::from(&path);
   loop {
@@ -433,5 +453,38 @@ mod tests {
     let opts = ParseOptions::default();
     let err = read_media_metadata("this-file-does-not-exist-12345.mkv".to_owned(), opts).unwrap_err();
     assert!(matches!(err, ParseError::Io { .. }));
+  }
+
+  #[test]
+  fn overridden_output_path_keeps_explicit_file_name() {
+    // A path that names a file (not an existing dir, no trailing separator)
+    // is used verbatim.
+    let out = resolve_overridden_output_path(
+      "/nonexistent_dir_bmm/custom.mkv".to_owned(),
+      "/inputs/movie.mkv".to_owned(),
+    );
+    assert_eq!(out, "/nonexistent_dir_bmm/custom.mkv");
+  }
+
+  #[test]
+  fn overridden_output_path_appends_source_name_for_existing_dir() {
+    let dir = std::env::temp_dir();
+    let out = resolve_overridden_output_path(
+      dir.to_string_lossy().into_owned(),
+      "/inputs/movie.mkv".to_owned(),
+    );
+    // Original name appended verbatim — no " (1)" dedup.
+    let expected = dir.join("movie.mkv").to_string_lossy().into_owned();
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn overridden_output_path_appends_source_name_for_trailing_separator() {
+    // A non-existent path ending with a separator is treated as a directory.
+    let base = std::env::temp_dir().join("bmm_override_does_not_exist");
+    let with_sep = format!("{}{}", base.to_string_lossy(), std::path::MAIN_SEPARATOR);
+    let out = resolve_overridden_output_path(with_sep, "/inputs/movie.mkv".to_owned());
+    let expected = base.join("movie.mkv").to_string_lossy().into_owned();
+    assert_eq!(out, expected);
   }
 }

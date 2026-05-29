@@ -106,6 +106,10 @@ interface MkvStore {
   fileTrackCounts: Record<string, TrackCounts>;
   fileSelectedIds: Record<string, string[]>;
   fileOutputDirs: Record<string, string>;
+  /** Full output file-path overrides for single-root cards (file-mode output
+   *  dialog). Takes precedence over `fileOutputDirs` / `globalOutputDir` and is
+   *  used verbatim as the merge output (no auto-rename dedup). */
+  fileOutputPaths: Record<string, string>;
   /** Session-only default output dir (not persisted). Consulted dynamically at
    *  merge/command-resolve time as the fallback when a card has no per-file
    *  override; undefined = fall back to each input file's own directory. */
@@ -175,8 +179,9 @@ interface MkvStore {
     automation: ConfigAutomation,
     presetFor: (trackType: string, language: string) => string | undefined,
   ) => void;
-  setFileOutputDir: (file: string, dir: string) => void;
-  clearFileOutputDir: (file: string) => void;
+  /** Set / clear a full output file-path override for a single-root card. */
+  setFileOutputPath: (file: string, path: string) => void;
+  clearFileOutputPath: (file: string) => void;
   setGroupOutputDir: (files: string[], dir: string) => void;
   clearGroupOutputDir: (files: string[]) => void;
   /** Set the session-only global default output dir for new files. */
@@ -201,6 +206,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileTrackCounts: {},
   fileSelectedIds: {},
   fileOutputDirs: {},
+  fileOutputPaths: {},
   globalOutputDir: undefined,
   betterMediaInfoAvailable: false,
   activeCard: null,
@@ -223,6 +229,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       delete nextSelected[path];
       const nextOutputDirs = { ...state.fileOutputDirs };
       delete nextOutputDirs[path];
+      const nextOutputPaths = { ...state.fileOutputPaths };
+      delete nextOutputPaths[path];
       const nextQueueItems = { ...state.queueItems };
       delete nextQueueItems[path];
       return {
@@ -232,6 +240,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         fileTrackCounts: nextCounts,
         fileSelectedIds: nextSelected,
         fileOutputDirs: nextOutputDirs,
+        fileOutputPaths: nextOutputPaths,
         queueItems: nextQueueItems,
         queueOrder: state.queueOrder.filter((f) => f !== path),
         activeCard: state.activeCard === path ? null : state.activeCard,
@@ -245,6 +254,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       fileTrackCounts: {},
       fileSelectedIds: {},
       fileOutputDirs: {},
+      fileOutputPaths: {},
       queueItems: {},
       queueOrder: [],
       activeCard: null,
@@ -651,15 +661,21 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       });
       return { fileTracks: { ...state.fileTracks, [file]: next } };
     }),
-  setFileOutputDir: (file, dir) =>
-    set((state) => ({
-      fileOutputDirs: { ...state.fileOutputDirs, [file]: dir },
-    })),
-  clearFileOutputDir: (file) =>
+  setFileOutputPath: (file, path) =>
     set((state) => {
-      const next = { ...state.fileOutputDirs };
+      // A full-path override supersedes any directory override for this file.
+      const nextDirs = { ...state.fileOutputDirs };
+      delete nextDirs[file];
+      return {
+        fileOutputDirs: nextDirs,
+        fileOutputPaths: { ...state.fileOutputPaths, [file]: path },
+      };
+    }),
+  clearFileOutputPath: (file) =>
+    set((state) => {
+      const next = { ...state.fileOutputPaths };
       delete next[file];
-      return { fileOutputDirs: next };
+      return { fileOutputPaths: next };
     }),
   setGroupOutputDir: (files, dir) =>
     set((state) => {
