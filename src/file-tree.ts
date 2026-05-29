@@ -281,3 +281,101 @@ export function applyUnitFlagAutomation(
     setTrackFlag([file], keys, "forced", "unspecified");
   }
 }
+
+/**
+ * Fold the user's manual card merges into the auto-derived `units`. `mergedRoots`
+ * maps an absorbed root file → the destination root it was dragged onto; each
+ * absorbed unit's whole member list is appended (flattened, no nesting) to its
+ * ultimate destination unit, and the absorbed card disappears.
+ *
+ * Chains (A→B→C) resolve to the ultimate destination C, so A's and B's members
+ * both land directly under C. Entries whose source is no longer a base root, or
+ * whose destination doesn't resolve to a surviving base root, or that would form
+ * a cycle, are ignored — the source simply stays its own card. Surviving cards
+ * keep their original order; absorbed members are appended in `units` order.
+ */
+export function applyManualMerges(
+  units: string[][],
+  mergedRoots: Record<string, string>,
+): string[][] {
+  if (Object.keys(mergedRoots).length === 0) {
+    return units;
+  }
+  const isBaseRoot = new Set(units.map((u) => u[0]));
+
+  // Follow the merge chain to the ultimate destination that is itself a base
+  // root and not further absorbed. Returns null on a cycle or a dangling target.
+  const resolveTarget = (root: string): string | null => {
+    const seen = new Set<string>([root]);
+    let cur = root;
+    while (mergedRoots[cur] !== undefined) {
+      cur = mergedRoots[cur];
+      if (seen.has(cur)) {
+        return null;
+      }
+      seen.add(cur);
+    }
+    return cur !== root && isBaseRoot.has(cur) ? cur : null;
+  };
+
+  const targetOf = new Map<string, string>();
+  for (const unit of units) {
+    const root = unit[0];
+    if (mergedRoots[root] === undefined) {
+      continue;
+    }
+    const target = resolveTarget(root);
+    if (target !== null) {
+      targetOf.set(root, target);
+    }
+  }
+  if (targetOf.size === 0) {
+    return units;
+  }
+
+  const finalMembers = new Map<string, string[]>();
+  for (const unit of units) {
+    if (!targetOf.has(unit[0])) {
+      finalMembers.set(unit[0], [...unit]);
+    }
+  }
+  for (const unit of units) {
+    const target = targetOf.get(unit[0]);
+    if (target === undefined) {
+      continue;
+    }
+    finalMembers.get(target)?.push(...unit);
+  }
+  return units
+    .filter((u) => !targetOf.has(u[0]))
+    .map((u) => finalMembers.get(u[0]) ?? u);
+}
+
+/**
+ * Pull every file in `detachedFiles` out of its unit (only non-root members can
+ * be detached — a unit's root is its card identity) and append each as its own
+ * one-member unit. Applied after [`applyManualMerges`] so a detached file stays
+ * out regardless of auto-grouping / drag-merges that would otherwise re-claim it.
+ */
+export function applyDetachments(
+  units: string[][],
+  detachedFiles: Record<string, true>,
+): string[][] {
+  if (Object.keys(detachedFiles).length === 0) {
+    return units;
+  }
+  const kept: string[][] = [];
+  const extracted: string[][] = [];
+  for (const unit of units) {
+    const remaining = [unit[0]];
+    for (let i = 1; i < unit.length; i += 1) {
+      if (detachedFiles[unit[i]]) {
+        extracted.push([unit[i]]);
+      } else {
+        remaining.push(unit[i]);
+      }
+    }
+    kept.push(remaining);
+  }
+  return [...kept, ...extracted];
+}

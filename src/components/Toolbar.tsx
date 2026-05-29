@@ -275,7 +275,10 @@ export default function Toolbar() {
       <ButtonGroup variant="outlined" size="small">
         <Tooltip title={t("toolbar.setGlobalOutputPath")}>
           <IconButton
-            sx={globalOutputDir ? activeButtonSx : buttonSx}
+            sx={{
+              ...buttonSx,
+              color: globalOutputDir ? "primary.main" : "text.secondary",
+            }}
             onClick={() => setGlobalOutputDialogOpen(true)}
           >
             <FolderSpecialIcon fontSize="small" />

@@ -13,6 +13,13 @@
     "ok": "OK",
     "browse": "参照",
     "setOutputPath": "出力先を設定",
+    "dragToMerge": "別のファイルにドラッグして結合",
+    "childTable": {
+      "id": "ID",
+      "filePath": "ファイルパス",
+      "action": "操作"
+    },
+    "removeFromRoot": "結合から削除",
     "outputPath": "出力先",
     "openInBetterMediaInfo": "BetterMediaInfo で開く",
     "outputPathNotWritable": "出力先に書き込めません。別のパスを選択してください。",

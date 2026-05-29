@@ -26,7 +26,14 @@ import {
   CardHeader,
   IconButton,
   LinearProgress,
+  Popover,
   Snackbar,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -34,6 +41,8 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import HubIcon from "@mui/icons-material/Hub";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import betterMediaInfoIcon from "../assets/bettermediainfo.png";
 import { basename } from "@tauri-apps/api/path";
@@ -78,6 +87,7 @@ import {
 } from "./TrackCellAutocomplete";
 import { useCardRowSelection } from "./useCardRowSelection";
 import { useFilesLoad } from "./useFilesLoad";
+import { beginCardDrag, CARD_ROOT_ATTR } from "./cardDrag";
 
 interface MkvFileCardProps {
   /** The merge unit's member files, root first. A single-member unit is the
@@ -86,13 +96,58 @@ interface MkvFileCardProps {
   memberFiles: string[];
 }
 
+/** Child-files dropdown becomes scrollable beyond this many rows. */
+const CHILD_MENU_VISIBLE_ROWS = 5;
+const CHILD_MENU_ROW_HEIGHT = 36;
+/** Max width of the child-files dropdown — it grows to show the full path and
+ *  middle-truncates only when a path is longer than this. */
+const CHILD_MENU_MAX_WIDTH = "min(90vw, 760px)";
+/** Max width of the File Path cell; the table grows to fit shorter paths and
+ *  middle-truncates only when a path exceeds this. */
+const CHILD_PATH_CELL_MAX_WIDTH = "min(80vw, 680px)";
+/** Number of trailing path characters always kept visible when middle-truncating. */
+const PATH_TAIL_CHARS = 18;
+
+/**
+ * Render a file path that grows to its natural width but, when constrained by
+ * the parent's max-width, keeps the start and the last [`PATH_TAIL_CHARS`]
+ * characters and collapses the middle to an ellipsis (CSS-only: the head shrinks
+ * with `text-overflow: ellipsis`, the tail never shrinks).
+ */
+function MiddleEllipsisPath({ path }: { path: string }) {
+  const tailLength = Math.min(path.length, PATH_TAIL_CHARS);
+  const head = path.slice(0, path.length - tailLength);
+  const tail = path.slice(path.length - tailLength);
+  return (
+    <Box sx={{ display: "flex", width: "100%", minWidth: 0, fontSize: "0.875rem" }}>
+      <Box
+        component="span"
+        sx={{
+          flex: "0 1 auto",
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {head}
+      </Box>
+      <Box component="span" sx={{ flex: "0 0 auto", whiteSpace: "nowrap" }}>
+        {tail}
+      </Box>
+    </Box>
+  );
+}
+
 export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const { t } = useTranslation();
   const root = memberFiles[0];
   const isMulti = memberFiles.length > 1;
   const childCount = memberFiles.length - 1;
+  const childFiles = memberFiles.slice(1);
 
   const removeFile = useMkvStore((s) => s.removeFile);
+  const detachFileFromRoot = useMkvStore((s) => s.detachFileFromRoot);
   const mkvToolNixPath = useMkvStore(
     (s) => s.config?.externalTools?.mkvToolNixPath ?? "",
   );
@@ -137,6 +192,12 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const [outputDialogOpen, setOutputDialogOpen] = useState(false);
   const [outputDialogInitial, setOutputDialogInitial] = useState("");
   const [outputDialogDefaultName, setOutputDialogDefaultName] = useState("");
+  // Anchor for the child-files dropdown opened from the badge; null = closed.
+  const [childMenuAnchor, setChildMenuAnchor] = useState<HTMLElement | null>(
+    null,
+  );
+  // True while a valid card drag is hovering over this card (drop highlight).
+  const dropActive = useMkvStore((s) => s.dropTargetRoot === root);
 
   // The whole tree flattened into one stable, sorted track list.
   const combined = useMemo<CombinedTrack[]>(
@@ -291,12 +352,14 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     );
   };
 
-  // Apply the profile's default/forced automation once — only after the WHOLE
-  // unit (the flattened tree) is loaded and auto-selected, so it picks one
-  // default per type across the merged file rather than one per member.
-  const flagAutomationDone = useRef(false);
+  // Apply the profile's default/forced automation — only after the WHOLE unit
+  // (the flattened tree) is loaded and auto-selected, so it picks one default
+  // per type across the merged file rather than one per member. Re-runs when the
+  // member set changes (e.g. another card is drag-merged in) so the combined
+  // unit gets one default per type again.
+  const flagAutomationSig = useRef<string | null>(null);
   useEffect(() => {
-    if (flagAutomationDone.current || !activeProfile) {
+    if (!activeProfile) {
       return;
     }
     const ready = memberFiles.every(
@@ -306,7 +369,11 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     if (!ready) {
       return;
     }
-    flagAutomationDone.current = true;
+    const sig = memberFiles.join("\n");
+    if (flagAutomationSig.current === sig) {
+      return;
+    }
+    flagAutomationSig.current = sig;
     applyUnitFlagAutomation(
       memberFiles,
       fileTracksMap,
@@ -435,6 +502,32 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     }
   };
 
+  // Start a pointer-based card drag (HTML5 DnD is unavailable under Tauri's
+  // file-drop). The controller in `cardDrag.ts` handles hover + drop/merge.
+  const handleDragHandlePointerDown = (e: React.PointerEvent) => {
+    if (isActive) {
+      return;
+    }
+    e.preventDefault();
+    beginCardDrag(root);
+  };
+
+  const openChildMenu = (e: React.MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setChildMenuAnchor(e.currentTarget);
+  };
+  const closeChildMenu = () => setChildMenuAnchor(null);
+
+  // Detach a child from this card. The unit's flag automation re-runs on the
+  // remaining members (member-set signature changes). Keep the dropdown open so
+  // several children can be removed in a row; close it once the last one goes.
+  const handleRemoveChild = (file: string) => {
+    if (childFiles.length <= 1) {
+      setChildMenuAnchor(null);
+    }
+    detachFileFromRoot(file);
+  };
+
   const handleDelete = async () => {
     const current = useMkvStore.getState().queueItems[root];
     if (current?.status === QueueItemStatus.Merging) {
@@ -461,6 +554,13 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
           color="primary"
           badgeContent={childCount}
           max={999}
+          slotProps={{
+            badge: {
+              onClick: openChildMenu,
+              role: "button",
+              "aria-label": t("merge.childCount", { count: childCount }),
+            },
+          }}
           sx={{
             "& .MuiBadge-badge": {
               position: "static",
@@ -469,6 +569,8 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
               height: 15,
               minWidth: 15,
               px: 0.5,
+              cursor: "pointer",
+              "&:hover": { filter: "brightness(1.15)" },
             },
           }}
         >
@@ -494,6 +596,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
             size="small"
             disabled={isActive}
             onClick={handleOpenOutputDialog}
+            sx={{ color: outputPathOverride ? "primary.main" : "text.secondary" }}
           >
             <FolderOpenIcon fontSize="small" />
           </IconButton>
@@ -546,6 +649,19 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
           </IconButton>
         </span>
       </Tooltip>
+      <Tooltip title={t("merge.dragToMerge")}>
+        <Box component="span" sx={{ display: "inline-flex" }}>
+          <IconButton
+            size="small"
+            disabled={isActive}
+            disableRipple
+            onPointerDown={handleDragHandlePointerDown}
+            sx={{ cursor: isActive ? "default" : "grab", touchAction: "none" }}
+          >
+            <DragIndicatorIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </Tooltip>
     </Box>
   );
 
@@ -563,10 +679,23 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     <Card
       variant="outlined"
       onClickCapture={activate}
+      {...{ [CARD_ROOT_ATTR]: root }}
       sx={{
         mt: 1,
-        bgcolor: isQueued ? "action.hover" : undefined,
-        borderColor: cardActive ? "primary.main" : undefined,
+        bgcolor: dropActive
+          ? "action.selected"
+          : isQueued
+            ? "action.hover"
+            : undefined,
+        borderColor:
+          dropActive || cardActive ? "primary.main" : undefined,
+        ...(dropActive
+          ? {
+              outline: "2px dashed",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            }
+          : {}),
       }}
     >
       <CardHeader
@@ -693,6 +822,58 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
         onConfirm={handleOutputConfirm}
         onClose={() => setOutputDialogOpen(false)}
       />
+      <Popover
+        anchorEl={childMenuAnchor}
+        open={Boolean(childMenuAnchor)}
+        onClose={closeChildMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+      >
+        <TableContainer
+          sx={{
+            maxWidth: CHILD_MENU_MAX_WIDTH,
+            // Header row + CHILD_MENU_VISIBLE_ROWS body rows, then scroll.
+            maxHeight: (CHILD_MENU_VISIBLE_ROWS + 1) * CHILD_MENU_ROW_HEIGHT,
+          }}
+        >
+          <Table size="small" stickyHeader>
+            <TableHead>
+              <TableRow>
+                <TableCell align="right" sx={{ width: 40 }}>
+                  {t("merge.childTable.id")}
+                </TableCell>
+                <TableCell>{t("merge.childTable.filePath")}</TableCell>
+                <TableCell align="center" sx={{ width: 48 }}>
+                  {t("merge.childTable.action")}
+                </TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {childFiles.map((file, index) => (
+                <TableRow key={file} hover>
+                  <TableCell align="right">{index + 1}</TableCell>
+                  <TableCell sx={{ maxWidth: CHILD_PATH_CELL_MAX_WIDTH }}>
+                    <Tooltip title={file}>
+                      <MiddleEllipsisPath path={file} />
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell align="center" sx={{ py: 0 }}>
+                    <Tooltip title={t("merge.removeFromRoot")}>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() => handleRemoveChild(file)}
+                      >
+                        <RemoveCircleOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Popover>
     </Card>
   );
 }

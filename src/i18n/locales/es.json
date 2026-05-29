@@ -13,6 +13,13 @@
     "ok": "Aceptar",
     "browse": "Examinar",
     "setOutputPath": "Establecer ruta de salida",
+    "dragToMerge": "Arrastra sobre otro archivo para combinar",
+    "childTable": {
+      "id": "ID",
+      "filePath": "Ruta del archivo",
+      "action": "Acción"
+    },
+    "removeFromRoot": "Quitar de la combinación",
     "outputPath": "Ruta de salida",
     "openInBetterMediaInfo": "Abrir en BetterMediaInfo",
     "outputPathNotWritable": "La ruta de salida no se puede escribir. Elige otra ruta.",

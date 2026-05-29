@@ -13,6 +13,13 @@
     "ok": "OK",
     "browse": "Sfoglia",
     "setOutputPath": "Imposta cartella destinazione",
+    "dragToMerge": "Trascina su un altro file per unire",
+    "childTable": {
+      "id": "ID",
+      "filePath": "Percorso file",
+      "action": "Azione"
+    },
+    "removeFromRoot": "Rimuovi dall'unione",
     "outputPath": "Cartella destinazione",
     "openInBetterMediaInfo": "Apri in BetterMediaInfo",
     "outputPathNotWritable": "Il percorso destinazione non è scrivibile. Scegli un altro percorso.",

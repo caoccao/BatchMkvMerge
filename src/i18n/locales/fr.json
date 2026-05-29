@@ -13,6 +13,13 @@
     "ok": "OK",
     "browse": "Parcourir",
     "setOutputPath": "Définir le chemin de sortie",
+    "dragToMerge": "Glisser sur un autre fichier pour fusionner",
+    "childTable": {
+      "id": "ID",
+      "filePath": "Chemin du fichier",
+      "action": "Action"
+    },
+    "removeFromRoot": "Retirer de la fusion",
     "outputPath": "Chemin de sortie",
     "openInBetterMediaInfo": "Ouvrir dans BetterMediaInfo",
     "outputPathNotWritable": "Le chemin de sortie n'est pas accessible en écriture. Choisissez un autre chemin.",

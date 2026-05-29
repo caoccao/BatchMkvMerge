@@ -75,6 +75,7 @@ import {
 } from "./TrackCellAutocomplete";
 import { useCardRowSelection } from "./useCardRowSelection";
 import { useFilesLoad } from "./useFilesLoad";
+import { GROUP_CARD_ATTR } from "./cardDrag";
 
 interface GroupCardProps {
   /** The structurally-identical merge units in this track-count group. Each
@@ -513,6 +514,7 @@ export function GroupCard({ units }: GroupCardProps) {
     <Paper
       variant="outlined"
       onClickCapture={activate}
+      {...{ [GROUP_CARD_ATTR]: "1" }}
       sx={{
         mt: 1,
         p: 1,
@@ -536,6 +538,7 @@ export function GroupCard({ units }: GroupCardProps) {
               size="small"
               disabled={hasActiveInGroup}
               onClick={handleOpenOutputDialog}
+              sx={{ color: groupOutputDir ? "primary.main" : "text.secondary" }}
             >
               <FolderOpenIcon fontSize="small" />
             </IconButton>

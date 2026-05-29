@@ -110,6 +110,19 @@ interface MkvStore {
    *  dialog). Takes precedence over `fileOutputDirs` / `globalOutputDir` and is
    *  used verbatim as the merge output (no auto-rename dedup). */
   fileOutputPaths: Record<string, string>;
+  /** Manual card merges: maps an absorbed root file → the destination root it
+   *  was dragged onto. Applied (with chain/cycle resolution) on top of the
+   *  auto-derived forest so the dragged card's whole tree becomes children of
+   *  the destination's single-root card. Survives re-grouping; cleared per file
+   *  on removal. */
+  mergedRoots: Record<string, string>;
+  /** Files explicitly detached from their card via the child-files table — each
+   *  is pulled out of whatever unit contains it and shown as its own card,
+   *  overriding both auto-grouping and manual drag-merges. */
+  detachedFiles: Record<string, true>;
+  /** Root of the single-root card currently hovered as a valid drop target
+   *  during a card drag (pointer-based), or null. Drives the drop highlight. */
+  dropTargetRoot: string | null;
   /** Session-only default output dir (not persisted). Consulted dynamically at
    *  merge/command-resolve time as the fallback when a card has no per-file
    *  override; undefined = fall back to each input file's own directory. */
@@ -121,6 +134,14 @@ interface MkvStore {
   addFiles: (paths: string[]) => void;
   removeFile: (path: string) => void;
   clearFiles: () => void;
+  /** Drag-merge `sourceRoot`'s card (and its whole tree) into `destRoot`'s
+   *  single-root card — all of the source's files become children of the
+   *  destination. No-op when source === dest. */
+  mergeCardInto: (sourceRoot: string, destRoot: string) => void;
+  /** Detach a child file from its card so it becomes its own card again. */
+  detachFileFromRoot: (file: string) => void;
+  /** Set / clear the card currently hovered as a valid drop target. */
+  setDropTarget: (root: string | null) => void;
   setActiveTab: (type: TabType) => void;
   openSettings: () => void;
   openAbout: () => void;
@@ -207,6 +228,9 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileSelectedIds: {},
   fileOutputDirs: {},
   fileOutputPaths: {},
+  mergedRoots: {},
+  detachedFiles: {},
+  dropTargetRoot: null,
   globalOutputDir: undefined,
   betterMediaInfoAvailable: false,
   activeCard: null,
@@ -231,6 +255,16 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       delete nextOutputDirs[path];
       const nextOutputPaths = { ...state.fileOutputPaths };
       delete nextOutputPaths[path];
+      // Drop manual merges that reference the removed file as either the
+      // absorbed source (key) or the destination (value).
+      const nextMergedRoots: Record<string, string> = {};
+      for (const [src, dest] of Object.entries(state.mergedRoots)) {
+        if (src !== path && dest !== path) {
+          nextMergedRoots[src] = dest;
+        }
+      }
+      const nextDetachedFiles = { ...state.detachedFiles };
+      delete nextDetachedFiles[path];
       const nextQueueItems = { ...state.queueItems };
       delete nextQueueItems[path];
       return {
@@ -241,6 +275,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         fileSelectedIds: nextSelected,
         fileOutputDirs: nextOutputDirs,
         fileOutputPaths: nextOutputPaths,
+        mergedRoots: nextMergedRoots,
+        detachedFiles: nextDetachedFiles,
         queueItems: nextQueueItems,
         queueOrder: state.queueOrder.filter((f) => f !== path),
         activeCard: state.activeCard === path ? null : state.activeCard,
@@ -255,10 +291,37 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       fileSelectedIds: {},
       fileOutputDirs: {},
       fileOutputPaths: {},
+      mergedRoots: {},
+      detachedFiles: {},
       queueItems: {},
       queueOrder: [],
       activeCard: null,
     }),
+  mergeCardInto: (sourceRoot, destRoot) =>
+    set((state) => {
+      if (sourceRoot === destRoot) {
+        return {};
+      }
+      // Re-merging supersedes a prior detach of the same root.
+      const nextDetached = { ...state.detachedFiles };
+      delete nextDetached[sourceRoot];
+      return {
+        mergedRoots: { ...state.mergedRoots, [sourceRoot]: destRoot },
+        detachedFiles: nextDetached,
+      };
+    }),
+  detachFileFromRoot: (file) =>
+    set((state) => {
+      // A directly drag-merged root un-merges (taking its own subtree with it);
+      // any other member is pulled out into its own card via `detachedFiles`.
+      if (state.mergedRoots[file] !== undefined) {
+        const nextMergedRoots = { ...state.mergedRoots };
+        delete nextMergedRoots[file];
+        return { mergedRoots: nextMergedRoots };
+      }
+      return { detachedFiles: { ...state.detachedFiles, [file]: true } };
+    }),
+  setDropTarget: (root) => set({ dropTargetRoot: root }),
   setActiveTab: (type) => set({ activeTab: type }),
   openSettings: () => set({ showSettings: true, activeTab: "settings" }),
   openAbout: () => set({ showAbout: true, activeTab: "about" }),

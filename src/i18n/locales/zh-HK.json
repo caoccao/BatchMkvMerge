@@ -13,6 +13,13 @@
     "ok": "確定",
     "browse": "瀏覽",
     "setOutputPath": "設定輸出路徑",
+    "dragToMerge": "拖到另一個檔案上以合併",
+    "childTable": {
+      "id": "ID",
+      "filePath": "檔案路徑",
+      "action": "操作"
+    },
+    "removeFromRoot": "從合併中移除",
     "outputPath": "輸出路徑",
     "openInBetterMediaInfo": "喺 BetterMediaInfo 開啟",
     "outputPathNotWritable": "輸出路徑無法寫入。請選擇其他路徑。",

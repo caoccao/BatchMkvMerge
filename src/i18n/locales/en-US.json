@@ -13,6 +13,13 @@
     "ok": "OK",
     "browse": "Browse",
     "setOutputPath": "Set Output Path",
+    "dragToMerge": "Drag onto another file to merge",
+    "childTable": {
+      "id": "ID",
+      "filePath": "File Path",
+      "action": "Action"
+    },
+    "removeFromRoot": "Remove from merge",
     "outputPath": "Output Path",
     "openInBetterMediaInfo": "Open in BetterMediaInfo",
     "outputPathNotWritable": "The output path is not writable. Please choose another path.",

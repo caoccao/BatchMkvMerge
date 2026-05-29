@@ -21,7 +21,12 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
 import { formatHMS, getParentDir } from "../merge";
-import { buildForest, combineUnitTracks } from "../file-tree";
+import {
+  applyDetachments,
+  applyManualMerges,
+  buildForest,
+  combineUnitTracks,
+} from "../file-tree";
 import { mediaTrackCounts } from "../media-metadata";
 import type { MediaTrack } from "../media-metadata";
 import type { MergeFinishedEvent } from "../protocol";
@@ -63,13 +68,20 @@ export default function FileList() {
   );
   const fileTrackCounts = useMkvStore((s) => s.fileTrackCounts);
   const fileTracks = useMkvStore((s) => s.fileTracks);
+  const mergedRoots = useMkvStore((s) => s.mergedRoots);
+  const detachedFiles = useMkvStore((s) => s.detachedFiles);
 
   const entries = useMemo<RenderEntry[]>(() => {
     // The atomic unit is a merge tree: when grouping by file name it's a forest
     // root plus its children; otherwise every file is its own one-member unit.
-    const units: string[][] = groupByFileName
+    // Manual drag-merges are folded in, then explicitly detached files pulled out.
+    const baseUnits: string[][] = groupByFileName
       ? buildForest(files).map((tree) => tree.members)
       : files.map((file) => [file]);
+    const units = applyDetachments(
+      applyManualMerges(baseUnits, mergedRoots),
+      detachedFiles,
+    );
 
     if (groupMode === GroupMode.None) {
       return units.map((members) => ({ kind: "single", members }));
@@ -123,7 +135,15 @@ export default function FileList() {
       result.push({ kind: "single", members });
     }
     return result;
-  }, [files, groupByFileName, groupMode, fileTrackCounts, fileTracks]);
+  }, [
+    files,
+    groupByFileName,
+    groupMode,
+    fileTrackCounts,
+    fileTracks,
+    mergedRoots,
+    detachedFiles,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
