@@ -181,7 +181,6 @@ export function OutputPathDialog({
             fullWidth
             inputRef={inputRef}
             size="small"
-            label={t("merge.outputPath")}
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
