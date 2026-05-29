@@ -16,6 +16,7 @@
     "outputPath": "Ruta de salida",
     "openInBetterMediaInfo": "Abrir en BetterMediaInfo",
     "outputPathNotWritable": "La ruta de salida no se puede escribir. Elige otra ruta.",
+    "outputPathDoesNotExist": "La ruta de salida no existe. Se creará.",
     "commandCopied": "Comando copiado al portapapeles.",
     "mergeComplete": "Combinación completada.",
     "noTracks": "No se encontraron pistas.",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "Completado en {{elapsed}}",
-    "unknownError": "Error desconocido",
-    "failedCreateOutput": "No se pudo crear {{path}}. Revísalo e inténtalo de nuevo."
+    "unknownError": "Error desconocido"
   },
   "confirm": {
     "exitTitle": "Salir",

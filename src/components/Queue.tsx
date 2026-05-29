@@ -183,7 +183,6 @@ export default function Queue() {
                 file,
                 selectedTracks,
                 profile,
-                t,
               });
             } catch (err) {
               console.error("Resume failed for", file, err);

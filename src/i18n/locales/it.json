@@ -16,6 +16,7 @@
     "outputPath": "Cartella destinazione",
     "openInBetterMediaInfo": "Apri in BetterMediaInfo",
     "outputPathNotWritable": "Il percorso destinazione non è scrivibile. Scegli un altro percorso.",
+    "outputPathDoesNotExist": "Il percorso destinazione non esiste. Verrà creato.",
     "commandCopied": "Comando copiato negli appunti.",
     "mergeComplete": "Unione completata.",
     "noTracks": "Nessuna traccia trovata.",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "Completato in {{elapsed}}",
-    "unknownError": "Errore sconosciuto",
-    "failedCreateOutput": "Impossibile creare {{path}}. Controlla e riprova."
+    "unknownError": "Errore sconosciuto"
   },
   "confirm": {
     "exitTitle": "Esci",

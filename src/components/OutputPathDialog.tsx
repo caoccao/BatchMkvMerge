@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -23,12 +23,17 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  InputAdornment,
   Stack,
   TextField,
+  Tooltip,
+  Typography,
 } from "@mui/material";
+import ClearIcon from "@mui/icons-material/Clear";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
-import { checkOutputPathWritable } from "../service";
+import { checkOutputPathWritable, outputPathExists } from "../service";
 
 interface Props {
   open: boolean;
@@ -49,13 +54,46 @@ export function OutputPathDialog({
   const { t } = useTranslation();
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (dialogOpen) {
       setValue(initialValue);
       setError(null);
+      setMissing(false);
     }
   }, [dialogOpen, initialValue]);
+
+  // Debounced check: warn (non-blocking) when the typed path doesn't yet exist.
+  useEffect(() => {
+    if (!dialogOpen) {
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      setMissing(false);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      outputPathExists(trimmed)
+        .then((exists) => {
+          if (!cancelled) {
+            setMissing(!exists);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setMissing(false);
+          }
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [value, dialogOpen]);
 
   const handleBrowse = async () => {
     try {
@@ -103,6 +141,11 @@ export function OutputPathDialog({
           onClose();
         }
       }}
+      slotProps={{
+        transition: {
+          onEntered: () => inputRef.current?.focus(),
+        },
+      }}
       sx={{ "& .MuiDialog-paper": { width: "60vw", maxWidth: "60vw" } }}
     >
       <DialogTitle>{title ?? t("merge.setOutputPath")}</DialogTitle>
@@ -110,7 +153,7 @@ export function OutputPathDialog({
         <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
           <TextField
             fullWidth
-            autoFocus
+            inputRef={inputRef}
             size="small"
             label={t("merge.outputPath")}
             value={value}
@@ -125,6 +168,28 @@ export function OutputPathDialog({
                 handleConfirm();
               }
             }}
+            slotProps={{
+              input: {
+                endAdornment: value ? (
+                  <InputAdornment position="end">
+                    <Tooltip title={t("settings.clear")}>
+                      <IconButton
+                        size="small"
+                        aria-label={t("settings.clear")}
+                        edge="end"
+                        onClick={() => {
+                          setValue("");
+                          setError(null);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </InputAdornment>
+                ) : null,
+              },
+            }}
           />
           <Button
             variant="outlined"
@@ -135,6 +200,11 @@ export function OutputPathDialog({
             {t("merge.browse")}
           </Button>
         </Stack>
+        {missing ? (
+          <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+            {t("merge.outputPathDoesNotExist")}
+          </Typography>
+        ) : null}
         {error ? (
           <Alert severity="error" sx={{ mt: 2 }}>
             {error}

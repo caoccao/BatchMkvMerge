@@ -16,6 +16,7 @@
     "outputPath": "Ausgabepfad",
     "openInBetterMediaInfo": "In BetterMediaInfo öffnen",
     "outputPathNotWritable": "Der Ausgabepfad ist nicht beschreibbar. Bitte wähle einen anderen Pfad.",
+    "outputPathDoesNotExist": "Der Ausgabepfad existiert nicht. Er wird erstellt.",
     "commandCopied": "Befehl in die Zwischenablage kopiert.",
     "mergeComplete": "Zusammenführung abgeschlossen.",
     "noTracks": "Keine Spuren gefunden.",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "Abgeschlossen in {{elapsed}}",
-    "unknownError": "Unbekannter Fehler",
-    "failedCreateOutput": "Konnte {{path}} nicht erstellen. Bitte prüfen und erneut versuchen."
+    "unknownError": "Unbekannter Fehler"
   },
   "confirm": {
     "exitTitle": "Beenden",

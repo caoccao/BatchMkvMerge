@@ -144,7 +144,6 @@ export default function Toolbar() {
           file,
           selectedTracks,
           profile,
-          t: tRef.current,
         });
       } catch (err) {
         console.error("Merge All failed for", file, err);

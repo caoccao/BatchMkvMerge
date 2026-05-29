@@ -109,8 +109,8 @@ async fn check_output_path_writable(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn ensure_output_path(path: String) -> Result<(), String> {
-  controller::ensure_output_path(path).await.map_err(convert_error)
+async fn output_path_exists(path: String) -> Result<bool, String> {
+  controller::output_path_exists(path).await.map_err(convert_error)
 }
 
 #[tauri::command]
@@ -168,8 +168,8 @@ pub fn run() {
       cancel_merge,
       check_output_path_writable,
       detect_better_media_info,
-      ensure_output_path,
       enqueue_merge,
+      output_path_exists,
       get_about,
       get_config,
       get_merge_status,

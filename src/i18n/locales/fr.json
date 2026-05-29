@@ -16,6 +16,7 @@
     "outputPath": "Chemin de sortie",
     "openInBetterMediaInfo": "Ouvrir dans BetterMediaInfo",
     "outputPathNotWritable": "Le chemin de sortie n'est pas accessible en écriture. Choisissez un autre chemin.",
+    "outputPathDoesNotExist": "Le chemin de sortie n'existe pas. Il sera créé.",
     "commandCopied": "Commande copiée dans le presse-papiers.",
     "mergeComplete": "Fusion terminée.",
     "noTracks": "Aucune piste trouvée.",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "Terminé en {{elapsed}}",
-    "unknownError": "Erreur inconnue",
-    "failedCreateOutput": "Échec de la création de {{path}}. Vérifiez et réessayez."
+    "unknownError": "Erreur inconnue"
   },
   "confirm": {
     "exitTitle": "Quitter",

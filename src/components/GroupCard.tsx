@@ -399,14 +399,12 @@ export function GroupCard({ units }: GroupCardProps) {
         root: unit[0],
         inputs,
         profile: activeProfile,
-        t,
       });
     } else {
       await enqueueSelectedTracksForFile({
         file: unit[0],
         selectedTracks: inputs[0]?.tracks ?? [],
         profile: activeProfile,
-        t,
       });
     }
   };

@@ -196,16 +196,10 @@ pub async fn check_output_path_writable(path: String) -> Result<bool> {
   }
 }
 
-pub async fn ensure_output_path(path: String) -> Result<()> {
-  let p = Path::new(&path);
-  if p.exists() {
-    if !p.is_dir() {
-      anyhow::bail!("{path} exists but is not a directory");
-    }
-    return Ok(());
-  }
-  std::fs::create_dir_all(p).map_err(anyhow::Error::msg)?;
-  Ok(())
+/// Whether the exact directory `path` already exists. Used by the output-path
+/// dialog to warn that a non-existent path will be created at merge time.
+pub async fn output_path_exists(path: String) -> Result<bool> {
+  Ok(Path::new(&path).is_dir())
 }
 
 fn better_media_info_exe_name() -> &'static str {

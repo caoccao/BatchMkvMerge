@@ -16,6 +16,7 @@
     "outputPath": "輸出路徑",
     "openInBetterMediaInfo": "在 BetterMediaInfo 中開啟",
     "outputPathNotWritable": "輸出路徑無法寫入。請選擇其他路徑。",
+    "outputPathDoesNotExist": "輸出路徑不存在。將會建立。",
     "commandCopied": "指令已複製到剪貼簿。",
     "mergeComplete": "合併完成。",
     "noTracks": "找不到軌道。",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "{{elapsed}} 內完成",
-    "unknownError": "未知錯誤",
-    "failedCreateOutput": "無法建立 {{path}}。請檢查後再試。"
+    "unknownError": "未知錯誤"
   },
   "confirm": {
     "exitTitle": "結束",

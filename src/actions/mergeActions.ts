@@ -27,16 +27,10 @@ import type { Config, ConfigProfile } from "../protocol";
 import { QueueItemStatus } from "../protocol";
 import {
   cancelMerge as invokeCancelMerge,
-  ensureOutputPath,
   enqueueMerge,
   resolveMergeOutputPath,
 } from "../service";
 import { useMkvStore } from "../store";
-
-type TranslateFn = (
-  key: string,
-  options?: Record<string, string | number>,
-) => string;
 
 type MkvStoreState = ReturnType<typeof useMkvStore.getState>;
 
@@ -73,20 +67,13 @@ export interface EnqueueSelectedTracksOptions {
   file: string;
   selectedTracks: MediaTrack[];
   profile: ConfigProfile;
-  t: TranslateFn;
   skipIfActive?: boolean;
 }
 
 export async function enqueueSelectedTracksForFile(
   options: EnqueueSelectedTracksOptions,
 ): Promise<boolean> {
-  const {
-    file,
-    selectedTracks,
-    profile,
-    t,
-    skipIfActive = true,
-  } = options;
+  const { file, selectedTracks, profile, skipIfActive = true } = options;
   if (selectedTracks.length === 0) {
     return false;
   }
@@ -100,16 +87,8 @@ export async function enqueueSelectedTracksForFile(
     state.fileOutputDirs[file],
     state.globalOutputDir,
   );
-  try {
-    await ensureOutputPath(outputDir);
-  } catch {
-    state.showNotification(
-      "error",
-      file,
-      t("notification.failedCreateOutput", { path: outputDir }),
-    );
-    return false;
-  }
+  // The app never creates the output directory — mkvmerge creates any missing
+  // path components when it writes the merged file.
   const outputPath = await resolveMergeOutputPath(outputDir, file);
   const args = buildMergeArgs(file, outputPath, selectedTracks, profile);
   await enqueueMerge(file, args);
@@ -124,7 +103,6 @@ export interface EnqueueSelectedTracksForUnitOptions {
    *  selected tracks are dropped so mkvmerge isn't handed a useless input. */
   inputs: MergeInput[];
   profile: ConfigProfile;
-  t: TranslateFn;
   skipIfActive?: boolean;
 }
 
@@ -137,7 +115,7 @@ export interface EnqueueSelectedTracksForUnitOptions {
 export async function enqueueSelectedTracksForUnit(
   options: EnqueueSelectedTracksForUnitOptions,
 ): Promise<boolean> {
-  const { root, inputs, profile, t, skipIfActive = true } = options;
+  const { root, inputs, profile, skipIfActive = true } = options;
   const nonEmpty = inputs.filter((input) => input.tracks.length > 0);
   if (nonEmpty.length === 0) {
     return false;
@@ -152,16 +130,8 @@ export async function enqueueSelectedTracksForUnit(
     state.fileOutputDirs[root],
     state.globalOutputDir,
   );
-  try {
-    await ensureOutputPath(outputDir);
-  } catch {
-    state.showNotification(
-      "error",
-      root,
-      t("notification.failedCreateOutput", { path: outputDir }),
-    );
-    return false;
-  }
+  // The app never creates the output directory — mkvmerge creates any missing
+  // path components when it writes the merged file.
   const outputPath = await resolveMergeOutputPath(outputDir, root);
   const args = buildMergeArgsMulti(nonEmpty, outputPath, profile);
   await enqueueMerge(root, args);

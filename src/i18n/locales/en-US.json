@@ -16,6 +16,7 @@
     "outputPath": "Output Path",
     "openInBetterMediaInfo": "Open in BetterMediaInfo",
     "outputPathNotWritable": "The output path is not writable. Please choose another path.",
+    "outputPathDoesNotExist": "The output path doesn't exist. It will be created.",
     "commandCopied": "Command copied to clipboard.",
     "mergeComplete": "Merge complete.",
     "noTracks": "No tracks found.",
@@ -187,8 +188,7 @@
   },
   "notification": {
     "completedIn": "Completed in {{elapsed}}",
-    "unknownError": "Unknown error",
-    "failedCreateOutput": "Failed to create {{path}}. Please check it out and try again."
+    "unknownError": "Unknown error"
   },
   "confirm": {
     "exitTitle": "Exit",

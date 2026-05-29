@@ -377,14 +377,12 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
           root,
           inputs: mergeInputs(),
           profile: activeProfile,
-          t,
         });
       } else {
         await enqueueSelectedTracksForFile({
           file: root,
           selectedTracks: mergeInputs()[0]?.tracks ?? [],
           profile: activeProfile,
-          t,
         });
       }
     } catch (err) {
