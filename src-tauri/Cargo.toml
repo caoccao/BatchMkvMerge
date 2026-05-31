@@ -29,6 +29,7 @@ log = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+sys-locale = "0.3.2"
 ureq = { version = "2", features = ["json"] }
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-serde = "0.0.12"
@@ -37,4 +38,3 @@ language-tags = "0.3"
 encoding_rs = "0.8"
 flate2 = "1"
 quick-xml = "=0.39.2"
-

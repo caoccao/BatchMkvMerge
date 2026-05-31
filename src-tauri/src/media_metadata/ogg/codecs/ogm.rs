@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! OGM legacy stream headers (the pre-Theora / pre-Vorbis Ogg wrapper used
 //! by the OGM tooling).  Layout:
@@ -178,7 +178,12 @@ fn fourcc_to_string(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn build_video_header_fourcc(fourcc: &[u8; 4], width: u32, height: u32, frame_duration_units: u64) -> Vec<u8> {
+pub(crate) fn build_video_header_fourcc(
+  fourcc: &[u8; 4],
+  width: u32,
+  height: u32,
+  frame_duration_units: u64,
+) -> Vec<u8> {
   let mut p = vec![0u8; 53];
   p[0] = 0x01;
   p[1..9].copy_from_slice(STREAM_TYPE_VIDEO);
@@ -286,10 +291,22 @@ mod tests {
   #[test]
   fn sniffs_ogm_audio_format_tags() {
     // PARSER-164: PCM / MP3 / AC-3 format tags all map to real codecs.
-    assert_eq!(sniff(&build_audio_header_tag(b"0001", 44100, 2, 16)).unwrap().codec_id, "A_PCM/INT/LIT");
-    assert_eq!(sniff(&build_audio_header_tag(b"0050", 44100, 2, 0)).unwrap().codec_id, "A_MPEG/L3");
-    assert_eq!(sniff(&build_audio_header_tag(b"0055", 44100, 2, 0)).unwrap().codec_id, "A_MPEG/L3");
-    assert_eq!(sniff(&build_audio_header_tag(b"2000", 48000, 6, 0)).unwrap().codec_id, "A_AC3");
+    assert_eq!(
+      sniff(&build_audio_header_tag(b"0001", 44100, 2, 16)).unwrap().codec_id,
+      "A_PCM/INT/LIT"
+    );
+    assert_eq!(
+      sniff(&build_audio_header_tag(b"0050", 44100, 2, 0)).unwrap().codec_id,
+      "A_MPEG/L3"
+    );
+    assert_eq!(
+      sniff(&build_audio_header_tag(b"0055", 44100, 2, 0)).unwrap().codec_id,
+      "A_MPEG/L3"
+    );
+    assert_eq!(
+      sniff(&build_audio_header_tag(b"2000", 48000, 6, 0)).unwrap().codec_id,
+      "A_AC3"
+    );
   }
 
   #[test]

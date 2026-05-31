@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! SSA / ASS reader.
 //!
@@ -300,7 +300,12 @@ pub fn parse_ssa(text: &str) -> SsaParse {
     }
 
     if previous_section != section {
-      flush_attachment(&mut attachments, &mut attachment_name, &mut attachment_data_uu, previous_section);
+      flush_attachment(
+        &mut attachments,
+        &mut attachment_name,
+        &mut attachment_data_uu,
+        previous_section,
+      );
     }
     previous_section = section;
   }
@@ -361,7 +366,14 @@ fn flush_attachment(
 pub fn decode_uu(data_uu: &[u8]) -> Vec<u8> {
   let full = (data_uu.len() / 4) * 4;
   let rem = data_uu.len() % 4;
-  let out_len = data_uu.len() / 4 * 3 + if rem == 3 { 2 } else if rem == 2 { 1 } else { 0 };
+  let out_len = data_uu.len() / 4 * 3
+    + if rem == 3 {
+      2
+    } else if rem == 2 {
+      1
+    } else {
+      0
+    };
   let mut out = Vec::with_capacity(out_len);
 
   let mut i = 0;
@@ -459,12 +471,7 @@ impl Reader for SsaReader {
     }
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     // PARSER-153: mkvtoolnix builds its `ssa_parser_c` over the whole text
     // input, so the complete global header and embedded `[Fonts]` /
     // `[Graphics]` sections must be available here.
@@ -582,9 +589,8 @@ mod tests {
   fn parse_ssa_recognises_spaced_fonts_section() {
     let font_bytes = [0x00u8, 0x01, 0x00, 0x00, 0xAB];
     let uu = uu_encode(&font_bytes);
-    let text = format!(
-      "[Script Info]\n\n[V4+   Styles]\nFormat: Name\n\n[Fonts]\nfontname: spaced.ttf\n{uu}\n\n[Events]\n"
-    );
+    let text =
+      format!("[Script Info]\n\n[V4+   Styles]\nFormat: Name\n\n[Fonts]\nfontname: spaced.ttf\n{uu}\n\n[Events]\n");
     let parsed = parse_ssa(&text);
     assert_eq!(parsed.attachments.len(), 1);
     assert_eq!(parsed.attachments[0].file_name, "spaced.ttf");
@@ -713,7 +719,11 @@ mod tests {
       (0u8..=255).collect::<Vec<u8>>(),
     ] {
       let encoded = uu_encode(&sample);
-      assert_eq!(decode_uu(encoded.as_bytes()), sample, "round-trip failed for {sample:?}");
+      assert_eq!(
+        decode_uu(encoded.as_bytes()),
+        sample,
+        "round-trip failed for {sample:?}"
+      );
       // Decoded size matches the upstream length derivation.
       assert_eq!(decode_uu(encoded.as_bytes()).len(), sample.len());
     }
@@ -777,7 +787,10 @@ mod tests {
     assert_eq!(parsed.attachments[0].file_name, "logo.png");
     assert_eq!(parsed.attachments[0].size, png.len() as u64);
     assert_eq!(parsed.attachments[0].mime_type.as_deref(), Some("image/png"));
-    assert_eq!(parsed.attachments[0].description.as_deref(), Some("SSA/ASS embedded picture"));
+    assert_eq!(
+      parsed.attachments[0].description.as_deref(),
+      Some("SSA/ASS embedded picture")
+    );
     // Graphics content must not leak into the header either.
     let global = parsed.global.unwrap();
     assert!(!global.contains("[Graphics]"));
@@ -831,7 +844,10 @@ mod tests {
   fn read_headers_recovers_fonts_past_probe_window() {
     use crate::media_metadata::deadline::Deadline;
     let blob = build_large_ass_with_late_fonts();
-    assert!(blob.len() > FORMER_PROBE_BYTES, "fixture must exceed the old byte window");
+    assert!(
+      blob.len() > FORMER_PROBE_BYTES,
+      "fixture must exceed the old byte window"
+    );
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     let mut out = MediaMetadata::new("clip.ass", 0);
     SsaReader

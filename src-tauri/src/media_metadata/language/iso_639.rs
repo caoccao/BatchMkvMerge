@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Static ISO 639-2 alpha-3 code table.
 //!
@@ -73,7 +73,10 @@ pub fn is_valid(code: &str) -> bool {
 /// `None` when the language has no distinct bibliographic code.
 pub fn term_to_bib(term: &str) -> Option<&'static str> {
   let t = term.trim().to_ascii_lowercase();
-  BIB_T_PAIRS.iter().copied().find_map(|(b, tt)| if tt == t { Some(b) } else { None })
+  BIB_T_PAIRS
+    .iter()
+    .copied()
+    .find_map(|(b, tt)| if tt == t { Some(b) } else { None })
 }
 
 /// Best-effort ISO 639-2 (canonical or bibliographic) → ISO 639-1 alpha-2.

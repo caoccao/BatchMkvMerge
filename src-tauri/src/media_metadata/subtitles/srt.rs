@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! SRT (SubRip Text) subtitle reader.
 //!
@@ -285,12 +285,7 @@ impl Reader for SrtReader {
     probe_srt_bounded(src)
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     let buf = read_source_to_end(src, Some(deadline), "srt::headers")?;
     let detected = encoding::detect(&buf);
     let text = encoding::decode_lossy(&buf);
@@ -406,9 +401,7 @@ mod tests {
   #[test]
   fn timecode_tolerates_trailing_content() {
     // Anchored at start, not end — trailing coordinates etc. are ignored.
-    assert!(looks_like_srt_timecode(
-      "00:00:01,000 --> 00:00:02,000 X1:200 Y2:100"
-    ));
+    assert!(looks_like_srt_timecode("00:00:01,000 --> 00:00:02,000 X1:200 Y2:100"));
   }
 
   #[test]

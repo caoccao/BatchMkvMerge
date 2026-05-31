@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! FLAC-in-Ogg identification packet.  Two mappings are recognised, mirroring
 //! `r_ogm.cpp:457-472`:
@@ -59,17 +59,18 @@ const NATIVE_MARKER: &[u8; 4] = b"fLaC";
 pub fn sniff(packet: &[u8]) -> Option<BitstreamMetadata> {
   // r_ogm.cpp:457-459 accepts either the bare native marker (pre-1.1.1) or the
   // 0x7f-FLAC wrapper (post-1.1.1).
-  let (post_1_1_1, info_offset, other_header_packets) = if packet.len() >= 13 && packet[..5] == SIGNATURE && &packet[9..13] == NATIVE_MARKER {
-    // packet[5..7] = major/minor, packet[7..9] = number_of_other_header_packets.
-    let other = u16::from_be_bytes([packet[7], packet[8]]) as usize;
-    // STREAMINFO follows the native marker (block header + body) at offset 13.
-    (true, 13 + 4, Some(other))
-  } else if packet.len() >= 4 && &packet[..4] == NATIVE_MARKER {
-    // PARSER-203: pre-1.1.1 bare-`fLaC` mapping; STREAMINFO follows the marker.
-    (false, 4 + 4, None)
-  } else {
-    return None;
-  };
+  let (post_1_1_1, info_offset, other_header_packets) =
+    if packet.len() >= 13 && packet[..5] == SIGNATURE && &packet[9..13] == NATIVE_MARKER {
+      // packet[5..7] = major/minor, packet[7..9] = number_of_other_header_packets.
+      let other = u16::from_be_bytes([packet[7], packet[8]]) as usize;
+      // STREAMINFO follows the native marker (block header + body) at offset 13.
+      (true, 13 + 4, Some(other))
+    } else if packet.len() >= 4 && &packet[..4] == NATIVE_MARKER {
+      // PARSER-203: pre-1.1.1 bare-`fLaC` mapping; STREAMINFO follows the marker.
+      (false, 4 + 4, None)
+    } else {
+      return None;
+    };
 
   let mut metadata = BitstreamMetadata::audio_only("A_FLAC", "FLAC");
   metadata.flac_post_1_1_1 = Some(post_1_1_1);

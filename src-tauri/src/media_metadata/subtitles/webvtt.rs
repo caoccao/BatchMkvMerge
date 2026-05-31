@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! WebVTT reader.
 //!
@@ -73,10 +73,7 @@ fn is_timestamp_line(line: &str) -> bool {
   }
   // Right side: a timestamp optionally followed by whitespace + settings.
   let after = after.trim_start_matches([' ', '\t']);
-  let end_ts = after
-    .find([' ', '\t'])
-    .map(|i| &after[..i])
-    .unwrap_or(after);
+  let end_ts = after.find([' ', '\t']).map(|i| &after[..i]).unwrap_or(after);
   is_timestamp(end_ts)
 }
 
@@ -188,12 +185,7 @@ impl Reader for WebVttReader {
     Ok(read > 0 && looks_like_webvtt(&encoding::decode_lossy(&buf[..read])))
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     // PARSER-197: mkvtoolnix parses the entire file before extracting
     // codec-private, so read the full text instead of stopping at a fixed
     // header window.
@@ -320,7 +312,10 @@ mod tests {
     // PARSER-197: mkvtoolnix's `get_codec_private()` joins all global blocks,
     // and the leading `WEBVTT` block IS a global block, so a minimal file's
     // codec-private is exactly "WEBVTT".
-    assert_eq!(codec_private_header("WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n").as_deref(), Some("WEBVTT"));
+    assert_eq!(
+      codec_private_header("WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n").as_deref(),
+      Some("WEBVTT")
+    );
   }
 
   #[test]

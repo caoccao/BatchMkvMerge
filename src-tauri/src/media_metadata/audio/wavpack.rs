@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! WavPack reader. Pure-Rust port of `mkvtoolnix/src/common/wavpack.cpp` +
 //! `src/input/r_wavpack.cpp`.
@@ -231,7 +231,11 @@ fn read_next_header(src: &mut FileSource, start: u64) -> Result<Option<(u64, Wav
     }
     // Advance to the next 'w' in this window (mkvtoolnix scans byte-by-byte for
     // the next sync), or past the whole window if none is present.
-    let next_w = hdr[1..].iter().position(|&b| b == b'w').map(|i| i + 1).unwrap_or(HEADER_SIZE);
+    let next_w = hdr[1..]
+      .iter()
+      .position(|&b| b == b'w')
+      .map(|i| i + 1)
+      .unwrap_or(HEADER_SIZE);
     skipped += next_w as u64;
     if skipped > MAX_SKIP {
       return Ok(None);
@@ -360,12 +364,7 @@ impl Reader for WavpackReader {
     }
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     src.seek_to(0)?;
     let meta = parse_frame_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
     // The probe already required a valid version-4 first block; an empty

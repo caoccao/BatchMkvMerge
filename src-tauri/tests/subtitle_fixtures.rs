@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! End-to-end fixtures for the subtitle readers (SRT, SSA/ASS, WebVTT, USF,
 //! MicroDVD, VobSub, PGS, HDMV TextST, VobButton).
@@ -206,15 +206,9 @@ fn parses_usf_with_metadata_and_per_track_language() {
   assert_eq!(m.tracks.len(), 2);
   assert_eq!(m.tracks[0].codec.id, "S_TEXT/USF");
   // Track 0 carries its own language.
-  assert_eq!(
-    m.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
-    "eng"
-  );
+  assert_eq!(m.tracks[0].properties.common.language.as_ref().unwrap().iso639_2, "eng");
   // Track 1 has no language → inherits the metadata default (deu).
-  assert_eq!(
-    m.tracks[1].properties.common.language.as_ref().unwrap().iso639_2,
-    "deu"
-  );
+  assert_eq!(m.tracks[1].properties.common.language.as_ref().unwrap().iso639_2, "deu");
 
   // Shared codec private is the whole document with both `<subtitles>` subtrees
   // removed (mkvtoolnix `create_codec_private`).

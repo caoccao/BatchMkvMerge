@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! VC-1 (SMPTE 421M) elementary stream reader.
 //!
@@ -511,8 +511,20 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     let v = out.tracks[0].properties.video.as_ref().unwrap();
-    assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 1920, height: 1088 }));
-    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 1920, height: 1080 }));
+    assert_eq!(
+      v.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 1920,
+        height: 1088
+      })
+    );
+    assert_eq!(
+      v.display_dimensions,
+      Some(Dimensions2D {
+        width: 1920,
+        height: 1080
+      })
+    );
     assert_eq!(v.default_duration_ns, Some(40_000_000));
   }
 

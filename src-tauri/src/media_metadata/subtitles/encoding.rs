@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Shared text-encoding detection for the subtitle readers.
 //!
@@ -207,10 +207,12 @@ fn read_utf8_like_char(src: &mut FileSource) -> Result<Option<char>, ParseError>
     }
     bytes.push(next[0]);
   }
-  Ok(std::str::from_utf8(&bytes)
-    .ok()
-    .and_then(|s| s.chars().next())
-    .or(Some(char::REPLACEMENT_CHARACTER)))
+  Ok(
+    std::str::from_utf8(&bytes)
+      .ok()
+      .and_then(|s| s.chars().next())
+      .or(Some(char::REPLACEMENT_CHARACTER)),
+  )
 }
 
 fn read_utf16_char(src: &mut FileSource, little_endian: bool) -> Result<Option<char>, ParseError> {
@@ -352,8 +354,14 @@ mod tests {
   fn bounded_line_leaves_remainder_after_character_cap() {
     let mut src = FileSource::from_reader_for_test(Cursor::new(b"12345\nnext\n".to_vec()));
     let enc = ProbeTextEncoding::detect_from_source(&mut src).unwrap();
-    assert_eq!(read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(), Some("123"));
-    assert_eq!(read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(), Some("45"));
+    assert_eq!(
+      read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(),
+      Some("123")
+    );
+    assert_eq!(
+      read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(),
+      Some("45")
+    );
   }
 
   #[test]
@@ -364,7 +372,13 @@ mod tests {
     }
     let mut src = FileSource::from_reader_for_test(Cursor::new(bytes));
     let enc = ProbeTextEncoding::detect_from_source(&mut src).unwrap();
-    assert_eq!(read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(), Some("123"));
-    assert_eq!(read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(), Some("45"));
+    assert_eq!(
+      read_bounded_text_line(&mut src, enc, 3).unwrap().as_deref(),
+      Some("123")
+    );
+    assert_eq!(
+      read_bounded_text_line(&mut src, enc, 10).unwrap().as_deref(),
+      Some("45")
+    );
   }
 }

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! USF (Universal Subtitle Format) reader.
 //!
@@ -226,9 +226,7 @@ fn parse_document(text: &str, deadline: &Deadline) -> Result<Option<UsfDocument>
         }
 
         // Outside any skipped subtree → keep the element in codec-private.
-        writer
-          .write_event(Event::Start(element.clone()))
-          .map_err(write_error)?;
+        writer.write_event(Event::Start(element.clone())).map_err(write_error)?;
         stack.push(name);
       }
 
@@ -281,9 +279,7 @@ fn parse_document(text: &str, deadline: &Deadline) -> Result<Option<UsfDocument>
           }
         }
 
-        writer
-          .write_event(Event::Empty(element.clone()))
-          .map_err(write_error)?;
+        writer.write_event(Event::Empty(element.clone())).map_err(write_error)?;
       }
 
       other => {
@@ -342,12 +338,7 @@ impl MediaReader for UsfReader {
     Ok(parse_document(&text, deadline)?.is_some())
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     deadline.check("usf::read_headers")?;
     let (bytes, text) = read_header_document(src, deadline)?;
     if !has_xml_marker(&text) {
@@ -369,9 +360,7 @@ impl MediaReader for UsfReader {
       let mut common = CommonTrackProperties::default();
       common.number = Some(idx as u64 + 1);
       // Per-track language, else the document default (r_usf.cpp lines 64-65).
-      let language_code = track_language
-        .as_deref()
-        .or(doc.default_language.as_deref());
+      let language_code = track_language.as_deref().or(doc.default_language.as_deref());
       if let Some(code) = language_code {
         common.language = Language::from_valid_hint(code);
       }

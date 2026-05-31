@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct Config {
   pub display_mode: DisplayMode,
   #[serde(default)]
   pub theme: Theme,
-  #[serde(default)]
+  #[serde(default = "Language::detect_system")]
   pub language: Language,
   #[serde(rename = "externalTools", default)]
   pub external_tools: ConfigExternalTools,
@@ -49,10 +49,7 @@ pub struct Config {
   pub parser: ConfigParser,
   #[serde(rename = "groupMode", default)]
   pub group_mode: GroupMode,
-  #[serde(
-    rename = "groupByFileName",
-    default = "Config::default_group_by_file_name"
-  )]
+  #[serde(rename = "groupByFileName", default = "Config::default_group_by_file_name")]
   pub group_by_file_name: bool,
   #[serde(default)]
   pub formatting: ConfigFormatting,
@@ -77,7 +74,7 @@ impl Default for Config {
     Self {
       display_mode: Default::default(),
       theme: Default::default(),
-      language: Default::default(),
+      language: Language::detect_system(),
       external_tools: Default::default(),
       profiles: Self::default_profiles(),
       active_profile: Self::default_active_profile(),
@@ -293,9 +290,15 @@ pub struct ConfigProfile {
   pub select_attachments: bool,
   #[serde(rename = "videoLanguagesForTrackSelection", default)]
   pub video_languages_for_track_selection: String,
-  #[serde(rename = "audioLanguagesForTrackSelection", default = "ConfigProfile::default_languages")]
+  #[serde(
+    rename = "audioLanguagesForTrackSelection",
+    default = "ConfigProfile::default_languages"
+  )]
   pub audio_languages_for_track_selection: String,
-  #[serde(rename = "subtitleLanguagesForTrackSelection", default = "ConfigProfile::default_languages")]
+  #[serde(
+    rename = "subtitleLanguagesForTrackSelection",
+    default = "ConfigProfile::default_languages"
+  )]
   pub subtitle_languages_for_track_selection: String,
   #[serde(rename = "preferredVideoLanguages", default = "ConfigProfile::default_languages")]
   pub preferred_video_languages: String,
@@ -303,11 +306,20 @@ pub struct ConfigProfile {
   pub preferred_audio_languages: String,
   #[serde(rename = "preferredSubtitleLanguages", default = "ConfigProfile::default_languages")]
   pub preferred_subtitle_languages: String,
-  #[serde(rename = "trackNamesVideo", default = "ConfigProfile::default_track_names_video_audio")]
+  #[serde(
+    rename = "trackNamesVideo",
+    default = "ConfigProfile::default_track_names_video_audio"
+  )]
   pub track_names_video: HashMap<String, String>,
-  #[serde(rename = "trackNamesAudio", default = "ConfigProfile::default_track_names_video_audio")]
+  #[serde(
+    rename = "trackNamesAudio",
+    default = "ConfigProfile::default_track_names_video_audio"
+  )]
   pub track_names_audio: HashMap<String, String>,
-  #[serde(rename = "trackNamesSubtitle", default = "ConfigProfile::default_track_names_subtitle")]
+  #[serde(
+    rename = "trackNamesSubtitle",
+    default = "ConfigProfile::default_track_names_subtitle"
+  )]
   pub track_names_subtitle: HashMap<String, String>,
   #[serde(default)]
   pub automation: ConfigAutomation,
@@ -537,6 +549,80 @@ impl Default for Language {
   }
 }
 
+impl Language {
+  fn detect_system() -> Self {
+    let locales: Vec<String> = sys_locale::get_locales().collect();
+    for locale in &locales {
+      if let Some(language) = Self::from_locale_tag(locale) {
+        log::debug!("Detected system language {:?} from locale {}.", language, locale);
+        return language;
+      }
+    }
+    if !locales.is_empty() {
+      log::debug!("No supported app language found in system locales {:?}.", locales);
+    }
+    Self::default()
+  }
+
+  fn from_locale_tag(locale: &str) -> Option<Self> {
+    let normalized = normalize_locale_tag(locale)?;
+    let mut parts = normalized.split('-');
+    let language = parts.next()?;
+    let mut script: Option<&str> = None;
+    let mut region: Option<&str> = None;
+    for part in parts {
+      if part.len() == 4 && script.is_none() {
+        script = Some(part);
+      } else if (part.len() == 2 || part.len() == 3) && region.is_none() {
+        region = Some(part);
+      }
+    }
+
+    match language {
+      "de" => Some(Self::De),
+      "en" => Some(Self::EnUS),
+      "es" => Some(Self::Es),
+      "fr" => Some(Self::Fr),
+      "it" => Some(Self::It),
+      "ja" => Some(Self::Ja),
+      "zh" => Some(match (script, region) {
+        (Some("hant"), Some("hk" | "mo")) => Self::ZhHK,
+        (Some("hant"), _) => Self::ZhTW,
+        (Some("hans"), _) => Self::ZhCN,
+        (_, Some("tw")) => Self::ZhTW,
+        (_, Some("hk" | "mo")) => Self::ZhHK,
+        _ => Self::ZhCN,
+      }),
+      _ => None,
+    }
+  }
+}
+
+fn normalize_locale_tag(locale: &str) -> Option<String> {
+  let locale = locale
+    .split(':')
+    .find(|part| !part.trim().is_empty())
+    .unwrap_or(locale)
+    .trim();
+  if locale.eq_ignore_ascii_case("c") || locale.eq_ignore_ascii_case("posix") {
+    return None;
+  }
+  let locale = locale
+    .split('.')
+    .next()
+    .unwrap_or(locale)
+    .split('@')
+    .next()
+    .unwrap_or(locale)
+    .replace('_', "-")
+    .to_ascii_lowercase();
+  if locale.is_empty() || locale == "c" || locale == "posix" {
+    None
+  } else {
+    Some(locale)
+  }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfigWindow {
   #[serde(default)]
@@ -657,12 +743,25 @@ impl Config {
   }
 
   fn load(path: PathBuf) -> Self {
-    let cloned_path = path.clone();
-    let path_string = cloned_path.to_str().unwrap();
+    let path_string = path.to_str().unwrap();
     log::debug!("Loading config from {}.", path_string);
-    let file = File::open(path).expect(format!("Couldn't open config file {}.", path_string).as_str());
+    let file = File::open(&path).expect(format!("Couldn't open config file {}.", path_string).as_str());
     let buf_reader = BufReader::new(file);
-    serde_json::from_reader(buf_reader).expect(format!("Couldn't parse config file {}.", path_string).as_str())
+    let value: serde_json::Value =
+      serde_json::from_reader(buf_reader).expect(format!("Couldn't parse config file {}.", path_string).as_str());
+    let should_save_language = value
+      .as_object()
+      .map(|object| !object.contains_key("language"))
+      .unwrap_or(false);
+    let config: Self =
+      serde_json::from_value(value).expect(format!("Couldn't parse config file {}.", path_string).as_str());
+    if should_save_language {
+      log::debug!("Saving detected language to config {}.", path_string);
+      if let Err(err) = config.save(path) {
+        log::error!("Couldn't save the detected language because {}", err);
+      }
+    }
+    config
   }
 
   fn save(&self, path: PathBuf) -> Result<()> {
@@ -783,6 +882,22 @@ mod tests {
         }"#;
     let cfg: Config = serde_json::from_str(json).unwrap();
     assert_eq!(cfg.parser.timeout_ms, ConfigParser::DEFAULT_TIMEOUT_MS);
+  }
+
+  #[test]
+  fn language_from_locale_tag_maps_supported_locales() {
+    assert!(matches!(Language::default(), Language::EnUS));
+    assert!(matches!(Language::from_locale_tag("de-DE"), Some(Language::De)));
+    assert!(matches!(Language::from_locale_tag("en_US.UTF-8"), Some(Language::EnUS)));
+    assert!(matches!(Language::from_locale_tag("es-MX"), Some(Language::Es)));
+    assert!(matches!(Language::from_locale_tag("fr-CA"), Some(Language::Fr)));
+    assert!(matches!(Language::from_locale_tag("it-IT"), Some(Language::It)));
+    assert!(matches!(Language::from_locale_tag("ja-JP"), Some(Language::Ja)));
+    assert!(matches!(Language::from_locale_tag("zh-Hans-CN"), Some(Language::ZhCN)));
+    assert!(matches!(Language::from_locale_tag("zh-Hant-TW"), Some(Language::ZhTW)));
+    assert!(matches!(Language::from_locale_tag("zh-Hant-HK"), Some(Language::ZhHK)));
+    assert!(matches!(Language::from_locale_tag("zh-MO"), Some(Language::ZhHK)));
+    assert!(matches!(Language::from_locale_tag("C.UTF-8"), None));
   }
 
   #[test]

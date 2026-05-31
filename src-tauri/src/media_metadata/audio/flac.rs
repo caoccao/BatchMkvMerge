@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Native FLAC reader (`.flac` files starting with `fLaC`).
 //!
@@ -469,12 +469,7 @@ impl Reader for FlacReader {
     Ok(read == 4 && &head == b"fLaC")
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     let metadata = parse_source_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
     let streaminfo = metadata.streaminfo.ok_or(ParseError::Malformed {
       format: "flac",
@@ -922,7 +917,10 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     assert_eq!(out.attachments.len(), 1);
-    assert_eq!(out.attachments[0].description.as_ref().unwrap().len(), description.len());
+    assert_eq!(
+      out.attachments[0].description.as_ref().unwrap().len(),
+      description.len()
+    );
   }
 
   // ---- PARSER-154: zero-length / absent picture data is dropped --------

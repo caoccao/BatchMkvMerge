@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! WAV reader. Pure-Rust port of `mkvtoolnix/src/input/r_wav.cpp`. Supports
 //! classic `RIFF/WAVE`, `RF64/WAVE` (>4 GB), and Wave64 (PARSER-020). The
@@ -332,11 +332,7 @@ fn parse_source_with_deadline(
   // false)` and the demuxer probe at that position.
   let data_bytes = match ds64_data_size {
     Some(ds64) => ds64,
-    None => chunks
-      .iter()
-      .filter(|c| id_eq(&c.id, b"data"))
-      .map(|c| c.len)
-      .sum(),
+    None => chunks.iter().filter(|c| id_eq(&c.id, b"data")).map(|c| c.len).sum(),
   };
   let mut probe = vec![0u8; first_data_chunk.len.min(PAYLOAD_PROBE_CAP) as usize];
   src.seek_to(first_data_chunk.pos)?;
@@ -406,12 +402,7 @@ impl Reader for WavReader {
     Ok(determine_type(&head[..read]).is_some())
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     let metadata = parse_source_with_deadline(src, Some(deadline))?.ok_or(ParseError::Unrecognised)?;
 
     out.container.format = ContainerFormat::Wav;

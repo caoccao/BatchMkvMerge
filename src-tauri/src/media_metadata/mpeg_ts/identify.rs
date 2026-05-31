@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Convert the per-PID stream registry into protocol Tracks + container
 //! programs.
@@ -443,7 +443,10 @@ mod tests {
     let mut m = MediaMetadata::new("clip.ts", 0);
     finalise_with_sdt(rows, &std::collections::HashMap::new(), &enrichment, &mut m);
     let v = m.tracks[0].properties.video.as_ref().unwrap();
-    assert_eq!(v.pixel_dimensions.as_ref().map(|d| (d.width, d.height)), Some((1920, 1080)));
+    assert_eq!(
+      v.pixel_dimensions.as_ref().map(|d| (d.width, d.height)),
+      Some((1920, 1080))
+    );
     let a = m.tracks[1].properties.audio.as_ref().unwrap();
     assert_eq!(a.channels, Some(6));
     assert_eq!(a.sampling_frequency, Some(48000.0));

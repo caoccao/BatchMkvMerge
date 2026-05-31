@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! `stbl` (sample table) — wraps `stsd` (sample descriptions), `stts`
 //! (decoding time-to-sample), `stsz` (sample sizes), and the chunk offset
@@ -252,11 +252,7 @@ fn read_stsz(src: &mut FileSource, header: &BoxHeader) -> Result<(Option<u32>, u
 }
 
 fn sane_sample_size(size: u64) -> u64 {
-  if size >= MAX_REASONABLE_SAMPLE_SIZE {
-    0
-  } else {
-    size
-  }
+  if size >= MAX_REASONABLE_SAMPLE_SIZE { 0 } else { size }
 }
 
 /// Read the chunk offsets from an `stco` box: FullBox(4) + entry_count(4) +
@@ -575,10 +571,7 @@ mod tests {
     let b = run_stbl(children);
     // Chunk 0 at 1000: sample0 @1000 size10, sample1 @1010 size20.
     // Chunk 1 at 5000: sample2 @5000 size30, sample3 @5030 size40.
-    assert_eq!(
-      b.first_samples,
-      vec![(1000, 10), (1010, 20), (5000, 30), (5030, 40)]
-    );
+    assert_eq!(b.first_samples, vec![(1000, 10), (1010, 20), (5000, 30), (5030, 40)]);
     // Backward-compat single-sample fields still set.
     assert_eq!(b.first_sample_file_offset, Some(1000));
     assert_eq!(b.first_sample_size, Some(10));
@@ -668,10 +661,7 @@ mod tests {
     let b = run_stbl(children);
     // chunk0 @100: sample0 size5. chunk1 @200: sample1 size6.
     // chunk2 @300: sample2 size7 @300, sample3 size8 @307.
-    assert_eq!(
-      b.first_samples,
-      vec![(100, 5), (200, 6), (300, 7), (307, 8)]
-    );
+    assert_eq!(b.first_samples, vec![(100, 5), (200, 6), (300, 7), (307, 8)]);
   }
 
   #[test]

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! PARSER-177: first-sample track verification.
 //!
@@ -405,7 +405,9 @@ fn derive_hevc_from_bitstream(
     profile_idc: Some(sps.profile_idc as u32),
     profile_name: Some(crate::media_metadata::elementary::hevc::sps::format_profile(sps.profile_idc).to_string()),
     level_idc: Some(sps.level_idc as u32),
-    level_name: Some(crate::media_metadata::elementary::hevc::sps::format_level(sps.level_idc)),
+    level_name: Some(crate::media_metadata::elementary::hevc::sps::format_level(
+      sps.level_idc,
+    )),
     tier: Some(match sps.tier {
       crate::media_metadata::elementary::hevc::sps::HevcTier::Main => ModelHevcTier::Main,
       crate::media_metadata::elementary::hevc::sps::HevcTier::High => ModelHevcTier::High,

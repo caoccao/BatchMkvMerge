@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! AV1 Open Bitstream Units (AV1 §5.3).
 //!
@@ -612,12 +612,7 @@ impl Reader for ObuReader {
     Ok(find_sequence_header(buf).is_some() && has_frame_obu(buf))
   }
 
-  fn read_headers(
-    &self,
-    src: &mut FileSource,
-    deadline: &Deadline,
-    out: &mut MediaMetadata,
-  ) -> Result<(), ParseError> {
+  fn read_headers(&self, src: &mut FileSource, deadline: &Deadline, out: &mut MediaMetadata) -> Result<(), ParseError> {
     let mut buf = vec![0u8; PROBE_BYTES];
     src.seek_to(0)?;
     deadline.check("obu-probe")?;
@@ -1329,11 +1324,7 @@ mod tests {
     build_seq_with_timing_and_operating_point(num_units, time_scale, 0)
   }
 
-  fn build_seq_with_timing_and_operating_point(
-    num_units: u32,
-    time_scale: u32,
-    operating_point_idc: u16,
-  ) -> Vec<u8> {
+  fn build_seq_with_timing_and_operating_point(num_units: u32, time_scale: u32, operating_point_idc: u16) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(0, 3); // seq_profile
     w.write_bit(false); // still_picture

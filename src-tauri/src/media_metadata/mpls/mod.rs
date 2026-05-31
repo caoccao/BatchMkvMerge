@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Blu-ray `.mpls` playlist support.  Port of the playlist branch of
 //! `mkvtoolnix/src/merge/reader_detection_and_creation.cpp` +
@@ -190,7 +190,10 @@ fn read_segment(path: &Path, deadline: &Deadline) -> Option<MediaMetadata> {
     return None;
   }
   src.seek_to(0).ok()?;
-  let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+  let name = path
+    .file_name()
+    .map(|n| n.to_string_lossy().into_owned())
+    .unwrap_or_default();
   let mut seg = MediaMetadata::new(&name, src.length().unwrap_or(0));
   MpegTsReader.read_headers(&mut src, deadline, &mut seg).ok()?;
   Some(seg)
@@ -533,7 +536,11 @@ mod tests {
 
     assert!(handled);
     assert_eq!(out.tracks.len(), 3, "video + audio(seg1) + audio(seg2)");
-    let pids: Vec<u32> = out.tracks.iter().filter_map(|t| t.properties.common.stream_id).collect();
+    let pids: Vec<u32> = out
+      .tracks
+      .iter()
+      .filter_map(|t| t.properties.common.stream_id)
+      .collect();
     assert!(pids.contains(&0x112), "PID introduced by the second segment");
     // Ids stay compact across the merge.
     assert_eq!(out.tracks.iter().map(|t| t.id).collect::<Vec<_>>(), vec![0, 1, 2]);
@@ -579,8 +586,15 @@ mod tests {
     let _ = std::fs::remove_dir_all(&root);
 
     assert!(handled);
-    let track = out.tracks.iter().find(|t| t.properties.common.stream_id == Some(0x111)).unwrap();
-    assert_eq!(track.properties.common.language.as_ref().map(|l| l.iso639_2.as_str()), Some("jpn"));
+    let track = out
+      .tracks
+      .iter()
+      .find(|t| t.properties.common.stream_id == Some(0x111))
+      .unwrap();
+    assert_eq!(
+      track.properties.common.language.as_ref().map(|l| l.iso639_2.as_str()),
+      Some("jpn")
+    );
   }
 
   #[test]
@@ -621,20 +635,29 @@ mod tests {
 
     // Stable order: video, then audio, then PG.
     let v = &pl.streams[0];
-    assert_eq!(v.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::Video);
+    assert_eq!(
+      v.kind,
+      crate::media_metadata::model::playlist::PlaylistStreamKind::Video
+    );
     assert_eq!(v.pid, 0x1011);
     assert_eq!(v.coding_type, 0x1b);
     assert_eq!(v.format, 6);
     assert_eq!(v.rate, 1);
 
     let a = &pl.streams[1];
-    assert_eq!(a.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::Audio);
+    assert_eq!(
+      a.kind,
+      crate::media_metadata::model::playlist::PlaylistStreamKind::Audio
+    );
     assert_eq!(a.pid, 0x1100);
     assert_eq!(a.coding_type, 0x81);
     assert_eq!(a.language.as_deref(), Some("jpn"));
 
     let p = &pl.streams[2];
-    assert_eq!(p.kind, crate::media_metadata::model::playlist::PlaylistStreamKind::PresentationGraphics);
+    assert_eq!(
+      p.kind,
+      crate::media_metadata::model::playlist::PlaylistStreamKind::PresentationGraphics
+    );
     assert_eq!(p.pid, 0x1200);
     assert_eq!(p.coding_type, 0x90);
     assert_eq!(p.language.as_deref(), Some("eng"));

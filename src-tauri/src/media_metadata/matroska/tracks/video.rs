@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Video TrackEntry sub-tree.  Port of
 //! `r_matroska.cpp::read_headers_track_video` (lines 1268-1350) plus the
@@ -1041,7 +1041,10 @@ mod tests {
     let (_b, h, mut s) = build_video(proj);
     let mut builder = VideoBuilder::default();
     parse(&mut s, &h, &no_deadline(), &mut builder).unwrap();
-    assert_eq!(builder.build().projection.unwrap().private_hex.unwrap().len(), large_private.len() * 2);
+    assert_eq!(
+      builder.build().projection.unwrap().private_hex.unwrap().len(),
+      large_private.len() * 2
+    );
   }
 
   #[test]

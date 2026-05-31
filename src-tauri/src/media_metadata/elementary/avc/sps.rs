@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! H.264 SPS (Sequence Parameter Set) decoder.
 //!
@@ -268,8 +268,7 @@ fn parse_vui(reader: &mut BitReader<'_>) -> Result<VuiInfo, ParseError> {
       // PARSER-238: `timing_info_t::default_duration()` is
       // `num_units_in_tick * 1e9 / time_scale` — no factor of two
       // (`../mkvtoolnix/src/common/avc/util.cpp:98-101`).
-      info.default_duration_ns =
-        Some(((num_units_in_tick as u128 * 1_000_000_000u128) / time_scale as u128) as u64);
+      info.default_duration_ns = Some(((num_units_in_tick as u128 * 1_000_000_000u128) / time_scale as u128) as u64);
     }
   }
   Ok(info)

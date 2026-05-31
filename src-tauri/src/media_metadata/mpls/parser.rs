@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Blu-ray playlist (`.mpls`) parser.  Port of
 //! `mkvtoolnix/src/common/bluray/mpls.cpp::parser_c`.
@@ -654,10 +654,7 @@ mod tests {
   #[test]
   fn counts_chapter_marks() {
     // Duration 10s; marks at 0s, 2s, 4s — none within 5s of the end → kept.
-    let buf = build_mpls(
-      &[("00001", 0, 450_000)],
-      &[(0, 0), (0, 90_000), (0, 180_000)],
-    );
+    let buf = build_mpls(&[("00001", 0, 450_000)], &[(0, 0), (0, 90_000), (0, 180_000)]);
     let p = parse(&buf).unwrap();
     assert_eq!(p.duration_ns, 10_000_000_000);
     assert_eq!(p.chapter_count, 3);

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Top-level `OggReader`.
 
@@ -740,10 +740,7 @@ mod tests {
   fn simple_chapter_broken_alternation_reports_none() {
     // A non-NAME line where a NAME is required is a chapter_error → mkvmerge
     // aborts the parse and reports zero chapters.
-    let lines = [
-      entry("CHAPTER01", "00:00:00.000"),
-      entry("CHAPTERBAD", "ignored"),
-    ];
+    let lines = [entry("CHAPTER01", "00:00:00.000"), entry("CHAPTERBAD", "ignored")];
     let refs: Vec<_> = lines.iter().collect();
     assert_eq!(simple_chapter_pair_count(&refs), None);
   }
@@ -752,10 +749,7 @@ mod tests {
   fn simple_chapter_missing_fraction_reports_none() {
     // The timestamp regex requires a `[.,]frac` part; a fractionless timestamp
     // fails in mode 0 → chapter_error.
-    let lines = [
-      entry("CHAPTER01", "00:00:00"),
-      entry("CHAPTER01NAME", "Intro"),
-    ];
+    let lines = [entry("CHAPTER01", "00:00:00"), entry("CHAPTER01NAME", "Intro")];
     let refs: Vec<_> = lines.iter().collect();
     assert_eq!(simple_chapter_pair_count(&refs), None);
   }
@@ -828,13 +822,7 @@ mod tests {
     // BOS page is non-conforming and must not introduce another local stream.
     let mut bytes = build_vorbis_stream(1, None);
     let late_flac_bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
-    bytes.extend(build_page(
-      HEADER_FLAG_BEGINNING_OF_STREAM,
-      0,
-      2,
-      0,
-      &[&late_flac_bos],
-    ));
+    bytes.extend(build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 2, 0, &[&late_flac_bos]));
     bytes.extend(build_page(0, 0, 2, 1, &[]));
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
@@ -905,7 +893,10 @@ mod tests {
     // the non-BOS comment page ends the BOS run.
     let bos = flac::build_identification_packet(48000, 2, 24, 1_000_000);
     let mut comment_pkt = vec![0x04]; // native FLAC VORBIS_COMMENT block header
-    comment_pkt.extend(build_block("reference libFLAC", &[("TITLE", "Song"), ("LANGUAGE", "eng")]));
+    comment_pkt.extend(build_block(
+      "reference libFLAC",
+      &[("TITLE", "Song"), ("LANGUAGE", "eng")],
+    ));
     let mut bytes = build_page(HEADER_FLAG_BEGINNING_OF_STREAM, 0, 1, 0, &[&bos]);
     bytes.extend(build_page(0, 0, 1, 1, &[&comment_pkt]));
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
@@ -1019,11 +1010,17 @@ mod tests {
     let v = t.properties.video.as_ref().unwrap();
     assert_eq!(
       v.pixel_dimensions,
-      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 1280, height: 720 })
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D {
+        width: 1280,
+        height: 720
+      })
     );
     assert_eq!(
       v.display_dimensions,
-      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 1280, height: 720 })
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D {
+        width: 1280,
+        height: 720
+      })
     );
     // 1001/30000 s ≈ 33_366_666 ns.
     assert_eq!(v.default_duration_ns, Some(33_366_666));
@@ -1196,7 +1193,10 @@ mod tests {
     OggReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 1);
     assert_eq!(out.tracks[0].codec.id, "A_VORBIS");
-    assert_eq!(out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2, "eng");
+    assert_eq!(
+      out.tracks[0].properties.common.language.as_ref().unwrap().iso639_2,
+      "eng"
+    );
   }
 
   #[test]

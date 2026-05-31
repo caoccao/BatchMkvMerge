@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! RealMedia top-level chunk walker.  Every object on disk starts with a
 //! 10-byte common header (4-byte FOURCC id, 4-byte BE size, 2-byte BE
@@ -73,19 +73,22 @@ impl PropChunk {
       return None;
     }
     let r = ChunkReader::new(payload);
-    Some((Self {
-      max_bit_rate: r.u32(0),
-      avg_bit_rate: r.u32(4),
-      max_packet_size: r.u32(8),
-      avg_packet_size: r.u32(12),
-      num_packets: r.u32(16),
-      duration_ms: r.u32(20),
-      preroll: r.u32(24),
-      index_offset: r.u32(28),
-      data_offset: r.u32(32),
-      num_streams: r.u16(36),
-      flags: r.u16(38),
-    }, Self::PAYLOAD_LEN))
+    Some((
+      Self {
+        max_bit_rate: r.u32(0),
+        avg_bit_rate: r.u32(4),
+        max_packet_size: r.u32(8),
+        avg_packet_size: r.u32(12),
+        num_packets: r.u32(16),
+        duration_ms: r.u32(20),
+        preroll: r.u32(24),
+        index_offset: r.u32(28),
+        data_offset: r.u32(32),
+        num_streams: r.u16(36),
+        flags: r.u16(38),
+      },
+      Self::PAYLOAD_LEN,
+    ))
   }
 }
 

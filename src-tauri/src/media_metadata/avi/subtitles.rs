@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! AVI subtitle (text-track) detection — bounded port of
 //! `mkvtoolnix/src/input/r_avi.cpp:118-174` (`parse_subtitle_chunks`).
@@ -86,12 +86,7 @@ impl AviSubtitleKind {
 /// `tx` for text.
 fn text_chunk_tag(stream_index: usize) -> [u8; 4] {
   let n = stream_index % 100;
-  [
-    (n / 10) as u8 + b'0',
-    (n % 10) as u8 + b'0',
-    b't',
-    b'x',
-  ]
+  [(n / 10) as u8 + b'0', (n % 10) as u8 + b'0', b't', b'x']
 }
 
 /// Walk the `movi` LIST looking for the first text chunk of each `text_streams`

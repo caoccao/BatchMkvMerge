@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Top-level `AviReader` — drives the RIFF walk.
 
@@ -511,10 +511,7 @@ mod tests {
     // would drop it, so no subtitle track is emitted.
     let junk = b"just some plain prose, definitely not a subtitle file";
     let text_chunk = encode_chunk(b"01tx", &gab2_chunk(junk));
-    let bytes = build_avi_with_movi(
-      vec![build_video_strl(1920, 1080), build_text_strl()],
-      vec![text_chunk],
-    );
+    let bytes = build_avi_with_movi(vec![build_video_strl(1920, 1080), build_text_strl()], vec![text_chunk]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.avi", 0);
     AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -527,10 +524,7 @@ mod tests {
   fn text_stream_without_movi_chunk_creates_no_subtitle_track() {
     // A declared text stream whose first chunk never appears in movi must
     // not synthesise a generic subtitle track (old behaviour).
-    let bytes = build_avi_with_movi(
-      vec![build_video_strl(1920, 1080), build_text_strl()],
-      vec![],
-    );
+    let bytes = build_avi_with_movi(vec![build_video_strl(1920, 1080), build_text_strl()], vec![]);
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.avi", 0);
     AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
@@ -556,7 +550,11 @@ mod tests {
     let mut out = MediaMetadata::new("clip.avi", 0);
     AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
     assert_eq!(out.tracks.len(), 4);
-    let sub = out.tracks.iter().find(|t| t.track_type == TrackType::Subtitles).unwrap();
+    let sub = out
+      .tracks
+      .iter()
+      .find(|t| t.track_type == TrackType::Subtitles)
+      .unwrap();
     assert_eq!(sub.id, 3);
     assert_eq!(sub.properties.common.number, Some(4));
   }
@@ -573,7 +571,14 @@ mod tests {
     let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
     let mut out = MediaMetadata::new("clip.avi", 0);
     AviReader.read_headers(&mut s, &dl(), &mut out).unwrap();
-    assert_eq!(out.tracks.iter().filter(|t| t.track_type == TrackType::Subtitles).count(), 1);
+    assert_eq!(
+      out
+        .tracks
+        .iter()
+        .filter(|t| t.track_type == TrackType::Subtitles)
+        .count(),
+      1
+    );
   }
 
   #[test]
@@ -623,7 +628,10 @@ mod tests {
     assert_eq!(v.pixel_dimensions.unwrap().width, 720);
     assert_eq!(
       v.display_dimensions,
-      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 785, height: 480 })
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D {
+        width: 785,
+        height: 480
+      })
     );
   }
 
@@ -639,7 +647,10 @@ mod tests {
     let v = out.tracks[0].properties.video.as_ref().unwrap();
     assert_eq!(
       v.display_dimensions,
-      Some(crate::media_metadata::model::track_properties_video::Dimensions2D { width: 785, height: 480 })
+      Some(crate::media_metadata::model::track_properties_video::Dimensions2D {
+        width: 785,
+        height: 480
+      })
     );
   }
 

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Dirac elementary stream reader.
 //!
@@ -180,17 +180,10 @@ fn complete_parse_unit(bytes: &[u8], pos: usize) -> Option<&[u8]> {
   if pos + PARSE_INFO_HEADER_LEN > bytes.len() || bytes.get(pos..pos + 4)? != PARSE_INFO_MAGIC {
     return None;
   }
-  let next_parse_offset = u32::from_be_bytes([
-    bytes[pos + 5],
-    bytes[pos + 6],
-    bytes[pos + 7],
-    bytes[pos + 8],
-  ]) as usize;
+  let next_parse_offset = u32::from_be_bytes([bytes[pos + 5], bytes[pos + 6], bytes[pos + 7], bytes[pos + 8]]) as usize;
   let mut search_from = pos + 4;
   while search_from + 4 <= bytes.len() {
-    let rel = bytes[search_from..]
-      .windows(4)
-      .position(|w| w == PARSE_INFO_MAGIC)?;
+    let rel = bytes[search_from..].windows(4).position(|w| w == PARSE_INFO_MAGIC)?;
     let next_sync = search_from + rel;
     if next_parse_offset == 0 || pos.checked_add(next_parse_offset).is_some_and(|end| end <= next_sync) {
       return bytes.get(pos..next_sync);
@@ -634,8 +627,20 @@ mod tests {
       .read_headers(&mut s, &Deadline::new(60_000), &mut out)
       .unwrap();
     let v = out.tracks[0].properties.video.as_ref().unwrap();
-    assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 720, height: 576 }));
-    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 785, height: 576 }));
+    assert_eq!(
+      v.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 720,
+        height: 576
+      })
+    );
+    assert_eq!(
+      v.display_dimensions,
+      Some(Dimensions2D {
+        width: 785,
+        height: 576
+      })
+    );
     assert_eq!(v.default_duration_ns, Some(33_366_666));
   }
 }

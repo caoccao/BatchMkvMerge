@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! `esds` — MPEG-4 Elementary Stream Descriptor (ISO/IEC 14496-1).
 //!
@@ -586,10 +586,14 @@ mod tests {
   #[test]
   fn truncated_decoder_specific_info_is_malformed() {
     let payload = vec![
-      0, 0, 0, 0, // FullBox header
+      0,
+      0,
+      0,
+      0, // FullBox header
       TAG_DEC_SPECIFIC_INFO,
       0x40, // declares 64 bytes
-      0x12, 0x10,
+      0x12,
+      0x10,
     ];
     assert!(matches!(run_result(payload), Err(ParseError::Malformed { .. })));
   }

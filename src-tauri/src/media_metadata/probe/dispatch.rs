@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Reader registry + probe cascade.
 //!
@@ -110,7 +110,11 @@ fn try_reader_by_name(
   out: &mut MediaMetadata,
   staged_reader: StagedReader,
 ) -> Result<Option<DispatchOutcome>, ParseError> {
-  let Some(reader) = registered_readers().iter().copied().find(|r| r.name() == staged_reader.name) else {
+  let Some(reader) = registered_readers()
+    .iter()
+    .copied()
+    .find(|r| r.name() == staged_reader.name)
+  else {
     return Ok(None);
   };
   // Each probe call must see a freshly-positioned cursor; the trait contract
@@ -161,9 +165,17 @@ fn staged_readers(hints: &[super::extension_hint::FileTypeHint]) -> Vec<StagedRe
   extend_stage(&mut readers, RAW_AUDIO_EIGHT_FRAME_READERS, ProbeMode::RawAudioStrict);
   extend_stage(&mut readers, STRICT_DTS_READERS, ProbeMode::DtsStrict);
   extend_stage(&mut readers, AMBIGUOUS_CONTAINER_READERS, ProbeMode::Default);
-  extend_stage(&mut readers, RAW_AUDIO_SIXTY_FOUR_FRAME_READERS, ProbeMode::RawAudioLoose64);
+  extend_stage(
+    &mut readers,
+    RAW_AUDIO_SIXTY_FOUR_FRAME_READERS,
+    ProbeMode::RawAudioLoose64,
+  );
   extend_stage(&mut readers, LATE_AMBIGUOUS_READERS, ProbeMode::Default);
-  extend_stage(&mut readers, ONE_FRAME_START_READERS, ProbeMode::RawAudioOneFrameAtStart);
+  extend_stage(
+    &mut readers,
+    ONE_FRAME_START_READERS,
+    ProbeMode::RawAudioOneFrameAtStart,
+  );
   extend_stage(&mut readers, LOOSE_ELEMENTARY_READERS, ProbeMode::Default);
   extend_stage(&mut readers, RAW_AUDIO_TWENTY_FRAME_READERS, ProbeMode::RawAudioLoose20);
   extend_stage(&mut readers, FINAL_UNSUPPORTED_BUT_LOCAL_READERS, ProbeMode::Default);

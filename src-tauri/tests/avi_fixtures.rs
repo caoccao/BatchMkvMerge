@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! End-to-end AVI fixtures.  Builds synthetic .avi blobs, writes them to a
 //! tempfile and drives `media_metadata::parse` against the path.
@@ -192,7 +192,11 @@ fn recognised_gab2_subtitle_creates_subtitle_track_after_audio() {
   let srt = b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello world\r\n";
   let text_chunk = chunk(b"02tx", &gab2_chunk(srt));
   let bytes = build_avi_with_movi(
-    vec![build_video_strl(1920, 1080), build_audio_strl(48000, 2), build_text_strl()],
+    vec![
+      build_video_strl(1920, 1080),
+      build_audio_strl(48000, 2),
+      build_text_strl(),
+    ],
     &[text_chunk],
   );
   let path = write_tempfile(&bytes);
@@ -212,10 +216,7 @@ fn recognised_gab2_subtitle_creates_subtitle_track_after_audio() {
 fn unrecognised_text_chunk_yields_no_subtitle_track() {
   let junk = b"plain prose, definitely not a subtitle file at all";
   let text_chunk = chunk(b"01tx", &gab2_chunk(junk));
-  let bytes = build_avi_with_movi(
-    vec![build_video_strl(1920, 1080), build_text_strl()],
-    &[text_chunk],
-  );
+  let bytes = build_avi_with_movi(vec![build_video_strl(1920, 1080), build_text_strl()], &[text_chunk]);
   let path = write_tempfile(&bytes);
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);

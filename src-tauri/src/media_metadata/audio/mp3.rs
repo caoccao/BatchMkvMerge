@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! MPEG-1/2/2.5 Audio reader (Layer I/II/III). Pure-Rust port of
 //! `mkvtoolnix/src/common/mp3.cpp` + `src/input/r_mp3.cpp`.
@@ -458,11 +458,7 @@ fn find_probe_mp3_headers_loose_20(bytes: &[u8]) -> Option<(usize, Mp3Header)> {
 fn find_headers_at_start(bytes: &[u8], window_size: usize, num_headers: u32) -> Option<(usize, Mp3Header)> {
   let window = &bytes[..bytes.len().min(window_size)];
   let (offset, header) = find_consecutive_mp3_headers(window, num_headers)?;
-  if offset == 0 {
-    Some((offset, header))
-  } else {
-    None
-  }
+  if offset == 0 { Some((offset, header)) } else { None }
 }
 
 fn find_headers_in_windows(bytes: &[u8], windows: &[usize], num_headers: u32) -> Option<(usize, Mp3Header)> {

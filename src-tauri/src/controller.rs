@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -179,8 +179,7 @@ pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> Str
 /// as-is.
 pub fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
   let path = std::path::Path::new(&output_path);
-  let looks_like_dir =
-    path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
+  let looks_like_dir = path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
   if !looks_like_dir {
     return output_path;
   }
@@ -469,10 +468,7 @@ mod tests {
   #[test]
   fn overridden_output_path_appends_source_name_for_existing_dir() {
     let dir = std::env::temp_dir();
-    let out = resolve_overridden_output_path(
-      dir.to_string_lossy().into_owned(),
-      "/inputs/movie.mkv".to_owned(),
-    );
+    let out = resolve_overridden_output_path(dir.to_string_lossy().into_owned(), "/inputs/movie.mkv".to_owned());
     // Original name appended verbatim — no " (1)" dedup.
     let expected = dir.join("movie.mkv").to_string_lossy().into_owned();
     assert_eq!(out, expected);

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! VP8-in-Ogg identification header.  Port of `ogm_v_vp8_demuxer_c`
 //! (`r_ogm.cpp:1536-1652`) + `mtx::ogm::vp8_header_t`
@@ -170,9 +170,21 @@ mod tests {
     assert_eq!(m.codec_id, "V_VP8");
     assert_eq!(m.codec_name, "VP8");
     let v = m.video.unwrap();
-    assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 640, height: 480 }));
+    assert_eq!(
+      v.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 640,
+        height: 480
+      })
+    );
     // No PAR → display dimensions equal pixel dimensions.
-    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 640, height: 480 }));
+    assert_eq!(
+      v.display_dimensions,
+      Some(Dimensions2D {
+        width: 640,
+        height: 480
+      })
+    );
     // 1/30 s = 33_333_333 ns.
     assert_eq!(v.default_duration_ns, Some(33_333_333));
     assert_eq!(m.frame_duration_ns, Some(33_333_333));
@@ -185,8 +197,20 @@ mod tests {
     let v = sniff(&pkt).unwrap().video.unwrap();
     // 720/480 = 1.5 ; 32/27 ≈ 1.185 → pixel ratio is NOT < par ratio, so the
     // height is reduced instead: display_height = round(480 * 27 / 32) = 405.
-    assert_eq!(v.pixel_dimensions, Some(Dimensions2D { width: 720, height: 480 }));
-    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 720, height: 405 }));
+    assert_eq!(
+      v.pixel_dimensions,
+      Some(Dimensions2D {
+        width: 720,
+        height: 480
+      })
+    );
+    assert_eq!(
+      v.display_dimensions,
+      Some(Dimensions2D {
+        width: 720,
+        height: 405
+      })
+    );
   }
 
   #[test]
@@ -195,7 +219,13 @@ mod tests {
     let pkt = build_identification_packet(480, 480, 2, 1, 25, 1);
     let v = sniff(&pkt).unwrap().video.unwrap();
     // 480/480 = 1 < 2/1 → display_width = round(480 * 2 / 1) = 960.
-    assert_eq!(v.display_dimensions, Some(Dimensions2D { width: 960, height: 480 }));
+    assert_eq!(
+      v.display_dimensions,
+      Some(Dimensions2D {
+        width: 960,
+        height: 480
+      })
+    );
   }
 
   #[test]

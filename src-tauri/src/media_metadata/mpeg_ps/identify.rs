@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Convert per-stream observations into protocol tracks.
 //!
@@ -186,7 +186,10 @@ fn resolve_codec(obs: &StreamObservation) -> Option<Codec> {
 /// Decode codec headers from the depacketised payload (PARSER-052). Returns
 /// `None` when mkvtoolnix's `new_stream_*` probe would throw and block the
 /// stream id (PARSER-306).
-fn decode_payload(codec: &mut Codec, payload: &[u8]) -> Option<(Option<VideoTrackProperties>, Option<AudioTrackProperties>)> {
+fn decode_payload(
+  codec: &mut Codec,
+  payload: &[u8],
+) -> Option<(Option<VideoTrackProperties>, Option<AudioTrackProperties>)> {
   match codec.kind {
     TrackKind::Video => {
       if codec.id == "V_MPEG4/ISO/AVC" {
@@ -704,7 +707,15 @@ mod tests {
     // PARSER-347: a bare sequence header exposes dimensions but is not enough
     // evidence for mkvtoolnix's video probe; require picture + slice state.
     let mut m = MediaMetadata::new("weak.mpg", 0);
-    finalise(vec![obs_payload(0xE0, None, None, mpeg_video::build_sequence_header(720, 480, 4))], &mut m);
+    finalise(
+      vec![obs_payload(
+        0xE0,
+        None,
+        None,
+        mpeg_video::build_sequence_header(720, 480, 4),
+      )],
+      &mut m,
+    );
     assert!(m.tracks.is_empty());
   }
 

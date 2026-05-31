@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Top-level `MpegTsReader`. Pure-Rust port of `r_mpeg_ts.cpp`.
 //!
@@ -228,7 +228,11 @@ impl Reader for MpegTsReader {
           header.payload_unit_start && payload.len() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1;
         let known = pes_payloads.contains_key(&header.pid);
         if known || (is_pes_start && pes_payloads.len() < MAX_PES_PIDS) {
-          let elementary: &[u8] = if is_pes_start { strip_pes_header(payload) } else { payload };
+          let elementary: &[u8] = if is_pes_start {
+            strip_pes_header(payload)
+          } else {
+            payload
+          };
           let buf = pes_payloads.entry(header.pid).or_default();
           if buf.len() < PES_PAYLOAD_CAP {
             let take = (PES_PAYLOAD_CAP - buf.len()).min(elementary.len());
@@ -307,7 +311,9 @@ fn resync(
   let mut pos = search_start;
   while pos < limit {
     deadline.check("mpeg_ts::resync")?;
-    if sync_byte_at(src, pos + header_offset as u64)? && sync_byte_at(src, pos + packet_size as u64 + header_offset as u64)? {
+    if sync_byte_at(src, pos + header_offset as u64)?
+      && sync_byte_at(src, pos + packet_size as u64 + header_offset as u64)?
+    {
       return Ok(Some(pos));
     }
     pos += 1;
@@ -372,12 +378,18 @@ fn compute_probes(rows: &[StreamRow], pes: &HashMap<u16, Vec<u8>>) -> Vec<RowPro
       let is_primary = row.codec_id == "A_TRUEHD";
       let probe = if is_primary {
         match truehd {
-          Some(e) => RowProbe { keep: true, enrichment: e },
+          Some(e) => RowProbe {
+            keep: true,
+            enrichment: e,
+          },
           None => RowProbe::default(),
         }
       } else {
         match ac3 {
-          Some(e) => RowProbe { keep: true, enrichment: e },
+          Some(e) => RowProbe {
+            keep: true,
+            enrichment: e,
+          },
           None => RowProbe::default(),
         }
       };
@@ -801,7 +813,10 @@ mod tests {
     assert_eq!(out.tracks[0].properties.common.number, Some(0x110));
     assert_eq!(out.tracks[1].properties.common.number, Some(0x111));
     let v = out.tracks[0].properties.video.as_ref().unwrap();
-    assert_eq!(v.pixel_dimensions.as_ref().map(|d| (d.width, d.height)), Some((1280, 720)));
+    assert_eq!(
+      v.pixel_dimensions.as_ref().map(|d| (d.width, d.height)),
+      Some((1280, 720))
+    );
     let a = out.tracks[1].properties.audio.as_ref().unwrap();
     assert_eq!(a.channels, Some(2));
     assert_eq!(a.sampling_frequency, Some(48000.0));
@@ -1029,7 +1044,10 @@ mod tests {
 
     // MPEG-2 video → pixel dimensions.
     let es = mpeg_video::build_probe_stream(1280, 720, 4);
-    assert_eq!(enrich_for_codec("V_MPEG2", 0x02, &es).unwrap().pixel_dimensions, Some((1280, 720)));
+    assert_eq!(
+      enrich_for_codec("V_MPEG2", 0x02, &es).unwrap().pixel_dimensions,
+      Some((1280, 720))
+    );
     assert!(enrich_for_codec("V_MPEG2", 0x02, &mpeg_video::build_sequence_header(1280, 720, 4)).is_none());
 
     // HEVC requires parameter sets plus access-unit evidence, not just SPS.
@@ -1050,17 +1068,17 @@ mod tests {
 
     // VC-1 → pixel dimensions.
     let es = vc1::build_terminated_sequence_header(1920, 1080);
-    assert_eq!(enrich_for_codec("V_VC1", 0xEA, &es).unwrap().pixel_dimensions, Some((1920, 1080)));
+    assert_eq!(
+      enrich_for_codec("V_VC1", 0xEA, &es).unwrap().pixel_dimensions,
+      Some((1920, 1080))
+    );
 
     // MP3 → channels + sampling frequency + Layer III codec override.
     let es = mp3::build_mp3_frame_v1(128, 44100, false);
     let m = enrich_for_codec("A_MPEG/L3", 0x03, &es).unwrap();
     assert_eq!(m.channels, Some(2));
     assert_eq!(m.sampling_frequency, Some(44100.0));
-    assert_eq!(
-      m.codec_override,
-      Some(("A_MPEG/L3".to_string(), "MP3".to_string()))
-    );
+    assert_eq!(m.codec_override, Some(("A_MPEG/L3".to_string(), "MP3".to_string())));
 
     // AAC (ADTS, sr_index 3 = 48 kHz, channel_config 2) — five consecutive
     // frames are required (PARSER-206).
@@ -1088,10 +1106,7 @@ mod tests {
     use crate::media_metadata::audio::mp3;
     let es = mp3::build_mp3_frame(1, 2, 128, 44100, false);
     let m = enrich_for_codec("A_MPEG/L3", 0x04, &es).unwrap();
-    assert_eq!(
-      m.codec_override,
-      Some(("A_MPEG/L2".to_string(), "MP2".to_string()))
-    );
+    assert_eq!(m.codec_override, Some(("A_MPEG/L2".to_string(), "MP2".to_string())));
     assert_eq!(m.channels, Some(2));
   }
 
@@ -1229,7 +1244,10 @@ mod tests {
     // [0x81][size=4 BE][4 bytes of data] → codec_private = 7 bytes.
     let es = [0x81u8, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF, 0xFF, 0xFF];
     let m = decode_textst_codec_private(&es).unwrap();
-    assert_eq!(m.codec_private.as_deref(), Some(&[0x81u8, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF][..]));
+    assert_eq!(
+      m.codec_private.as_deref(),
+      Some(&[0x81u8, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF][..])
+    );
     // Wrong segment type or truncation → failed probe.
     assert!(decode_textst_codec_private(&[0x80u8, 0x00, 0x04, 0, 0, 0, 0]).is_none());
     assert!(decode_textst_codec_private(&[0x81u8, 0x00, 0x10, 0xDE]).is_none());

@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! AC-3 / E-AC-3 reader.
 //!
@@ -610,11 +610,7 @@ fn find_probe_frame_sync_loose_20(bytes: &[u8]) -> Option<usize> {
 fn find_frames_at_start(bytes: &[u8], window_size: usize, num_required_frames: usize) -> Option<usize> {
   let window = &bytes[..bytes.len().min(window_size)];
   let offset = find_frame_sync_with_frames(window, num_required_frames)?;
-  if offset == 0 {
-    Some(offset)
-  } else {
-    None
-  }
+  if offset == 0 { Some(offset) } else { None }
 }
 
 fn find_frames_in_windows(bytes: &[u8], windows: &[usize], num_required_frames: usize) -> Option<usize> {
@@ -712,7 +708,14 @@ impl BitBuf {
 /// Build a synthetic E-AC-3 frame.  `fscod`/`fscod2` are fixed to 0 (48 kHz);
 /// a `chanmap` is only emitted when `frame_type == FRAME_TYPE_DEPENDENT`.
 #[cfg(test)]
-pub(crate) fn build_eac3_frame(frame_type: u8, frmsiz: u16, acmod: u8, lfeon: bool, bsid: u8, chanmap: Option<u16>) -> Vec<u8> {
+pub(crate) fn build_eac3_frame(
+  frame_type: u8,
+  frmsiz: u16,
+  acmod: u8,
+  lfeon: bool,
+  bsid: u8,
+  chanmap: Option<u16>,
+) -> Vec<u8> {
   let mut w = BitBuf::new();
   w.put(frame_type as u32, 2);
   w.put(0, 3); // sub_stream_id

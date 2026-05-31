@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! Matroska Tracks dispatcher.  Mirrors `r_matroska.cpp::read_headers_tracks`
 //! (lines 1352-1507) — walks every TrackEntry under the Tracks element and
@@ -507,7 +507,11 @@ mod tests {
     payload.extend(encode_element_string(ids::CODEC_ID, 1, "V_AV1"));
     let mut mapping_payload = Vec::new();
     mapping_payload.extend(encode_element_uint(ids::BLOCK_ADD_ID_TYPE, 2, dvvc_value));
-    mapping_payload.extend(encode_element(ids::BLOCK_ADD_ID_EXTRA_DATA, 2, &[0x01, 0x00, 0x4a, 0xff]));
+    mapping_payload.extend(encode_element(
+      ids::BLOCK_ADD_ID_EXTRA_DATA,
+      2,
+      &[0x01, 0x00, 0x4a, 0xff],
+    ));
     payload.extend(encode_element(ids::BLOCK_ADDITION_MAPPING, 2, &mapping_payload));
     let entry = encode_element(ids::TRACK_ENTRY, 1, &payload);
     let (_b, header, mut s) = build_tracks(vec![entry]);

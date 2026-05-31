@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! `stsd` (sample description) box.
 //!
@@ -208,11 +208,25 @@ fn parse_entry(
   // remaining sample-entry payload is preserved verbatim as codec private
   // (`priv.clone(mem, size)`), rather than walked for sub-boxes.
   if is_video && !is_known_priv_video_fourcc(&retained_sample_entry_kind) {
-    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining, deadline.max_element_size())?;
+    capture_remaining_as_private(
+      src,
+      entry,
+      builder,
+      bytes_consumed,
+      remaining,
+      deadline.max_element_size(),
+    )?;
     return Ok(());
   }
   if is_subtitle && retained_sample_entry_kind != *b"mp4s" {
-    capture_remaining_as_private(src, entry, builder, bytes_consumed, remaining, deadline.max_element_size())?;
+    capture_remaining_as_private(
+      src,
+      entry,
+      builder,
+      bytes_consumed,
+      remaining,
+      deadline.max_element_size(),
+    )?;
     return Ok(());
   }
 
@@ -882,9 +896,7 @@ mod tests {
 
   #[test]
   fn hvcc_child_preserves_payload_larger_than_four_kib() {
-    let mut hvcc_payload = crate::media_metadata::mp4::codec_specific::hvcc::build_hvcc_payload(
-      2, true, 153, 1, 2, 2,
-    );
+    let mut hvcc_payload = crate::media_metadata::mp4::codec_specific::hvcc::build_hvcc_payload(2, true, 153, 1, 2, 2);
     hvcc_payload.extend_from_slice(&vec![0x24u8; 5 * 1024]);
     let hvcc = encode_box(b"hvcC", &hvcc_payload);
     let entry = build_video_sample_entry(b"hev1", 3840, 2160, 24, &hvcc);
@@ -1019,7 +1031,10 @@ mod tests {
     let entry = build_audio_sample_entry_v0(b"fLaC", 0, 0, 0, &dfla);
     let payload = build_stsd_payload(&[entry]);
     let b = run(payload, *b"soun");
-    assert_eq!(b.codec_private_hex.as_ref().unwrap().len(), (dfla_payload.len() - 4) * 2);
+    assert_eq!(
+      b.codec_private_hex.as_ref().unwrap().len(),
+      (dfla_payload.len() - 4) * 2
+    );
     assert_eq!(b.audio.unwrap().sampling_frequency, Some(48_000.0));
   }
 

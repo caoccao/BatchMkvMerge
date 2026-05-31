@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! RealMediaReader — walks the top-level chunk hierarchy and populates the
 //! MediaMetadata model.
@@ -224,7 +224,11 @@ fn read_first_data_packets(
     }
 
     remaining -= length;
-    if packets.len() >= target_streams && dnet_streams.iter().all(|id| packets.get(id).is_some_and(|p| dnet_packet_has_bsid(p))) {
+    if packets.len() >= target_streams
+      && dnet_streams
+        .iter()
+        .all(|id| packets.get(id).is_some_and(|p| dnet_packet_has_bsid(p)))
+    {
       break;
     }
   }
@@ -1006,14 +1010,7 @@ mod tests {
       .unwrap();
     let audio = out.tracks.iter().find(|t| t.id == 3).unwrap();
     assert_eq!(audio.codec.id, "A_EAC3");
-    let cfg = audio
-      .properties
-      .audio
-      .as_ref()
-      .unwrap()
-      .codec_config
-      .as_ref()
-      .unwrap();
+    let cfg = audio.properties.audio.as_ref().unwrap().codec_config.as_ref().unwrap();
     assert_eq!(cfg.profile_name.as_deref(), Some("BSID 11"));
   }
 
@@ -1092,7 +1089,10 @@ mod tests {
     blob.extend(build_prop_chunk(0));
     let v_props = build_video_props(b"RV30", 176, 144, 25.0);
     blob.extend(build_mdpr(4, "video/x-pn-realvideo", &v_props));
-    blob.extend(build_data_chunk_with_packets(&[(4, build_real_video_packet_dims(5, 5))]));
+    blob.extend(build_data_chunk_with_packets(&[(
+      4,
+      build_real_video_packet_dims(5, 5),
+    )]));
 
     let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
     let mut out = MediaMetadata::new("clip.rm", 0);

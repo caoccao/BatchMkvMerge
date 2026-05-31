@@ -1,19 +1,19 @@
 /*
- *   Copyright (c) 2026. caoccao.com Sam Cao
- *   All rights reserved.
+*   Copyright (c) 2026. caoccao.com Sam Cao
+*   All rights reserved.
 
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+*   Licensed under the Apache License, Version 2.0 (the "License");
+*   you may not use this file except in compliance with the License.
+*   You may obtain a copy of the License at
 
- *   http://www.apache.org/licenses/LICENSE-2.0
+*   http://www.apache.org/licenses/LICENSE-2.0
 
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- */
+*   Unless required by applicable law or agreed to in writing, software
+*   distributed under the License is distributed on an "AS IS" BASIS,
+*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*   See the License for the specific language governing permissions and
+*   limitations under the License.
+*/
 
 //! `MpegPsReader`. Pure-Rust port of `mkvtoolnix/src/input/r_mpeg_ps.cpp`.
 //!
@@ -212,7 +212,11 @@ impl Reader for MpegPsReader {
           // LPCM reads a fixed-offset header and needs the correct start.
           let extra_skip = match sub_id {
             Some(s) if (0x80..=0x8F).contains(&s) || (0x98..=0xCF).contains(&s) => {
-              if (0xB0..=0xBF).contains(&s) { 4usize } else { 3usize }
+              if (0xB0..=0xBF).contains(&s) {
+                4usize
+              } else {
+                3usize
+              }
             }
             _ => 0usize,
           };
@@ -487,9 +491,7 @@ mod tests {
     bytes.extend_from_slice(&start_code(PACK_HEADER));
     bytes.extend_from_slice(&[0u8; 10]);
     // Sequence header plus picture/slice evidence.
-    let mut seq = vec![
-      0x00, 0x00, 0x01, 0xB3, 0x2D, 0x01, 0xE0, 0x13, 0x00, 0x00, 0x00, 0x00,
-    ];
+    let mut seq = vec![0x00, 0x00, 0x01, 0xB3, 0x2D, 0x01, 0xE0, 0x13, 0x00, 0x00, 0x00, 0x00];
     seq.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08]);
     seq.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x80]);
     let pts = [0x21u8, 0x11, 0x11, 0x11, 0x11]; // MPEG-1 PTS-only marker + value
