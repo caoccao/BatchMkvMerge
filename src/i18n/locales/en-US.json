@@ -205,7 +205,7 @@
   },
   "card": {
     "summary": {
-      "toPath": "To path {{path}}",
+      "toPath": "To path: {{path}}",
       "size": "Size: {{size}}",
       "encoded": "Encoded: {{date}}",
       "title": "Title: {{title}}"

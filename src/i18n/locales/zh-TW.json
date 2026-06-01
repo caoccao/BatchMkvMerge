@@ -205,7 +205,7 @@
   },
   "card": {
     "summary": {
-      "toPath": "輸出至 {{path}}",
+      "toPath": "輸出至: {{path}}",
       "size": "大小：{{size}}",
       "encoded": "編碼時間：{{date}}",
       "title": "標題：{{title}}"
