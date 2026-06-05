@@ -200,8 +200,9 @@ interface TrackSelectionTableProps {
   /** Label for the ID column. Defaults to the bare track id; the combined
    *  merge-tree table shows `{fileId}:{trackId}` to disambiguate members. */
   idLabel?: (track: MediaTrack) => ReactNode;
-  /** Disable drag-reorder (the combined merge-tree table has a fixed,
-   *  deterministic sort, so reordering is meaningless there). */
+  /** Opt out of drag-reorder for this table. Used where a reorder has no
+   *  representable mapping (e.g. a group of multi-member units that would need
+   *  per-member lock-step reordering across structurally-identical units). */
   reorderDisabled?: boolean;
   onToggleAll: (checked: boolean) => void;
   onToggleOne: (key: string, checked: boolean) => void;

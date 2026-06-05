@@ -120,6 +120,13 @@ interface MkvStore {
    *  is pulled out of whatever unit contains it and shown as its own card,
    *  overriding both auto-grouping and manual drag-merges. */
   detachedFiles: Record<string, true>;
+  /** Per-unit custom track order for multi-member cards, keyed by the unit's
+   *  root file. The value is the flattened combined order as a list of stable
+   *  combined ids (`combinedTrackId`) and drives both the table display and the
+   *  merge `--track-order`. Absent = the deterministic default sort. Lets a
+   *  combined card interleave tracks across its member files / track types,
+   *  which the per-file `fileTracks` order alone can't express. */
+  combinedTrackOrders: Record<string, string[]>;
   /** Root of the single-root card currently hovered as a valid drop target
    *  during a card drag (pointer-based), or null. Drives the drop highlight. */
   dropTargetRoot: string | null;
@@ -184,6 +191,9 @@ interface MkvStore {
    *  file that contains both rows. The track `id` is intrinsic and unchanged —
    *  only the row order changes. */
   reorderTracks: (files: string[], fromKey: string, toKey: string) => void;
+  /** Set the custom combined track order for a multi-member unit (keyed by its
+   *  root). Pass the full flattened order as a list of `combinedTrackId`s. */
+  setCombinedTrackOrder: (root: string, order: string[]) => void;
   /** Set the editable language code on every matching track key across all files. */
   setTrackLanguage: (files: string[], keys: string[], value: string) => void;
   /** Set the editable track name on every matching track key across all files. */
@@ -226,6 +236,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   fileTracks: {},
   fileTrackCounts: {},
   fileSelectedIds: {},
+  combinedTrackOrders: {},
   fileOutputDirs: {},
   fileOutputPaths: {},
   mergedRoots: {},
@@ -251,6 +262,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       delete nextCounts[path];
       const nextSelected = { ...state.fileSelectedIds };
       delete nextSelected[path];
+      const nextCombinedOrders = { ...state.combinedTrackOrders };
+      delete nextCombinedOrders[path];
       const nextOutputDirs = { ...state.fileOutputDirs };
       delete nextOutputDirs[path];
       const nextOutputPaths = { ...state.fileOutputPaths };
@@ -273,6 +286,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
         fileTracks: nextTracks,
         fileTrackCounts: nextCounts,
         fileSelectedIds: nextSelected,
+        combinedTrackOrders: nextCombinedOrders,
         fileOutputDirs: nextOutputDirs,
         fileOutputPaths: nextOutputPaths,
         mergedRoots: nextMergedRoots,
@@ -289,6 +303,7 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       fileTracks: {},
       fileTrackCounts: {},
       fileSelectedIds: {},
+  combinedTrackOrders: {},
       fileOutputDirs: {},
       fileOutputPaths: {},
       mergedRoots: {},
@@ -662,6 +677,10 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       }
       return { fileTracks };
     }),
+  setCombinedTrackOrder: (root, order) =>
+    set((state) => ({
+      combinedTrackOrders: { ...state.combinedTrackOrders, [root]: order },
+    })),
   setTrackLanguage: (files, keys, value) =>
     set((state) => {
       const keySet = new Set(keys);

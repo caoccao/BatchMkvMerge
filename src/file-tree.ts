@@ -26,8 +26,8 @@ import type { TrackFlag } from "./protocol";
  *
  * `members` is the ordered list of source files: `members[0]` is the root, the
  * rest are its children sorted by stem ascending (so the tree is stable). The
- * tree is "flat under shortest" — the smallest stem in a directory is the root
- * and every other file whose stem contains it is a direct child (no deeper
+ * tree is "flat under shortest" — the shortest stem in a directory is the root
+ * and every other file whose stem starts with it is a direct child (no deeper
  * nesting), so `childCount === members.length - 1`.
  */
 export interface FileTree {
@@ -75,19 +75,21 @@ function byStemThenPath(
 /**
  * Build the merge-tree forest for *Group by file name*. Files are grouped by
  * directory; within each directory, a file's stem being a (case-sensitive)
- * substring of another's makes it the parent. The algorithm:
+ * prefix of another's makes it the parent. The algorithm:
  *
  *   1. Sort the directory's files by stem length ascending (smallest first),
  *      then stem, then path.
  *   2. Walk that order. The first unclaimed file becomes a root and claims
- *      every still-unclaimed file whose stem contains the root stem as a direct
- *      child; claimed files are removed from the pool so the smallest containing
- *      stem wins and each file is assigned exactly once.
+ *      every still-unclaimed file whose stem starts with the root stem as a
+ *      direct child; claimed files are removed from the pool so the shortest
+ *      prefix stem wins and each file is assigned exactly once.
  *   3. Repeat for the next unclaimed file.
  *
- * Equal stems (e.g. `Movie.mkv` / `Movie.srt`) count as substrings, so they
- * land in the same tree. Roots are returned in the original `files` order so the
- * on-screen card order stays stable as files are added.
+ * Equal stems (e.g. `Movie.mkv` / `Movie.srt`) count as prefixes, so they land
+ * in the same tree. A stem that merely contains the root elsewhere (e.g. the
+ * root `Movie` and `The.Movie`) is not a child. Roots are returned in the
+ * original `files` order so the on-screen card order stays stable as files are
+ * added.
  */
 export function buildForest(files: string[]): FileTree[] {
   const stem = new Map<string, string>();
@@ -129,7 +131,7 @@ export function buildForest(files: string[]): FileTree[] {
         if (cand === root || claimed.has(cand)) {
           continue;
         }
-        if ((stem.get(cand) ?? "").includes(rootStem)) {
+        if ((stem.get(cand) ?? "").startsWith(rootStem)) {
           claimed.add(cand);
           children.push(cand);
         }
@@ -159,13 +161,22 @@ export function buildForest(files: string[]): FileTree[] {
 
 /**
  * Flatten a unit's member files into one combined track list, as if the tree
- * were a single file. Rows are sorted first by track type, then by member index
+ * were a single file.
+ *
+ * Without `order` the rows are sorted first by track type, then by member index
  * (root before children), then by each file's own track order — a fully
  * determined, stable order (so the table never reshuffles between renders).
+ *
+ * With `order` (a list of [`combinedTrackId`]s, e.g. a user's drag-reorder of a
+ * multi-member card) the rows follow that order; any row not present in `order`
+ * (a newly added member's tracks) falls in after the ordered ones, keeping the
+ * default sort. This lets a combined card interleave tracks across member files
+ * and track types — something the per-file order alone can't represent.
  */
 export function combineUnitTracks(
   members: string[],
   fileTracks: Record<string, MediaTrack[]>,
+  order?: string[],
 ): CombinedTrack[] {
   const rows: { track: CombinedTrack; within: number }[] = [];
   members.forEach((file, memberIndex) => {
@@ -174,6 +185,7 @@ export function combineUnitTracks(
       rows.push({ track: { ...t, sourceFile: file, memberIndex }, within });
     });
   });
+  // Default order: type, then member, then each file's own order.
   rows.sort((a, b) => {
     const ta = trackTypeRank(a.track.type);
     const tb = trackTypeRank(b.track.type);
@@ -185,6 +197,25 @@ export function combineUnitTracks(
     }
     return a.within - b.within;
   });
+  if (order && order.length > 0) {
+    const pos = new Map(order.map((id, index) => [id, index]));
+    // Stable re-sort by the custom order; rows absent from it keep their default
+    // position relative to one another and land after the ordered rows.
+    rows.sort((a, b) => {
+      const pa = pos.get(combinedTrackId(a.track));
+      const pb = pos.get(combinedTrackId(b.track));
+      if (pa === undefined && pb === undefined) {
+        return 0;
+      }
+      if (pa === undefined) {
+        return 1;
+      }
+      if (pb === undefined) {
+        return -1;
+      }
+      return pa - pb;
+    });
+  }
   return rows.map((r) => r.track);
 }
 
@@ -192,6 +223,13 @@ export function combineUnitTracks(
  *  structurally-identical units. */
 export function rowKeyOf(track: CombinedTrack): string {
   return `${track.memberIndex}:${track.type}:${track.id}`;
+}
+
+/** Stable identity for a combined row that survives member-index changes
+ *  (merge / detach): the source file plus its bare `${type}:${id}` key. Used to
+ *  persist a unit's custom combined track order (see `combinedTrackOrders`). */
+export function combinedTrackId(track: CombinedTrack): string {
+  return `${track.sourceFile} ${track.type}:${track.id}`;
 }
 
 /** Split a combined row key back into its member index and the bare

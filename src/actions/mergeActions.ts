@@ -21,7 +21,7 @@ import {
   resolveOutputDir,
   trackKey,
 } from "../merge";
-import type { MergeInput } from "../merge";
+import type { MergeInput, OrderedTrackRef } from "../merge";
 import type { MediaTrack } from "../media-metadata";
 import type { Config, ConfigProfile } from "../protocol";
 import { QueueItemStatus } from "../protocol";
@@ -124,6 +124,9 @@ export interface EnqueueSelectedTracksForUnitOptions {
   /** Member files with their selected tracks, root first. Members with no
    *  selected tracks are dropped so mkvmerge isn't handed a useless input. */
   inputs: MergeInput[];
+  /** Optional explicit combined `--track-order` (the user's drag-reorder of the
+   *  flattened table). Omitted = default type-major order. */
+  order?: OrderedTrackRef[];
   profile: ConfigProfile;
   skipIfActive?: boolean;
 }
@@ -137,7 +140,7 @@ export interface EnqueueSelectedTracksForUnitOptions {
 export async function enqueueSelectedTracksForUnit(
   options: EnqueueSelectedTracksForUnitOptions,
 ): Promise<boolean> {
-  const { root, inputs, profile, skipIfActive = true } = options;
+  const { root, inputs, order, profile, skipIfActive = true } = options;
   const nonEmpty = inputs.filter((input) => input.tracks.length > 0);
   if (nonEmpty.length === 0) {
     return false;
@@ -148,7 +151,7 @@ export async function enqueueSelectedTracksForUnit(
     return false;
   }
   const outputPath = await resolveMergeOutputFor(state, root);
-  const args = buildMergeArgsMulti(nonEmpty, outputPath, profile);
+  const args = buildMergeArgsMulti(nonEmpty, outputPath, profile, order);
   await enqueueMerge(root, args);
   state.addToQueue(root);
   return true;

@@ -60,9 +60,10 @@ import {
   resolveOutputDir,
   trackKey,
 } from "../merge";
-import type { MergeInput } from "../merge";
+import type { MergeInput, OrderedTrackRef } from "../merge";
 import {
   applyUnitFlagAutomation,
+  combinedTrackId,
   combineUnitTracks,
   parseRowKey,
   rowKeyOf,
@@ -167,6 +168,8 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   const setTrackName = useMkvStore((s) => s.setTrackName);
   const setTrackFlag = useMkvStore((s) => s.setTrackFlag);
   const reorderTracks = useMkvStore((s) => s.reorderTracks);
+  const setCombinedTrackOrder = useMkvStore((s) => s.setCombinedTrackOrder);
+  const combinedOrder = useMkvStore((s) => s.combinedTrackOrders[root]);
   const setFileSelectedIds = useMkvStore((s) => s.setFileSelectedIds);
   const setFileOutputPath = useMkvStore((s) => s.setFileOutputPath);
   const clearFileOutputPath = useMkvStore((s) => s.clearFileOutputPath);
@@ -211,10 +214,19 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   // True while a valid card drag is hovering over this card (drop highlight).
   const dropActive = useMkvStore((s) => s.dropTargetRoot === root);
 
-  // The whole tree flattened into one stable, sorted track list.
+  // The whole tree flattened into one list. A multi-member card honours the
+  // user's custom drag-reorder (`combinedOrder`); a single-member card always
+  // uses the default order (its reorder lives in the root file's own track list
+  // via `reorderTracks`), so any order left over from when it had children is
+  // ignored.
   const combined = useMemo<CombinedTrack[]>(
-    () => combineUnitTracks(memberFiles, fileTracksMap),
-    [memberFiles, fileTracksMap],
+    () =>
+      combineUnitTracks(
+        memberFiles,
+        fileTracksMap,
+        isMulti ? combinedOrder : undefined,
+      ),
+    [memberFiles, fileTracksMap, isMulti, combinedOrder],
   );
   const trackCounts = useMemo(() => mediaTrackCounts(combined), [combined]);
 
@@ -363,15 +375,34 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       setTrackFlag,
     );
 
+  // Reorder a track. A single-member card reorders the root file's own list
+  // (the deterministic combined sort then re-groups it by type). A multi-member
+  // card persists a free combined order so a row can move anywhere — across
+  // member files and track types — which per-file ordering can't express.
   const onReorder = (fromRowKey: string, toRowKey: string) => {
-    if (isMulti) {
+    if (!isMulti) {
+      reorderTracks(
+        [root],
+        parseRowKey(fromRowKey).bareKey,
+        parseRowKey(toRowKey).bareKey,
+      );
       return;
     }
-    reorderTracks(
-      [root],
-      parseRowKey(fromRowKey).bareKey,
-      parseRowKey(toRowKey).bareKey,
-    );
+    const ids = combined.map(combinedTrackId);
+    const fromTrack = combined.find((tk) => rowKeyOf(tk) === fromRowKey);
+    const toTrack = combined.find((tk) => rowKeyOf(tk) === toRowKey);
+    if (!fromTrack || !toTrack) {
+      return;
+    }
+    const fromIndex = ids.indexOf(combinedTrackId(fromTrack));
+    const toIndex = ids.indexOf(combinedTrackId(toTrack));
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+      return;
+    }
+    const next = ids.slice();
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setCombinedTrackOrder(root, next);
   };
 
   // Apply the profile's default/forced automation — only after the WHOLE unit
@@ -418,6 +449,13 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       return { file, tracks };
     });
 
+  // Selected tracks in the combined display order, as cross-file refs for the
+  // merge `--track-order` so a drag-reorder of a multi-member card is honoured.
+  const mergeTrackOrder = (): OrderedTrackRef[] =>
+    combined
+      .filter((tk) => selectedIds.has(rowKeyOf(tk)))
+      .map((tk) => ({ file: tk.sourceFile, id: tk.id, type: tk.type }));
+
   const buildCurrentCommand = async (): Promise<string | null> => {
     if (!hasSelection || !activeProfile) {
       return null;
@@ -435,6 +473,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
         outputPath,
         mkvToolNixPath,
         activeProfile,
+        mergeTrackOrder(),
       );
     }
     return buildCommandString(
@@ -468,6 +507,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
         await enqueueSelectedTracksForUnit({
           root,
           inputs: mergeInputs(),
+          order: mergeTrackOrder(),
           profile: activeProfile,
         });
       } else {
@@ -799,7 +839,6 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
               ? (tk) => `${(tk as CombinedTrack).memberIndex}:${tk.id}`
               : undefined
           }
-          reorderDisabled={isMulti}
           emptyText={t("merge.noTracks")}
           headers={{
             id: t("merge.header.id"),

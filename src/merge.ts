@@ -127,6 +127,14 @@ export interface MergeInput {
   tracks: MediaTrack[];
 }
 
+/** A track's source file + identity, used to express an explicit cross-file
+ *  `--track-order` (the combined table's user-defined order). */
+export interface OrderedTrackRef {
+  file: string;
+  id: number;
+  type: string;
+}
+
 /** `true` for the three media types that participate in `--track-order`. */
 function isOrderedType(type: string): boolean {
   return type === "video" || type === "audio" || type === "subtitles";
@@ -237,42 +245,65 @@ export function buildMergeArgs(
  * Build the mkvmerge argv that merges multiple `inputs` into one output. Each
  * input emits its own per-file option block followed by its path (file index =
  * position in `inputs`, root first), then a single global `--track-order` over
- * every selected video/audio/subtitle track. The track order is type-major
- * (video, then audio, then subtitle) and within a type follows input order then
- * each file's own order — matching the flattened combined table the user sees.
- * Mirrors mkvtoolnix-gui `merge/mux_config.cpp` (`buildMkvmergeOptions` +
- * `buildTrackOrder`).
+ * every selected video/audio/subtitle track.
+ *
+ * When `order` is given (the combined table's user-defined order) the
+ * `--track-order` follows it exactly, so a drag-reorder that interleaves tracks
+ * across member files / track types is honoured in the output. Without it the
+ * order is the default type-major one (video, then audio, then subtitle; within
+ * a type, input order then each file's own order) — matching the default
+ * flattened table. Mirrors mkvtoolnix-gui `merge/mux_config.cpp`
+ * (`buildMkvmergeOptions` + `buildTrackOrder`).
  */
 export function buildMergeArgsMulti(
   inputs: MergeInput[],
   outputPath: string,
   _profile: ConfigProfile,
+  order?: OrderedTrackRef[],
 ): string[] {
   const args: string[] = ["-o", outputPath];
   for (const input of inputs) {
     appendInputOptions(args, input.file, input.tracks);
   }
 
-  const ordered: { fileIndex: number; id: number; rank: number; seq: number }[] =
-    [];
-  inputs.forEach((input, fileIndex) => {
-    for (const track of input.tracks) {
-      if (isOrderedType(track.type)) {
-        ordered.push({
-          fileIndex,
-          id: track.id,
-          rank: trackTypeRank(track.type),
-          seq: ordered.length,
-        });
+  const fileIndexOf = new Map(inputs.map((input, index) => [input.file, index]));
+  let trackOrder: string[];
+  if (order) {
+    // Follow the explicit combined order, keeping only ordered-type tracks that
+    // belong to an emitted input (selected) so mkvmerge never sees a stray id.
+    trackOrder = order
+      .filter(
+        (ref) => isOrderedType(ref.type) && fileIndexOf.has(ref.file),
+      )
+      .map((ref) => `${fileIndexOf.get(ref.file)}:${ref.id}`);
+  } else {
+    const ordered: {
+      fileIndex: number;
+      id: number;
+      rank: number;
+      seq: number;
+    }[] = [];
+    inputs.forEach((input, fileIndex) => {
+      for (const track of input.tracks) {
+        if (isOrderedType(track.type)) {
+          ordered.push({
+            fileIndex,
+            id: track.id,
+            rank: trackTypeRank(track.type),
+            seq: ordered.length,
+          });
+        }
       }
-    }
-  });
-  // Stable sort by type rank (seq breaks ties so input + within-file order is
-  // preserved) → the combined table order.
-  ordered.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.seq - b.seq));
-  const order = ordered.map((o) => `${o.fileIndex}:${o.id}`);
-  if (order.length > 0) {
-    args.push("--track-order", order.join(","));
+    });
+    // Stable sort by type rank (seq breaks ties so input + within-file order is
+    // preserved) → the combined table order.
+    ordered.sort((a, b) =>
+      a.rank !== b.rank ? a.rank - b.rank : a.seq - b.seq,
+    );
+    trackOrder = ordered.map((o) => `${o.fileIndex}:${o.id}`);
+  }
+  if (trackOrder.length > 0) {
+    args.push("--track-order", trackOrder.join(","));
   }
   return args;
 }
@@ -294,9 +325,10 @@ export function buildCommandStringMulti(
   outputPath: string,
   mkvToolNixPath: string,
   profile: ConfigProfile,
+  order?: OrderedTrackRef[],
 ): string {
   const mkvmergePath = `${mkvToolNixPath}${getSep()}mkvmerge`;
-  const args = buildMergeArgsMulti(inputs, outputPath, profile);
+  const args = buildMergeArgsMulti(inputs, outputPath, profile, order);
   return [mkvmergePath, ...args].map(shellQuote).join(" ");
 }
 
