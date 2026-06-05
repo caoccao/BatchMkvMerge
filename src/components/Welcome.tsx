@@ -24,12 +24,18 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import appIconUrl from "../../src-tauri/icons/icon.png";
+import batchMkvExtractIcon from "../assets/batchmkvextract.png";
+import bdMasterIcon from "../assets/bdmaster.png";
+import betterMediaInfoIcon from "../assets/bettermediainfo.png";
 import { getMediaFiles } from "../service";
 import { useMkvStore } from "../store";
 
 const AUTHOR_NAME = "Sam Cao";
 const AUTHOR_URL = "https://github.com/caoccao/";
 const GITHUB_URL = "https://github.com/caoccao/BatchMkvMerge";
+const BETTER_MEDIA_INFO_URL = "https://github.com/caoccao/BetterMediaInfo";
+const BATCH_MKV_EXTRACT_URL = "https://github.com/caoccao/BatchMkvExtract";
+const BD_MASTER_URL = "https://github.com/caoccao/BDMaster";
 
 interface AppCardProps {
   logo: string;
@@ -236,6 +242,24 @@ export default function Welcome() {
             intro={t("welcome.intro")}
             githubUrl={GITHUB_URL}
             isPrimary
+          />
+          <AppCard
+            logo={betterMediaInfoIcon}
+            title="BetterMediaInfo"
+            intro={t("welcome.introBetterMediaInfo")}
+            githubUrl={BETTER_MEDIA_INFO_URL}
+          />
+          <AppCard
+            logo={batchMkvExtractIcon}
+            title="BatchMkvExtract"
+            intro={t("welcome.introBatchMkvExtract")}
+            githubUrl={BATCH_MKV_EXTRACT_URL}
+          />
+          <AppCard
+            logo={bdMasterIcon}
+            title="BDMaster"
+            intro={t("welcome.introBDMaster")}
+            githubUrl={BD_MASTER_URL}
           />
         </Box>
 
