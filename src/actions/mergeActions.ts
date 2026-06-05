@@ -22,6 +22,7 @@ import {
   trackKey,
 } from "../merge";
 import type { MergeInput, OrderedTrackRef } from "../merge";
+import { combineUnitTracks } from "../file-tree";
 import type { MediaTrack } from "../media-metadata";
 import type { Config, ConfigProfile } from "../protocol";
 import { QueueItemStatus } from "../protocol";
@@ -155,6 +156,58 @@ export async function enqueueSelectedTracksForUnit(
   await enqueueMerge(root, args);
   state.addToQueue(root);
   return true;
+}
+
+/**
+ * Enqueue one card unit (root first, drag-merged / grouped members after) using
+ * the store's current selection — the same merge the card's own Merge button
+ * performs. A multi-member unit becomes ONE multi-input merge keyed by its root
+ * (honouring the unit's custom combined track order); a single-member unit is a
+ * plain per-file merge. Used by the toolbar's Merge All so a merged card yields
+ * exactly one queue task instead of one per member file.
+ */
+export async function enqueueUnitSelection(
+  unit: string[],
+  profile: ConfigProfile,
+): Promise<boolean> {
+  const state = useMkvStore.getState();
+  const inputs: MergeInput[] = unit.map((file) => {
+    const sel = new Set(state.fileSelectedIds[file] ?? []);
+    return {
+      file,
+      tracks: (state.fileTracks[file] ?? []).filter((track) =>
+        sel.has(trackKey(track)),
+      ),
+    };
+  });
+  if (unit.length === 1) {
+    return await enqueueSelectedTracksForFile({
+      file: unit[0],
+      selectedTracks: inputs[0]?.tracks ?? [],
+      profile,
+    });
+  }
+  // Selected tracks in the combined display order, as cross-file refs for the
+  // merge `--track-order` (matches `MkvFileCard.mergeTrackOrder`).
+  const selectedByFile = new Map(
+    inputs.map((input) => [
+      input.file,
+      new Set(input.tracks.map((track) => trackKey(track))),
+    ]),
+  );
+  const order: OrderedTrackRef[] = combineUnitTracks(
+    unit,
+    state.fileTracks,
+    state.combinedTrackOrders[unit[0]],
+  )
+    .filter((track) => selectedByFile.get(track.sourceFile)?.has(trackKey(track)))
+    .map((track) => ({ file: track.sourceFile, id: track.id, type: track.type }));
+  return await enqueueSelectedTracksForUnit({
+    root: unit[0],
+    inputs,
+    order,
+    profile,
+  });
 }
 
 export async function cancelMerge(

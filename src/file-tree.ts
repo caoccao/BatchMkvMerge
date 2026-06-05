@@ -390,6 +390,28 @@ export function applyManualMerges(
 }
 
 /**
+ * Derive the card units for the current file list: the *Group by file name*
+ * forest (or one unit per file when that's off), with manual drag-merges folded
+ * in and explicitly detached files pulled out. This is THE definition of
+ * "one card = one merge output" — `FileList` renders these units and the
+ * toolbar's Merge All enqueues one merge per unit, so both must share it.
+ */
+export function buildMergeUnits(
+  files: string[],
+  groupByFileName: boolean,
+  mergedRoots: Record<string, string>,
+  detachedFiles: Record<string, true>,
+): string[][] {
+  const baseUnits: string[][] = groupByFileName
+    ? buildForest(files).map((tree) => tree.members)
+    : files.map((file) => [file]);
+  return applyDetachments(
+    applyManualMerges(baseUnits, mergedRoots),
+    detachedFiles,
+  );
+}
+
+/**
  * Pull every file in `detachedFiles` out of its unit (only non-root members can
  * be detached — a unit's root is its card identity) and append each as its own
  * one-member unit. Applied after [`applyManualMerges`] so a detached file stays

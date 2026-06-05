@@ -37,10 +37,10 @@ import { useTranslation } from "react-i18next";
 import {
   cancelMerge,
   cancelMerges,
-  enqueueSelectedTracksForFile,
+  enqueueUnitSelection,
   getActiveProfile,
-  getSelectedTracksForFile,
 } from "../actions/mergeActions";
+import { buildMergeUnits } from "../file-tree";
 import { formatHMS } from "../merge";
 import type { QueueItem } from "../store";
 import { QueueItemStatus, useMkvStore } from "../store";
@@ -168,24 +168,29 @@ export default function Queue() {
           if (!profile) {
             return;
           }
+          // Queue items are keyed by their card unit's root — resume the whole
+          // unit so a multi-member card re-merges all member tracks, not just
+          // the root file's own. A file that is no longer a unit root falls
+          // back to a plain single-file resume.
+          const units = buildMergeUnits(
+            state.files,
+            state.config?.groupByFileName ?? true,
+            state.mergedRoots,
+            state.detachedFiles,
+          );
+          const unitOf = new Map(units.map((unit) => [unit[0], unit]));
           for (const item of items) {
             if (item.status !== QueueItemStatus.Cancelled &&
                 item.status !== QueueItemStatus.Failed) {
               continue;
             }
-            const file = item.file;
-            const selectedTracks = getSelectedTracksForFile(file, state);
-            if (selectedTracks.length === 0) {
-              continue;
-            }
             try {
-              await enqueueSelectedTracksForFile({
-                file,
-                selectedTracks,
+              await enqueueUnitSelection(
+                unitOf.get(item.file) ?? [item.file],
                 profile,
-              });
+              );
             } catch (err) {
-              console.error("Resume failed for", file, err);
+              console.error("Resume failed for", item.file, err);
             }
           }
         };

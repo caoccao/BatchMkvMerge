@@ -40,10 +40,10 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import { useTranslation } from "react-i18next";
 import {
   cancelMerges,
-  enqueueSelectedTracksForFile,
+  enqueueUnitSelection,
   getActiveProfile,
-  getSelectedTracksForFile,
 } from "../actions/mergeActions";
+import { buildMergeUnits } from "../file-tree";
 import {
   GroupMode,
   QueueItemStatus,
@@ -134,19 +134,20 @@ export default function Toolbar() {
     if (!profile) {
       return;
     }
-    for (const file of state.files) {
-      const selectedTracks = getSelectedTracksForFile(file, state);
-      if (selectedTracks.length === 0) {
-        continue;
-      }
+    // Enqueue per card unit, not per file — a multi-member card (drag-merged or
+    // grouped by file name) merges into ONE output keyed by its root, so it must
+    // become a single queue task exactly like its own Merge button.
+    const units = buildMergeUnits(
+      state.files,
+      state.config?.groupByFileName ?? true,
+      state.mergedRoots,
+      state.detachedFiles,
+    );
+    for (const unit of units) {
       try {
-        await enqueueSelectedTracksForFile({
-          file,
-          selectedTracks,
-          profile,
-        });
+        await enqueueUnitSelection(unit, profile);
       } catch (err) {
-        console.error("Merge All failed for", file, err);
+        console.error("Merge All failed for", unit[0], err);
       }
     }
   }, []);

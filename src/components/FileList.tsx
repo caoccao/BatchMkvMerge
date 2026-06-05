@@ -21,12 +21,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
 import { formatHMS, getParentDir } from "../merge";
-import {
-  applyDetachments,
-  applyManualMerges,
-  buildForest,
-  combineUnitTracks,
-} from "../file-tree";
+import { buildMergeUnits, combineUnitTracks } from "../file-tree";
 import { mediaTrackCounts } from "../media-metadata";
 import type { MediaTrack } from "../media-metadata";
 import type { MergeFinishedEvent } from "../protocol";
@@ -75,11 +70,10 @@ export default function FileList() {
     // The atomic unit is a merge tree: when grouping by file name it's a forest
     // root plus its children; otherwise every file is its own one-member unit.
     // Manual drag-merges are folded in, then explicitly detached files pulled out.
-    const baseUnits: string[][] = groupByFileName
-      ? buildForest(files).map((tree) => tree.members)
-      : files.map((file) => [file]);
-    const units = applyDetachments(
-      applyManualMerges(baseUnits, mergedRoots),
+    const units = buildMergeUnits(
+      files,
+      groupByFileName,
+      mergedRoots,
       detachedFiles,
     );
 
