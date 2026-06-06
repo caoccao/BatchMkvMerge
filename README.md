@@ -17,6 +17,8 @@ BatchMkvMerge is a desktop GUI that drives [mkvmerge](https://mkvtoolnix.downloa
 * 8 UI languages with light and dark modes
 * Integrate with [BetterMediaInfo](https://github.com/caoccao/BetterMediaInfo)
 
+![Screenshot](docs/screenshots/card_view_grouping.png)
+
 ## Installation
 
 * Make sure you have [MKVToolNix](https://mkvtoolnix.download/) installed.
@@ -26,6 +28,7 @@ BatchMkvMerge is a desktop GUI that drives [mkvmerge](https://mkvtoolnix.downloa
 ## Documentation
 
 * [Development](docs/development.md)
+* [Screenshots](docs/screenshots.md)
 * [Release Notes](docs/release_notes.md)
 
 ## License
