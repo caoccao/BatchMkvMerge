@@ -61,6 +61,7 @@ import {
 } from "../file-tree";
 import type { CombinedTrack } from "../file-tree";
 import { mediaTrackCounts } from "../media-metadata";
+import type { MediaTrack } from "../media-metadata";
 import { QueueItemStatus } from "../protocol";
 import { launchBetterMediaInfo, resolveMergeOutputPath } from "../service";
 import { nextTrackFlag, useMkvStore } from "../store";
@@ -171,6 +172,23 @@ export function GroupCard({ units }: GroupCardProps) {
     [repMembers, fileTracksMap],
   );
   const repCounts = useMemo(() => mediaTrackCounts(repCombined), [repCombined]);
+  const codecFor = (track: MediaTrack) => {
+    if (track.kind === "chapters") {
+      return t("settings.chapters");
+    }
+    return track.codec;
+  };
+  const descriptionFor = (track: MediaTrack) => {
+    if (track.kind === "chapters" && track.chapterEntryCount !== undefined) {
+      return t(
+        track.chapterEntryCount === 1
+          ? "merge.chapterEntryCount.single"
+          : "merge.chapterEntryCount.multiple",
+        { count: track.chapterEntryCount },
+      );
+    }
+    return track.description;
+  };
   const allRowKeys = useMemo(() => repCombined.map(rowKeyOf), [repCombined]);
   const cardId = useMemo(() => roots.join("\n"), [roots]);
 
@@ -755,6 +773,8 @@ export function GroupCard({ units }: GroupCardProps) {
                 ? (tk) => `${(tk as CombinedTrack).memberIndex}:${tk.id}`
                 : undefined
             }
+            codecFor={codecFor}
+            descriptionFor={descriptionFor}
             reorderDisabled={reorderDisabled}
             emptyText={t("merge.noTracks")}
             headers={{

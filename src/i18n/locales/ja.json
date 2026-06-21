@@ -27,6 +27,10 @@
     "commandCopied": "コマンドをクリップボードにコピーしました。",
     "mergeComplete": "結合が完了しました。",
     "noTracks": "トラックが見つかりません。",
+    "chapterEntryCount": {
+      "single": "{{count}} エントリ",
+      "multiple": "{{count}} エントリ"
+    },
     "header": {
       "id": "ID",
       "type": "種類",

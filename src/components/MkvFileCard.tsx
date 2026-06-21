@@ -76,6 +76,7 @@ import {
   resolveOverriddenOutputPath,
 } from "../service";
 import { mediaTrackCounts } from "../media-metadata";
+import type { MediaTrack } from "../media-metadata";
 import { formatFileSize } from "../format";
 import { nextTrackFlag, useMkvStore } from "../store";
 import type { TrackFlagKind } from "../store";
@@ -230,6 +231,23 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
   );
   const unitTrackOrder = isMulti ? combinedOrder : undefined;
   const trackCounts = useMemo(() => mediaTrackCounts(combined), [combined]);
+  const codecFor = (track: MediaTrack) => {
+    if (track.kind === "chapters") {
+      return t("settings.chapters");
+    }
+    return track.codec;
+  };
+  const descriptionFor = (track: MediaTrack) => {
+    if (track.kind === "chapters" && track.chapterEntryCount !== undefined) {
+      return t(
+        track.chapterEntryCount === 1
+          ? "merge.chapterEntryCount.single"
+          : "merge.chapterEntryCount.multiple",
+        { count: track.chapterEntryCount },
+      );
+    }
+    return track.description;
+  };
 
   // Subtitle extras from the root file: file size (always present once parsed)
   // plus parser-sourced encoded date / container title when available.
@@ -850,6 +868,8 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
               ? (tk) => `${(tk as CombinedTrack).memberIndex}:${tk.id}`
               : undefined
           }
+          codecFor={codecFor}
+          descriptionFor={descriptionFor}
           emptyText={t("merge.noTracks")}
           headers={{
             id: t("merge.header.id"),

@@ -27,6 +27,10 @@
     "commandCopied": "指令已複製到剪貼簿。",
     "mergeComplete": "合併完成。",
     "noTracks": "找不到軌道。",
+    "chapterEntryCount": {
+      "single": "{{count}} 個條目",
+      "multiple": "{{count}} 個條目"
+    },
     "header": {
       "id": "ID",
       "type": "類型",

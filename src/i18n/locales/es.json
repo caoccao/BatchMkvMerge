@@ -27,6 +27,10 @@
     "commandCopied": "Comando copiado al portapapeles.",
     "mergeComplete": "Combinación completada.",
     "noTracks": "No se encontraron pistas.",
+    "chapterEntryCount": {
+      "single": "{{count}} entrada",
+      "multiple": "{{count}} entradas"
+    },
     "header": {
       "id": "ID",
       "type": "Tipo",

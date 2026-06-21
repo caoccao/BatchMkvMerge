@@ -48,14 +48,19 @@ export interface MediaTrack {
   number: number;
   /** Mirrors mkvmerge -J `type` ("video"|"audio"|"subtitles"|"chapters"|"attachment"|"buttons"|"unknown"). */
   type: string;
-  /** Human-readable codec name. For attachments this is the mime subtype. */
+  /** Human-readable codec name. For attachments this is the mime subtype.
+   *  Empty for synthetic chapter rows; cards render a localized chapter label. */
   codec: string;
-  /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Drives the track extension lookup. */
+  /** Raw container codec id ("V_MPEG4/ISO/AVC", FOURCC, ...). Empty for
+   *  synthetic chapter rows. */
   codecId: string;
   /** Short human-readable summary of the track's domain properties: resolution
    *  + frame rate (video), channel layout (audio), text/image + variant +
-   *  encoding (subtitles). Empty for synthetic rows. */
+   *  encoding (subtitles). Empty for synthetic rows whose display text is
+   *  derived from another field. */
   description: string;
+  /** Number of chapter entries for the synthetic chapters row. */
+  chapterEntryCount?: number;
   /** Payload size in bytes when the source exposes it (Matroska
    *  `NUMBER_OF_BYTES` statistics tag, or an attachment's stored size). Null
    *  when the parser has no value. */
@@ -324,9 +329,10 @@ export function metadataToMediaTracks(meta: MediaMetadata): MediaTrack[] {
       id: 0,
       number: 0,
       type: "chapters",
-      codec: "xml",
-      codecId: "xml",
+      codec: "",
+      codecId: "",
       description: "",
+      chapterEntryCount: meta.chapters.numEntries,
       size: null,
       bitRate: null,
       trackName: "",

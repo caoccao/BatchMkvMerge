@@ -27,6 +27,10 @@
     "commandCopied": "Befehl in die Zwischenablage kopiert.",
     "mergeComplete": "Zusammenführung abgeschlossen.",
     "noTracks": "Keine Spuren gefunden.",
+    "chapterEntryCount": {
+      "single": "{{count}} Eintrag",
+      "multiple": "{{count}} Einträge"
+    },
     "header": {
       "id": "ID",
       "type": "Typ",

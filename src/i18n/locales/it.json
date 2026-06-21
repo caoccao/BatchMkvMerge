@@ -27,6 +27,10 @@
     "commandCopied": "Comando copiato negli appunti.",
     "mergeComplete": "Unione completata.",
     "noTracks": "Nessuna traccia trovata.",
+    "chapterEntryCount": {
+      "single": "{{count}} voce",
+      "multiple": "{{count}} voci"
+    },
     "header": {
       "id": "ID",
       "type": "Tipo",

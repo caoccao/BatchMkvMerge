@@ -200,6 +200,10 @@ interface TrackSelectionTableProps {
   /** Label for the ID column. Defaults to the bare track id; the combined
    *  merge-tree table shows `{fileId}:{trackId}` to disambiguate members. */
   idLabel?: (track: MediaTrack) => ReactNode;
+  /** Localized codec text for rows whose codec is data-derived. */
+  codecFor?: (track: MediaTrack) => ReactNode;
+  /** Localized description text for rows whose description is data-derived. */
+  descriptionFor?: (track: MediaTrack) => ReactNode;
   /** Opt out of drag-reorder for this table. Used where a reorder has no
    *  representable mapping (e.g. a group of multi-member units that would need
    *  per-member lock-step reordering across structurally-identical units). */
@@ -242,6 +246,8 @@ export function TrackSelectionTable({
   errorText = null,
   rowKey,
   idLabel,
+  codecFor,
+  descriptionFor,
   reorderDisabled = false,
   onToggleAll,
   onToggleOne,
@@ -257,6 +263,9 @@ export function TrackSelectionTable({
 }: TrackSelectionTableProps) {
   const keyOf = rowKey ?? trackKey;
   const idOf = idLabel ?? ((track: MediaTrack) => track.id);
+  const codecOf = codecFor ?? ((track: MediaTrack): ReactNode => track.codec);
+  const descriptionOf =
+    descriptionFor ?? ((track: MediaTrack): ReactNode => track.description);
   const sensors = useSensors(
     useSensor(InteractiveSafePointerSensor, {
       activationConstraint: { distance: 5 },
@@ -385,8 +394,8 @@ export function TrackSelectionTable({
                     <TableCell>
                       <TrackTypeIcon type={track.type} />
                     </TableCell>
-                    <TableCell>{track.codec}</TableCell>
-                    <TableCell>{track.description}</TableCell>
+                    <TableCell>{codecOf(track)}</TableCell>
+                    <TableCell>{descriptionOf(track)}</TableCell>
                     <TableCell>
                       {track.size != null
                         ? formatTrackSize(track.size, track.type, formatting)

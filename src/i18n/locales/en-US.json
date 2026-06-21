@@ -27,6 +27,10 @@
     "commandCopied": "Command copied to clipboard.",
     "mergeComplete": "Merge complete.",
     "noTracks": "No tracks found.",
+    "chapterEntryCount": {
+      "single": "{{count}} entry",
+      "multiple": "{{count}} entries"
+    },
     "header": {
       "id": "ID",
       "type": "Type",

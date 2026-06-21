@@ -27,6 +27,10 @@
     "commandCopied": "Commande copiée dans le presse-papiers.",
     "mergeComplete": "Fusion terminée.",
     "noTracks": "Aucune piste trouvée.",
+    "chapterEntryCount": {
+      "single": "{{count}} entrée",
+      "multiple": "{{count}} entrées"
+    },
     "header": {
       "id": "ID",
       "type": "Type",
