@@ -228,6 +228,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       ),
     [memberFiles, fileTracksMap, isMulti, combinedOrder],
   );
+  const unitTrackOrder = isMulti ? combinedOrder : undefined;
   const trackCounts = useMemo(() => mediaTrackCounts(combined), [combined]);
 
   // Subtitle extras from the root file: file size (always present once parsed)
@@ -364,6 +365,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       fileSelectedIdsMap,
       { resetDefault: true, resetForced: false },
       setTrackFlag,
+      unitTrackOrder,
     );
 
   const onForcedHeaderClick = () =>
@@ -373,6 +375,7 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
       fileSelectedIdsMap,
       { resetDefault: false, resetForced: true },
       setTrackFlag,
+      unitTrackOrder,
     );
 
   // Reorder a track. A single-member card reorders the root file's own list
@@ -436,8 +439,16 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
         resetForced: activeProfile.automation?.reset_forced_display.enabled ?? false,
       },
       setTrackFlag,
+      unitTrackOrder,
     );
-  }, [memberFiles, activeProfile, fileTracksMap, fileSelectedIdsMap, setTrackFlag]);
+  }, [
+    memberFiles,
+    activeProfile,
+    fileTracksMap,
+    fileSelectedIdsMap,
+    setTrackFlag,
+    unitTrackOrder,
+  ]);
 
   // Per-member selected tracks (in each file's own order) for the merge command.
   const mergeInputs = (): MergeInput[] =>

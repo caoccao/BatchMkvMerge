@@ -251,6 +251,8 @@ export function parseRowKey(rowKey: string): {
  * flattened tree the first checked video/audio/subtitle becomes the default
  * (other checked primary tracks cleared), and/or every checked track's forced
  * flag is cleared. Edits are dispatched per source file via `setTrackFlag`.
+ * `order`, when present, is the same custom combined row order used by the
+ * selection table and merge command.
  *
  * This is per-unit by design — when several units are grouped together they may
  * have different track layouts, so each must be evaluated against its own tracks
@@ -267,11 +269,12 @@ export function applyUnitFlagAutomation(
     kind: "default" | "forced",
     value: TrackFlag,
   ) => void,
+  order?: string[],
 ): void {
   if (!opts.resetDefault && !opts.resetForced) {
     return;
   }
-  const combined = combineUnitTracks(members, fileTracks);
+  const combined = combineUnitTracks(members, fileTracks, order);
   const selected = new Set<string>();
   members.forEach((file, memberIndex) => {
     for (const bareKey of fileSelectedIds[file] ?? []) {

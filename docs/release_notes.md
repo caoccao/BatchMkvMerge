@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.2.0
+
+- Fixed default-track reset automation to honor user-reordered track order.
+
 ## 0.1.0
 
 - Initial release of BatchMkvMerge as a cross-platform desktop app (Windows, Linux, macOS) built with Tauri + React.
