@@ -145,8 +145,8 @@ function isOrderedType(type: string): boolean {
  * Mirrors mkvtoolnix-gui's per-file options (`merge/source_file.cpp`): media
  * type selection (`-d/-a/-s` or `--no-*`), per-track `--language/--track-name`
  * and default/forced flags (only when explicitly set so "unspecified" keeps the
- * source flag), chapters, attachments, then the file itself. Track ids are this
- * file's own namespace, so the same helper serves every input.
+ * source flag), chapters, global tags, attachments, then the file itself. Track
+ * ids are this file's own namespace, so the same helper serves every input.
  */
 function appendInputOptions(
   args: string[],
@@ -194,6 +194,7 @@ function appendInputOptions(
   if (!tracks.some((t) => t.type === "chapters")) {
     args.push("--no-chapters");
   }
+  args.push("--no-global-tags");
   const attachmentIds = tracks
     .filter((t) => t.type === "attachment")
     .map((t) => String(t.id));
@@ -214,7 +215,8 @@ function appendInputOptions(
  *
  *   mkvmerge -o <out> [-d/-a/-s <ids> | --no-video/audio/subtitles]
  *     [--default-track-flag <id>:0|1] [--forced-display-flag <id>:0|1]
- *     [--no-chapters] [--attachments <ids> | --no-attachments]
+ *     [--no-chapters] [--no-global-tags]
+ *     [--attachments <ids> | --no-attachments]
  *     <input> --track-order 0:<id>,…
  *
  * `tracks` are the *selected* rows in the table's (possibly drag-reordered)
