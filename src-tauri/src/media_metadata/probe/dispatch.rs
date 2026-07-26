@@ -453,6 +453,10 @@ mod tests {
   fn extension_hints_do_not_frontload_raw_audio_or_text_readers() {
     use super::super::extension_hint::hints_for_extension;
     assert_eq!(hints_to_reader_names(&hints_for_extension("mp4")), vec!["mp4"]);
+    assert_eq!(
+      hints_to_reader_names(&hints_for_extension("m2v")),
+      vec!["mpeg_video", "mpeg_ps"]
+    );
     assert!(hints_to_reader_names(&hints_for_extension("mp3")).is_empty());
     assert!(hints_to_reader_names(&hints_for_extension("srt")).is_empty());
   }

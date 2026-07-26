@@ -5,6 +5,7 @@
 - Fixed default-track reset automation to honor user-reordered track order.
 - Fixed chapter rows to show a localized chapter label and entry count in the proper columns.
 - Added `--no-global-tags` to generated mkvmerge commands.
+- Improved native metadata parity with MKVToolNix for MP4 track names, MPEG probing, and direct VobSub `.sub` inputs.
 
 ## 0.1.0
 

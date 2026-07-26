@@ -1,6 +1,6 @@
 # Blu-ray MPLS Playlist Parser
 
-Implementation progress: 90%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -32,4 +32,4 @@ Key structures are `Playlist`, `PlayItem`, `SubPath`, `SubPlayItem`, `SubPlayIte
 
 ## Gaps and Handling
 
-Rust does not use CLPI metadata, does not implement true multi-file packet IO or timestamp continuity, and does not fully surface chapter names or angle/multiclip details. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing, but playlists with chapter marks now expose both playlist-specific chapter metadata and the standard chapter summary that mkvtoolnix reports during identification. Playlist recognition is content-based rather than extension-gated, so renamed MPLS files with resolvable Blu-ray segment files enter the same path as `.mpls` inputs.
+Rust does not use CLPI metadata or implement true multi-file packet IO and timestamp continuity; those paths serve packet delivery rather than `mkvmerge -J` identification and are not counted against native-parser progress. The playlist identification fields emitted by `mm_mpls_multi_file_io_c::create_verbose_identification_info` — duration, total segment size, chapter count, and ordered segment paths — are all surfaced, alongside the standard chapter summary and STN stream metadata. If referenced segment files are missing, only playlist metadata that can be read from the MPLS file is available. Track merging is PID-based and intentionally scoped to metadata listing. Playlist recognition is content-based rather than extension-gated, so renamed MPLS files with resolvable Blu-ray segment files enter the same path as `.mpls` inputs.

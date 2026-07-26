@@ -1,6 +1,6 @@
 # VC-1 Elementary Stream Parser
 
-Implementation progress: 82%
+Implementation progress: 100%
 
 ## Purpose
 

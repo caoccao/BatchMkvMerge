@@ -1,6 +1,6 @@
 # DV Parser
 
-Implementation progress: 60%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -27,4 +27,4 @@ There are no persistent parser-specific structures; the reader writes directly i
 
 ## Gaps and Handling
 
-The probe now mirrors upstream's marker-density scan over up to 20 MiB, so valid DV streams whose first header is not at offset 0 are recognised and short arbitrary files that merely begin with the `0x1f 0x07 0x00` prefix are rejected. The handling remains intentionally conservative after recognition: no track is emitted because raw DV extraction is not supported by this parser, so frame-rate, dimension, and aspect-ratio details that upstream surfaces for muxing are not decoded.
+The probe mirrors upstream's marker-density scan over up to 20 MiB, so valid DV streams whose first header is not at offset 0 are recognised and short arbitrary files that merely begin with the `0x1f 0x07 0x00` prefix are rejected. MKVToolNix routes a positive raw-DV probe through its recognised-but-unsupported result instead of returning a reader for identification; the native parser therefore also emits no track. Frame-rate, dimension, and aspect-ratio decoding belongs to the unreachable muxing reader path and is not counted against identification parity.

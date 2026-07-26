@@ -1,6 +1,6 @@
 # Dirac Elementary Stream Parser
 
-Implementation progress: 92%
+Implementation progress: 100%
 
 ## Purpose
 

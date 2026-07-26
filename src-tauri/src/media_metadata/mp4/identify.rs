@@ -165,7 +165,11 @@ fn build_track(
 
   let mut common = CommonTrackProperties::default();
   common.number = builder.track_id.map(|id| id as u64);
-  common.track_name = builder.handler_name;
+  // PARSER-403: only `trak/udta/name` is a user-facing track name.
+  // `mdia/hdlr`'s component name (often "VideoHandler"/"SoundHandler") is
+  // diagnostic handler metadata and MKVToolNix does not identify it as the
+  // track name.
+  common.track_name = builder.track_name;
   common.language = builder
     .language_iso_639_2
     .as_deref()
@@ -507,6 +511,32 @@ mod tests {
     assert_eq!(m.tracks.len(), 1);
     let a = m.tracks[0].properties.audio.as_ref().unwrap();
     assert_eq!(a.channels, Some(2));
+  }
+
+  #[test]
+  fn trak_udta_name_is_used_instead_of_handler_component_name() {
+    let mut moov = MoovBuilder::default();
+    let mut builder = audio_builder(2, "mp4a");
+    builder.handler_name = Some("SoundHandler".to_string());
+    builder.track_name = Some("Japanese dub".to_string());
+    moov.tracks.push(builder);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert_eq!(
+      m.tracks[0].properties.common.track_name.as_deref(),
+      Some("Japanese dub")
+    );
+  }
+
+  #[test]
+  fn handler_component_name_is_not_reported_as_track_name() {
+    let mut moov = MoovBuilder::default();
+    let mut builder = audio_builder(2, "mp4a");
+    builder.handler_name = Some("SoundHandler".to_string());
+    moov.tracks.push(builder);
+    let mut m = MediaMetadata::new("clip.mp4", 0);
+    finalise(moov, false, HashMap::new(), &mut m);
+    assert!(m.tracks[0].properties.common.track_name.is_none());
   }
 
   #[test]

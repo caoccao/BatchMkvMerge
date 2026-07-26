@@ -52,6 +52,10 @@ pub struct TrackBuilder {
 
   pub handler_type: Option<[u8; 4]>,
   pub handler_name: Option<String>,
+  /// User-facing name from `trak/udta/name`. The media-handler component
+  /// name (`handler_name`) is not a track name and must not be surfaced as
+  /// one. PARSER-403.
+  pub track_name: Option<String>,
 
   /// FOURCC of the first sample-entry box (e.g. `avc1`, `mp4a`).
   pub sample_entry_kind: Option<[u8; 4]>,
@@ -203,10 +207,37 @@ pub fn parse(src: &mut FileSource, parent: &BoxHeader, deadline: &Deadline) -> R
       parse_tref(src, child, deadline, &mut builder)?;
       Ok(ChildAction::Consumed)
     }
+    b"udta" => {
+      parse_udta(src, child, deadline, &mut builder)?;
+      Ok(ChildAction::Consumed)
+    }
     _ => Ok(ChildAction::Skip),
   })?;
   builder.merge_codec_config();
   Ok(builder)
+}
+
+/// Parse track-level user data. MKVToolNix only consumes direct `name`
+/// children here, strips surrounding whitespace and keeps the first non-empty
+/// value (`qtmp4_reader_c::handle_trak_udta_atom`). PARSER-403.
+fn parse_udta(
+  src: &mut FileSource,
+  parent: &BoxHeader,
+  deadline: &Deadline,
+  builder: &mut TrackBuilder,
+) -> Result<(), ParseError> {
+  atom::walk_children(src, parent, "mp4::trak::udta", deadline, |src, child| {
+    if &child.kind.0 != b"name" {
+      return Ok(ChildAction::Skip);
+    }
+
+    let payload = atom::read_payload(src, child, deadline.max_element_size())?;
+    let name = String::from_utf8_lossy(&payload).trim().to_string();
+    if builder.track_name.as_deref().unwrap_or_default().is_empty() && !name.is_empty() {
+      builder.track_name = Some(name);
+    }
+    Ok(ChildAction::Consumed)
+  })
 }
 
 /// Parse a `tref` (track reference) container, collecting the track IDs of any
@@ -282,6 +313,48 @@ mod tests {
     let b = parse(&mut s, &parent, &dl()).unwrap();
     assert_eq!(b.track_id, Some(1));
     assert_eq!(b.chapter_track_ids, vec![7]);
+  }
+
+  #[test]
+  fn trak_udta_name_sets_trimmed_track_name() {
+    let name = encode_box(b"name", b"  Director commentary  ");
+    let udta = encode_box(b"udta", &name);
+    let trak = encode_box(b"trak", &udta);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(trak));
+    let parent = atom::read_box_header(&mut s).unwrap();
+    let b = parse(&mut s, &parent, &dl()).unwrap();
+    assert_eq!(b.track_name.as_deref(), Some("Director commentary"));
+  }
+
+  #[test]
+  fn trak_udta_keeps_first_non_empty_name() {
+    let empty = encode_box(b"name", b" \t ");
+    let first = encode_box(b"name", b"First");
+    let second = encode_box(b"name", b"Second");
+    let mut udta_payload = empty;
+    udta_payload.extend(first);
+    udta_payload.extend(second);
+    let udta = encode_box(b"udta", &udta_payload);
+    let trak = encode_box(b"trak", &udta);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(trak));
+    let parent = atom::read_box_header(&mut s).unwrap();
+    let b = parse(&mut s, &parent, &dl()).unwrap();
+    assert_eq!(b.track_name.as_deref(), Some("First"));
+  }
+
+  #[test]
+  fn trak_udta_ignores_nested_and_unknown_names() {
+    let nested_name = encode_box(b"name", b"Nested");
+    let meta = encode_box(b"meta", &nested_name);
+    let unknown = encode_box(b"junk", b"Unknown");
+    let mut udta_payload = meta;
+    udta_payload.extend(unknown);
+    let udta = encode_box(b"udta", &udta_payload);
+    let trak = encode_box(b"trak", &udta);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(trak));
+    let parent = atom::read_box_header(&mut s).unwrap();
+    let b = parse(&mut s, &parent, &dl()).unwrap();
+    assert!(b.track_name.is_none());
   }
 
   #[test]

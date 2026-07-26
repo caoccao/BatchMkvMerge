@@ -139,14 +139,22 @@ struct Entry {
   hint: FileTypeHint,
 }
 
-/// Full extension table.  Source-of-truth file is
-/// `mkvtoolnix/src/common/file_types.cpp:28-66`.  Keep this list sorted by
-/// extension for easier maintenance.
+/// Full extension table. The primary source is
+/// `mkvtoolnix/src/common/file_types.cpp::get_supported`; `.sub` is the one
+/// additional alias accepted directly by `vobsub_reader_c::probe_file`.
+/// Ambiguous entries retain `file_type_e` enum order because upstream returns
+/// them from a `std::set` before running extension-hinted probes.
 ///
 /// Note: extensions are stored *without* leading dot, lower-case.  Comparisons
 /// are case-insensitive (see [`hints_for_extension`]).
 #[rustfmt::skip]
 const TABLE: &[Entry] = &[
+    // ALAC uses `file_type_e::is_unknown` (enum value 0), so its entries
+    // precede real reader hints for ambiguous extensions. No extension prober
+    // is registered for it; CAF is still detected from its magic bytes.
+    Entry { ext: "caf",     hint: FileTypeHint::Alac },
+    Entry { ext: "m4a",     hint: FileTypeHint::Alac },
+    Entry { ext: "mp4",     hint: FileTypeHint::Alac },
     // Dolby Digital / Dolby Digital Plus (AC-3, E-AC-3)
     Entry { ext: "ac3",     hint: FileTypeHint::Ac3 },
     Entry { ext: "eac3",    hint: FileTypeHint::Ac3 },
@@ -163,10 +171,6 @@ const TABLE: &[Entry] = &[
     Entry { ext: "x264",    hint: FileTypeHint::AvcEs },
     // AVI
     Entry { ext: "avi",     hint: FileTypeHint::Avi },
-    // ALAC (file_types.cpp:32) — shares extensions with AAC/MP4.
-    Entry { ext: "caf",     hint: FileTypeHint::Alac },
-    Entry { ext: "m4a",     hint: FileTypeHint::Alac },
-    Entry { ext: "mp4",     hint: FileTypeHint::Alac },
     // Dirac
     Entry { ext: "drc",     hint: FileTypeHint::Dirac },
     // Dolby TrueHD
@@ -202,6 +206,12 @@ const TABLE: &[Entry] = &[
     // MPEG-1/2 Audio Layer II/III
     Entry { ext: "mp2",     hint: FileTypeHint::Mp3 },
     Entry { ext: "mp3",     hint: FileTypeHint::Mp3 },
+    // MPEG-1/2 video elementary streams. `by_extension()` returns a std::set
+    // ordered by `file_type_e`, where mpeg_es precedes mpeg_ps. Keep these
+    // overlapping m2v/mpv entries before the program-stream hints. PARSER-404.
+    Entry { ext: "m1v",     hint: FileTypeHint::MpegEs },
+    Entry { ext: "m2v",     hint: FileTypeHint::MpegEs },
+    Entry { ext: "mpv",     hint: FileTypeHint::MpegEs },
     // MPEG program streams
     Entry { ext: "mpg",     hint: FileTypeHint::MpegPs },
     Entry { ext: "mpeg",    hint: FileTypeHint::MpegPs },
@@ -214,10 +224,6 @@ const TABLE: &[Entry] = &[
     Entry { ext: "ts",      hint: FileTypeHint::MpegTs },
     Entry { ext: "m2ts",    hint: FileTypeHint::MpegTs },
     Entry { ext: "mts",     hint: FileTypeHint::MpegTs },
-    // MPEG-1/2 video elementary streams (file_types.cpp:47 re-uses m2v/mpv).
-    Entry { ext: "m1v",     hint: FileTypeHint::MpegEs },
-    Entry { ext: "m2v",     hint: FileTypeHint::MpegEs },
-    Entry { ext: "mpv",     hint: FileTypeHint::MpegEs },
     // Blu-ray playlist (mkvtoolnix recognises but does not parse standalone).
     Entry { ext: "mpls",    hint: FileTypeHint::BlurayPlaylist },
     // Matroska
@@ -258,6 +264,10 @@ const TABLE: &[Entry] = &[
     // VobButton / VobSub
     Entry { ext: "btn",     hint: FileTypeHint::VobButton },
     Entry { ext: "idx",     hint: FileTypeHint::VobSub },
+    // The advertised type list only names `.idx`, but r_vobsub.cpp accepts a
+    // `.sub` path and resolves its sibling `.idx`. Keep that implemented path
+    // reachable through the app-level accept list. PARSER-405.
+    Entry { ext: "sub",     hint: FileTypeHint::VobSub },
     // WAV / WAVPACK
     Entry { ext: "wav",     hint: FileTypeHint::Wav },
     Entry { ext: "wv",      hint: FileTypeHint::Wavpack4 },
@@ -331,9 +341,7 @@ mod tests {
   #[test]
   fn ambiguous_mp4_returns_all_candidates() {
     let hints = hints_for_extension("mp4");
-    assert!(hints.contains(&FileTypeHint::Aac));
-    assert!(hints.contains(&FileTypeHint::Alac));
-    assert!(hints.contains(&FileTypeHint::QtMp4));
+    assert_eq!(hints, vec![FileTypeHint::Alac, FileTypeHint::Aac, FileTypeHint::QtMp4]);
   }
 
   #[test]
@@ -341,6 +349,23 @@ mod tests {
     let hints = hints_for_extension("ogg");
     assert!(hints.contains(&FileTypeHint::Ogm));
     assert!(hints.contains(&FileTypeHint::Flac));
+  }
+
+  #[test]
+  fn ambiguous_mpeg_extensions_follow_upstream_enum_order() {
+    for ext in ["m2v", "mpv"] {
+      assert_eq!(
+        hints_for_extension(ext),
+        vec![FileTypeHint::MpegEs, FileTypeHint::MpegPs],
+        "{ext} should try MPEG ES before MPEG PS",
+      );
+    }
+  }
+
+  #[test]
+  fn vobsub_data_extension_is_accepted() {
+    assert_eq!(hints_for_extension("sub"), vec![FileTypeHint::VobSub]);
+    assert!(is_supported_media_path("movie.sub"));
   }
 
   #[test]
@@ -368,7 +393,7 @@ mod tests {
     // Spot-check that the historic mkv-only restriction has been broadened.
     for ext in [
       "mkv", "webm", "mp4", "mov", "avi", "mp3", "aac", "flac", "wav", "ts", "m2ts", "h264", "265", "av1", "srt",
-      "ass", "sup", "vtt", "ogg", "opus", "thd", "dts", "rm", "vc1", "idx", "ivf",
+      "ass", "sup", "vtt", "ogg", "opus", "thd", "dts", "rm", "vc1", "idx", "sub", "ivf",
     ] {
       assert!(is_supported_media_extension(ext), "{ext} should be supported");
     }

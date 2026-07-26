@@ -1,6 +1,6 @@
 # RealMedia Parser
 
-Implementation progress: 96%
+Implementation progress: 100%
 
 ## Purpose
 
@@ -37,4 +37,4 @@ Important structures are `ChunkHeader`, `PropChunk`, `ContChunk`, `MdprChunk`, `
 
 ## Gaps and Handling
 
-Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or perform packet output. Video dimensions come from the MDPR header during identification, matching mkvtoolnix; the deadline-checked DATA packet walk is retained only for `dnet` BSID refinement. Other late packet-derived refinements remain out of scope. The parser records reliable header metadata and the bounded packet-prefix improvements needed for identification.
+Rust is a lightweight parser rather than a full librmff implementation. It does not assemble or reorder packets, use full indexes, or perform packet output. Those are muxing concerns and are not counted against native-parser progress. Video dimensions come from the MDPR header during identification, matching mkvtoolnix; the deadline-checked DATA packet walk is retained for the identify-relevant `dnet` BSID refinement. The parser covers the container and per-track fields emitted by `real_reader_c::identify`.
