@@ -90,6 +90,10 @@
     "cancelAll": "Cancel All",
     "resumeAll": "Resume All",
     "clearCompleted": "Clear Completed",
+    "systemNotification": "System Notification",
+    "systemNotificationTooltip": "Show system notification when complete.",
+    "topmostNotification": "Topmost Notification",
+    "topmostNotificationTooltip": "Show topmost notification when complete",
     "header": {
       "filePath": "File Path",
       "status": "Status",

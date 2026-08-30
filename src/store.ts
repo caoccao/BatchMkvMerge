@@ -138,6 +138,8 @@ interface MkvStore {
   /** Id of the currently active card (file path or group key); null = none. */
   activeCard: string | null;
   notification: Notification | null;
+  systemNotificationEnabled: boolean;
+  topmostNotificationEnabled: boolean;
   addFiles: (paths: string[]) => void;
   removeFile: (path: string) => void;
   clearFiles: () => void;
@@ -219,6 +221,8 @@ interface MkvStore {
   setGlobalOutputDir: (dir: string) => void;
   setBetterMediaInfoAvailable: (value: boolean) => void;
   setActiveCard: (id: string | null) => void;
+  setSystemNotificationEnabled: (value: boolean) => void;
+  setTopmostNotificationEnabled: (value: boolean) => void;
   showNotification: (kind: NotificationKind, file: string, detail: string) => void;
   dismissNotification: () => void;
 }
@@ -246,6 +250,8 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   betterMediaInfoAvailable: false,
   activeCard: null,
   notification: null,
+  systemNotificationEnabled: false,
+  topmostNotificationEnabled: false,
   addFiles: (paths) =>
     set((state) => {
       const existing = new Set(state.files);
@@ -780,6 +786,10 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
   setBetterMediaInfoAvailable: (value) =>
     set({ betterMediaInfoAvailable: value }),
   setActiveCard: (id) => set({ activeCard: id }),
+  setSystemNotificationEnabled: (value) =>
+    set({ systemNotificationEnabled: value }),
+  setTopmostNotificationEnabled: (value) =>
+    set({ topmostNotificationEnabled: value }),
   showNotification: (kind, file, detail) =>
     set((state) => ({
       notification: {

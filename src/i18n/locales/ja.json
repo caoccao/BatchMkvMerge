@@ -90,6 +90,10 @@
     "cancelAll": "すべてキャンセル",
     "resumeAll": "すべて再開",
     "clearCompleted": "完了を消去",
+    "systemNotification": "システム通知",
+    "systemNotificationTooltip": "完了時にシステム通知を表示します。",
+    "topmostNotification": "最前面通知",
+    "topmostNotificationTooltip": "完了時に最前面の通知を表示します。",
     "header": {
       "filePath": "ファイルパス",
       "status": "状態",

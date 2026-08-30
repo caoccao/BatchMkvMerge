@@ -340,6 +340,13 @@ export interface MergeFinishedEvent {
   error: string | null;
 }
 
+export interface TopmostNotification {
+  title: string;
+  file: string;
+  detail: string;
+  closeLabel: string;
+}
+
 export function getDisplayModes(): DisplayMode[] {
   return [DisplayMode.Auto, DisplayMode.Light, DisplayMode.Dark];
 }

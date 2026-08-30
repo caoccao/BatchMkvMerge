@@ -90,6 +90,10 @@
     "cancelAll": "Cancelar todo",
     "resumeAll": "Reanudar todo",
     "clearCompleted": "Eliminar completados",
+    "systemNotification": "Notificación del sistema",
+    "systemNotificationTooltip": "Mostrar una notificación del sistema al finalizar.",
+    "topmostNotification": "Notificación en primer plano",
+    "topmostNotificationTooltip": "Mostrar una notificación en primer plano al finalizar.",
     "header": {
       "filePath": "Ruta del archivo",
       "status": "Estado",

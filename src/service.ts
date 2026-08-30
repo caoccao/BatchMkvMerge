@@ -23,6 +23,7 @@ import type {
   MergeSnapshot,
   MediaMetadata,
   MkvToolNixStatus,
+  TopmostNotification,
   UpdateCheckResult,
 } from "./protocol";
 
@@ -128,4 +129,20 @@ export async function getUpdateResult(): Promise<UpdateCheckResult | null> {
 
 export async function skipVersion(version: string): Promise<void> {
   return await invoke<void>("skip_version", { version });
+}
+
+export async function showTopmostNotification(
+  notification: TopmostNotification,
+): Promise<void> {
+  return await invoke<void>("show_topmost_notification", { notification });
+}
+
+export async function getTopmostNotification(): Promise<
+  TopmostNotification | null
+> {
+  return await invoke<TopmostNotification | null>("get_topmost_notification");
+}
+
+export async function closeTopmostNotification(): Promise<void> {
+  return await invoke<void>("close_topmost_notification");
 }

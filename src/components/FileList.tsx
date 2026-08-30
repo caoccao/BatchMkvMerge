@@ -20,13 +20,18 @@ import { Box } from "@mui/material";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
+import { sendSystemCompletionNotification } from "../completion-notifications";
 import { formatHMS, getParentDir } from "../merge";
 import { buildMergeUnits, combineUnitTracks } from "../file-tree";
 import { mediaTrackCounts } from "../media-metadata";
 import type { MediaTrack } from "../media-metadata";
 import type { MergeFinishedEvent } from "../protocol";
 import { GroupMode, QueueItemStatus } from "../protocol";
-import { getMergeStatus, getMediaFiles } from "../service";
+import {
+  getMergeStatus,
+  getMediaFiles,
+  showTopmostNotification,
+} from "../service";
 import { useMkvStore } from "../store";
 import { GroupCard } from "./GroupCard";
 import { MkvFileCard } from "./MkvFileCard";
@@ -171,11 +176,32 @@ export default function FileList() {
         recordFinishedOutcome(file, outcome, error);
         if (outcome === QueueItemStatus.Completed) {
           const elapsedMs = startedAt !== null ? Date.now() - startedAt : 0;
+          const detail = t("notification.completedIn", {
+            elapsed: formatHMS(elapsedMs),
+          });
           showNotification(
             "success",
             file,
-            t("notification.completedIn", { elapsed: formatHMS(elapsedMs) }),
+            detail,
           );
+          const state = useMkvStore.getState();
+          const title = t("merge.mergeComplete");
+          if (state.systemNotificationEnabled) {
+            sendSystemCompletionNotification(title, file, detail).catch(
+              (err) =>
+                console.error("Failed to show system notification", err),
+            );
+          }
+          if (state.topmostNotificationEnabled) {
+            showTopmostNotification({
+              title,
+              file,
+              detail,
+              closeLabel: t("tabs.close"),
+            }).catch((err) =>
+              console.error("Failed to show topmost notification", err),
+            );
+          }
         } else if (outcome === QueueItemStatus.Failed) {
           showNotification(
             "error",

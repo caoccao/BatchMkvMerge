@@ -24,44 +24,24 @@ use crate::media_metadata;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::probe::extension_hint::is_supported_media_path;
 use crate::media_metadata::{ParseError, ParseOptions};
-use crate::protocol::{About, BetterMediaInfoStatus, UpdateCheckResult};
+use crate::merge;
+use crate::mkvtoolnix;
+use crate::notification::{NotificationState, TopmostNotification};
+use crate::protocol::{
+  About, BetterMediaInfoStatus, MediaMetadataErrorPayload, MergeSnapshot, MkvToolNixStatus, UpdateCheckResult,
+  UpdateCheckState,
+};
 
-pub async fn get_about() -> Result<About> {
-  Ok(About {
-    app_version: get_app_version().to_owned(),
-  })
-}
-
-pub async fn get_config() -> Result<config::Config> {
-  Ok(config::get_config())
-}
-
-pub async fn set_config(config: config::Config) -> Result<config::Config> {
-  config::set_config(config)?;
-  Ok(config::get_config())
-}
-
-pub fn get_app_version() -> &'static str {
-  env!("CARGO_PKG_VERSION")
-}
-
-pub fn is_newer_version(latest: &str, current: &str) -> bool {
-  let latest = latest.trim_start_matches('v');
-  let current = current.trim_start_matches('v');
-  let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-  let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-  let len = latest_parts.len().max(current_parts.len());
-  for i in 0..len {
-    let l = latest_parts.get(i).copied().unwrap_or(0);
-    let c = current_parts.get(i).copied().unwrap_or(0);
-    if l > c {
-      return true;
-    }
-    if l < c {
-      return false;
-    }
+fn better_media_info_exe_name() -> &'static str {
+  if cfg!(target_os = "windows") {
+    "BetterMediaInfo.exe"
+  } else {
+    "BetterMediaInfo"
   }
-  false
+}
+
+pub fn cancel_merge(file: String) -> Result<()> {
+  merge::cancel(file)
 }
 
 pub fn check_for_updates() -> Result<UpdateCheckResult> {
@@ -91,105 +71,6 @@ pub fn check_for_updates() -> Result<UpdateCheckResult> {
   })
 }
 
-pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
-  let mut result: Vec<String> = Vec::new();
-  for input in paths {
-    let path = Path::new(input.as_str());
-    if !path.exists() {
-      continue;
-    }
-    if path.is_dir() {
-      let mut entries: Vec<PathBuf> = path
-        .read_dir()
-        .map_err(anyhow::Error::msg)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && is_supported_media_path(p))
-        .collect();
-      entries.sort();
-      for p in entries {
-        if let Some(s) = p.to_str() {
-          result.push(s.to_owned());
-        }
-      }
-    } else if path.is_file() && is_supported_media_path(path) {
-      result.push(input);
-    }
-  }
-  Ok(result)
-}
-
-/// Resolve the file's media metadata using the native parser. Extracted as a
-/// plain function (no `#[tauri::command]`) so unit tests can exercise it
-/// without spinning up Tauri.
-pub fn read_media_metadata(file: String, options: ParseOptions) -> Result<MediaMetadata, ParseError> {
-  media_metadata::parse(Path::new(&file), options)
-}
-
-/// Build the per-invocation [`ParseOptions`] from the persisted config. The
-/// persisted setting **wins** over the legacy `BMM_PARSER_BUDGET_MS` env
-/// override; the env var is only consulted when the user has not pinned a
-/// value through Settings (i.e. when `parser.timeoutMs` matches the default).
-/// See [[feedback-parser-timeout]].
-pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
-  let timeout_ms = if cfg.parser.timeout_ms == config::ConfigParser::DEFAULT_TIMEOUT_MS {
-    std::env::var("BMM_PARSER_BUDGET_MS")
-      .ok()
-      .and_then(|v| v.parse::<u64>().ok())
-      .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
-  } else {
-    cfg.parser.effective_timeout_ms()
-  };
-  ParseOptions {
-    timeout_ms,
-    subtitle_charset: cfg.parser.subtitle_charset.clone(),
-    ..ParseOptions::default()
-  }
-}
-
-/// Resolve a non-colliding merge output path: `<output_dir>/<stem>.mkv`,
-/// appending " (1)", " (2)", … when the candidate already exists.  Merging in
-/// place collides on the base name (it is the source file), so the increment
-/// kicks in automatically.
-pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
-  let dir = std::path::Path::new(&output_dir);
-  let stem = std::path::Path::new(&source_file)
-    .file_stem()
-    .and_then(|s| s.to_str())
-    .unwrap_or("output");
-  let mut counter: u32 = 0;
-  loop {
-    let name = if counter == 0 {
-      format!("{stem}.mkv")
-    } else {
-      format!("{stem} ({counter}).mkv")
-    };
-    let candidate = dir.join(&name);
-    if !candidate.exists() {
-      return candidate.to_string_lossy().into_owned();
-    }
-    counter += 1;
-  }
-}
-
-/// Resolve a user-set output-path override for a single-root card. When the
-/// override points at a directory (it exists as one, or ends with a path
-/// separator), the input file's original name is appended verbatim —
-/// `<override_dir>/<source file name>`, with NO " (1)" dedup, so the original
-/// name is preferred. Otherwise the override already names a file and is used
-/// as-is.
-pub fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
-  let path = std::path::Path::new(&output_path);
-  let looks_like_dir = path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
-  if !looks_like_dir {
-    return output_path;
-  }
-  let name = std::path::Path::new(&source_file)
-    .file_name()
-    .and_then(|s| s.to_str())
-    .unwrap_or("output.mkv");
-  path.join(name).to_string_lossy().into_owned()
-}
-
 pub async fn check_output_path_writable(path: String) -> Result<bool> {
   let mut current = PathBuf::from(&path);
   loop {
@@ -215,60 +96,8 @@ pub async fn check_output_path_writable(path: String) -> Result<bool> {
   }
 }
 
-/// Whether the exact directory `path` already exists. Used by the output-path
-/// dialog to warn that a non-existent path will be created at merge time.
-pub async fn output_path_exists(path: String) -> Result<bool> {
-  Ok(Path::new(&path).is_dir())
-}
-
-fn better_media_info_exe_name() -> &'static str {
-  if cfg!(target_os = "windows") {
-    "BetterMediaInfo.exe"
-  } else {
-    "BetterMediaInfo"
-  }
-}
-
-pub fn find_running_process_dir(exe_name: &str) -> Option<PathBuf> {
-  let sys = sysinfo::System::new_all();
-  for process in sys.processes().values() {
-    let name = process.name().to_string_lossy();
-    if !name.eq_ignore_ascii_case(exe_name) {
-      continue;
-    }
-    if let Some(exe) = process.exe() {
-      if let Some(parent) = exe.parent() {
-        return Some(parent.to_path_buf());
-      }
-    }
-  }
-  None
-}
-
-fn find_running_better_media_info_dir() -> Option<PathBuf> {
-  find_running_process_dir(better_media_info_exe_name())
-}
-
-fn find_better_media_info_dir(path: &Path) -> Option<PathBuf> {
-  if !path.exists() {
-    return None;
-  }
-  let exe_name = better_media_info_exe_name();
-  if path.is_file() {
-    let matches = path
-      .file_name()
-      .and_then(|n| n.to_str())
-      .map(|n| n.eq_ignore_ascii_case(exe_name))
-      .unwrap_or(false);
-    if matches {
-      return path.parent().map(|p| p.to_path_buf());
-    }
-    return None;
-  }
-  if path.is_dir() && path.join(exe_name).is_file() {
-    return Some(path.to_path_buf());
-  }
-  None
+pub fn close_topmost_notification(window: &tauri::WebviewWindow, state: &NotificationState) -> Result<()> {
+  crate::notification::close_topmost_notification(window, state)
 }
 
 fn common_better_media_info_dirs() -> Vec<PathBuf> {
@@ -302,6 +131,64 @@ fn common_better_media_info_dirs() -> Vec<PathBuf> {
   dirs
 }
 
+pub async fn detect_better_media_info(user_path: String, check_running: bool) -> Result<BetterMediaInfoStatus> {
+  if check_running {
+    if let Some(dir) = find_running_better_media_info_dir() {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: dir.to_string_lossy().to_string(),
+      });
+    }
+  }
+  let trimmed = user_path.trim();
+  if !trimmed.is_empty() {
+    if let Some(found) = find_better_media_info_dir(Path::new(trimmed)) {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: found.to_string_lossy().to_string(),
+      });
+    }
+  }
+  for dir in common_better_media_info_dirs() {
+    if let Some(found) = find_better_media_info_dir(&dir) {
+      return Ok(BetterMediaInfoStatus {
+        found: true,
+        path: found.to_string_lossy().to_string(),
+      });
+    }
+  }
+  Ok(BetterMediaInfoStatus {
+    found: false,
+    path: String::new(),
+  })
+}
+
+pub fn enqueue_merge(file: String, args: Vec<String>) -> Result<()> {
+  merge::enqueue(file, args)
+}
+
+fn find_better_media_info_dir(path: &Path) -> Option<PathBuf> {
+  if !path.exists() {
+    return None;
+  }
+  let exe_name = better_media_info_exe_name();
+  if path.is_file() {
+    let matches = path
+      .file_name()
+      .and_then(|n| n.to_str())
+      .map(|n| n.eq_ignore_ascii_case(exe_name))
+      .unwrap_or(false);
+    if matches {
+      return path.parent().map(|p| p.to_path_buf());
+    }
+    return None;
+  }
+  if path.is_dir() && path.join(exe_name).is_file() {
+    return Some(path.to_path_buf());
+  }
+  None
+}
+
 #[cfg(target_os = "macos")]
 fn find_macos_app_bundle(bin: &Path) -> Option<PathBuf> {
   // The Mach-O binary lives at `<bundle>.app/Contents/MacOS/BetterMediaInfo`,
@@ -315,6 +202,114 @@ fn find_macos_app_bundle(bin: &Path) -> Option<PathBuf> {
     current = current.parent()?;
   }
   None
+}
+
+fn find_running_better_media_info_dir() -> Option<PathBuf> {
+  find_running_process_dir(better_media_info_exe_name())
+}
+
+pub fn find_running_process_dir(exe_name: &str) -> Option<PathBuf> {
+  let sys = sysinfo::System::new_all();
+  for process in sys.processes().values() {
+    let name = process.name().to_string_lossy();
+    if !name.eq_ignore_ascii_case(exe_name) {
+      continue;
+    }
+    if let Some(exe) = process.exe() {
+      if let Some(parent) = exe.parent() {
+        return Some(parent.to_path_buf());
+      }
+    }
+  }
+  None
+}
+
+pub async fn get_about() -> Result<About> {
+  Ok(About {
+    app_version: get_app_version().to_owned(),
+  })
+}
+
+pub fn get_app_version() -> &'static str {
+  env!("CARGO_PKG_VERSION")
+}
+
+pub async fn get_config() -> Result<config::Config> {
+  Ok(config::get_config())
+}
+
+pub fn get_launch_args() -> Vec<String> {
+  std::env::args().skip(1).collect()
+}
+
+pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
+  let mut result: Vec<String> = Vec::new();
+  for input in paths {
+    let path = Path::new(input.as_str());
+    if !path.exists() {
+      continue;
+    }
+    if path.is_dir() {
+      let mut entries: Vec<PathBuf> = path
+        .read_dir()
+        .map_err(anyhow::Error::msg)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && is_supported_media_path(p))
+        .collect();
+      entries.sort();
+      for p in entries {
+        if let Some(s) = p.to_str() {
+          result.push(s.to_owned());
+        }
+      }
+    } else if path.is_file() && is_supported_media_path(path) {
+      result.push(input);
+    }
+  }
+  Ok(result)
+}
+
+pub async fn get_media_metadata(file: String) -> std::result::Result<MediaMetadata, MediaMetadataErrorPayload> {
+  let options = parser_options_from_config(&config::get_config());
+  tauri::async_runtime::spawn_blocking(move || read_media_metadata(file, options))
+    .await
+    .map_err(|join_err| MediaMetadataErrorPayload::internal(join_err.to_string()))?
+    .map_err(|err| MediaMetadataErrorPayload::from_parse_error(&err))
+}
+
+pub fn get_merge_status() -> MergeSnapshot {
+  merge::snapshot()
+}
+
+pub fn get_topmost_notification(state: &NotificationState) -> Result<Option<TopmostNotification>> {
+  crate::notification::get_topmost_notification(state)
+}
+
+pub fn get_update_result(state: &UpdateCheckState) -> Option<UpdateCheckResult> {
+  state.result.lock().unwrap().clone()
+}
+
+pub async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
+  mkvtoolnix::is_mkvtoolnix_found(path, check_running).await
+}
+
+pub fn is_newer_version(latest: &str, current: &str) -> bool {
+  let latest = latest.trim_start_matches('v');
+  let current = current.trim_start_matches('v');
+  let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
+  let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+  let len = latest_parts.len().max(current_parts.len());
+  for i in 0..len {
+    let l = latest_parts.get(i).copied().unwrap_or(0);
+    let c = current_parts.get(i).copied().unwrap_or(0);
+    if l > c {
+      return true;
+    }
+    if l < c {
+      return false;
+    }
+  }
+  false
 }
 
 pub async fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
@@ -367,36 +362,101 @@ pub async fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
   Ok(())
 }
 
-pub async fn detect_better_media_info(user_path: String, check_running: bool) -> Result<BetterMediaInfoStatus> {
-  if check_running {
-    if let Some(dir) = find_running_better_media_info_dir() {
-      return Ok(BetterMediaInfoStatus {
-        found: true,
-        path: dir.to_string_lossy().to_string(),
-      });
-    }
+/// Whether the exact directory `path` already exists. Used by the output-path
+/// dialog to warn that a non-existent path will be created at merge time.
+pub async fn output_path_exists(path: String) -> Result<bool> {
+  Ok(Path::new(&path).is_dir())
+}
+
+/// Build the per-invocation [`ParseOptions`] from the persisted config. The
+/// persisted setting **wins** over the legacy `BMM_PARSER_BUDGET_MS` env
+/// override; the env var is only consulted when the user has not pinned a
+/// value through Settings (i.e. when `parser.timeoutMs` matches the default).
+/// See [[feedback-parser-timeout]].
+pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
+  let timeout_ms = if cfg.parser.timeout_ms == config::ConfigParser::DEFAULT_TIMEOUT_MS {
+    std::env::var("BMM_PARSER_BUDGET_MS")
+      .ok()
+      .and_then(|v| v.parse::<u64>().ok())
+      .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
+  } else {
+    cfg.parser.effective_timeout_ms()
+  };
+  ParseOptions {
+    timeout_ms,
+    subtitle_charset: cfg.parser.subtitle_charset.clone(),
+    ..ParseOptions::default()
   }
-  let trimmed = user_path.trim();
-  if !trimmed.is_empty() {
-    if let Some(found) = find_better_media_info_dir(Path::new(trimmed)) {
-      return Ok(BetterMediaInfoStatus {
-        found: true,
-        path: found.to_string_lossy().to_string(),
-      });
+}
+
+/// Resolve the file's media metadata using the native parser. Extracted as a
+/// plain function (no `#[tauri::command]`) so unit tests can exercise it
+/// without spinning up Tauri.
+pub fn read_media_metadata(file: String, options: ParseOptions) -> Result<MediaMetadata, ParseError> {
+  media_metadata::parse(Path::new(&file), options)
+}
+
+/// Resolve a non-colliding merge output path: `<output_dir>/<stem>.mkv`,
+/// appending " (1)", " (2)", … when the candidate already exists.  Merging in
+/// place collides on the base name (it is the source file), so the increment
+/// kicks in automatically.
+pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
+  let dir = std::path::Path::new(&output_dir);
+  let stem = std::path::Path::new(&source_file)
+    .file_stem()
+    .and_then(|s| s.to_str())
+    .unwrap_or("output");
+  let mut counter: u32 = 0;
+  loop {
+    let name = if counter == 0 {
+      format!("{stem}.mkv")
+    } else {
+      format!("{stem} ({counter}).mkv")
+    };
+    let candidate = dir.join(&name);
+    if !candidate.exists() {
+      return candidate.to_string_lossy().into_owned();
     }
+    counter += 1;
   }
-  for dir in common_better_media_info_dirs() {
-    if let Some(found) = find_better_media_info_dir(&dir) {
-      return Ok(BetterMediaInfoStatus {
-        found: true,
-        path: found.to_string_lossy().to_string(),
-      });
-    }
+}
+
+/// Resolve a user-set output-path override for a single-root card. When the
+/// override points at a directory (it exists as one, or ends with a path
+/// separator), the input file's original name is appended verbatim —
+/// `<override_dir>/<source file name>`, with NO " (1)" dedup, so the original
+/// name is preferred. Otherwise the override already names a file and is used
+/// as-is.
+pub fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
+  let path = std::path::Path::new(&output_path);
+  let looks_like_dir = path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
+  if !looks_like_dir {
+    return output_path;
   }
-  Ok(BetterMediaInfoStatus {
-    found: false,
-    path: String::new(),
-  })
+  let name = std::path::Path::new(&source_file)
+    .file_name()
+    .and_then(|s| s.to_str())
+    .unwrap_or("output.mkv");
+  path.join(name).to_string_lossy().into_owned()
+}
+
+pub async fn set_config(config: config::Config) -> Result<config::Config> {
+  config::set_config(config)?;
+  Ok(config::get_config())
+}
+
+pub fn show_topmost_notification(
+  app: &tauri::AppHandle,
+  state: &NotificationState,
+  notification: TopmostNotification,
+) -> Result<()> {
+  crate::notification::show_topmost_notification(app, state, notification)
+}
+
+pub fn skip_version(version: String) -> Result<()> {
+  let mut config = config::get_config();
+  config.update.ignore_version = version;
+  config::set_config(config)
 }
 
 #[cfg(test)]
@@ -415,6 +475,43 @@ mod tests {
   static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
   #[test]
+  fn overridden_output_path_appends_source_name_for_existing_dir() {
+    let dir = std::env::temp_dir();
+    let out = resolve_overridden_output_path(dir.to_string_lossy().into_owned(), "/inputs/movie.mkv".to_owned());
+    // Original name appended verbatim — no " (1)" dedup.
+    let expected = dir.join("movie.mkv").to_string_lossy().into_owned();
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn overridden_output_path_appends_source_name_for_trailing_separator() {
+    // A non-existent path ending with a separator is treated as a directory.
+    let base = std::env::temp_dir().join("bmm_override_does_not_exist");
+    let with_sep = format!("{}{}", base.to_string_lossy(), std::path::MAIN_SEPARATOR);
+    let out = resolve_overridden_output_path(with_sep, "/inputs/movie.mkv".to_owned());
+    let expected = base.join("movie.mkv").to_string_lossy().into_owned();
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn overridden_output_path_keeps_explicit_file_name() {
+    // A path that names a file (not an existing dir, no trailing separator)
+    // is used verbatim.
+    let out = resolve_overridden_output_path(
+      "/nonexistent_dir_bmm/custom.mkv".to_owned(),
+      "/inputs/movie.mkv".to_owned(),
+    );
+    assert_eq!(out, "/nonexistent_dir_bmm/custom.mkv");
+  }
+
+  #[test]
+  fn parser_options_from_config_clamps_pinned_value() {
+    let cfg = cfg_with_timeout(1);
+    let opts = parser_options_from_config(&cfg);
+    assert_eq!(opts.timeout_ms, config::ConfigParser::MIN_TIMEOUT_MS);
+  }
+
+  #[test]
   fn parser_options_from_config_default_uses_default_timeout() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
@@ -423,13 +520,6 @@ mod tests {
     }
     let opts = parser_options_from_config(&cfg);
     assert_eq!(opts.timeout_ms, config::ConfigParser::DEFAULT_TIMEOUT_MS);
-  }
-
-  #[test]
-  fn parser_options_from_config_clamps_pinned_value() {
-    let cfg = cfg_with_timeout(1);
-    let opts = parser_options_from_config(&cfg);
-    assert_eq!(opts.timeout_ms, config::ConfigParser::MIN_TIMEOUT_MS);
   }
 
   #[test]
@@ -452,35 +542,5 @@ mod tests {
     let opts = ParseOptions::default();
     let err = read_media_metadata("this-file-does-not-exist-12345.mkv".to_owned(), opts).unwrap_err();
     assert!(matches!(err, ParseError::Io { .. }));
-  }
-
-  #[test]
-  fn overridden_output_path_keeps_explicit_file_name() {
-    // A path that names a file (not an existing dir, no trailing separator)
-    // is used verbatim.
-    let out = resolve_overridden_output_path(
-      "/nonexistent_dir_bmm/custom.mkv".to_owned(),
-      "/inputs/movie.mkv".to_owned(),
-    );
-    assert_eq!(out, "/nonexistent_dir_bmm/custom.mkv");
-  }
-
-  #[test]
-  fn overridden_output_path_appends_source_name_for_existing_dir() {
-    let dir = std::env::temp_dir();
-    let out = resolve_overridden_output_path(dir.to_string_lossy().into_owned(), "/inputs/movie.mkv".to_owned());
-    // Original name appended verbatim — no " (1)" dedup.
-    let expected = dir.join("movie.mkv").to_string_lossy().into_owned();
-    assert_eq!(out, expected);
-  }
-
-  #[test]
-  fn overridden_output_path_appends_source_name_for_trailing_separator() {
-    // A non-existent path ending with a separator is treated as a directory.
-    let base = std::env::temp_dir().join("bmm_override_does_not_exist");
-    let with_sep = format!("{}{}", base.to_string_lossy(), std::path::MAIN_SEPARATOR);
-    let out = resolve_overridden_output_path(with_sep, "/inputs/movie.mkv".to_owned());
-    let expected = base.join("movie.mkv").to_string_lossy().into_owned();
-    assert_eq!(out, expected);
   }
 }

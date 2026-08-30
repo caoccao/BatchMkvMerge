@@ -90,6 +90,10 @@
     "cancelAll": "全部取消",
     "resumeAll": "全部恢复",
     "clearCompleted": "清除已完成",
+    "systemNotification": "系统通知",
+    "systemNotificationTooltip": "完成时显示系统通知。",
+    "topmostNotification": "置顶通知",
+    "topmostNotificationTooltip": "完成时显示置顶通知。",
     "header": {
       "filePath": "文件路径",
       "status": "状态",

@@ -90,6 +90,10 @@
     "cancelAll": "Alle abbrechen",
     "resumeAll": "Alle fortsetzen",
     "clearCompleted": "Abgeschlossene löschen",
+    "systemNotification": "Systembenachrichtigung",
+    "systemNotificationTooltip": "Systembenachrichtigung nach Abschluss anzeigen.",
+    "topmostNotification": "Benachrichtigung im Vordergrund",
+    "topmostNotificationTooltip": "Benachrichtigung im Vordergrund nach Abschluss anzeigen.",
     "header": {
       "filePath": "Dateipfad",
       "status": "Status",

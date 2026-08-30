@@ -19,9 +19,32 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./i18n";
 import App from "./App";
+import { TopmostNotification } from "./components/TopmostNotification";
+
+enum AppView {
+  Main = "main",
+  Notification = "notification",
+}
+
+function getAppView(): AppView {
+  const value = new URLSearchParams(window.location.search).get("view");
+  switch (value) {
+    case AppView.Notification:
+      return AppView.Notification;
+    default:
+      return AppView.Main;
+  }
+}
+
+function renderAppView(view: AppView) {
+  switch (view) {
+    case AppView.Notification:
+      return <TopmostNotification />;
+    case AppView.Main:
+      return <App />;
+  }
+}
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <React.StrictMode>{renderAppView(getAppView())}</React.StrictMode>,
 );

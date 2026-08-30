@@ -90,6 +90,10 @@
     "cancelAll": "Interrompi tutto",
     "resumeAll": "Riprendi tutto",
     "clearCompleted": "Cancella completati",
+    "systemNotification": "Notifica di sistema",
+    "systemNotificationTooltip": "Mostra una notifica di sistema al termine.",
+    "topmostNotification": "Notifica in primo piano",
+    "topmostNotificationTooltip": "Mostra una notifica in primo piano al termine.",
     "header": {
       "filePath": "Percorso file",
       "status": "Stato",

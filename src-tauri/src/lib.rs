@@ -15,45 +15,57 @@
 *   limitations under the License.
 */
 
+mod application;
 mod config;
 mod constants;
 mod controller;
 pub mod media_metadata;
 mod merge;
 mod mkvtoolnix;
+mod notification;
 mod protocol;
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+mod window_state;
 
 use media_metadata::model::MediaMetadata;
 use protocol::{MediaMetadataErrorPayload, UpdateCheckResult, UpdateCheckState};
 
-static WINDOW_READY: AtomicBool = AtomicBool::new(false);
-
-const MIN_WINDOW_WIDTH: u32 = 600;
-const MIN_WINDOW_HEIGHT: u32 = 450;
-
-fn is_persistable_window_size(width: u32, height: u32) -> bool {
-  width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT
+#[tauri::command]
+async fn cancel_merge(file: String) -> Result<(), String> {
+  controller::cancel_merge(file).map_err(convert_error)
 }
 
-fn sanitize_window_size(width: u32, height: u32) -> (u32, u32) {
-  (width.max(MIN_WINDOW_WIDTH), height.max(MIN_WINDOW_HEIGHT))
+#[tauri::command]
+async fn check_output_path_writable(path: String) -> Result<bool, String> {
+  controller::check_output_path_writable(path)
+    .await
+    .map_err(convert_error)
 }
 
-#[cfg(target_os = "linux")]
-fn configure_linux_webkit_renderer() {
-  if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-    // SAFETY: This runs during process startup before Tauri or Tokio spawn threads.
-    unsafe {
-      std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-  }
+#[tauri::command]
+fn close_topmost_notification(
+  window: tauri::WebviewWindow,
+  state: tauri::State<'_, notification::NotificationState>,
+) -> Result<(), String> {
+  controller::close_topmost_notification(&window, &state).map_err(convert_error)
 }
 
 fn convert_error(error: anyhow::Error) -> String {
   error.to_string()
+}
+
+#[tauri::command]
+async fn detect_better_media_info(
+  path: String,
+  check_running: bool,
+) -> Result<protocol::BetterMediaInfoStatus, String> {
+  controller::detect_better_media_info(path, check_running)
+    .await
+    .map_err(convert_error)
+}
+
+#[tauri::command]
+async fn enqueue_merge(file: String, args: Vec<String>) -> Result<(), String> {
+  controller::enqueue_merge(file, args).map_err(convert_error)
 }
 
 #[tauri::command]
@@ -67,56 +79,47 @@ async fn get_config() -> Result<config::Config, String> {
 }
 
 #[tauri::command]
+fn get_launch_args() -> Vec<String> {
+  controller::get_launch_args()
+}
+
+#[tauri::command]
 async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>, String> {
   controller::get_media_files(paths).await.map_err(convert_error)
 }
 
 #[tauri::command]
-fn get_launch_args() -> Vec<String> {
-  std::env::args().skip(1).collect()
-}
-
-#[tauri::command]
 async fn get_media_metadata(file: String) -> Result<MediaMetadata, MediaMetadataErrorPayload> {
-  let opts = controller::parser_options_from_config(&config::get_config());
-  tauri::async_runtime::spawn_blocking(move || controller::read_media_metadata(file, opts))
-    .await
-    .map_err(|join_err| MediaMetadataErrorPayload::internal(join_err.to_string()))?
-    .map_err(|err| MediaMetadataErrorPayload::from_parse_error(&err))
-}
-
-#[tauri::command]
-async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<protocol::MkvToolNixStatus, String> {
-  mkvtoolnix::is_mkvtoolnix_found(path, check_running)
-    .await
-    .map_err(convert_error)
-}
-
-#[tauri::command]
-async fn enqueue_merge(file: String, args: Vec<String>) -> Result<(), String> {
-  merge::enqueue(file, args).map_err(convert_error)
-}
-
-#[tauri::command]
-async fn cancel_merge(file: String) -> Result<(), String> {
-  merge::cancel(file).map_err(convert_error)
+  controller::get_media_metadata(file).await
 }
 
 #[tauri::command]
 async fn get_merge_status() -> Result<protocol::MergeSnapshot, String> {
-  Ok(merge::snapshot())
+  Ok(controller::get_merge_status())
 }
 
 #[tauri::command]
-async fn set_config(config: config::Config) -> Result<config::Config, String> {
-  controller::set_config(config).await.map_err(convert_error)
+fn get_topmost_notification(
+  state: tauri::State<'_, notification::NotificationState>,
+) -> Result<Option<notification::TopmostNotification>, String> {
+  controller::get_topmost_notification(&state).map_err(convert_error)
 }
 
 #[tauri::command]
-async fn check_output_path_writable(path: String) -> Result<bool, String> {
-  controller::check_output_path_writable(path)
+fn get_update_result(state: tauri::State<'_, UpdateCheckState>) -> Option<UpdateCheckResult> {
+  controller::get_update_result(&state)
+}
+
+#[tauri::command]
+async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<protocol::MkvToolNixStatus, String> {
+  controller::is_mkvtoolnix_found(path, check_running)
     .await
     .map_err(convert_error)
+}
+
+#[tauri::command]
+async fn launch_better_media_info(paths: Vec<String>) -> Result<(), String> {
+  controller::launch_better_media_info(paths).await.map_err(convert_error)
 }
 
 #[tauri::command]
@@ -134,224 +137,29 @@ fn resolve_overridden_output_path(output_path: String, source_file: String) -> S
   controller::resolve_overridden_output_path(output_path, source_file)
 }
 
-#[tauri::command]
-async fn detect_better_media_info(
-  path: String,
-  check_running: bool,
-) -> Result<protocol::BetterMediaInfoStatus, String> {
-  controller::detect_better_media_info(path, check_running)
-    .await
-    .map_err(convert_error)
-}
-
-#[tauri::command]
-async fn launch_better_media_info(paths: Vec<String>) -> Result<(), String> {
-  controller::launch_better_media_info(paths).await.map_err(convert_error)
-}
-
-#[tauri::command]
-fn get_update_result(state: tauri::State<'_, UpdateCheckState>) -> Option<UpdateCheckResult> {
-  state.result.lock().unwrap().clone()
-}
-
-#[tauri::command]
-fn skip_version(version: String) -> Result<(), String> {
-  let mut cfg = config::get_config();
-  cfg.update.ignore_version = version;
-  config::set_config(cfg).map_err(convert_error)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  #[cfg(target_os = "linux")]
-  configure_linux_webkit_renderer();
-
-  let runtime = tokio::runtime::Builder::new_multi_thread()
-    .worker_threads(4)
-    .enable_all()
-    .build()
-    .expect("Failed to build Tokio runtime");
-  tauri::async_runtime::set(runtime.handle().clone());
-
-  tauri::Builder::default()
-    .manage(UpdateCheckState {
-      result: Arc::new(Mutex::new(None)),
-    })
-    .plugin(tauri_plugin_clipboard_manager::init())
-    .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![
-      cancel_merge,
-      check_output_path_writable,
-      detect_better_media_info,
-      enqueue_merge,
-      output_path_exists,
-      get_about,
-      get_config,
-      get_merge_status,
-      get_launch_args,
-      get_media_files,
-      get_media_metadata,
-      get_update_result,
-      is_mkvtoolnix_found,
-      launch_better_media_info,
-      resolve_merge_output_path,
-      resolve_overridden_output_path,
-      set_config,
-      skip_version
-    ])
-    .setup(|app| {
-      use tauri::Manager;
-      merge::init_app_handle(app.handle().clone());
-      let window = app.get_webview_window("main").unwrap();
-      window.set_title(&format!("BatchMkvMerge v{}", env!("CARGO_PKG_VERSION")))?;
-
-      let mut cfg = config::get_config();
-      let (window_width, window_height) = sanitize_window_size(cfg.window.size.width, cfg.window.size.height);
-      let should_save_sanitized_size = cfg.window.size.width != window_width || cfg.window.size.height != window_height;
-      cfg.window.size.width = window_width;
-      cfg.window.size.height = window_height;
-      let _ = window.set_size(tauri::LogicalSize::new(window_width, window_height));
-      if cfg.window.position.x < 0 || cfg.window.position.y < 0 {
-        let _ = window.center();
-      } else {
-        let _ = window.set_position(tauri::LogicalPosition::new(
-          cfg.window.position.x,
-          cfg.window.position.y,
-        ));
-      }
-      if should_save_sanitized_size {
-        let _ = config::set_config(cfg.clone());
-      }
-
-      let _ = window.show();
-      let _ = window.set_focus();
-
-      let update_state = app.state::<UpdateCheckState>();
-      let result_arc = update_state.result.clone();
-      let update_cfg = config::get_config();
-      let interval_seconds: i64 = match update_cfg.update.check_interval {
-        config::UpdateCheckInterval::Daily => 86_400,
-        config::UpdateCheckInterval::Weekly => 604_800,
-        config::UpdateCheckInterval::Monthly => 2_592_000,
-      };
-      let now_seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-      if update_cfg.update.last_checked == 0 || now_seconds - update_cfg.update.last_checked > interval_seconds {
-        std::thread::spawn(move || {
-          let check_result = std::panic::catch_unwind(controller::check_for_updates).unwrap_or_else(|_| {
-            log::error!("Update check panicked");
-            Err(anyhow::anyhow!("Update check panicked"))
-          });
-          match check_result {
-            Ok(result) => {
-              let mut updated_config = config::get_config();
-              updated_config.update.last_checked = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-              if let Some(ref version) = result.latest_version {
-                updated_config.update.last_version = version.clone();
-              }
-              let _ = config::set_config(updated_config.clone());
-              let final_result = if result.has_update
-                && result.latest_version.as_deref() == Some(updated_config.update.ignore_version.as_str())
-                && !updated_config.update.ignore_version.is_empty()
-              {
-                UpdateCheckResult {
-                  has_update: false,
-                  latest_version: None,
-                }
-              } else {
-                result
-              };
-              *result_arc.lock().unwrap() = Some(final_result);
-            }
-            Err(e) => {
-              log::warn!("Update check failed: {}", e);
-              *result_arc.lock().unwrap() = Some(UpdateCheckResult {
-                has_update: false,
-                latest_version: None,
-              });
-            }
-          }
-        });
-      } else if !update_cfg.update.last_version.is_empty()
-        && controller::is_newer_version(&update_cfg.update.last_version, controller::get_app_version())
-        && update_cfg.update.last_version != update_cfg.update.ignore_version
-      {
-        *result_arc.lock().unwrap() = Some(UpdateCheckResult {
-          has_update: true,
-          latest_version: Some(update_cfg.update.last_version.clone()),
-        });
-      } else {
-        *result_arc.lock().unwrap() = Some(UpdateCheckResult {
-          has_update: false,
-          latest_version: None,
-        });
-      }
-
-      WINDOW_READY.store(true, Ordering::SeqCst);
-      Ok(())
-    })
-    .on_window_event(|window, event| {
-      if !WINDOW_READY.load(Ordering::SeqCst) || window.label() != "main" {
-        return;
-      }
-      match event {
-        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-          if window.is_minimized().unwrap_or(false) {
-            return;
-          }
-          let Ok(scale) = window.scale_factor() else {
-            return;
-          };
-          let Ok(pos) = window.outer_position() else {
-            return;
-          };
-          let Ok(size) = window.inner_size() else {
-            return;
-          };
-          let logical_pos: tauri::LogicalPosition<i32> = pos.to_logical(scale);
-          let logical_size: tauri::LogicalSize<u32> = size.to_logical(scale);
-          if !is_persistable_window_size(logical_size.width, logical_size.height) {
-            return;
-          }
-          let mut cfg = config::get_config();
-          cfg.window.position.x = logical_pos.x;
-          cfg.window.position.y = logical_pos.y;
-          cfg.window.size.width = logical_size.width;
-          cfg.window.size.height = logical_size.height;
-          if let Err(err) = config::set_config(cfg) {
-            log::error!("Couldn't save window state because {}", err);
-          }
-        }
-        _ => {}
-      }
-    })
+  let _runtime: tokio::runtime::Runtime = application::configure_runtime();
+  application::builder()
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
+#[tauri::command]
+async fn set_config(config: config::Config) -> Result<config::Config, String> {
+  controller::set_config(config).await.map_err(convert_error)
+}
 
-  #[test]
-  fn persistable_window_size_respects_configured_minimums() {
-    assert!(is_persistable_window_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
-    assert!(!is_persistable_window_size(MIN_WINDOW_WIDTH - 1, MIN_WINDOW_HEIGHT));
-    assert!(!is_persistable_window_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT - 1));
-  }
+#[tauri::command]
+async fn show_topmost_notification(
+  app: tauri::AppHandle,
+  state: tauri::State<'_, notification::NotificationState>,
+  notification: notification::TopmostNotification,
+) -> Result<(), String> {
+  controller::show_topmost_notification(&app, &state, notification).map_err(convert_error)
+}
 
-  #[test]
-  fn sanitize_window_size_clamps_poisoned_config_values() {
-    assert_eq!(sanitize_window_size(1, 2), (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
-    assert_eq!(
-      sanitize_window_size(MIN_WINDOW_WIDTH + 100, MIN_WINDOW_HEIGHT + 100),
-      (MIN_WINDOW_WIDTH + 100, MIN_WINDOW_HEIGHT + 100)
-    );
-  }
+#[tauri::command]
+fn skip_version(version: String) -> Result<(), String> {
+  controller::skip_version(version).map_err(convert_error)
 }

@@ -32,6 +32,8 @@ import {
 } from "@mui/material";
 import CancelIcon from "@mui/icons-material/Cancel";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
+import PictureInPictureAltOutlinedIcon from "@mui/icons-material/PictureInPictureAltOutlined";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { useTranslation } from "react-i18next";
 import {
@@ -40,6 +42,7 @@ import {
   enqueueUnitSelection,
   getActiveProfile,
 } from "../actions/mergeActions";
+import { requestSystemNotificationPermission } from "../completion-notifications";
 import { buildMergeUnits } from "../file-tree";
 import { formatHMS } from "../merge";
 import type { QueueItem } from "../store";
@@ -100,11 +103,37 @@ export default function Queue() {
   const queueItems = useMkvStore((s) => s.queueItems);
   const queueOrder = useMkvStore((s) => s.queueOrder);
   const clearCompletedInDrive = useMkvStore((s) => s.clearCompletedInDrive);
+  const systemNotificationEnabled = useMkvStore(
+    (s) => s.systemNotificationEnabled,
+  );
+  const topmostNotificationEnabled = useMkvStore(
+    (s) => s.topmostNotificationEnabled,
+  );
+  const setSystemNotificationEnabled = useMkvStore(
+    (s) => s.setSystemNotificationEnabled,
+  );
+  const setTopmostNotificationEnabled = useMkvStore(
+    (s) => s.setTopmostNotificationEnabled,
+  );
 
   const handleCancel = async (file: string) => {
     await cancelMerge(file, (err) => {
       console.error("Failed to cancel merge", err);
     });
+  };
+  const handleToggleSystemNotification = async () => {
+    if (systemNotificationEnabled) {
+      setSystemNotificationEnabled(false);
+      return;
+    }
+    try {
+      const granted = await requestSystemNotificationPermission();
+      if (granted) {
+        setSystemNotificationEnabled(true);
+      }
+    } catch (err) {
+      console.error("Failed to request system notification permission", err);
+    }
   };
   const [now, setNow] = useState(() => Date.now());
 
@@ -198,6 +227,32 @@ export default function Queue() {
           <CardHeader
             action={
               <>
+                <Tooltip title={t("queue.systemNotificationTooltip")}>
+                  <IconButton
+                    size="small"
+                    color={systemNotificationEnabled ? "primary" : "default"}
+                    aria-label={t("queue.systemNotification")}
+                    aria-pressed={systemNotificationEnabled}
+                    onClick={handleToggleSystemNotification}
+                  >
+                    <NotificationsOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={t("queue.topmostNotificationTooltip")}>
+                  <IconButton
+                    size="small"
+                    color={topmostNotificationEnabled ? "primary" : "default"}
+                    aria-label={t("queue.topmostNotification")}
+                    aria-pressed={topmostNotificationEnabled}
+                    onClick={() =>
+                      setTopmostNotificationEnabled(
+                        !topmostNotificationEnabled,
+                      )
+                    }
+                  >
+                    <PictureInPictureAltOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <Tooltip title={t("queue.resumeAll")}>
                   <span>
                     <IconButton
