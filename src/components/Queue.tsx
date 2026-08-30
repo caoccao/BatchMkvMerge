@@ -158,10 +158,12 @@ export default function Queue() {
 
   const statusLabel = (status: QueueItemStatus) =>
     t(`queue.status.${status.toLowerCase()}`);
+  const visibleGroups: [string, QueueItem[]][] =
+    groups.length === 0 ? [["", []]] : groups;
 
   return (
     <Stack spacing={2} sx={{ p: 1 }}>
-      {groups.map(([drive, items]) => {
+      {visibleGroups.map(([drive, items]) => {
         const hasCompleted = items.some(
           (i) =>
             i.status === QueueItemStatus.Completed ||
@@ -223,7 +225,7 @@ export default function Queue() {
           }
         };
         return (
-        <Card variant="outlined" key={drive}>
+        <Card variant="outlined" key={drive || "empty"}>
           <CardHeader
             action={
               <>

@@ -18,8 +18,8 @@
 import {
   isPermissionGranted,
   requestPermission,
-  sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { showSystemNotification } from "./service";
 
 export async function requestSystemNotificationPermission(): Promise<boolean> {
   if (await isPermissionGranted()) {
@@ -36,8 +36,5 @@ export async function sendSystemCompletionNotification(
   if (!(await isPermissionGranted())) {
     return;
   }
-  sendNotification({
-    title,
-    body: `${file}\n${detail}`,
-  });
+  await showSystemNotification(title, file, detail);
 }

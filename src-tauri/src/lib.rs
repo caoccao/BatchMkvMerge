@@ -151,6 +151,11 @@ async fn set_config(config: config::Config) -> Result<config::Config, String> {
 }
 
 #[tauri::command]
+fn show_system_notification(app: tauri::AppHandle, title: String, file: String, detail: String) -> Result<(), String> {
+  controller::show_system_notification(&app, title, file, detail).map_err(convert_error)
+}
+
+#[tauri::command]
 async fn show_topmost_notification(
   app: tauri::AppHandle,
   state: tauri::State<'_, notification::NotificationState>,

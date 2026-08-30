@@ -30,29 +30,17 @@ export default function MainContent() {
   const activeTab = useMkvStore((s) => s.activeTab);
   const showSettings = useMkvStore((s) => s.showSettings);
   const showAbout = useMkvStore((s) => s.showAbout);
-  const queueOrder = useMkvStore((s) => s.queueOrder);
   const setActiveTab = useMkvStore((s) => s.setActiveTab);
   const closeSettings = useMkvStore((s) => s.closeSettings);
   const closeAbout = useMkvStore((s) => s.closeAbout);
 
-  const hasQueue = queueOrder.length > 0;
-
-  const tabs: TabType[] = ["fileList"];
-  if (hasQueue) {
-    tabs.push("queue");
-  }
+  const tabs: TabType[] = ["fileList", "queue"];
   if (showSettings) {
     tabs.push("settings");
   }
   if (showAbout) {
     tabs.push("about");
   }
-
-  useEffect(() => {
-    if (activeTab === "queue" && !hasQueue) {
-      setActiveTab("fileList");
-    }
-  }, [activeTab, hasQueue, setActiveTab]);
 
   const activeIndex = Math.max(0, tabs.indexOf(activeTab));
 

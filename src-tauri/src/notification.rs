@@ -20,8 +20,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+#[cfg(not(target_os = "windows"))]
+use tauri_plugin_notification::NotificationExt;
+
 const TOPMOST_NOTIFICATION_EVENT: &str = "topmost-notification";
 const TOPMOST_NOTIFICATION_LABEL: &str = "notification";
+#[cfg(target_os = "windows")]
+const SYSTEM_NOTIFICATION_APP_ID: &str = "BetterMkvMerge";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +97,46 @@ pub fn get_topmost_notification(state: &NotificationState) -> Result<Option<Topm
     .lock()
     .map(|notification| notification.clone())
     .map_err(|err| anyhow!(err.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn register_system_notification_identity() -> Result<()> {
+  let key =
+    windows_registry::CURRENT_USER.create(format!(r"SOFTWARE\Classes\AppUserModelId\{SYSTEM_NOTIFICATION_APP_ID}"))?;
+  key.set_expand_string("DisplayName", SYSTEM_NOTIFICATION_APP_ID)?;
+  key.set_string("IconBackgroundColor", "0")?;
+
+  if tauri::is_dev() {
+    let icon_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("icons")
+      .join("32x32.png");
+    if icon_path.is_file() {
+      key.set_expand_string("IconUri", icon_path.to_string_lossy())?;
+    }
+  }
+  Ok(())
+}
+
+pub fn show_system_notification(_app: &tauri::AppHandle, title: String, file: String, detail: String) -> Result<()> {
+  #[cfg(target_os = "windows")]
+  {
+    register_system_notification_identity()?;
+    tauri_winrt_notification::Toast::new(SYSTEM_NOTIFICATION_APP_ID)
+      .title(&title)
+      .text1(&file)
+      .text2(&detail)
+      .show()?;
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  _app
+    .notification()
+    .builder()
+    .title(title)
+    .body(format!("{file}\n{detail}"))
+    .show()?;
+
+  Ok(())
 }
 
 pub fn show_topmost_notification(

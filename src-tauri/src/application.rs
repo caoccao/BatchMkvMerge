@@ -57,6 +57,7 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
       crate::resolve_merge_output_path,
       crate::resolve_overridden_output_path,
       crate::set_config,
+      crate::show_system_notification,
       crate::show_topmost_notification,
       crate::skip_version
     ])

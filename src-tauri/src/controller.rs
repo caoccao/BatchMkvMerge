@@ -445,6 +445,10 @@ pub async fn set_config(config: config::Config) -> Result<config::Config> {
   Ok(config::get_config())
 }
 
+pub fn show_system_notification(app: &tauri::AppHandle, title: String, file: String, detail: String) -> Result<()> {
+  crate::notification::show_system_notification(app, title, file, detail)
+}
+
 pub fn show_topmost_notification(
   app: &tauri::AppHandle,
   state: &NotificationState,

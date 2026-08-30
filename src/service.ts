@@ -131,6 +131,18 @@ export async function skipVersion(version: string): Promise<void> {
   return await invoke<void>("skip_version", { version });
 }
 
+export async function showSystemNotification(
+  title: string,
+  file: string,
+  detail: string,
+): Promise<void> {
+  return await invoke<void>("show_system_notification", {
+    title,
+    file,
+    detail,
+  });
+}
+
 export async function showTopmostNotification(
   notification: TopmostNotification,
 ): Promise<void> {
