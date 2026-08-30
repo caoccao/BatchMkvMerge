@@ -18,7 +18,11 @@
 import { create } from "zustand";
 import { getDriveKey, trackKey } from "./merge";
 import type { MediaTrack } from "./media-metadata";
-import { mediaTrackCounts, metadataToMediaTracks } from "./media-metadata";
+import {
+  languageCodeAliases,
+  mediaTrackCounts,
+  metadataToMediaTracks,
+} from "./media-metadata";
 import type {
   About,
   Config,
@@ -200,13 +204,11 @@ interface MkvStore {
   setTrackLanguage: (files: string[], keys: string[], value: string) => void;
   /** Set the editable track name on every matching track key across all files. */
   setTrackName: (files: string[], keys: string[], value: string) => void;
-  /** Apply the active profile's *language/name* automation to a freshly-parsed
-   *  file's tracks (run once per newly added file): reset-und-language then
-   *  set-track-name (which sees the updated language). The default/forced
-   *  automation is applied separately by [`applyFlagAutomationToFile`] *after*
-   *  auto-selection so it can be scoped to the checked tracks. `presetFor`
-   *  resolves the per-language track-name preset (passed in so the store
-   *  doesn't depend on the UI's language lookups). */
+  /** Apply the active profile's per-track language/name automation. Steps run
+   *  in order: reset-und-language, then set-track-name (which sees the updated
+   *  language). Unit-level default/forced automation and track auto-selection
+   *  are orchestrated by `useFilesLoad`. `presetFor` resolves the per-language
+   *  track-name preset (passed in so the store doesn't depend on UI lookups). */
   applyAutomationToFile: (
     file: string,
     automation: ConfigAutomation,
@@ -697,7 +699,13 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
           continue;
         }
         fileTracks[file] = list.map((t) =>
-          keySet.has(trackKey(t)) ? { ...t, language: value } : t,
+          keySet.has(trackKey(t))
+            ? {
+                ...t,
+                language: value,
+                languageCodes: languageCodeAliases(value),
+              }
+            : t,
         );
       }
       return { fileTracks };
@@ -728,16 +736,18 @@ export const useMkvStore = create<MkvStore>((set, get) => ({
       if (!resetUnd.enabled && !setName) {
         return {};
       }
-      // Per-track language then name (name sees the updated language). The
-      // default/forced steps live in `applyFlagAutomationToFile`, run after
-      // auto-selection so they can be scoped to the checked tracks.
+      // Per-track language then name (name sees the updated language).
       const next = list.map((track): MediaTrack => {
         if (track.kind !== "track") {
           return track;
         }
         let updated = track;
         if (resetUnd.enabled && resetUnd.language && updated.language === "und") {
-          updated = { ...updated, language: resetUnd.language };
+          updated = {
+            ...updated,
+            language: resetUnd.language,
+            languageCodes: languageCodeAliases(resetUnd.language),
+          };
         }
         if (setName) {
           const preset = presetFor(updated.type, updated.language);

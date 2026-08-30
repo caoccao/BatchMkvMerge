@@ -15,7 +15,7 @@
  *   limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -195,7 +195,12 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     );
   });
 
-  const { loading, error } = useFilesLoad(memberFiles, t);
+  const loadUnits = useMemo(() => [memberFiles], [memberFiles]);
+  const { loading, error } = useFilesLoad(
+    loadUnits,
+    t,
+    isMulti ? combinedOrder : undefined,
+  );
 
   const isMerging = entry?.status === QueueItemStatus.Merging;
   const isQueued = entry?.status === QueueItemStatus.Waiting;
@@ -425,48 +430,6 @@ export function MkvFileCard({ memberFiles }: MkvFileCardProps) {
     next.splice(toIndex, 0, moved);
     setCombinedTrackOrder(root, next);
   };
-
-  // Apply the profile's default/forced automation — only after the WHOLE unit
-  // (the flattened tree) is loaded and auto-selected, so it picks one default
-  // per type across the merged file rather than one per member. Re-runs when the
-  // member set changes (e.g. another card is drag-merged in) so the combined
-  // unit gets one default per type again.
-  const flagAutomationSig = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeProfile) {
-      return;
-    }
-    const ready = memberFiles.every(
-      (f) =>
-        fileTracksMap[f] !== undefined && fileSelectedIdsMap[f] !== undefined,
-    );
-    if (!ready) {
-      return;
-    }
-    const sig = memberFiles.join("\n");
-    if (flagAutomationSig.current === sig) {
-      return;
-    }
-    flagAutomationSig.current = sig;
-    applyUnitFlagAutomation(
-      memberFiles,
-      fileTracksMap,
-      fileSelectedIdsMap,
-      {
-        resetDefault: activeProfile.automation?.reset_default_track.enabled ?? false,
-        resetForced: activeProfile.automation?.reset_forced_display.enabled ?? false,
-      },
-      setTrackFlag,
-      unitTrackOrder,
-    );
-  }, [
-    memberFiles,
-    activeProfile,
-    fileTracksMap,
-    fileSelectedIdsMap,
-    setTrackFlag,
-    unitTrackOrder,
-  ]);
 
   // Per-member selected tracks (in each file's own order) for the merge command.
   const mergeInputs = (): MergeInput[] =>

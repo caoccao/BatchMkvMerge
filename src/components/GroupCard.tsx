@@ -165,7 +165,7 @@ export function GroupCard({ units }: GroupCardProps) {
   const repMembers = units[0] ?? [];
   const reorderDisabled = units.some((u) => u.length > 1);
 
-  const { loading, error } = useFilesLoad(allFiles, t);
+  const { loading, error } = useFilesLoad(units, t);
 
   const repCombined = useMemo<CombinedTrack[]>(
     () => combineUnitTracks(repMembers, fileTracksMap),
@@ -352,37 +352,6 @@ export function GroupCard({ units }: GroupCardProps) {
       );
     }
   };
-
-  // Apply the profile's default/forced automation once, after every unit in the
-  // group is loaded and auto-selected, so it operates on the flattened tree's
-  // checked tracks (broadcast to the matching position in each unit).
-  const flagAutomationDone = useRef(false);
-  useEffect(() => {
-    if (flagAutomationDone.current || !activeProfile) {
-      return;
-    }
-    const ready = allFiles.every(
-      (f) =>
-        fileTracksMap[f] !== undefined && fileSelectedIdsMap[f] !== undefined,
-    );
-    if (!ready) {
-      return;
-    }
-    flagAutomationDone.current = true;
-    const resetDefault =
-      activeProfile.automation?.reset_default_track.enabled ?? false;
-    const resetForced =
-      activeProfile.automation?.reset_forced_display.enabled ?? false;
-    for (const unit of units) {
-      applyUnitFlagAutomation(
-        unit,
-        fileTracksMap,
-        fileSelectedIdsMap,
-        { resetDefault, resetForced },
-        setTrackFlag,
-      );
-    }
-  }, [units, allFiles, activeProfile, fileTracksMap, fileSelectedIdsMap, setTrackFlag]);
 
   const onReorder = (fromRowKey: string, toRowKey: string) => {
     if (reorderDisabled) {

@@ -24,6 +24,31 @@ import type {
   TrackType,
   VideoTrackProperties,
 } from "./protocol";
+import { MKV_LANGUAGES } from "./mkvLanguages";
+
+const LANGUAGE_CODES_BY_ALIAS = new Map<string, string[]>();
+for (const language of MKV_LANGUAGES) {
+  const parenthesizedCodes = language.label.match(/\(([^)]+)\)$/)?.[1] ?? "";
+  const codes = Array.from(
+    new Set(
+      [language.code, ...parenthesizedCodes.split(";")]
+        .map((code) => code.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+  for (const code of codes) {
+    LANGUAGE_CODES_BY_ALIAS.set(code, codes);
+  }
+}
+
+/** All ISO aliases known for an editable language value. */
+export function languageCodeAliases(value: string): string[] {
+  const normalized = value.trim().toLowerCase();
+  return (
+    LANGUAGE_CODES_BY_ALIAS.get(normalized) ??
+    (normalized ? [normalized] : [])
+  );
+}
 
 /**
  * Which kind of row a [`MediaTrack`] represents. The parser's `Track`s are
