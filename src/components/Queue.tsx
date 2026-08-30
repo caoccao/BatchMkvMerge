@@ -50,9 +50,8 @@ const TICK_INTERVAL_MS = 200;
 function statusColor(status: QueueItemStatus): string {
   switch (status) {
     case QueueItemStatus.Merging:
-      return "success.main";
     case QueueItemStatus.Completed:
-      return "text.secondary";
+      return "success.main";
     case QueueItemStatus.Cancelled:
     case QueueItemStatus.Failed:
       return "error.main";
