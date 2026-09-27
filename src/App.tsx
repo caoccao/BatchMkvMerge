@@ -27,6 +27,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ProgressBarStatus } from "@tauri-apps/api/window";
 import Layout from "./components/Layout";
 import { changeLanguage } from "./i18n";
+import { handleInputWordNavigation } from "./input-word-navigation";
 import * as Protocol from "./protocol";
 import { QueueItemStatus } from "./protocol";
 import { detectBetterMediaInfo, getLaunchArgs, getMediaFiles } from "./service";
@@ -89,6 +90,13 @@ function App() {
   const displayMode = config?.displayMode ?? Protocol.DisplayMode.Auto;
   const selectedTheme = config?.theme ?? Protocol.Theme.Ocean;
   const language = config?.language;
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleInputWordNavigation);
+    return () => {
+      document.removeEventListener("keydown", handleInputWordNavigation);
+    };
+  }, []);
 
   useEffect(() => {
     initConfig();
