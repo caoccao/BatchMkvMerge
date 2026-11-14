@@ -66,11 +66,11 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 - `src/components/`: UI screens/widgets (cards, queue, settings, toolbar) — reference, unbuilt
 - `src/i18n/locales/`: locale dictionaries (9 languages)
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `crates/bmm-platform`, `crates/bmm-app`; `src-tauri` excluded; one `target/`)
-- `crates/bmm-app/`: the gpui-kit app (`src/`), its Phase 2 prototypes (`examples/spike/`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
+- `crates/bmm-app/`: the gpui-kit app (`src/`; `src/domain/` holds the UI logic without GPUI: merge trees, group cards, size and time labels, queue states, parse-error messages, numeric word navigation), its Phase 2 prototypes (`examples/spike/`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
 - `crates/bmm-platform/src/`: taskbar / Dock / launcher progress per OS
-- `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs)
+- `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs; the track rows of the selection table in `media_track.rs`, the `mkvmerge` command line in `merge_args.rs`, the MKV language list and its lookups in `languages.rs`, and `js.rs`, the JavaScript number, string and rounding rules the ported logic keeps)
 - `crates/bmm-core/src/media_metadata/`: native parser implementation
-- `crates/bmm-core/tests/`: parser fixture integration tests
+- `crates/bmm-core/tests/`: parser fixture integration tests, and `merge_args_golden.rs` with its cases in `tests/golden/` (`*.json` plus the synthetic inputs in `fixtures.rs`)
 - `src-tauri/src/`: Tauri shell (commands, window state, notifications) — reference, unbuilt
 - `src-tauri/tests/`: TypeScript protocol regeneration check — no longer runs
 - `docs/parsers/`: parser coverage and behavior notes per format

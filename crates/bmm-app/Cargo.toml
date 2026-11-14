@@ -19,8 +19,10 @@ name = "BatchMkvMerge"
 path = "src/main.rs"
 
 [dependencies]
+bmm-core = { path = "../bmm-core" }
 gpui-kit = "=0.9.1"
 log.workspace = true
+unicode-segmentation = "1"
 
 # Tests and the Phase 2 spike example. `test-support` (headless test
 # windows, `Window::render_to_image`) only reaches targets built with

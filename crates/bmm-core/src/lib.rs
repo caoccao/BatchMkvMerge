@@ -25,8 +25,12 @@
 
 pub mod config;
 pub mod constants;
+pub mod js;
+pub mod languages;
 pub mod media_metadata;
+pub mod media_track;
 pub mod merge;
+pub mod merge_args;
 pub mod mkvtoolnix;
 pub mod protocol;
 pub mod services;

@@ -411,7 +411,10 @@ fn kill(control: &SharedControl) {
   let _ = guard.kill();
 }
 
-fn get_drive_key(file: &str) -> String {
+/// The per-drive queue a file belongs to: the Windows path prefix (`C:`,
+/// `\\server\share`) uppercased, else `default`. One drive merges one file at a
+/// time. The app groups its queue rows by the same key.
+pub fn get_drive_key(file: &str) -> String {
   #[cfg(target_os = "windows")]
   {
     let path = std::path::Path::new(file);

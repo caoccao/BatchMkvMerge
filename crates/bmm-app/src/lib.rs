@@ -21,6 +21,7 @@
 //! only calls [`run`].
 
 pub mod assets;
+pub mod domain;
 
 use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::*;

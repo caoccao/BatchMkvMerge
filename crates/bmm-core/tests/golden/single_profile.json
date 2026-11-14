@@ -1,0 +1,213 @@
+{
+  "description": "One file, tracks auto-selected by a profile (Japanese audio, French and Chinese subtitles, chapters, no attachments), no edits.",
+  "multi": false,
+  "outputPath": "/out/Movie.mkv",
+  "mkvToolNixPath": "/opt/mkvtoolnix",
+  "inputs": [
+    {
+      "fixture": "movie",
+      "file": "/media/Movie.mkv",
+      "profile": {
+        "name": "Golden",
+        "selectVideo": false,
+        "selectAudio": true,
+        "selectSubtitle": true,
+        "selectChapters": true,
+        "selectAttachments": false,
+        "videoLanguagesForTrackSelection": "",
+        "audioLanguagesForTrackSelection": "jpn",
+        "subtitleLanguagesForTrackSelection": "fre, chi"
+      }
+    }
+  ],
+  "expected": {
+    "rows": {
+      "movie": [
+        {
+          "kind": "track",
+          "id": 0,
+          "number": 1,
+          "type": "video",
+          "codec": "AVC/H.264/MPEG-4p10",
+          "codecId": "V_MPEG4/ISO/AVC",
+          "description": "1920x1080 23.976fps",
+          "size": 5400000000,
+          "bitRate": 8000000,
+          "trackName": "Main Feature",
+          "language": "en",
+          "languageCodes": [
+            "eng",
+            "en"
+          ],
+          "defaultTrack": "true",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 1,
+          "number": 2,
+          "type": "audio",
+          "codec": "AC-3",
+          "codecId": "A_AC3",
+          "description": "6ch 48kHz",
+          "size": 432000000,
+          "bitRate": 640000,
+          "trackName": "Japanese 5.1",
+          "language": "ja",
+          "languageCodes": [
+            "jpn",
+            "ja"
+          ],
+          "defaultTrack": "true",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 2,
+          "number": 3,
+          "type": "audio",
+          "codec": "AAC",
+          "codecId": "A_AAC",
+          "description": "stereo 44.1kHz",
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "en",
+          "languageCodes": [
+            "eng",
+            "en"
+          ],
+          "defaultTrack": "false",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 3,
+          "number": 4,
+          "type": "subtitles",
+          "codec": "SRT (UTF-8 text)",
+          "codecId": "S_TEXT/UTF8",
+          "description": "Text SRT",
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "fr",
+          "languageCodes": [
+            "fra",
+            "fre",
+            "fr"
+          ],
+          "defaultTrack": "false",
+          "forced": "true"
+        },
+        {
+          "kind": "track",
+          "id": 4,
+          "number": 5,
+          "type": "subtitles",
+          "codec": "SubStationAlpha (ASS)",
+          "codecId": "S_TEXT/ASS",
+          "description": "Text ASS",
+          "size": null,
+          "bitRate": null,
+          "trackName": "Simplified Chinese",
+          "language": "zh",
+          "languageCodes": [
+            "zho",
+            "chi",
+            "zh"
+          ],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "chapters",
+          "id": 0,
+          "number": 0,
+          "type": "chapters",
+          "codec": "",
+          "codecId": "",
+          "description": "",
+          "chapterEntryCount": 3,
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "attachment",
+          "id": 1,
+          "number": 0,
+          "type": "attachment",
+          "codec": "jpg",
+          "codecId": "jpg",
+          "description": "",
+          "size": 2048,
+          "bitRate": null,
+          "trackName": "cover.jpg",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "attachment",
+          "id": 2,
+          "number": 0,
+          "type": "attachment",
+          "codec": "ttf",
+          "codecId": "ttf",
+          "description": "",
+          "size": 512,
+          "bitRate": null,
+          "trackName": "Subtitle Font.TTF",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        }
+      ]
+    },
+    "args": [
+      "-o",
+      "/out/Movie.mkv",
+      "-d",
+      "0",
+      "-a",
+      "1",
+      "-s",
+      "3,4",
+      "--language",
+      "0:en",
+      "--track-name",
+      "0:Main Feature",
+      "--default-track-flag",
+      "0:1",
+      "--language",
+      "1:ja",
+      "--track-name",
+      "1:Japanese 5.1",
+      "--default-track-flag",
+      "1:1",
+      "--language",
+      "3:fr",
+      "--default-track-flag",
+      "3:0",
+      "--forced-display-flag",
+      "3:1",
+      "--language",
+      "4:zh",
+      "--track-name",
+      "4:Simplified Chinese",
+      "--no-global-tags",
+      "--no-attachments",
+      "/media/Movie.mkv",
+      "--track-order",
+      "0:0,0:1,0:3,0:4"
+    ],
+    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 1 -s 3,4 --language 0:en --track-name \"0:Main Feature\" --default-track-flag 0:1 --language 1:ja --track-name \"1:Japanese 5.1\" --default-track-flag 1:1 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --language 4:zh --track-name \"4:Simplified Chinese\" --no-global-tags --no-attachments /media/Movie.mkv --track-order 0:0,0:1,0:3,0:4"
+  }
+}
