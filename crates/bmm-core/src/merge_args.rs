@@ -154,7 +154,7 @@ fn shell_quote(value: &str) -> String {
   if !value.is_empty()
     && !value
       .chars()
-      .any(|c| crate::js::is_whitespace(c) || matches!(c, '"' | '\'' | '\\'))
+      .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
   {
     return value.to_string();
   }
@@ -275,8 +275,8 @@ pub fn build_merge_args_multi(
 
   let track_order: Vec<String> = match order {
     Some(order) => {
-      // Like a JavaScript `Map` built from the inputs: a repeated file keeps
-      // its last index.
+      // A file listed twice keeps its last index (later entries overwrite
+      // earlier ones when the map is collected).
       let file_index: HashMap<&str, usize> = inputs
         .iter()
         .enumerate()

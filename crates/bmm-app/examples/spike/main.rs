@@ -40,7 +40,8 @@ mod topmost;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use batch_mkvmerge::{APP_IDENTIFIER, APP_NAME, assets::AppAssets, main_window_options};
+use batch_mkvmerge::platform::window::main_window_options;
+use batch_mkvmerge::{APP_IDENTIFIER, APP_NAME, assets::AppAssets};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -150,7 +151,7 @@ fn main() {
     })
     .detach();
 
-    let mut options = main_window_options(cx);
+    let mut options = main_window_options(&Default::default(), cx);
     options.titlebar = Some(TitlebarOptions {
       title: Some(format!("{APP_NAME} spike").into()),
       ..Default::default()

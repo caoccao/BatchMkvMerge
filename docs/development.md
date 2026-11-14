@@ -24,6 +24,7 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 ### gpui-kit app
 
 - [gpui-kit](https://crates.io/crates/gpui-kit) 0.9.1 (exact pin; GPUI with the `gpui-pre` backend), in `crates/bmm-app` (package `BatchMkvMerge`)
+- [rust-i18n](https://crates.io/crates/rust-i18n) 4.2 for localization (9 locales under `crates/bmm-app/locales/`)
 - `crates/bmm-platform`: per-OS integrations GPUI lacks (taskbar / Dock / launcher progress through `ITaskbarList3`, `NSDockTile`, the `com.canonical.Unity.LauncherEntry` D-Bus signal)
 - Installers: cargo-packager 0.11.8 (`.app`, `.dmg`, NSIS `.exe`, WiX `.msi`, `.deb`, `.AppImage`) and cargo-generate-rpm 0.21.1 (`.rpm`)
 
@@ -64,11 +65,11 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 
 - `src/`: React app (UI, state store, protocol/types, service wrappers) — reference, unbuilt
 - `src/components/`: UI screens/widgets (cards, queue, settings, toolbar) — reference, unbuilt
-- `src/i18n/locales/`: locale dictionaries (9 languages)
+- `src/i18n/locales/`: the React locale dictionaries (9 languages) — reference; the app's are in `crates/bmm-app/locales/`
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `crates/bmm-platform`, `crates/bmm-app`; `src-tauri` excluded; one `target/`)
-- `crates/bmm-app/`: the gpui-kit app (`src/`; `src/domain/` holds the UI logic without GPUI: merge trees, group cards, size and time labels, queue states, parse-error messages, numeric word navigation), its Phase 2 prototypes (`examples/spike/`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
+- `crates/bmm-app/`: the gpui-kit app (`src/`; `src/domain/` holds the UI logic without GPUI: merge trees, group cards, size and time labels, queue states, parse-error messages, numeric word navigation; `src/state/` the config, file and navigation stores; `src/ui/` the screens and shortcuts; `src/platform/` window geometry, close guard, macOS menus and file dialogs; `src/i18n.rs` and `src/theme.rs`), its locale files (`locales/`), theme sets (`themes/`), Phase 2 prototypes (`examples/spike/`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
 - `crates/bmm-platform/src/`: taskbar / Dock / launcher progress per OS
-- `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs; the track rows of the selection table in `media_track.rs`, the `mkvmerge` command line in `merge_args.rs`, the MKV language list and its lookups in `languages.rs`, and `js.rs`, the JavaScript number, string and rounding rules the ported logic keeps)
+- `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs; the track rows of the selection table in `media_track.rs`, the `mkvmerge` command line in `merge_args.rs`, and the MKV language list and its lookups in `languages.rs`)
 - `crates/bmm-core/src/media_metadata/`: native parser implementation
 - `crates/bmm-core/tests/`: parser fixture integration tests, and `merge_args_golden.rs` with its cases in `tests/golden/` (`*.json` plus the synthetic inputs in `fixtures.rs`)
 - `src-tauri/src/`: Tauri shell (commands, window state, notifications) — reference, unbuilt

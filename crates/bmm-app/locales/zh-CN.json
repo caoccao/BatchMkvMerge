@@ -1,0 +1,238 @@
+{
+  "app": {
+    "dropHere": "将媒体文件或文件夹拖到此处"
+  },
+  "list": {
+    "delete": "删除"
+  },
+  "merge": {
+    "childCount": "%{count} 个子文件合并到此输出",
+    "copyCommand": "复制命令",
+    "merge": "合并",
+    "cancel": "取消",
+    "ok": "确定",
+    "browse": "浏览",
+    "setOutputPath": "设置输出路径",
+    "dragToMerge": "拖到另一个文件上以合并",
+    "childTable": {
+      "id": "ID",
+      "filePath": "文件路径",
+      "action": "操作"
+    },
+    "removeFromRoot": "从合并中移除",
+    "outputPath": "输出路径",
+    "openInBetterMediaInfo": "在 BetterMediaInfo 中打开",
+    "outputPathNotWritable": "输出路径不可写。请选择其他路径。",
+    "outputPathDoesNotExist": "输出路径不存在。将会创建。",
+    "commandCopied": "命令已复制到剪贴板。",
+    "mergeComplete": "合并完成。",
+    "noTracks": "未找到轨道。",
+    "chapterEntryCount": {
+      "single": "%{count} 个条目",
+      "multiple": "%{count} 个条目"
+    },
+    "header": {
+      "id": "ID",
+      "type": "类型",
+      "codec": "编码",
+      "description": "描述",
+      "size": "大小",
+      "bitRate": "比特率",
+      "trackName": "轨道名称",
+      "language": "语言",
+      "defaultTrack": "默认轨道",
+      "forcedDisplay": "强制显示"
+    },
+    "error": {
+      "mkvmergeNotAvailable": "mkvmerge 不可用。请在设置中检查 MKVToolNix 路径。%{detail}",
+      "mkvmergeFailed": "mkvmerge 失败:%{detail}",
+      "parser": {
+        "io": "无法读取文件:%{detail}",
+        "unexpectedEof": "文件被截断:%{detail}",
+        "unrecognised": "无法识别的文件格式:%{detail}",
+        "timeout": "解析器在阶段 %{stage} 超过 %{budgetMs} 毫秒后超时:%{detail}",
+        "malformed": "文件格式有误:%{detail}",
+        "oversizedElement": "元素超过大小上限:%{detail}",
+        "internal": "解析器内部错误:%{detail}"
+      }
+    }
+  },
+  "toolbar": {
+    "setGlobalOutputPath": "设置全局输出路径",
+    "mergeAll": "全部合并 (F3)",
+    "cancelAll": "全部取消 (F4)",
+    "clear": "清空 (Ctrl + Q)",
+    "profile": "配置文件 (F9)",
+    "settings": "设置 (F10)",
+    "about": "关于"
+  },
+  "group": {
+    "copyAllCommands": "复制全部命令",
+    "mergeAll": "全部合并",
+    "clearAll": "全部清除"
+  },
+  "groupMode": {
+    "title": "分组",
+    "none": "不分组",
+    "trackCount": "按每种类型的相同轨道数分组",
+    "trackCountAndLanguage": "按每种类型的相同轨道数和语言分组",
+    "byFileName": "按文件名分组"
+  },
+  "tabs": {
+    "fileList": "文件列表",
+    "queue": "队列",
+    "settings": "设置",
+    "about": "关于",
+    "close": "关闭"
+  },
+  "queue": {
+    "defaultDrive": "队列",
+    "cancelAll": "全部取消",
+    "resumeAll": "全部恢复",
+    "clearCompleted": "清除已完成",
+    "systemNotification": "系统通知",
+    "systemNotificationTooltip": "完成时显示系统通知。",
+    "topmostNotification": "置顶通知",
+    "topmostNotificationTooltip": "完成时显示置顶通知。",
+    "header": {
+      "filePath": "文件路径",
+      "status": "状态",
+      "start": "开始",
+      "end": "结束",
+      "elapsed": "已用时间",
+      "eta": "预计剩余"
+    },
+    "status": {
+      "waiting": "等待中",
+      "merging": "合并中",
+      "completed": "已完成",
+      "cancelled": "已取消",
+      "failed": "失败"
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "appearance": "外观",
+    "formatting": "格式",
+    "bitRate": "比特率",
+    "size": "大小",
+    "precision": "精度",
+    "unit": "单位",
+    "mode": "模式",
+    "autoMode": "自动",
+    "lightMode": "浅色",
+    "darkMode": "深色",
+    "theme": "主题",
+    "themeOcean": "海洋",
+    "themeAqua": "碧水",
+    "themeSky": "天空",
+    "themeArctic": "北极",
+    "themeGlacier": "冰川",
+    "themeMist": "薄雾",
+    "themeSlate": "石板灰",
+    "themeCharcoal": "炭灰",
+    "themeMidnight": "午夜",
+    "themeIndigo": "靛蓝",
+    "themeViolet": "紫罗兰",
+    "themeLavender": "薰衣草",
+    "themeRose": "玫瑰",
+    "themeBlush": "粉霞",
+    "themeCoral": "珊瑚",
+    "themeSunset": "日落",
+    "themeAmber": "琥珀",
+    "themeSand": "沙丘",
+    "themeForest": "森林",
+    "themeEmerald": "翡翠",
+    "language": "语言",
+    "mkv": "MKV",
+    "integration": "集成",
+    "mkvToolNix": "MKVToolNix",
+    "betterMediaInfo": "BetterMediaInfo",
+    "mkvToolNixPath": "MKVToolNix 路径",
+    "betterMediaInfoPath": "BetterMediaInfo 路径",
+    "browse": "浏览",
+    "detect": "检测",
+    "mkvToolNixFound": "已在 MKVToolNix 路径下找到 mkvmerge。",
+    "mkvToolNixNotFound": "在 MKVToolNix 路径下未找到 mkvmerge。",
+    "betterMediaInfoFound": "已找到 BetterMediaInfo",
+    "betterMediaInfoNotFound": "未检测到 BetterMediaInfo。请检查路径后重试。",
+    "update": "更新",
+    "checkNewVersion": "检查新版本",
+    "daily": "每天",
+    "weekly": "每周",
+    "monthly": "每月",
+    "profiles": "配置文件",
+    "activeProfile": "当前配置文件",
+    "newProfileName": "新配置文件名称",
+    "addProfile": "添加",
+    "deleteProfile": "删除",
+    "video": "视频",
+    "audio": "音频",
+    "subtitles": "字幕",
+    "chapters": "章节",
+    "attachments": "附件",
+    "autoSelectOnDrop": "添加文件时自动选择",
+    "onlyAutoSelectOnDropForLanguages": "仅在添加文件时按语言自动选择",
+    "reset": "重置",
+    "trackSelection": "轨道选择",
+    "languages": "语言",
+    "trackNames": "轨道名称",
+    "automation": "自动化",
+    "automationResetUndLanguage": "自动将语言 und 设置为",
+    "automationSetTrackName": "按语言自动设置轨道名称",
+    "automationResetDefaultTrack": "自动重置默认轨道",
+    "automationResetForcedDisplay": "自动重置强制显示",
+    "trackNamesHint": "每行一个轨道名称",
+    "filter": "筛选",
+    "clear": "清除",
+    "addAll": "全部添加",
+    "removeAll": "全部移除",
+    "available": "可用",
+    "preferred": "首选",
+    "languagesInstruction": "在两个表格之间拖动语言以添加或移除，在右侧表格内拖动以重新排序。"
+  },
+  "about": {
+    "title": "关于",
+    "tagline": "mkvmerge 批量图形界面",
+    "author": "作者",
+    "github": "GitHub"
+  },
+  "footer": {
+    "donate": "捐赠以支持开发",
+    "copyright": "© 版权所有 2026"
+  },
+  "notification": {
+    "completedIn": "%{elapsed} 内完成",
+    "unknownError": "未知错误"
+  },
+  "confirm": {
+    "exitTitle": "退出",
+    "exitMessage": "当前有正在进行的合并任务。确定要退出吗?",
+    "yes": "是",
+    "no": "否"
+  },
+  "card": {
+    "summary": {
+      "toPath": "输出到: %{path}",
+      "size": "大小：%{size}",
+      "encoded": "编码时间：%{date}",
+      "title": "标题：%{title}"
+    }
+  },
+  "update": {
+    "newVersionAvailable": "新版本 %{version} 已发布。",
+    "skipThisVersion": "跳过此版本"
+  },
+  "welcome": {
+    "title": "欢迎使用 BatchMkvMerge",
+    "subtitle": "基于 MKVToolNix mkvmerge 的批处理图形界面。",
+    "intro": "以用户友好的方式批量处理媒体文件。基于 MKVToolNix 的 mkvmerge 构建的图形界面。",
+    "introBetterMediaInfo": "使用快速、现代的界面查看任何媒体文件。一目了然地浏览视频、音频、图像和字幕轨道的流、属性和元数据。",
+    "introBatchMkvExtract": "一次从多个 .mkv 文件中提取轨道、章节和附件。基于 MKVToolNix 的 mkvextract 构建的批处理图形界面。",
+    "introBDMaster": "使用现代图形界面检视蓝光光盘。一目了然地浏览光盘、播放列表、流、轨道和码率图表。",
+    "addFiles": "添加文件",
+    "addFolder": "添加文件夹",
+    "emptyHint": "提示：你也可以将媒体文件或文件夹拖放到此窗口中。",
+    "viewOnGithub": "在 GitHub 查看"
+  }
+}

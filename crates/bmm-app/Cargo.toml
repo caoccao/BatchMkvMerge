@@ -22,6 +22,8 @@ path = "src/main.rs"
 bmm-core = { path = "../bmm-core" }
 gpui-kit = "=0.9.1"
 log.workspace = true
+# Locale files under `locales/` and `t!`; gpui-kit's i18n needs 4.2 or later.
+rust-i18n = "4.2"
 unicode-segmentation = "1"
 
 # Tests and the Phase 2 spike example. `test-support` (headless test
@@ -30,6 +32,7 @@ unicode-segmentation = "1"
 [dev-dependencies]
 bmm-platform = { path = "../bmm-platform" }
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+serde_json.workspace = true
 
 # Read-back of AppKit state (Dock tile, panel visibility) in the spike.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

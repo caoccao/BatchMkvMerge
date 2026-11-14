@@ -70,14 +70,16 @@ fn parse_type(value: &str) -> MediaTrackType {
   }
 }
 
-/// A JavaScript number as JSON: integral values as integers, the way
-/// `JSON.stringify` writes them.
-fn js_number(value: f64) -> Value {
-  if value.fract() == 0.0 && value.abs() < 2f64.powi(53) {
-    json!(value as i64)
-  } else {
-    json!(value)
+/// The expected row with `size` and `bitRate` read as `f64`, the type of the
+/// row fields (the file writes integral values as JSON integers).
+fn float_numbers(row: &Value) -> Value {
+  let mut row = row.clone();
+  for field in ["size", "bitRate"] {
+    if let Some(number) = row[field].as_f64() {
+      row[field] = json!(number);
+    }
   }
+  row
 }
 
 /// A row in the shape of the React app's `MediaTrack` object.
@@ -95,8 +97,8 @@ fn row_json(track: &MediaTrack) -> Value {
     "codec": track.codec,
     "codecId": track.codec_id,
     "description": track.description,
-    "size": track.size.map_or(Value::Null, js_number),
-    "bitRate": track.bit_rate.map_or(Value::Null, js_number),
+    "size": track.size,
+    "bitRate": track.bit_rate,
     "trackName": track.track_name,
     "language": track.language,
     "languageCodes": track.language_codes,
@@ -172,7 +174,8 @@ fn merge_arguments_match_the_react_app() {
 
     for (fixture, rows) in expected["rows"].as_object().expect("expected.rows") {
       let actual: Vec<Value> = parsed[fixture.as_str()].iter().map(row_json).collect();
-      assert_eq!(&Value::Array(actual), rows, "{name}: rows of {fixture}");
+      let expected_rows: Vec<Value> = rows.as_array().expect("rows").iter().map(float_numbers).collect();
+      assert_eq!(actual, expected_rows, "{name}: rows of {fixture}");
     }
 
     let inputs: Vec<MergeInput> = case["inputs"]

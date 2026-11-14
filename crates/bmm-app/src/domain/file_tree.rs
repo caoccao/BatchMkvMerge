@@ -27,7 +27,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use bmm_core::js;
 use bmm_core::media_metadata::model::track_properties_common::TrackFlag;
 use bmm_core::media_track::{MediaTrack, MediaTrackKind, MediaTrackType};
 use bmm_core::merge_args::{file_name, parent_dir};
@@ -90,9 +89,9 @@ pub fn stem_of(path: &str) -> &str {
   }
 }
 
-/// Stem, then full path, in JavaScript string order.
+/// Stem, then full path, in string order.
 fn by_stem_then_path(a: &str, b: &str, stems: &HashMap<&str, &str>) -> Ordering {
-  js::cmp_utf16(stems[a], stems[b]).then_with(|| js::cmp_utf16(a, b))
+  stems[a].cmp(stems[b]).then_with(|| a.cmp(b))
 }
 
 /// The *Group by file name* forest. Per directory, files are walked from the
@@ -113,8 +112,9 @@ pub fn build_forest(files: &[String]) -> Vec<FileTree> {
   for dir_files in by_dir.values() {
     let mut ordered = dir_files.clone();
     ordered.sort_by(|a, b| {
-      js::utf16_len(stems[a])
-        .cmp(&js::utf16_len(stems[b]))
+      stems[a]
+        .len()
+        .cmp(&stems[b].len())
         .then_with(|| by_stem_then_path(a, b, &stems))
     });
     let mut claimed: HashSet<&str> = HashSet::new();
@@ -473,14 +473,14 @@ mod tests {
   }
 
   #[test]
-  fn sorts_stems_in_javascript_order() {
-    // Same length (in UTF-16 units) so only the string order decides: a
-    // surrogate pair sorts before U+FF21 in UTF-16, after it in Rust's order.
-    let files = s(&["/m/x\u{ff21}.mkv", "/m/x\u{1f3ac}.mkv", "/m/x.mkv"]);
+  fn sorts_stems_in_string_order() {
+    // Children follow Rust's string order (by code point): U+FF21 before
+    // U+1F3AC.
+    let files = s(&["/m/x\u{1f3ac}.mkv", "/m/x\u{ff21}.mkv", "/m/x.mkv"]);
     let forest = build_forest(&files);
     assert_eq!(
       forest[0].members,
-      s(&["/m/x.mkv", "/m/x\u{1f3ac}.mkv", "/m/x\u{ff21}.mkv"])
+      s(&["/m/x.mkv", "/m/x\u{ff21}.mkv", "/m/x\u{1f3ac}.mkv"])
     );
   }
 

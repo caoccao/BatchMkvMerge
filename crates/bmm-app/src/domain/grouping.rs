@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 
 use bmm_core::config::GroupMode;
-use bmm_core::js;
 use bmm_core::media_track::{MediaTrack, MediaTrackType, media_track_counts};
 use bmm_core::merge_args::parent_dir;
 
@@ -44,7 +43,7 @@ fn language_signature(tracks: &[CombinedTrack], track_type: MediaTrackType) -> S
     .filter(|row| row.track.track_type == track_type)
     .map(|row| row.track.language.as_str())
     .collect();
-  languages.sort_by(|a, b| js::cmp_utf16(a, b));
+  languages.sort();
   languages.join(",")
 }
 

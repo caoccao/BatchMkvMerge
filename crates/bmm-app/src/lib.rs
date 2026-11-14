@@ -20,11 +20,26 @@
 //! Everything lives in this library so that tests run against it; the binary
 //! only calls [`run`].
 
+/// `t!` as a [`gpui_kit::SharedString`], ready to become an element.
+macro_rules! tr {
+  ($($all:tt)*) => {
+    gpui_kit::SharedString::from(rust_i18n::t!($($all)*).into_owned())
+  };
+}
+
 pub mod assets;
 pub mod domain;
+pub mod i18n;
+pub mod platform;
+pub mod state;
+pub mod theme;
+pub mod ui;
 
-use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::*;
+
+// The nine locale files under `locales/`; a key missing in a locale falls
+// back to en-US, as i18next did.
+rust_i18n::i18n!("locales", fallback = "en-US");
 
 /// Product name: window title, menus, notifications.
 pub const APP_NAME: &str = "BatchMkvMerge";
@@ -36,11 +51,6 @@ pub const DESKTOP_ID: &str = "BatchMkvMerge";
 /// The application version, shown in the title and About.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const DEFAULT_WINDOW_SIZE: (f32, f32) = (1024.0, 768.0);
-const MIN_WINDOW_SIZE: (f32, f32) = (600.0, 450.0);
-
-actions!(batch_mkvmerge, [Quit]);
-
 /// The window title: `BatchMkvMerge v<version>`.
 pub fn window_title() -> SharedString {
   format!("{APP_NAME} v{APP_VERSION}").into()
@@ -48,12 +58,30 @@ pub fn window_title() -> SharedString {
 
 /// Starts the application and blocks until it quits.
 pub fn run() {
-  gpui_kit::application().with_assets(assets::AppAssets).run(|cx| {
+  // Read before the event loop starts; creates the default file on first run.
+  let config = bmm_core::config::get_config();
+  gpui_kit::application().with_assets(assets::AppAssets).run(move |cx| {
+    {
+      // gpui-kit's own strings (dialog buttons, input menus) look up the
+      // application's locale files first; registered before `init`.
+      use gpui_kit::component as gpui_component;
+      rust_i18n::extend!(gpui_component);
+    }
     gpui_kit::init(cx);
     cx.set_app_identity(APP_IDENTIFIER, APP_NAME);
-    #[cfg(target_os = "macos")]
-    install_app_menu(cx);
-    open_main_window(cx);
+    i18n::set_language(config.language);
+    theme::install(cx);
+    theme::apply(&config, cx.window_appearance(), cx);
+    let stores = state::Stores::new(config, state::config::Persistence::disk(), cx);
+    ui::actions::bind_keys(cx);
+    ui::actions::install(&stores, cx);
+    platform::menus::install(cx);
+    let Some(handle) = platform::window::open_main(&stores, cx) else {
+      cx.quit();
+      return;
+    };
+    platform::install_quit(handle, &stores, cx);
+    platform::ingest_launch_args(&stores, cx);
     // Bring the app to the front also when started from a terminal; GPUI
     // delivers focus events only to the active window.
     cx.activate(true);
@@ -64,64 +92,4 @@ pub fn run() {
     })
     .detach();
   });
-}
-
-/// macOS application menu. Elsewhere Ctrl+Q is the app's Clear shortcut and
-/// closing the last window quits.
-#[cfg(target_os = "macos")]
-fn install_app_menu(cx: &mut App) {
-  cx.on_action(|_: &Quit, cx| cx.quit());
-  cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-  cx.set_menus([Menu::new(APP_NAME).items([MenuItem::action("Quit", Quit)])]);
-}
-
-/// Window options of the main window: centred default size, the 600×450
-/// minimum of 0.2.0, the desktop id as the Wayland app id.
-pub fn main_window_options(cx: &App) -> WindowOptions {
-  let (width, height) = DEFAULT_WINDOW_SIZE;
-  let (min_width, min_height) = MIN_WINDOW_SIZE;
-  WindowOptions {
-    window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-      None,
-      size(px(width), px(height)),
-      cx,
-    ))),
-    titlebar: Some(TitlebarOptions {
-      title: Some(window_title()),
-      ..Default::default()
-    }),
-    window_min_size: Some(size(px(min_width), px(min_height))),
-    app_id: Some(DESKTOP_ID.into()),
-    ..Default::default()
-  }
-}
-
-fn open_main_window(cx: &mut App) {
-  let options = main_window_options(cx);
-  if let Err(error) = gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| SkeletonView)) {
-    log::error!("Failed to open the main window: {error}");
-    cx.quit();
-  }
-}
-
-/// Placeholder content until the real layout lands.
-pub struct SkeletonView;
-
-impl Render for SkeletonView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .size_full()
-      .items_center()
-      .justify_center()
-      .gap_3()
-      .bg(cx.theme().background)
-      .text_color(cx.theme().foreground)
-      .child(img(assets::APP_ICON).size(px(128.0)))
-      .child(div().text_2xl().font_weight(FontWeight::SEMIBOLD).child(APP_NAME))
-      .child(
-        div()
-          .text_color(cx.theme().muted_foreground)
-          .child(format!("v{APP_VERSION}")),
-      )
-  }
 }

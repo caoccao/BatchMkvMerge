@@ -477,7 +477,7 @@ impl Default for ConfigExternalTools {
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum DisplayMode {
   Auto,
   Light,
@@ -490,7 +490,7 @@ impl Default for DisplayMode {
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Theme {
   #[serde(alias = "Default")]
   Ocean,
@@ -521,7 +521,7 @@ impl Default for Theme {
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Language {
   #[serde(rename = "de")]
   De,

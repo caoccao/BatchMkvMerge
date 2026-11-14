@@ -298,7 +298,7 @@ fn stat_tag_number(track: &Track, name: &str) -> Option<f64> {
     .tags
     .iter()
     .find(|tag| tag.name.to_uppercase() == upper)?;
-  crate::js::number(&tag.value).filter(|value| value.is_finite())
+  tag.value.trim().parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
 /// The attachment's file extension, else its mime subtype, lowercased.
@@ -335,8 +335,7 @@ fn channel_layout_label(kind: ChannelLayoutKind) -> Option<&'static str> {
   }
 }
 
-/// Round to three decimals the way `Math.round(x * 1000) / 1000` does for the
-/// positive values used here.
+/// Round to three decimals (halves away from zero).
 fn round3(value: f64) -> f64 {
   (value * 1000.0).round() / 1000.0
 }

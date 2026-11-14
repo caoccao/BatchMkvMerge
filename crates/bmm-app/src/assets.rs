@@ -25,8 +25,17 @@ use gpui_kit::{AssetSource, Result, SharedString};
 
 /// Asset path of the application icon (256×256 PNG).
 pub const APP_ICON: &str = "images/icon.png";
+/// Logos of the sibling applications on the Welcome page.
+pub const BETTER_MEDIA_INFO_ICON: &str = "images/bettermediainfo.png";
+pub const BATCH_MKV_EXTRACT_ICON: &str = "images/batchmkvextract.png";
+pub const BD_MASTER_ICON: &str = "images/bdmaster.png";
 
-const IMAGES: &[(&str, &[u8])] = &[(APP_ICON, include_bytes!("../assets/icon.png"))];
+const IMAGES: &[(&str, &[u8])] = &[
+  (APP_ICON, include_bytes!("../assets/icon.png")),
+  (BETTER_MEDIA_INFO_ICON, include_bytes!("../assets/bettermediainfo.png")),
+  (BATCH_MKV_EXTRACT_ICON, include_bytes!("../assets/batchmkvextract.png")),
+  (BD_MASTER_ICON, include_bytes!("../assets/bdmaster.png")),
+];
 
 // Lucide icons the UI needs that are not part of gpui-kit's default 106-icon
 // bundle; every icon is in the `IconName` enum, only the SVGs are opt-in.

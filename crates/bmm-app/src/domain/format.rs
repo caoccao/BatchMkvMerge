@@ -24,7 +24,6 @@
 use std::time::Duration;
 
 use bmm_core::config::{ConfigFormatField, ConfigFormatting, FormatPrecision, FormatUnit};
-use bmm_core::js;
 use bmm_core::media_track::MediaTrackType;
 
 const KIBI: f64 = 1024.0;
@@ -74,12 +73,11 @@ fn format_value(value: f64, field: &ConfigFormatField, suffix: &str) -> String {
     if value > *divisor {
       return format!(
         "{}{label}{suffix}",
-        trim_fraction_zeros(&js::to_fixed(value / divisor, decimals))
+        trim_fraction_zeros(&format!("{:.*}", decimals, value / divisor))
       );
     }
   }
-  // `+ 0.0` turns -0 into 0, which JavaScript prints as "0".
-  format!("{}{suffix}", value + 0.0)
+  format!("{value}{suffix}")
 }
 
 /// The configured field of a track type; chapters, attachments and anything
@@ -145,9 +143,10 @@ mod tests {
     assert_eq!(format_file_size(1.25 * GIBI), "1.25GB");
     assert_eq!(format_file_size(3.0 * TEBI), "3TB");
     assert_eq!(format_file_size(2048.0 * TEBI), "2048TB");
-    // An exact tie rounds up, like `toFixed`: 1152 / 1024 = 1.125.
-    assert_eq!(format_file_size(1152.0), "1.13KB");
-    assert_eq!(format_file_size(-0.0), "0B");
+    // Rust rounds an exact tie to even: 1152 / 1024 = 1.125.
+    assert_eq!(format_file_size(1152.0), "1.12KB");
+    assert_eq!(format_file_size(1160.0), "1.13KB");
+    assert_eq!(format_file_size(-0.0), "-0B");
     for invalid in [-1.0, f64::NAN, f64::INFINITY] {
       assert_eq!(format_file_size(invalid), "");
     }
@@ -157,7 +156,8 @@ mod tests {
   fn honours_precision_and_unit() {
     let cases = [
       (FormatPrecision::Zero, FormatUnit::KMGT, 1.6 * MEBI, "2MB"),
-      (FormatPrecision::One, FormatUnit::KMGT, 1.25 * MEBI, "1.3MB"),
+      // Exact ties round to even: 1.25 → 1.2, 4.75 → 4.8.
+      (FormatPrecision::One, FormatUnit::KMGT, 1.25 * MEBI, "1.2MB"),
       (FormatPrecision::Two, FormatUnit::K, MEBI, "1024KB"),
       (FormatPrecision::Two, FormatUnit::KM, 5.0 * GIBI, "5120MB"),
       (FormatPrecision::Two, FormatUnit::KMG, 2.0 * TEBI, "2048GB"),
@@ -195,7 +195,8 @@ mod tests {
       format_track_size(1.5 * GIBI, MediaTrackType::Audio, formatting),
       "1536MB"
     );
-    assert_eq!(format_track_size(2_560.0, MediaTrackType::Subtitles, formatting), "3KB");
+    // 2.5 KB is an exact tie and rounds to even.
+    assert_eq!(format_track_size(2_560.0, MediaTrackType::Subtitles, formatting), "2KB");
     assert_eq!(
       format_track_bit_rate(640_000.0, MediaTrackType::Video, formatting),
       "625Kbps"

@@ -35,9 +35,9 @@ pub enum Direction {
   Right,
 }
 
-/// JavaScript's `[^\S\r\n]`: whitespace other than CR and LF.
+/// Whitespace other than CR and LF.
 fn is_horizontal_space(c: char) -> bool {
-  bmm_core::js::is_whitespace(c) && c != '\r' && c != '\n'
+  c.is_whitespace() && c != '\r' && c != '\n'
 }
 
 /// The char at byte offset `index`, if `index` is a char boundary inside the
@@ -153,23 +153,7 @@ mod tests {
   use super::*;
 
   // The cases of the React app's `tests/input-word-navigation.test.mjs`, one
-  // for one, with its UTF-16 offsets; `nav` converts to byte offsets and back.
-
-  fn byte_offset(value: &str, utf16: usize) -> usize {
-    let mut units = 0;
-    for (byte, c) in value.char_indices() {
-      if units >= utf16 {
-        return byte;
-      }
-      units += c.len_utf16();
-    }
-    assert_eq!(units, utf16, "offset {utf16} is not a char boundary of {value:?}");
-    value.len()
-  }
-
-  fn utf16_offset(value: &str, byte: usize) -> usize {
-    value[..byte].encode_utf16().count()
-  }
+  // for one, in byte offsets.
 
   fn nav(value: &str, caret: usize, direction: &str, is_mac: bool) -> Option<usize> {
     let direction = if direction == "left" {
@@ -177,7 +161,7 @@ mod tests {
     } else {
       Direction::Right
     };
-    numeric_word_boundary(value, byte_offset(value, caret), direction, is_mac).map(|byte| utf16_offset(value, byte))
+    numeric_word_boundary(value, caret, direction, is_mac)
   }
 
   #[test]
@@ -238,7 +222,8 @@ mod tests {
   #[test]
   fn ordinary_text_and_punctuation_continue_to_use_native_navigation() {
     for value in ["", "123456", "abc.def", "can't", "你好世界", "123..456"] {
-      for caret in 0..=value.encode_utf16().count() {
+      let carets = value.char_indices().map(|(byte, _)| byte).chain([value.len()]);
+      for caret in carets {
         for direction in ["left", "right"] {
           for is_mac in [false, true] {
             assert_eq!(
@@ -258,15 +243,17 @@ mod tests {
   }
 
   #[test]
-  fn unicode_numbers_and_utf16_caret_offsets_are_supported() {
-    assert_eq!(nav("字幕 １２３.４５６", 3, "right", false), Some(7));
-    assert_eq!(nav("字幕 １２３.４５６", 10, "left", true), Some(7));
-    assert_eq!(nav("🎬 123.456", 3, "right", false), Some(7));
-    assert_eq!(nav("𝟙𝟚.𝟛𝟜", 9, "left", false), Some(5));
+  fn unicode_numbers_are_supported() {
+    // Full-width digits and CJK take 3 bytes, the emoji and the mathematical
+    // digits 4.
+    assert_eq!(nav("字幕 １２３.４５６", 7, "right", false), Some(17));
+    assert_eq!(nav("字幕 １２３.４５６", 26, "left", true), Some(17));
+    assert_eq!(nav("🎬 123.456", 5, "right", false), Some(9));
+    assert_eq!(nav("𝟙𝟚.𝟛𝟜", 17, "left", false), Some(9));
   }
 
-  // Beyond the React tests: byte offsets directly, and the selection update
-  // of `handleInputWordNavigation`.
+  // Beyond the React tests: caret offsets at the edges, and the selection
+  // update of `handleInputWordNavigation`.
 
   #[test]
   fn works_on_byte_offsets() {
