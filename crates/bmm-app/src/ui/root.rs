@@ -73,12 +73,17 @@ impl AppView {
         }
       }),
       cx.subscribe_in(&stores.ui, window, |_, _, event: &UiEvent, window, cx| {
-        let UiEvent::Toast(toast) = event;
-        let notification = match toast.kind {
-          NotificationKind::Success => Notification::success(toast.detail.clone()),
-          NotificationKind::Error => Notification::error(toast.detail.clone()),
+        let notification = |kind: NotificationKind, message: &str| match kind {
+          NotificationKind::Success => Notification::success(message.to_string()),
+          NotificationKind::Error => Notification::error(message.to_string()),
         };
-        window.push_notification(notification.title(toast.file.clone()).placement(Anchor::TopCenter), cx);
+        let notification = match event {
+          UiEvent::Toast(toast) => notification(toast.kind, &toast.detail)
+            .title(toast.file.clone())
+            .placement(Anchor::TopCenter),
+          UiEvent::Snackbar(snackbar) => notification(snackbar.kind, &snackbar.message).placement(Anchor::BottomCenter),
+        };
+        window.push_notification(notification, cx);
       }),
     ];
     let close_stores = stores.clone();

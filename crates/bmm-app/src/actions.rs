@@ -27,11 +27,19 @@
 //! creates the output directory: mkvmerge creates missing directories.
 
 use bmm_core::media_track::MediaTrack;
-use bmm_core::merge_args::{MergeInput, OrderedTrackRef, build_merge_args, build_merge_args_multi, resolve_output_dir};
+use bmm_core::merge_args::{
+  MergeInput, OrderedTrackRef, build_command_string, build_command_string_multi, build_merge_args,
+  build_merge_args_multi, resolve_output_dir,
+};
 use bmm_core::services::{resolve_merge_output_path, resolve_overridden_output_path};
-use gpui_kit::{App, AppContext, Task};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use gpui_kit::{App, AppContext, ClipboardItem, Task};
 
 use crate::domain::file_tree::combine_unit_tracks;
+use crate::domain::status::QueueItemStatus;
+use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
 
 /// Where a merge writes: a card's full output path wins, else its directory
@@ -144,14 +152,50 @@ impl MergeRequest {
     Self::unit(files, root, inputs, Some(order))
   }
 
+  /// One unit of a group card with the stores' current selection
+  /// (`GroupCard.enqueueUnit`): one member merges as a file, several as one
+  /// output in the default type-major order, as the group card passed no
+  /// order.
+  pub fn group_unit(files: &FileStore, unit: &[String]) -> Option<Self> {
+    let root = unit.first()?;
+    if unit.len() == 1 {
+      return Self::file(files, root, files.selected_tracks(root));
+    }
+    let inputs = unit
+      .iter()
+      .map(|file| MergeInput {
+        file: file.clone(),
+        tracks: files.selected_tracks(file),
+      })
+      .collect();
+    Self::unit(files, root, inputs, None)
+  }
+
+  /// The output file the merge writes. Checks the file system.
+  pub fn output_path(&self) -> String {
+    resolve_merge_output_for(&self.output, &self.root)
+  }
+
   /// The `mkvmerge` arguments, with the output path resolved. Checks the
   /// file system.
   pub fn resolve(&self) -> Vec<String> {
-    let output = resolve_merge_output_for(&self.output, &self.root);
+    let output = self.output_path();
     if self.multi {
       build_merge_args_multi(&self.inputs, &output, self.order.as_deref())
     } else {
       build_merge_args(&self.root, &output, &self.inputs[0].tracks)
+    }
+  }
+
+  /// The copyable shell command (`buildCommandString(Multi)`) for the
+  /// MKVToolNix in `mkv_toolnix_path`, with the output Merge would write.
+  /// Checks the file system.
+  pub fn command(&self, mkv_toolnix_path: &str) -> String {
+    let output = self.output_path();
+    if self.multi {
+      build_command_string_multi(&self.inputs, &output, mkv_toolnix_path, self.order.as_deref())
+    } else {
+      build_command_string(&self.root, &output, mkv_toolnix_path, &self.inputs[0].tracks)
     }
   }
 }
@@ -255,6 +299,133 @@ pub fn clear_files(stores: &Stores, cx: &mut App) {
 pub fn remove_file(stores: &Stores, file: &str, cx: &mut App) {
   stores.files.update(cx, |files, cx| files.remove_file(file, cx));
   stores.queue.update(cx, |queue, cx| queue.remove_from_queue(file, cx));
+}
+
+fn status(stores: &Stores, file: &str, cx: &App) -> Option<QueueItemStatus> {
+  stores.queue.read(cx).item(file).map(|item| item.status)
+}
+
+/// A file card's Delete (`MkvFileCard.handleDelete`): nothing while the
+/// unit's root merges; a waiting root is cancelled first; then every member
+/// goes, with its queue item. `false` when nothing was removed.
+pub fn delete_unit(stores: &Stores, unit: &[String], cx: &mut App) -> bool {
+  let Some(root) = unit.first() else {
+    return false;
+  };
+  match status(stores, root, cx) {
+    Some(QueueItemStatus::Merging) => return false,
+    Some(QueueItemStatus::Waiting) => cancel_merge(stores, root, cx),
+    _ => {}
+  }
+  for file in unit {
+    remove_file(stores, file, cx);
+  }
+  true
+}
+
+/// A group card's Clear All (`GroupCard.handleClearAll`): every unit whose
+/// root is not merging goes, a waiting root cancelled first.
+pub fn clear_units(stores: &Stores, units: &[Vec<String>], cx: &mut App) {
+  for unit in units {
+    if unit
+      .first()
+      .is_some_and(|root| status(stores, root, cx) != Some(QueueItemStatus::Merging))
+    {
+      delete_unit(stores, unit, cx);
+    }
+  }
+}
+
+/// Copies the commands of `requests`, one per line, to the clipboard and
+/// says so (`handleCopyCommand`, `handleCopyAll`). Output paths are resolved
+/// on the background executor, as for a merge.
+pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
+  if requests.is_empty() {
+    return Task::ready(());
+  }
+  let toolnix = stores.config.read(cx).config().external_tools.mkv_toolnix_path.clone();
+  let ui = stores.ui.clone();
+  cx.spawn(async move |cx| {
+    let commands = cx
+      .background_spawn(async move {
+        requests
+          .iter()
+          .map(|request| request.command(&toolnix))
+          .collect::<Vec<_>>()
+          .join("\n")
+      })
+      .await;
+    cx.update(|cx| {
+      cx.write_to_clipboard(ClipboardItem::new_string(commands));
+      ui.update(cx, |ui, cx| {
+        ui.show_snackbar(NotificationKind::Success, tr!("merge.commandCopied").to_string(), cx)
+      });
+    });
+  })
+}
+
+/// Opens `paths` in the detected BetterMediaInfo
+/// (`launchBetterMediaInfo`); a failure is shown as a card message.
+pub fn open_in_better_media_info(stores: &Stores, paths: Vec<String>, cx: &mut App) -> Task<()> {
+  let Some(dir) = stores.files.read(cx).better_media_info_dir().map(str::to_string) else {
+    return Task::ready(());
+  };
+  let ui = stores.ui.clone();
+  cx.spawn(async move |cx| {
+    let launched = cx
+      .background_spawn(async move { bmm_core::services::launch_better_media_info_from(&dir, paths) })
+      .await;
+    if let Err(error) = launched {
+      cx.update(|cx| {
+        ui.update(cx, |ui, cx| {
+          ui.show_snackbar(NotificationKind::Error, error.to_string(), cx)
+        });
+      });
+    }
+  })
+}
+
+/// Detects BetterMediaInfo now and whenever its configured path changes
+/// (`App.tsx`): the cards show Open in BetterMediaInfo while it is found. A
+/// detection that a newer one overtook is dropped.
+pub fn watch_better_media_info(stores: &Stores, cx: &mut App) {
+  let detected_path: Rc<RefCell<Option<String>>> = Rc::default();
+  let generation = Rc::new(Cell::new(0_u64));
+  let detect = {
+    let files = stores.files.clone();
+    move |path: String, cx: &mut App| {
+      if detected_path.borrow().as_ref() == Some(&path) {
+        return;
+      }
+      *detected_path.borrow_mut() = Some(path.clone());
+      generation.set(generation.get() + 1);
+      let (files, generation, current) = (files.clone(), generation.clone(), generation.get());
+      cx.spawn(async move |cx| {
+        let status = cx
+          .background_spawn(async move { bmm_core::services::detect_better_media_info(path, false) })
+          .await;
+        if generation.get() != current {
+          return;
+        }
+        let dir = status.ok().filter(|status| status.found).map(|status| status.path);
+        files.update(cx, |files, cx| files.set_better_media_info(dir, cx));
+      })
+      .detach();
+    }
+  };
+  let path = |stores: &Stores, cx: &App| {
+    stores
+      .config
+      .read(cx)
+      .config()
+      .external_tools
+      .better_media_info_path
+      .clone()
+  };
+  detect(path(stores, cx), cx);
+  let watched = stores.clone();
+  cx.observe(&stores.config, move |_, cx| detect(path(&watched, cx), cx))
+    .detach();
 }
 
 #[cfg(test)]

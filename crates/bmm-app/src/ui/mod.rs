@@ -22,9 +22,11 @@
 
 pub mod about;
 pub mod actions;
+pub mod cards;
 pub mod file_list;
 pub mod footer;
 pub mod main_content;
+pub mod output_dialog;
 pub mod root;
 pub mod toolbar;
 pub mod track_table;

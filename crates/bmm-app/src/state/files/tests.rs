@@ -634,8 +634,9 @@ fn output_overrides(cx: &mut TestAppContext) {
     assert_eq!(store.output_path("/m/a.mkv"), None);
     store.clear_group_output_dir(&s(&["/m/b.mkv"]), cx);
     assert_eq!(store.output_dir("/m/b.mkv"), None);
-    store.set_better_media_info_available(true, cx);
+    store.set_better_media_info(Some("/opt/bmi".into()), cx);
     assert!(store.better_media_info_available());
+    assert_eq!(store.better_media_info_dir(), Some("/opt/bmi"));
   });
 }
 

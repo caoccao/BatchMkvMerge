@@ -91,6 +91,7 @@ pub fn run() {
     };
     platform::install_quit(handle, &stores, cx);
     platform::ingest_launch_args(&stores, cx);
+    actions::watch_better_media_info(&stores, cx);
     // Bring the app to the front also when started from a terminal; GPUI
     // delivers focus events only to the active window.
     cx.activate(true);

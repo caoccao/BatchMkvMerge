@@ -70,11 +70,21 @@ pub struct Toast {
   pub detail: String,
 }
 
+/// A card's short message (`Command copied`, a launch error): a
+/// bottom-centre toast without a title, as the cards' snackbars were.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snackbar {
+  pub kind: NotificationKind,
+  pub message: String,
+}
+
 /// Events for the window that shows the state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiEvent {
   /// Show a toast in the main window.
   Toast(Toast),
+  /// Show a card's message at the bottom of the main window.
+  Snackbar(Snackbar),
 }
 
 pub struct UiState {
@@ -190,6 +200,12 @@ impl UiState {
   /// Shows a toast in the main window (`showNotification`).
   pub fn show_toast(&mut self, kind: NotificationKind, file: String, detail: String, cx: &mut Context<Self>) {
     cx.emit(UiEvent::Toast(Toast { kind, file, detail }));
+  }
+
+  /// Shows a card's message at the bottom of the main window (the cards'
+  /// `Snackbar`).
+  pub fn show_snackbar(&mut self, kind: NotificationKind, message: String, cx: &mut Context<Self>) {
+    cx.emit(UiEvent::Snackbar(Snackbar { kind, message }));
   }
 }
 

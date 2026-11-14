@@ -10,6 +10,7 @@ dependencies = [
  "async-channel",
  "bmm-core",
  "bmm-platform",
+ "chrono",
  "gpui-kit",
  "log",
  "objc2 0.6.4",

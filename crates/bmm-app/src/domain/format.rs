@@ -145,6 +145,51 @@ pub fn format_track_counts(counts: &MediaTrackCounts) -> String {
   .join(" ")
 }
 
+/// A container's mux date (UTC, as the parser stores it) in the local time
+/// zone, `2026-05-24 09:00:00` in every language (Q&A; React used the
+/// browser's `toLocaleString()`). `None` without a date; a value that is no
+/// date is shown as it is, as React did.
+pub fn format_encoded_date(date_utc: Option<&str>) -> Option<String> {
+  format_encoded_date_in(date_utc, &chrono::Local)
+}
+
+/// [`format_encoded_date`] in the time zone `tz`. Like JavaScript's `Date`,
+/// a date or year alone means midnight UTC and a date-time without an
+/// offset means local time.
+pub fn format_encoded_date_in<Tz: chrono::TimeZone>(date_utc: Option<&str>, tz: &Tz) -> Option<String>
+where
+  Tz::Offset: std::fmt::Display,
+{
+  use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+  let raw = date_utc?.trim();
+  if raw.is_empty() {
+    return None;
+  }
+  let instant: Option<DateTime<Utc>> = DateTime::parse_from_rfc3339(raw)
+    .map(|date| date.with_timezone(&Utc))
+    .ok()
+    .or_else(|| {
+      NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+          (raw.len() == 4)
+            .then(|| raw.parse::<i32>().ok())
+            .flatten()
+            .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
+        })
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|midnight| midnight.and_utc())
+    });
+  let shown = match instant {
+    Some(instant) => instant.with_timezone(tz).naive_local(),
+    None => match NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S") {
+      Ok(local) => local,
+      Err(_) => return Some(raw.to_string()),
+    },
+  };
+  Some(shown.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
 /// `HH:MM:SS` with whole seconds rounded down (hours keep growing past 99);
 /// `--:--:--` when there is no duration (not started, or a negative span).
 pub fn format_hms(duration: Option<Duration>) -> String {
@@ -279,6 +324,40 @@ mod tests {
     assert_eq!(trim_fraction_zeros("100"), "100");
     assert_eq!(trim_fraction_zeros("100.0"), "100");
     assert_eq!(trim_fraction_zeros("0.05"), "0.05");
+  }
+
+  #[test]
+  fn shows_encoded_dates_in_the_time_zone() {
+    let tokyo = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    let utc = chrono::Utc;
+    assert_eq!(format_encoded_date_in(None, &utc), None);
+    assert_eq!(format_encoded_date_in(Some(" "), &utc), None);
+    assert_eq!(
+      format_encoded_date_in(Some("2026-05-24T00:00:00Z"), &tokyo).as_deref(),
+      Some("2026-05-24 09:00:00")
+    );
+    assert_eq!(
+      format_encoded_date_in(Some("2026-05-23T20:30:15-03:00"), &utc).as_deref(),
+      Some("2026-05-23 23:30:15")
+    );
+    // A date or year alone is midnight UTC, as JavaScript reads it.
+    assert_eq!(
+      format_encoded_date_in(Some("2024-01-02"), &tokyo).as_deref(),
+      Some("2024-01-02 09:00:00")
+    );
+    assert_eq!(
+      format_encoded_date_in(Some("2024"), &tokyo).as_deref(),
+      Some("2024-01-01 09:00:00")
+    );
+    // Without an offset the time is already local.
+    assert_eq!(
+      format_encoded_date_in(Some("2024-03-04T05:06:07"), &tokyo).as_deref(),
+      Some("2024-03-04 05:06:07")
+    );
+    assert_eq!(
+      format_encoded_date_in(Some("last spring"), &utc).as_deref(),
+      Some("last spring")
+    );
   }
 
   #[test]

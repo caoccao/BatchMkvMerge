@@ -37,7 +37,7 @@
 
 pub mod autocomplete;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1049,18 +1049,5 @@ impl Render for TrackTable {
       .children(self.render_ghost(cx))
       .horizontal_scrollbar(&self.scroll_x)
       .into_any_element()
-  }
-}
-
-/// A one-line header for a table's box until the cards arrive: the root's
-/// path, or the group's directory with its unit count.
-pub fn scope_title(scope: &TableScope) -> String {
-  if scope.is_group() {
-    let dir = bmm_core::merge_args::parent_dir(scope.id());
-    format!("{dir} ({})", scope.units().len())
-  } else if scope.members().len() > 1 {
-    format!("{} (+{})", scope.id(), scope.members().len() - 1)
-  } else {
-    scope.id().to_string()
   }
 }

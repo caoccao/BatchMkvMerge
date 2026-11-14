@@ -16,29 +16,38 @@
 */
 
 //! The File List tab (`FileList.tsx`): the Welcome page while it is empty,
-//! otherwise one box per card (a unit, or a group of structurally identical
-//! units) with a one-line header and its track table. The boxes become the
-//! merge cards with the cards.
+//! otherwise one card per entry: a [`FileCard`] per merge unit, a
+//! [`GroupCard`] per group of structurally identical units.
 //!
-//! The table views are kept by their first root, so they survive files
-//! being added, grouped and edited (typing in a group's language cell
-//! changes its group key). A click in a box makes it the active card, the
-//! one the table keys act on: ↑/↓, Space, Ctrl/Cmd+A and Ctrl/Cmd+Shift+A
-//! work wherever the focus is, as React's document listener did, except in
-//! a text field and when another control binds the key.
+//! The cards and their track tables are kept by the card's first root, so
+//! they survive files being added, grouped and edited (typing in a group's
+//! language cell changes its group key). Each card is drawn as a cached
+//! view at the height it measured, so a card that changes repaints alone.
+//!
+//! A card dragged by its handle onto another file card merges into it
+//! (`cardDrag.ts`): the list hit-tests the cards while the drag moves, marks
+//! the target and sets the cursor (copy over a file card, not-allowed over a
+//! group card or the dragged card itself). Files dragged in from the system
+//! outline the list.
+//!
+//! A click in a card makes it the active card, the one the table keys act
+//! on: ↑/↓, Space, Ctrl/Cmd+A and Ctrl/Cmd+Shift+A work wherever the focus
+//! is, as React's document listener did, except in a text field and when
+//! another control binds the key.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::*;
 
-use super::track_table::{TrackTable, scope_title};
+use super::cards::{CardDrag, FileCard, GroupCard};
+use super::track_table::TrackTable;
 use super::welcome::Welcome;
-use crate::domain::status::{QueueItem, QueueItemStatus};
-use crate::state::files::{FileEvent, TableScope};
-use crate::state::queue::QueueEvent;
+use crate::state::files::TableScope;
 use crate::state::{Stores, TabType};
 
 /// A key the active card's table handles.
@@ -72,10 +81,90 @@ pub fn table_key(keystroke: &Keystroke) -> Option<TableKey> {
   }
 }
 
+/// Where a card drag points: a file card it may merge into, a card it may
+/// not merge into (a group card, or itself), or no card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DropTarget {
+  Card(String),
+  Refused,
+  None,
+}
+
+/// The drop target of a drag of `source` at `position` over the cards
+/// `scopes`, laid out at `bounds` (same order).
+pub fn drop_target(
+  source: &str,
+  position: Point<Pixels>,
+  scopes: &[TableScope],
+  bounds: &[Bounds<Pixels>],
+) -> DropTarget {
+  match scopes.iter().zip(bounds).find(|(_, bounds)| bounds.contains(&position)) {
+    Some((scope, _)) if !scope.is_group() && scope.id() != source => DropTarget::Card(scope.id().to_string()),
+    Some(_) => DropTarget::Refused,
+    None => DropTarget::None,
+  }
+}
+
+/// A card view of either kind.
+#[derive(Clone)]
+pub enum CardView {
+  File(Entity<FileCard>),
+  Group(Entity<GroupCard>),
+}
+
+impl CardView {
+  pub fn file(&self) -> Option<&Entity<FileCard>> {
+    match self {
+      Self::File(card) => Some(card),
+      Self::Group(_) => None,
+    }
+  }
+
+  pub fn group(&self) -> Option<&Entity<GroupCard>> {
+    match self {
+      Self::File(_) => None,
+      Self::Group(card) => Some(card),
+    }
+  }
+
+  pub fn render_count(&self, cx: &App) -> usize {
+    match self {
+      Self::File(card) => card.read(cx).render_count(),
+      Self::Group(card) => card.read(cx).render_count(),
+    }
+  }
+
+  /// The card as a cached view at its measured height; uncached until it
+  /// has measured itself.
+  fn element(&self, cx: &App) -> AnyElement {
+    fn cached<V: Render>(card: &Entity<V>, height: Option<Pixels>) -> AnyElement {
+      match height {
+        Some(height) => card
+          .clone()
+          .cached(StyleRefinement::default().w_full().h(height))
+          .into_any_element(),
+        None => card.clone().into_any_element(),
+      }
+    }
+    match self {
+      Self::File(card) => cached(card, card.read(cx).height().get()),
+      Self::Group(card) => cached(card, card.read(cx).height().get()),
+    }
+  }
+}
+
 pub struct FileListView {
   stores: Stores,
   /// The table of each card, by its first root.
   tables: HashMap<String, Entity<TrackTable>>,
+  /// The cards, by their first root.
+  cards: HashMap<String, CardView>,
+  /// The cards in list order and their bounds in the last frame, for the
+  /// card drag.
+  scopes: Vec<TableScope>,
+  card_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+  /// The file card a card drag would merge into.
+  drag_target: Option<String>,
   scroll: ScrollHandle,
   window: Option<AnyWindowHandle>,
   _subscriptions: Vec<Subscription>,
@@ -85,18 +174,9 @@ impl FileListView {
   pub fn new(stores: Stores, cx: &mut Context<Self>) -> Self {
     let view = cx.weak_entity();
     let subscriptions = vec![
+      // Cards come and go only with structural changes; each card repaints
+      // its own data.
       cx.observe(&stores.files, |_, _, cx| cx.notify()),
-      cx.subscribe(&stores.files, |_, _, event: &FileEvent, cx| {
-        // The headers show the active card; the rows repaint themselves.
-        if matches!(event, FileEvent::Highlight { .. }) {
-          cx.notify();
-        }
-      }),
-      cx.subscribe(&stores.queue, |_, _, event: &QueueEvent, cx| {
-        if matches!(event, QueueEvent::ItemChanged { .. }) {
-          cx.notify();
-        }
-      }),
       cx.intercept_keystrokes(move |event, window, cx| {
         let handled = view
           .update(cx, |view, cx| view.on_keystroke(event, window, cx))
@@ -109,6 +189,10 @@ impl FileListView {
     Self {
       stores,
       tables: HashMap::new(),
+      cards: HashMap::new(),
+      scopes: Vec::new(),
+      card_bounds: Rc::default(),
+      drag_target: None,
       scroll: ScrollHandle::new(),
       window: None,
       _subscriptions: subscriptions,
@@ -118,6 +202,11 @@ impl FileListView {
   /// The table of the card whose first root is `id`.
   pub fn table(&self, id: &str) -> Option<Entity<TrackTable>> {
     self.tables.get(id).cloned()
+  }
+
+  /// The card whose first root is `id`.
+  pub fn card(&self, id: &str) -> Option<&CardView> {
+    self.cards.get(id)
   }
 
   /// A keystroke anywhere in the window, before the key bindings: the
@@ -171,14 +260,20 @@ impl FileListView {
     }
   }
 
-  /// Creates the tables of new cards, hands the others their current units
-  /// and drops the tables of cards that are gone.
-  fn sync_tables(&mut self, scopes: &[TableScope], cx: &mut Context<Self>) {
+  /// Creates the tables and cards of new entries, hands the others their
+  /// current units and drops those of entries that are gone. A card that
+  /// changes kind (a unit joining a group) is made again around the same
+  /// table.
+  fn sync_cards(&mut self, scopes: &[TableScope], cx: &mut Context<Self>) {
     let mut live = HashSet::new();
     for scope in scopes {
-      live.insert(scope.id().to_string());
-      match self.tables.get(scope.id()) {
-        Some(table) => table.update(cx, |table, cx| table.set_scope(scope.clone(), cx)),
+      let id = scope.id().to_string();
+      live.insert(id.clone());
+      let table = match self.tables.get(&id) {
+        Some(table) => {
+          table.update(cx, |table, cx| table.set_scope(scope.clone(), cx));
+          table.clone()
+        }
         None => {
           let (stores, scroll) = (self.stores.clone(), self.scroll.clone());
           let table = cx.new(|cx| {
@@ -186,77 +281,112 @@ impl FileListView {
             table.set_scroll_handle(scroll);
             table
           });
-          self.tables.insert(scope.id().to_string(), table);
+          self.tables.insert(id.clone(), table.clone());
+          table
+        }
+      };
+      match (self.cards.get(&id), scope.is_group()) {
+        (Some(CardView::File(card)), false) => {
+          card.update(cx, |card, cx| card.set_members(scope.members().to_vec(), cx));
+        }
+        (Some(CardView::Group(card)), true) => {
+          card.update(cx, |card, cx| card.set_units(scope.units().to_vec(), cx));
+        }
+        _ => {
+          let stores = self.stores.clone();
+          let card = if scope.is_group() {
+            let units = scope.units().to_vec();
+            CardView::Group(cx.new(|cx| GroupCard::new(stores, units, table, cx)))
+          } else {
+            let members = scope.members().to_vec();
+            CardView::File(cx.new(|cx| FileCard::new(stores, members, table, cx)))
+          };
+          self.cards.insert(id, card);
         }
       }
     }
     self.tables.retain(|id, _| live.contains(id));
+    self.cards.retain(|id, _| live.contains(id));
   }
-}
 
-/// A queue item's status as the Queue tab shows it: the label (with the
-/// percentage while merging) in the status colour.
-fn status_label(item: &QueueItem, cx: &App) -> (String, Hsla) {
-  let theme = cx.theme();
-  let color = match item.status {
-    QueueItemStatus::Merging | QueueItemStatus::Completed => theme.success,
-    QueueItemStatus::Cancelled | QueueItemStatus::Failed => theme.danger,
-    QueueItemStatus::Waiting => theme.foreground,
-  };
-  let mut label = tr!(item.status.label_key()).to_string();
-  if item.status == QueueItemStatus::Merging {
-    label.push_str(&format!(" {}%", item.progress));
+  /// A card drag moved: marks the file card it would merge into and shows
+  /// whether it may.
+  fn drag_moved(&mut self, event: &DragMoveEvent<CardDrag>, window: &mut Window, cx: &mut Context<Self>) {
+    let source = event.drag(cx).root.clone();
+    let target = drop_target(&source, event.event.position, &self.scopes, &self.card_bounds.borrow());
+    let cursor = match target {
+      DropTarget::Card(_) => CursorStyle::DragCopy,
+      DropTarget::Refused => CursorStyle::OperationNotAllowed,
+      DropTarget::None => CursorStyle::ClosedHand,
+    };
+    cx.set_active_drag_cursor_style(cursor, window);
+    let target = match target {
+      DropTarget::Card(root) => Some(root),
+      _ => None,
+    };
+    self.set_drag_target(target, cx);
   }
-  (label, color)
+
+  fn set_drag_target(&mut self, target: Option<String>, cx: &mut Context<Self>) {
+    if self.drag_target != target {
+      self.drag_target = target.clone();
+      self
+        .stores
+        .files
+        .update(cx, |files, cx| files.set_drop_target(target, cx));
+    }
+  }
+
+  /// A card dropped in the list: it merges into the marked file card.
+  fn dropped(&mut self, drag: &CardDrag, cx: &mut Context<Self>) {
+    let target = self.drag_target.take();
+    self.stores.files.update(cx, |files, cx| {
+      files.set_drop_target(None, cx);
+      if let Some(target) = target
+        && target != drag.root
+      {
+        files.merge_card_into(&drag.root, &target, cx);
+      }
+    });
+  }
 }
 
 impl Render for FileListView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.window = Some(window.window_handle());
+    if self.drag_target.is_some() && !cx.has_active_drag() {
+      // The drag ended outside the list.
+      cx.defer_in(window, |this, _, cx| this.set_drag_target(None, cx));
+    }
+    let primary = cx.theme().primary;
+    // System files dragged over the window outline the list (Q&A).
+    let drop_zone = div()
+      .id("file-drop-zone")
+      .test_support()
+      .size_full()
+      .border_2()
+      .border_color(transparent_black())
+      .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_dashed().border_color(primary));
+
     let files = self.stores.files.read(cx);
     if !files.has_files() {
       self.tables.clear();
-      return Welcome::new(self.stores.clone()).into_any_element();
+      self.cards.clear();
+      self.scopes.clear();
+      return drop_zone.child(Welcome::new(self.stores.clone())).into_any_element();
     }
     let scopes: Vec<TableScope> = files.entries().iter().map(TableScope::from_entry).collect();
-    let active = files.active_card().map(str::to_string);
-    self.sync_tables(&scopes, cx);
+    self.sync_cards(&scopes, cx);
 
-    let theme = cx.theme();
-    let (border, primary, muted) = (theme.border, theme.primary, theme.muted_foreground);
-    let boxes: Vec<AnyElement> = scopes
+    let entries: Vec<AnyElement> = scopes
       .iter()
       .enumerate()
       .map(|(index, scope)| {
-        let id = scope.id().to_string();
-        let queue = self.stores.queue.read(cx);
-        let statuses: Vec<AnyElement> = scope
-          .roots()
-          .filter_map(|root| queue.item(root).map(|item| (root, item)))
-          .map(|(root, item)| {
-            let (label, color) = status_label(item, cx);
-            let label = if scope.is_group() {
-              format!("{}: {label}", bmm_core::merge_args::file_name(root))
-            } else {
-              label
-            };
-            div().text_color(color).child(label).into_any_element()
-          })
-          .collect();
-        let card = id.clone();
-        v_flex()
+        let card = scope.id().to_string();
+        div()
           .id(("file-entry", index))
           .test_support()
           .w_full()
-          .p(super::space(1.0))
-          .gap(super::space(0.5))
-          .border_1()
-          .rounded(px(4.0))
-          .border_color(if active.as_deref() == Some(id.as_str()) {
-            primary
-          } else {
-            border
-          })
           .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
             let card = card.clone();
             this
@@ -264,34 +394,32 @@ impl Render for FileListView {
               .files
               .update(cx, |files, cx| files.set_active_card(Some(card), cx));
           }))
-          .child(
-            h_flex()
-              .flex_wrap()
-              .gap(super::space(1.0))
-              .child(
-                div()
-                  .min_w_0()
-                  .max_w_full()
-                  .truncate()
-                  .text_color(muted)
-                  .child(scope_title(scope)),
-              )
-              .children(statuses),
-          )
-          .child(self.tables[&id].clone())
+          .child(self.cards[scope.id()].element(cx))
           .into_any_element()
       })
       .collect();
-    div()
-      .id("file-list")
-      .test_support()
-      .size_full()
-      .overflow_y_scroll()
-      .restrict_scroll_to_axis()
-      .track_scroll(&self.scroll)
-      .text_size(super::text::body2())
-      .child(v_flex().gap(super::space(1.0)).children(boxes))
-      .vertical_scrollbar(&self.scroll)
+    self.scopes = scopes;
+    let card_bounds = self.card_bounds.clone();
+    drop_zone
+      .child(
+        div()
+          .id("file-list")
+          .test_support()
+          .size_full()
+          .overflow_y_scroll()
+          .restrict_scroll_to_axis()
+          .track_scroll(&self.scroll)
+          .text_size(super::text::body2())
+          .on_drag_move(cx.listener(Self::drag_moved))
+          .on_drop(cx.listener(|this, drag: &CardDrag, _, cx| this.dropped(drag, cx)))
+          .child(
+            v_flex()
+              .gap(super::space(1.0))
+              .on_children_prepainted(move |bounds, _, _| *card_bounds.borrow_mut() = bounds)
+              .children(entries),
+          )
+          .vertical_scrollbar(&self.scroll),
+      )
       .into_any_element()
   }
 }

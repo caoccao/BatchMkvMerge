@@ -113,7 +113,8 @@ pub struct FileStore {
   global_output_dir: Option<String>,
   /// The card the keyboard acts on (a unit root or a group key).
   active_card: Option<String>,
-  better_media_info_available: bool,
+  /// Where BetterMediaInfo was detected; `None` hides the cards' button.
+  better_media_info: Option<String>,
   /// Why a file could not be parsed; it is not tried again until removed.
   load_errors: HashMap<String, MediaMetadataErrorPayload>,
   /// Files being parsed on the background executor.
@@ -160,7 +161,7 @@ impl FileStore {
       drop_target_root: None,
       global_output_dir: None,
       active_card: None,
-      better_media_info_available: false,
+      better_media_info: None,
       load_errors: HashMap::new(),
       in_flight: HashSet::new(),
       automated_units: HashSet::new(),
@@ -262,7 +263,12 @@ impl FileStore {
   }
 
   pub fn better_media_info_available(&self) -> bool {
-    self.better_media_info_available
+    self.better_media_info.is_some()
+  }
+
+  /// The directory BetterMediaInfo was detected in.
+  pub fn better_media_info_dir(&self) -> Option<&str> {
+    self.better_media_info.as_deref()
   }
 
   /// The card units, root first (one card and one merge output each).
@@ -556,10 +562,11 @@ impl FileStore {
     }
   }
 
-  /// `setBetterMediaInfoAvailable`.
-  pub fn set_better_media_info_available(&mut self, available: bool, cx: &mut Context<Self>) {
-    if self.better_media_info_available != available {
-      self.better_media_info_available = available;
+  /// Where BetterMediaInfo was detected, or `None` when it was not
+  /// (`setBetterMediaInfoAvailable`, with the directory the launch needs).
+  pub fn set_better_media_info(&mut self, dir: Option<String>, cx: &mut Context<Self>) {
+    if self.better_media_info != dir {
+      self.better_media_info = dir;
       cx.notify();
     }
   }

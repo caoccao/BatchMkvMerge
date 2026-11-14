@@ -16,9 +16,11 @@
 */
 
 //! The toolbar (`Toolbar.tsx`): icon buttons with tooltips and the same
-//! enabled states. Merge All, Cancel All, Clear, Group by file name, Settings
-//! and About work; the global output path and the group-mode and profile
-//! menus join with the features they drive.
+//! enabled states. The global output path, Merge All, Cancel All, Clear,
+//! Group by file name, Settings and About work; the group-mode and profile
+//! menus join with the settings.
+
+use std::rc::Rc;
 
 use bmm_core::config::GroupMode;
 use gpui_kit::assets::IconName;
@@ -29,6 +31,7 @@ use gpui_kit::*;
 
 use crate::actions;
 use crate::state::{Stores, TabType};
+use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
 
 /// The i18n key naming a group mode (`groupModeLabelKey`).
 pub fn group_mode_label_key(mode: &GroupMode) -> &'static str {
@@ -78,6 +81,24 @@ fn divider(cx: &App) -> Div {
   div().w(px(1.0)).h(px(20.0)).mx(super::space(0.5)).bg(cx.theme().border)
 }
 
+impl Toolbar {
+  /// The session's default output directory (`Toolbar.tsx`): the output
+  /// dialog in directory mode; empty clears it.
+  fn open_global_output_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let files = self.stores.files.clone();
+    let request = OutputDialogRequest {
+      title: tr!("toolbar.setGlobalOutputPath"),
+      initial: files.read(cx).global_output_dir().unwrap_or_default().to_string(),
+      mode: OutputMode::Directory,
+      default_file_name: String::new(),
+      on_confirm: Rc::new(move |value: String, cx: &mut App| {
+        files.update(cx, |files, cx| files.set_global_output_dir(value, cx));
+      }),
+    };
+    OutputPathDialog::open(request, window, cx);
+  }
+}
+
 impl Render for Toolbar {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme();
@@ -101,13 +122,16 @@ impl Render for Toolbar {
     h_flex().id("toolbar").test_support().gap(super::space(1.0)).child(
       h_flex()
         .items_center()
-        .child(icon_button(
-          "toolbar-global-output",
-          IconName::FolderCog,
-          Some(if has_global_output { primary } else { muted }),
-          tr!("toolbar.setGlobalOutputPath"),
-          true,
-        ))
+        .child(
+          icon_button(
+            "toolbar-global-output",
+            IconName::FolderCog,
+            Some(if has_global_output { primary } else { muted }),
+            tr!("toolbar.setGlobalOutputPath"),
+            true,
+          )
+          .on_click(cx.listener(|this, _, window, cx| this.open_global_output_dialog(window, cx))),
+        )
         .child(
           icon_button(
             "toolbar-merge-all",

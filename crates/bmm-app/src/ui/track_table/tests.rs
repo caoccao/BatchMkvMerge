@@ -38,12 +38,12 @@ use crate::ui::tests::{Shell, started};
 // Matroska movie with every row type, an audio-only `.mka` and an `.srt`.
 #[allow(dead_code)]
 #[path = "../../../../bmm-core/tests/golden/fixtures.rs"]
-mod golden;
+pub(crate) mod golden;
 
 /// The golden fixtures written under `dir` as `{prefix}{name}.{ext}` and
 /// parsed: the paths in fixture order (movie, `.mka`, `.srt`) and the
 /// metadata by path.
-fn golden_files(dir: &TempDir, prefix: &str) -> (Vec<String>, HashMap<String, MediaMetadata>) {
+pub(crate) fn golden_files(dir: &TempDir, prefix: &str) -> (Vec<String>, HashMap<String, MediaMetadata>) {
   let mut paths = Vec::new();
   let mut parsed = HashMap::new();
   for fixture in golden::fixtures() {
@@ -66,7 +66,12 @@ fn english(config: Config) -> Config {
 }
 
 /// A shell listing `files` (parsed from `fixtures`).
-fn shell(cx: &mut TestAppContext, config: Config, fixtures: HashMap<String, MediaMetadata>, files: &[&str]) -> Shell {
+pub(crate) fn shell(
+  cx: &mut TestAppContext,
+  config: Config,
+  fixtures: HashMap<String, MediaMetadata>,
+  files: &[&str],
+) -> Shell {
   let shell = Shell::with_config(cx, english(config), fixtures);
   shell.add_parsed(cx, files);
   // GPUI delivers focus events only to an active window.
@@ -76,7 +81,7 @@ fn shell(cx: &mut TestAppContext, config: Config, fixtures: HashMap<String, Medi
 }
 
 /// A shell with the golden movie alone on its card.
-fn movie_shell(cx: &mut TestAppContext, name: &str) -> (Shell, String, TempDir) {
+pub(crate) fn movie_shell(cx: &mut TestAppContext, name: &str) -> (Shell, String, TempDir) {
   let dir = TempDir::new(name);
   let (paths, parsed) = golden_files(&dir, "");
   let movie = paths[0].clone();
@@ -84,7 +89,7 @@ fn movie_shell(cx: &mut TestAppContext, name: &str) -> (Shell, String, TempDir) 
   (shell, movie, dir)
 }
 
-fn table(shell: &Shell, cx: &mut TestAppContext, id: &str) -> Entity<TrackTable> {
+pub(crate) fn table(shell: &Shell, cx: &mut TestAppContext, id: &str) -> Entity<TrackTable> {
   cx.read(|cx| {
     shell
       .view
@@ -135,7 +140,7 @@ fn row_keys(shell: &Shell, cx: &mut TestAppContext, id: &str) -> Vec<String> {
   })
 }
 
-fn selected_ids(shell: &Shell, cx: &mut TestAppContext, file: &str) -> Vec<String> {
+pub(crate) fn selected_ids(shell: &Shell, cx: &mut TestAppContext, file: &str) -> Vec<String> {
   shell.stores.files.read_with(cx, |files, _| {
     files.selected_ids(file).map(<[String]>::to_vec).unwrap_or_default()
   })
@@ -522,6 +527,8 @@ fn a_group_cards_table_edits_every_unit(cx: &mut TestAppContext) {
     ..Config::default()
   };
   let shell = shell(cx, config, parsed, &[&first[0], &second[0]]);
+  // Wide enough for the root list and the whole table.
+  shell.resize(cx, 1400.0, 760.0);
   let scope = table(&shell, cx, &first[0]).read_with(cx, |table, _| table.scope().clone());
   assert!(scope.is_group());
   in_table(&shell, cx, &first[0], |window, cx| {
@@ -746,17 +753,4 @@ fn the_cursor_steps_and_stops_at_the_ends() {
   assert_eq!(step_cursor(4, Some(3), true), Some(3));
   assert_eq!(step_cursor(4, Some(0), false), Some(0));
   assert_eq!(step_cursor(4, Some(1), true), Some(2));
-}
-
-#[test]
-fn box_titles_name_the_root_or_the_group() {
-  assert_eq!(scope_title(&TableScope::unit(s(&["/m/a.mkv"]))), "/m/a.mkv");
-  assert_eq!(
-    scope_title(&TableScope::unit(s(&["/m/a.mkv", "/m/a.srt"]))),
-    "/m/a.mkv (+1)"
-  );
-  assert_eq!(
-    scope_title(&TableScope::group(vec![s(&["/m/a.mkv"]), s(&["/m/b.mkv"])])),
-    "/m (2)"
-  );
 }

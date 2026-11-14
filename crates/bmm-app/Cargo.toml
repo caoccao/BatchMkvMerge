@@ -23,6 +23,9 @@ anyhow.workspace = true
 # Merge events from the core's worker threads to the foreground executor.
 async-channel = "2"
 bmm-core = { path = "../bmm-core" }
+# The card summary's encoded date in the local time zone; gpui already
+# compiles it with these features.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 gpui-kit = "=0.9.1"
 log.workspace = true
 # Locale files under `locales/` and `t!`; gpui-kit's i18n needs 4.2 or later.

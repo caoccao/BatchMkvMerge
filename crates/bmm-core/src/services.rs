@@ -222,7 +222,13 @@ pub fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
   if configured.is_empty() {
     anyhow::bail!("BetterMediaInfo path is not set");
   }
-  let exe = Path::new(&configured).join(better_media_info_exe_name());
+  launch_better_media_info_from(&configured, paths)
+}
+
+/// Opens `paths` in the BetterMediaInfo installed in `dir` (the directory
+/// [`detect_better_media_info`] reports).
+pub fn launch_better_media_info_from(dir: &str, paths: Vec<String>) -> Result<()> {
+  let exe = Path::new(dir.trim()).join(better_media_info_exe_name());
   if !exe.is_file() {
     anyhow::bail!("BetterMediaInfo executable not found at {}", exe.display());
   }
@@ -426,5 +432,12 @@ mod tests {
     let opts = ParseOptions::default();
     let err = read_media_metadata("this-file-does-not-exist-12345.mkv".to_owned(), opts).unwrap_err();
     assert!(matches!(err, ParseError::Io { .. }));
+  }
+
+  #[test]
+  fn launching_better_media_info_from_a_directory_without_it_fails() {
+    let dir = std::env::temp_dir().join("bmm_no_better_media_info_here");
+    let err = launch_better_media_info_from(&dir.to_string_lossy(), vec!["/media/a.mkv".to_owned()]).unwrap_err();
+    assert!(err.to_string().contains("executable not found"), "{err}");
   }
 }

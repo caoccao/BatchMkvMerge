@@ -154,8 +154,15 @@ impl Shell {
       .unwrap_or_else(|| crate::window_title().to_string())
   }
 
-  fn toasts(&self, cx: &mut TestAppContext) -> usize {
+  pub(super) fn toasts(&self, cx: &mut TestAppContext) -> usize {
     self.window(cx, |window, cx| window.notifications(cx).len())
+  }
+
+  /// Resizes the window's content and draws a frame.
+  pub(super) fn resize(&self, cx: &mut TestAppContext, width: f32, height: f32) {
+    cx.simulate_window_resize(self.handle, size(px(width), px(height)));
+    cx.run_until_parked();
+    self.window(cx, |window, cx| window.render_frame(cx));
   }
 
   pub(super) fn window<R>(&self, cx: &mut TestAppContext, f: impl FnOnce(&mut Window, &mut App) -> R) -> R {
@@ -429,7 +436,7 @@ pub(super) fn started(file: &str) -> MergeEvent {
   }
 }
 
-fn finished(file: &str, outcome: MergeOutcome, error: Option<&str>) -> MergeEvent {
+pub(super) fn finished(file: &str, outcome: MergeOutcome, error: Option<&str>) -> MergeEvent {
   MergeEvent::Finished {
     file: file.to_string(),
     outcome,
@@ -461,7 +468,7 @@ impl Shell {
       .read_with(cx, |queue, _| queue.item(file).map(|item| item.status))
   }
 
-  fn disabled(&self, cx: &mut TestAppContext, id: &'static str) -> bool {
+  pub(super) fn disabled(&self, cx: &mut TestAppContext, id: &'static str) -> bool {
     self.window(cx, |window, cx| {
       window.render_frame(cx);
       window.find(id).disabled() == Some(true)
