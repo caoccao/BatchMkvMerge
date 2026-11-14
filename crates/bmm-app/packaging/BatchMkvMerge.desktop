@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=AudioVideo;Video;
+Comment=A tool to batch merge media files to MKV files using mkvmerge.
+Exec=BatchMkvMerge
+StartupWMClass=BatchMkvMerge
+Icon=BatchMkvMerge
+Name=BatchMkvMerge
+Terminal=false
+Type=Application

@@ -17,11 +17,17 @@
 
 ## Migration in progress
 
-The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch, in phases 0-14, one Conventional Commit per phase. The maintainer keeps the plan outside the repository; `CLAUDE.md` lists the phases. Until the Tauri app is removed (Phase 12), it stays buildable and this document describes it.
+The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch, in phases 0-14, one Conventional Commit per phase. The maintainer keeps the plan outside the repository; `CLAUDE.md` lists the phases. The Tauri app is no longer built or run: `src/` and `src-tauri/` stay in the tree as unbuilt porting reference until Phase 12 deletes them, and sections marked "reference" describe that app. The new app is `crates/bmm-app`.
 
 ## Tech Stack
 
-### Frontend
+### gpui-kit app
+
+- [gpui-kit](https://crates.io/crates/gpui-kit) 0.9.1 (exact pin; GPUI with the `gpui-pre` backend), in `crates/bmm-app` (package `BatchMkvMerge`)
+- `crates/bmm-platform`: per-OS integrations GPUI lacks (taskbar / Dock / launcher progress through `ITaskbarList3`, `NSDockTile`, the `com.canonical.Unity.LauncherEntry` D-Bus signal)
+- Installers: cargo-packager 0.11.8 (`.app`, `.dmg`, NSIS `.exe`, WiX `.msi`, `.deb`, `.AppImage`) and cargo-generate-rpm 0.21.1 (`.rpm`)
+
+### Frontend (reference, unbuilt)
 
 - React 19 + TypeScript + Vite
 - Material UI 9, Emotion, and dnd-kit for drag/reorder UX
@@ -31,12 +37,12 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 
 ### Backend
 
-- Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library and the Tauri v2 shell `src-tauri`
+- Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library, `crates/bmm-platform` and `crates/bmm-app`; the Tauri v2 shell `src-tauri` is excluded (reference, unbuilt)
 - Native Rust media metadata parser under `crates/bmm-core/src/media_metadata/`
 - JSON-only wire protocol (`invoke` commands + Tauri events)
 - Tokio runtime for async command handling plus dedicated worker threads for merge processes
 
-### Tauri plugins
+### Tauri plugins (reference, unbuilt)
 
 - `tauri-plugin-clipboard-manager`
 - `tauri-plugin-dialog`
@@ -49,42 +55,48 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 
 ## Tooling
 
-- [pnpm](https://pnpm.io/) — package manager
 - [Rust](https://www.rust-lang.org/) 1.100.0 — pinned in `rust-toolchain.toml` at the repository root
+- [cargo-packager](https://crates.io/crates/cargo-packager) 0.11.8 and [cargo-generate-rpm](https://crates.io/crates/cargo-generate-rpm) 0.21.1 — installers (`cargo install --locked --version …`)
+- [cargo-llvm-cov](https://crates.io/crates/cargo-llvm-cov) — coverage gate
 - [Deno](https://deno.com/) — scripts under `scripts/ts/` (e.g. `change-version.ts`)
 
 ## Repository layout
 
-- `src/`: React app (UI, state store, protocol/types, service wrappers)
-- `src/components/`: UI screens/widgets (cards, queue, settings, toolbar)
+- `src/`: React app (UI, state store, protocol/types, service wrappers) — reference, unbuilt
+- `src/components/`: UI screens/widgets (cards, queue, settings, toolbar) — reference, unbuilt
 - `src/i18n/locales/`: locale dictionaries (9 languages)
-- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `src-tauri`; one `target/`)
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `crates/bmm-platform`, `crates/bmm-app`; `src-tauri` excluded; one `target/`)
+- `crates/bmm-app/`: the gpui-kit app (`src/`), its Phase 2 prototypes (`examples/spike/`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
+- `crates/bmm-platform/src/`: taskbar / Dock / launcher progress per OS
 - `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs)
 - `crates/bmm-core/src/media_metadata/`: native parser implementation
 - `crates/bmm-core/tests/`: parser fixture integration tests
-- `src-tauri/src/`: Tauri shell (commands, window state, notifications)
-- `src-tauri/tests/`: TypeScript protocol regeneration check
+- `src-tauri/src/`: Tauri shell (commands, window state, notifications) — reference, unbuilt
+- `src-tauri/tests/`: TypeScript protocol regeneration check — no longer runs
 - `docs/parsers/`: parser coverage and behavior notes per format
 - `scripts/ts/`: maintenance scripts (including multi-file version bumping)
 
 ## Commands
 
 ```bash
-pnpm install                           # install JS dependencies
-pnpm tauri dev --release               # run the app in development (hot-reload frontend + Rust, release build)
-pnpm tauri build                       # build installers for the current platform
-pnpm dev                               # run only the Vite dev server (no Tauri window)
-pnpm build                             # type-check and build the frontend
-cargo check --release --workspace      # fast Rust type-check
-cargo test --release --workspace       # run Rust unit + integration tests
-cargo llvm-cov --release -p bmm-core   # line coverage of the core crate (CI gate: 90 %)
+cargo run --release -p BatchMkvMerge                         # run the gpui-kit app
+cargo run --release -p BatchMkvMerge --example spike         # the Phase 2 prototypes
+cargo check --release --workspace                            # fast Rust type-check
+cargo test --release --workspace                             # run all Rust tests
+cargo llvm-cov --release -p bmm-core                         # line coverage of the core crate (CI gate: 90 %)
+cargo build --profile dist -p BatchMkvMerge                  # installer build (release + thin LTO, stripped)
+cargo packager --profile dist -p BatchMkvMerge -f app,dmg    # macOS; nsis,wix on Windows; deb,appimage on Linux
+cargo generate-rpm --profile dist -p crates/bmm-app          # .rpm on Linux
 ```
 
-To bump the version across `package.json`, `src-tauri/Cargo.toml`, `crates/bmm-core/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
+Installers land in `target/packager/` (`target/generate-rpm/` for the `.rpm`). The `pnpm` / `tauri` commands of the React app no longer work.
+
+To bump the version across `package.json`, `src-tauri/Cargo.toml`, the three `crates/*/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
 
 ```bash
 cd scripts/ts
 deno task change-version
+cd ../.. && cargo update -w   # record the new workspace versions in Cargo.lock
 ```
 
 ## Configuration storage
@@ -95,7 +107,7 @@ The persisted config file is named `BatchMkvMerge.json` and lives at:
 - **Linux** — `$XDG_CONFIG_HOME/BatchMkvMerge/`, else `$HOME/.config/BatchMkvMerge/`.
 - **macOS** — `~/Library/Application Support/BatchMkvMerge/`.
 
-## Frontend ↔ Backend protocol
+## Frontend ↔ Backend protocol (reference)
 
 All communication goes through Tauri's `invoke` and event system; there's no IPC codec beyond JSON.
 
@@ -147,12 +159,12 @@ All communication goes through Tauri's `invoke` and event system; there's no IPC
 
 ## CI
 
-Three GitHub Actions workflows build release bundles on push/PR:
+Three GitHub Actions workflows build the gpui-kit app on push/PR and upload its installers under the artifact names of the Tauri releases:
 
-- `linux_build.yml` — `.deb`, `.rpm`, `.AppImage`
-- `macos_build.yml` — `.dmg` (x86_64 and arm64 via matrix)
-- `windows_build.yml` — `.msi`, `.exe` (NSIS)
+- `linux_build.yml` (`ubuntu-22.04`, for a low glibc floor) — `.deb`, `.AppImage` (cargo-packager), `.rpm` (cargo-generate-rpm)
+- `macos_build.yml` — `.dmg` (x86_64 on `macos-15-intel` and arm64 on `macos-15`)
+- `windows_build.yml` — `.msi` (one per language) and NSIS `.exe`
 
-Each installs Node 24, pnpm 11, and the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), then runs frontend build + Rust tests (`cargo test --release --workspace`) before packaging. Installers land in `target/release/bundle/`.
+Each installs the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), runs `cargo test --release --workspace --locked`, builds `BatchMkvMerge` with `--profile dist` and packages it. No Node, pnpm or Deno steps. Linux also installs GPUI's build dependencies and Mesa's Vulkan drivers.
 
 Linux additionally enforces ≥ 90 % line coverage for the `bmm-core` crate (`cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`).

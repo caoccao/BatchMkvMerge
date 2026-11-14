@@ -23,7 +23,8 @@ env:
 jobs:
   build_package:
     name: Build for Linux x86_64
-    runs-on: ubuntu-latest
+    # 22.04 keeps the glibc floor of the binary low.
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Set git to use LF
@@ -34,15 +35,15 @@ jobs:
     - name: Checkout the code
       uses: actions/checkout@v6
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: 24
-
-    - name: Upgrade Ubuntu
+    - name: Install system packages
+      # Build dependencies of GPUI (gpui-kit's install script) plus Mesa's
+      # Vulkan drivers for the headless UI tests, and the tools cargo-packager
+      # needs for the AppImage.
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev librsvg2-dev
+        sudo apt-get install -y gcc g++ clang pkg-config libzstd-dev libfontconfig-dev libfreetype-dev \
+          libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libssl-dev \
+          libvulkan-dev libvulkan1 mesa-vulkan-drivers patchelf squashfs-tools file
 
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -61,26 +62,11 @@ jobs:
         # warnings are expected. Clearing the flag lets warnings stay warnings.
         rustflags: ""
 
-    - name: Setup pnpm
-      uses: pnpm/action-setup@v5
-      with:
-        version: 11
-
-    - name: Install JS deps and build frontend
-      # `pnpm build` runs first so `tauri_build::build()` (invoked from
-      # src-tauri/build.rs at every cargo invocation) sees the frontendDist
-      # directory. Without it `cargo test` can't even compile.
-      run: |
-        pnpm install --frozen-lockfile
-        pnpm build
-
     - name: Run Rust tests
-      run: cargo test --release --workspace
+      run: cargo test --release --workspace --locked
 
     # Coverage gate: the UI-free bmm-core crate (parser, config, merge queue,
     # services, MKVToolNix, update check) is held to >= 90% line coverage.
-    # Scoping by package replaces the old file-name exclusion list; the Tauri
-    # shell is not measured.
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@v2
       with:
@@ -89,26 +75,39 @@ jobs:
     - name: Coverage gate (bmm-core >= 90%)
       run: cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90
 
-    - name: Build BatchMkvMerge
-      run: pnpm tauri build
+    - name: Install packaging tools
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-packager@0.11.8,cargo-generate-rpm@0.21.1
+
+    # Installers come from the dist profile: release + thin LTO, one codegen
+    # unit, stripped symbols.
+    - name: Build BatchMkvMerge (dist profile)
+      run: cargo build --profile dist -p BatchMkvMerge --locked
+
+    - name: Package the deb and the AppImage
+      run: cargo packager --profile dist -p BatchMkvMerge -f deb,appimage
+
+    - name: Package the rpm
+      run: cargo generate-rpm --profile dist -p crates/bmm-app
 
     - name: Upload the deb
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-deb
         path: |
-          target/release/bundle/deb/*.deb
+          target/packager/*.deb
 
     - name: Upload the rpm
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-rpm
         path: |
-          target/release/bundle/rpm/*.rpm
+          target/generate-rpm/*.rpm
 
     - name: Upload the AppImage
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-AppImage
         path: |
-          target/release/bundle/appimage/*.AppImage
+          target/packager/*.AppImage

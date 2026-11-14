@@ -1,0 +1,130 @@
+[package]
+name = "BatchMkvMerge"
+version = "0.2.0"
+description = "A tool to batch merge media files to MKV files using mkvmerge."
+authors = ["Sam Cao"]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/caoccao/BatchMkvMerge"
+publish = false
+default-run = "BatchMkvMerge"
+
+# All code and tests live in the library; the binary only calls `run()`.
+[lib]
+name = "batch_mkvmerge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "BatchMkvMerge"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "=0.9.1"
+log.workspace = true
+
+# Tests and the Phase 2 spike example. `test-support` (headless test
+# windows, `Window::render_to_image`) only reaches targets built with
+# dev-dependencies, never the shipped binary.
+[dev-dependencies]
+bmm-platform = { path = "../bmm-platform" }
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+
+# Read-back of AppKit state (Dock tile, panel visibility) in the spike.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSDockTile", "NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = "0.6"
+
+# Phase 2 prototypes: `cargo run --release -p BatchMkvMerge --example spike`.
+# `test = true` runs its tests in `cargo test --release --workspace`.
+[[example]]
+name = "spike"
+path = "examples/spike/main.rs"
+test = true
+
+# Embeds the exe icon and version info on Windows. GPUI embeds its own
+# application manifest, so this resource must not carry one.
+[build-dependencies]
+winresource = "0.1"
+
+# Installers: `cargo packager --profile dist -p BatchMkvMerge -f <formats>`
+# (app, dmg, nsis, wix, deb, appimage). Every identity below must match the
+# 0.1.0 Tauri installers so the new ones upgrade an old install in place.
+[package.metadata.packager]
+product-name = "BatchMkvMerge"
+identifier = "com.caoccao.batch-mkvmerge"
+# 0.1.0's MSI and NSIS installers used "caoccao" (cargo-packager derives the
+# same from the identifier); it names the HKCU\Software\caoccao\BatchMkvMerge key.
+publisher = "caoccao"
+category = "Video"
+homepage = "https://github.com/caoccao/BatchMkvMerge"
+copyright = "Copyright (c) 2026. caoccao.com Sam Cao"
+license-file = "../../LICENSE"
+icons = [
+  "packaging/icons/32x32.png",
+  "packaging/icons/128x128.png",
+  "packaging/icons/128x128@2x.png",
+  "packaging/icons/icon.icns",
+  "packaging/icons/icon.ico",
+]
+out-dir = "../../target/packager"
+
+[package.metadata.packager.macos]
+# GPUI's Metal shaders are compiled for macOS 12.
+minimum-system-version = "12.0"
+
+[package.metadata.packager.nsis]
+# Per-user, like 0.1.0: %LOCALAPPDATA%\BatchMkvMerge and
+# HKCU\...\Uninstall\BatchMkvMerge. cargo-packager 0.11.8 accepts `installMode`
+# or `installer-mode` here, not `install-mode`.
+installMode = "currentUser"
+languages = ["English", "German", "Spanish", "French", "Italian", "Japanese", "SimpChinese", "TradChinese"]
+display-language-selector = true
+
+[package.metadata.packager.wix]
+# One MSI per language, as 0.1.0 shipped. The template pins 0.1.0's UpgradeCode.
+languages = ["en-US", "de-DE", "es-ES", "fr-FR", "it-IT", "ja-JP", "zh-CN", "zh-TW"]
+template = "packaging/wix/main.wxs"
+
+[package.metadata.packager.deb]
+# cargo-packager derives "batch-mkv-merge" from the product name, which is
+# 0.1.0's package name; set explicitly so a rename cannot break upgrades.
+package-name = "batch-mkv-merge"
+# Provisional; the final list is derived with dpkg-shlibdeps on the built
+# binary before 1.0.0 (GPUI dlopens Vulkan and fontconfig).
+depends = [
+  "libc6",
+  "libgcc-s1",
+  "libxcb1",
+  "libxkbcommon0",
+  "libxkbcommon-x11-0",
+  "libwayland-client0",
+  "libvulkan1",
+  "libfontconfig1",
+  "libfreetype6",
+]
+desktop-template = "packaging/BatchMkvMerge.desktop"
+
+[package.metadata.packager.appimage]
+# The Vulkan loader and fontconfig come from the host.
+libs = ["libxkbcommon-x11.so.0", "libxkbcommon.so.0", "libwayland-client.so.0"]
+
+# `cargo generate-rpm --profile dist -p crates/bmm-app`; cargo-packager has no RPM support.
+[package.metadata.generate-rpm]
+# 0.1.0's RPM package name.
+name = "batch-mkv-merge"
+summary = "A tool to batch merge media files to MKV files using mkvmerge."
+license = "Apache-2.0"
+assets = [
+  { source = "target/release/BatchMkvMerge", dest = "/usr/bin/BatchMkvMerge", mode = "755" },
+  { source = "packaging/BatchMkvMerge.desktop", dest = "/usr/share/applications/BatchMkvMerge.desktop", mode = "644" },
+  { source = "packaging/icons/32x32.png", dest = "/usr/share/icons/hicolor/32x32/apps/BatchMkvMerge.png", mode = "644" },
+  { source = "packaging/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/BatchMkvMerge.png", mode = "644" },
+  { source = "packaging/icons/128x128@2x.png", dest = "/usr/share/icons/hicolor/256x256/apps/BatchMkvMerge.png", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+vulkan-loader = "*"
+fontconfig = "*"
+libxkbcommon-x11 = "*"
+libwayland-client = "*"

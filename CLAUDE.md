@@ -21,13 +21,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch. The maintainer keeps the migration plan (phases 0-14) outside the repository. Each phase lands as one Conventional Commit on that branch, so `git log` shows which phases are done. The work ends with a pull request into `main`; the branch creates no tags and no releases.
 
-Until Phase 12 the Tauri app stays buildable and is the behavioural reference. The sections below describe that Tauri app, not the target architecture.
+The Tauri app is no longer built, run or tested. `src/` (React) and `src-tauri/` stay in the tree as unbuilt porting reference until Phase 12 deletes them; `src-tauri` is excluded from the Cargo workspace. The architecture sections further below describe that reference, not the new app. The new app is `crates/bmm-app` (package `BatchMkvMerge`), described in "gpui-kit app" below.
 
 | Phase | Content |
 | --- | --- |
 | 0 | Ground rules (the Build rules above), branch |
 | 1 | Cargo workspace, `crates/bmm-core` extraction, `MergeEvent` sink |
-| 2 | Spike: packaged skeleton on CI, four platform prototypes, 0.2.0 upgrade identities (go/no-go gate) |
+| 2 | Spike: packaged skeleton on CI, four platform prototypes, upgrade identities of the last Tauri release (go/no-go gate) |
 | 3 | Domain logic ported to Rust with tests |
 | 4 | Application shell |
 | 5 | State entities, metadata pipeline, merge events |
@@ -44,13 +44,16 @@ Until Phase 12 the Tauri app stays buildable and is the behavioural reference. T
 ## Common commands
 
 ```bash
-pnpm install                           # install JS dependencies
-pnpm tauri dev --release               # run the desktop app with frontend + Rust hot-reload (release Rust build)
-pnpm tauri build                       # build installers for the current platform
-pnpm build                             # tsc + vite build (type-check + frontend bundle only)
-cargo check --release --workspace      # fast Rust type-check without linking
-cargo test --release --workspace       # run the Rust unit + integration test suite
+cargo run --release -p BatchMkvMerge                   # run the gpui-kit app
+cargo run --release -p BatchMkvMerge --example spike   # the Phase 2 prototypes
+cargo check --release --workspace                      # fast Rust type-check without linking
+cargo test --release --workspace                       # run the Rust test suite (includes the spike's tests)
+cargo build --profile dist -p BatchMkvMerge            # installer build: release + thin LTO
+cargo packager --profile dist -p BatchMkvMerge -f app,dmg   # or nsis,wix / deb,appimage (cargo-packager 0.11.8)
+cargo generate-rpm --profile dist -p crates/bmm-app    # .rpm on Linux (cargo-generate-rpm 0.21.1)
 ```
+
+The `pnpm` / `tauri` commands of the React app no longer work: `src-tauri` is not a workspace member.
 
 Version bumps are done with a Deno script — edit the two arguments at the bottom of `scripts/ts/change-version.ts` and run:
 
@@ -58,7 +61,7 @@ Version bumps are done with a Deno script — edit the two arguments at the bott
 cd scripts/ts && deno task change-version
 ```
 
-That rewrites `package.json`, `src-tauri/Cargo.toml`, `crates/bmm-core/Cargo.toml`, `src-tauri/tauri.conf.json`, and all three `.github/workflows/*.yml` files.
+That rewrites `package.json`, `src-tauri/Cargo.toml`, `crates/bmm-app/Cargo.toml`, `crates/bmm-core/Cargo.toml`, `crates/bmm-platform/Cargo.toml`, `src-tauri/tauri.conf.json`, and all three `.github/workflows/*.yml` files. Run `cargo update -w` afterwards so `Cargo.lock` records the new workspace versions.
 
 ### Rust toolchain
 
@@ -66,13 +69,20 @@ The toolchain is pinned in `rust-toolchain.toml` at the repository root (current
 
 ### Tests
 
-The Rust code is a Cargo workspace (root `Cargo.toml`, one `Cargo.lock`, one `target/`): `crates/bmm-core` holds everything UI-free — the parser sub-tree `crates/bmm-core/src/media_metadata/`, config, merge queue, services, MKVToolNix and update check — and `src-tauri` is the Tauri shell on top of it. Unit tests are inline (`#[cfg(test)] mod tests {}`); the parser fixture tests are `crates/bmm-core/tests/*_fixtures.rs`, and the TypeScript drift check is `src-tauri/tests/protocol_typescript.rs`. `cargo test --release --workspace` runs all of them. Coverage is measured with `cargo-llvm-cov`: the whole `bmm-core` crate is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`. Scoping by package keeps the Tauri shell out and every new core file in, with no file-name exclusion list; local baseline is ~93 % for the crate (~96 % for the parser alone). `merge.rs` is tested through a fake process launcher (`MergeQueue::new`), never a real `mkvmerge`. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+The Rust code is a Cargo workspace (root `Cargo.toml`, one `Cargo.lock`, one `target/`) with three members: `crates/bmm-core` holds everything UI-free — the parser sub-tree `crates/bmm-core/src/media_metadata/`, config, merge queue, services, MKVToolNix and update check; `crates/bmm-platform` holds per-OS code GPUI lacks (taskbar / Dock / launcher progress); `crates/bmm-app` is the gpui-kit application. `src-tauri` is excluded from the workspace. Unit tests are inline (`#[cfg(test)] mod tests {}`); the parser fixture tests are `crates/bmm-core/tests/*_fixtures.rs`; the spike example's tests run too (`test = true` on the `[[example]]`). `cargo test --release --workspace` runs all of them. Coverage is measured with `cargo-llvm-cov`: the whole `bmm-core` crate is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`. Scoping by package keeps the UI crates out and every new core file in, with no file-name exclusion list; local baseline is ~93 % for the crate (~96 % for the parser alone). `merge.rs` is tested through a fake process launcher (`MergeQueue::new`), never a real `mkvmerge`.
 
-```bash
-BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript   # from the repository root
-```
+The TypeScript drift check `src-tauri/tests/protocol_typescript.rs` no longer runs (its crate is not built), so `src/protocol.generated.ts` is frozen; both go away in Phase 12. The model structs still derive specta until then.
 
-The non-regen run of that test fails with a line-by-line diff when the checked-in file is stale — CI catches drift automatically.
+### gpui-kit app (`crates/bmm-app`)
+
+- Package `BatchMkvMerge`: a library `batch_mkvmerge` with all code and tests, and a three-line binary that calls `batch_mkvmerge::run()` (`#![windows_subsystem = "windows"]` unconditionally, there is no debug build). The app identity lives in `lib.rs` constants: `APP_IDENTIFIER` (`com.caoccao.batch-mkvmerge`), `DESKTOP_ID` (`BatchMkvMerge`, the Linux desktop file basename, Wayland app id and launcher-progress URI).
+- `gpui-kit` is an exact pin (`=0.9.1`). Its `test-support` feature is a dev-dependency only, so it never reaches the shipped binary. Because Cargo resolves weak `dep?/feature` entries into the lockfile, `test-support` makes `Cargo.lock` carry the `gpui-fast*` crates and their exact pins; they are never compiled. If a resolution conflict appears after a gpui-kit bump, re-resolve the gpui graph in one go instead of downgrading crates one by one.
+- Icons: `gpui_kit::assets::IconName` is the full Lucide catalog; `gpui_kit::component::IconName` is a small legacy subset. Only 106 SVGs are embedded by default; `src/assets.rs` adds the others the UI uses through `icon_assets!` and serves the app's own images (`images/icon.png`).
+- UI tests use `#[gpui_kit::test]` and `gpui_kit::test::TestWindowExt` (`click`, `drag`, `input`, `press`, `find`). Mark elements a test must find with `.test_support()` (`gpui_kit::base::TestSupportExt`; a no-op without the feature). In a test module that sees `gpui_kit::*`, add `use core::prelude::v1::test;`, because the glob also exports GPUI's `test` macro and `#[test]` would recurse. GPUI delivers focus events only to an active window and through deferred effects: call `window.activate_window()` once and `cx.run_until_parked()` after a click before typing.
+- GPUI starts its own drag after a hard-coded 2 px and then drops the click. Row reordering with dnd-kit's 5 px activation uses a pointer state machine instead (`examples/spike/reorder.rs`).
+- An `absolute()` element needs explicit insets (`top_0().left_0()`); without them taffy places it at its static position after its siblings.
+- `KeyBinding::new` cannot parse `secondary-…` (it needs the OS); bind `cmd-…` / `ctrl-…` per platform.
+- Packaging metadata is in `crates/bmm-app/Cargo.toml` (`[package.metadata.packager]`, `[package.metadata.generate-rpm]`). Every installer identity matches the 0.1.0 Tauri release: deb and rpm package `batch-mkv-merge`, bundle id, NSIS per-user install with publisher `caoccao`, and the MSI UpgradeCode, which `packaging/wix/main.wxs` pins because cargo-packager would derive a different one. cargo-packager rejects unknown keys (NSIS takes `installMode`, not `install-mode`).
 
 ## Platform-specific notes
 
@@ -83,7 +93,7 @@ The non-regen run of that test fails with a line-by-line diff when the checked-i
 
 ### Frontend ↔ Backend split
 
-React app under `src/` talks to a Rust Tauri v2 backend: the thin shell under `src-tauri/` (commands, window, notifications) on top of the UI-free `crates/bmm-core` library. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `crates/bmm-core/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `crates/bmm-core/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
+React app under `src/` talks to a Rust Tauri v2 backend: the thin shell under `src-tauri/` (commands, window, notifications) on top of the UI-free `crates/bmm-core` library. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `crates/bmm-core/src/media_metadata/model/` and was mirrored into `src/protocol.generated.ts` via specta by `src-tauri/tests/protocol_typescript.rs`, which is no longer built (the file is frozen); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `crates/bmm-core/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
 
 The Tauri command surface for files / metadata is:
 
@@ -256,7 +266,7 @@ The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 - `u64` / `i64` fields **must** carry `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>`) — specta-typescript otherwise rejects them to prevent JS precision loss. Accept the loss explicitly via the override.
 - `protocol_version: u32` (currently 1) is ours; bump it on breaking changes.
 
-The TypeScript counterpart `src/protocol.generated.ts` is **auto-generated by specta** from the model structs and **must be regenerated** any time a model struct changes (`BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`). The non-regen run of the same test asserts the checked-in file matches what specta would emit, so CI catches drift. Don't edit it by hand.
+The TypeScript counterpart `src/protocol.generated.ts` was generated by specta from the model structs through `src-tauri/tests/protocol_typescript.rs`. That test no longer runs because `src-tauri` is not built, so the file is frozen until Phase 12 deletes it. Don't edit it by hand.
 
 **Configurable timeout** (see [[feedback_parser_timeout]] memory): the per-file budget comes from `config.parser.timeoutMs` (default 10000, clamped 100–60000). It is not surfaced in the UI — edit the config file to change it. On expiry the parser returns `Err(ParseError::Timeout { budget_ms, stage })` immediately — no partial result. The `BMM_PARSER_BUDGET_MS` env var is kept as a dev-only override; the persisted config wins when both are set.
 
@@ -277,5 +287,5 @@ Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfo
 - When cards register their `handleMerge` into `fileMergeHandlers`, the signature is `() => Promise<void>`. The toolbar's Merge All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
 - All `if-else` must have braces.
 - Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase.
-- When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.
-- Never edit `src/protocol.generated.ts` by hand — it is regenerated from the Rust model.
+- When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate); the model keeps its specta derives until Phase 12.
+- Never edit `src/protocol.generated.ts` by hand — it was generated from the Rust model and is frozen until Phase 12.

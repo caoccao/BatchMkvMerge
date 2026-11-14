@@ -44,11 +44,6 @@ jobs:
     - name: Checkout the code
       uses: actions/checkout@v6
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: 24
-
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       # No `toolchain:` input: the action then installs the toolchain pinned in
@@ -63,28 +58,25 @@ jobs:
         # warnings are expected. Clearing the flag lets warnings stay warnings.
         rustflags: ""
 
-    - name: Setup pnpm
-      uses: pnpm/action-setup@v5
-      with:
-        version: 11
-
-    - name: Install JS deps and build frontend
-      # `pnpm build` runs first so `tauri_build::build()` (invoked from
-      # src-tauri/build.rs at every cargo invocation) sees the frontendDist
-      # directory. Without it `cargo test` can't even compile.
-      run: |
-        pnpm install --frozen-lockfile
-        pnpm build
-
     - name: Run Rust tests
-      run: cargo test --release --workspace
+      run: cargo test --release --workspace --locked
 
-    - name: Build BatchMkvMerge
-      run: pnpm tauri build
+    - name: Install cargo-packager
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-packager@0.11.8
+
+    # Installers come from the dist profile: release + thin LTO, one codegen
+    # unit, stripped symbols.
+    - name: Build BatchMkvMerge (dist profile)
+      run: cargo build --profile dist -p BatchMkvMerge --locked
+
+    - name: Package the app and the dmg
+      run: cargo packager --profile dist -p BatchMkvMerge -f app,dmg
 
     - name: Upload the Artifact
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-${{ matrix.os }}-${{ matrix.arch }}-${{ env.BATCH_MKV_MERGE_VERSION }}
         path: |
-          target/release/bundle/dmg/*.dmg
+          target/packager/*.dmg

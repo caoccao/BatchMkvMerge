@@ -1,16 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/bmm-core", "src-tauri"]
+members = ["crates/bmm-core", "crates/bmm-platform", "crates/bmm-app"]
+# The Tauri shell is no longer built. It stays in the tree, unbuilt, as the
+# porting reference for the gpui-kit app and is deleted with `src/` later.
+exclude = ["src-tauri"]
 
-# Dependencies shared by more than one member. The specta crates must resolve to
-# the same version in `bmm-core` (model derives) and `src-tauri` (protocol test).
+# Dependencies shared by more than one member.
 [workspace.dependencies]
 anyhow = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
-specta-serde = "0.0.12"
 specta-typescript = "0.0.12"
 
 # `[profile.release]` stays at Cargo's defaults so the release edit-test loop is
