@@ -242,5 +242,30 @@
     "addFolder": "新增資料夾",
     "emptyHint": "提示：您也可以將媒體檔案或資料夾拖放到此視窗。",
     "viewOnGithub": "在 GitHub 查看"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "搜尋...",
+      "no_results": "沒有相符的設定",
+      "no_results_description": "請嘗試其他關鍵字。",
+      "Reset All": "全部重設"
+    },
+    "Select": {
+      "placeholder": "請選擇"
+    },
+    "List": {
+      "search_placeholder": "搜尋..."
+    },
+    "Input": {
+      "Cut": "剪下",
+      "Copy": "複製",
+      "Paste": "貼上",
+      "Select All": "全選",
+      "Clear": "清除"
+    },
+    "Dialog": {
+      "ok": "確定",
+      "cancel": "取消"
+    }
   }
 }

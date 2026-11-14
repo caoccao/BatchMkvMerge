@@ -33,6 +33,7 @@ use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, Sett
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 
+use super::FIELD_MIN_WIDTH;
 use crate::state::Stores;
 use crate::tools::{Tool, ToolStatus};
 
@@ -254,25 +255,38 @@ impl Render for ToolPathRow {
       .w_full()
       .gap(px(6.0))
       .child(
+        // The buttons move below the field when it would get narrower than
+        // FIELD_MIN_WIDTH.
         h_flex()
           .w_full()
+          .flex_wrap()
           .gap(px(8.0))
-          .child(div().flex_1().min_w_0().child(Input::new(&self.input).small().w_full()))
           .child(
-            Button::new(SharedString::from(format!("settings-{name}-browse")))
-              .outline()
-              .small()
-              .min_w(px(90.0))
-              .label(tr!("settings.browse"))
-              .on_click(cx.listener(|this, _, _, cx| this.browse(cx))),
+            div()
+              .flex_1()
+              .min_w(px(FIELD_MIN_WIDTH))
+              .child(Input::new(&self.input).small().w_full()),
           )
           .child(
-            Button::new(SharedString::from(format!("settings-{name}-detect")))
-              .outline()
-              .small()
-              .min_w(px(90.0))
-              .label(tr!("settings.detect"))
-              .on_click(cx.listener(|this, _, _, cx| this.detect_now(cx))),
+            h_flex()
+              .flex_none()
+              .gap(px(8.0))
+              .child(
+                Button::new(SharedString::from(format!("settings-{name}-browse")))
+                  .outline()
+                  .small()
+                  .min_w(px(90.0))
+                  .label(tr!("settings.browse"))
+                  .on_click(cx.listener(|this, _, _, cx| this.browse(cx))),
+              )
+              .child(
+                Button::new(SharedString::from(format!("settings-{name}-detect")))
+                  .outline()
+                  .small()
+                  .min_w(px(90.0))
+                  .label(tr!("settings.detect"))
+                  .on_click(cx.listener(|this, _, _, cx| this.detect_now(cx))),
+              ),
           ),
       )
       .children(caption)

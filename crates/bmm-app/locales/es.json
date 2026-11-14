@@ -242,5 +242,30 @@
     "addFolder": "Agregar carpeta",
     "emptyHint": "Sugerencia: también puede arrastrar y soltar archivos multimedia o carpetas en esta ventana.",
     "viewOnGithub": "Ver en GitHub"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Buscar...",
+      "no_results": "No hay ajustes coincidentes",
+      "no_results_description": "Pruebe con otra palabra clave.",
+      "Reset All": "Restablecer todo"
+    },
+    "Select": {
+      "placeholder": "Seleccione"
+    },
+    "List": {
+      "search_placeholder": "Buscar..."
+    },
+    "Input": {
+      "Cut": "Cortar",
+      "Copy": "Copiar",
+      "Paste": "Pegar",
+      "Select All": "Seleccionar todo",
+      "Clear": "Limpiar"
+    },
+    "Dialog": {
+      "ok": "Aceptar",
+      "cancel": "Cancelar"
+    }
   }
 }

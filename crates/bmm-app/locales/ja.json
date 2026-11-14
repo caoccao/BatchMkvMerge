@@ -242,5 +242,30 @@
     "addFolder": "フォルダを追加",
     "emptyHint": "ヒント：このウィンドウにメディアファイルやフォルダをドラッグ＆ドロップすることもできます。",
     "viewOnGithub": "GitHub で見る"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "検索...",
+      "no_results": "一致する設定はありません",
+      "no_results_description": "別のキーワードをお試しください。",
+      "Reset All": "すべてリセット"
+    },
+    "Select": {
+      "placeholder": "選択してください"
+    },
+    "List": {
+      "search_placeholder": "検索..."
+    },
+    "Input": {
+      "Cut": "切り取り",
+      "Copy": "コピー",
+      "Paste": "貼り付け",
+      "Select All": "すべて選択",
+      "Clear": "クリア"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "キャンセル"
+    }
   }
 }

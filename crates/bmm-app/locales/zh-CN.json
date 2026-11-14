@@ -242,5 +242,30 @@
     "addFolder": "添加文件夹",
     "emptyHint": "提示：你也可以将媒体文件或文件夹拖放到此窗口中。",
     "viewOnGithub": "在 GitHub 查看"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "搜索...",
+      "no_results": "没有匹配的设置",
+      "no_results_description": "请尝试其他关键词。",
+      "Reset All": "全部重置"
+    },
+    "Select": {
+      "placeholder": "请选择"
+    },
+    "List": {
+      "search_placeholder": "搜索..."
+    },
+    "Input": {
+      "Cut": "剪切",
+      "Copy": "复制",
+      "Paste": "粘贴",
+      "Select All": "全选",
+      "Clear": "清除"
+    },
+    "Dialog": {
+      "ok": "确定",
+      "cancel": "取消"
+    }
   }
 }

@@ -66,12 +66,9 @@ pub fn run() {
   // Read before the event loop starts; creates the default file on first run.
   let config = bmm_core::config::get_config();
   gpui_kit::application().with_assets(assets::AppAssets).run(move |cx| {
-    {
-      // gpui-kit's own strings (dialog buttons, input menus) look up the
-      // application's locale files first; registered before `init`.
-      use gpui_kit::component as gpui_component;
-      rust_i18n::extend!(gpui_component);
-    }
+    // gpui-kit's own strings (dialog buttons, input menus) look up the
+    // application's locale files first; registered before `init`.
+    i18n::install_component_strings();
     gpui_kit::init(cx);
     cx.set_app_identity(APP_IDENTIFIER, APP_NAME);
     i18n::set_language(config.language);

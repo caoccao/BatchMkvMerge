@@ -242,5 +242,30 @@
     "addFolder": "Aggiungi cartella",
     "emptyHint": "Suggerimento: puoi anche trascinare e rilasciare in questa finestra file multimediali o cartelle.",
     "viewOnGithub": "Info (GitHub)"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Cerca...",
+      "no_results": "Nessuna impostazione corrispondente",
+      "no_results_description": "Prova con un'altra parola chiave.",
+      "Reset All": "Ripristina tutto"
+    },
+    "Select": {
+      "placeholder": "Seleziona"
+    },
+    "List": {
+      "search_placeholder": "Cerca..."
+    },
+    "Input": {
+      "Cut": "Taglia",
+      "Copy": "Copia",
+      "Paste": "Incolla",
+      "Select All": "Seleziona tutto",
+      "Clear": "Cancella"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "Annulla"
+    }
   }
 }

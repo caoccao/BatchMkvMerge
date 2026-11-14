@@ -147,6 +147,11 @@ impl StreamKind {
   }
 }
 
+/// The narrowest text field of a row with buttons (a tool path, the new
+/// profile name); below it the buttons wrap under the field, so long German
+/// and French labels still fit at the 600 × 450 minimum window size.
+pub const FIELD_MIN_WIDTH: f32 = 200.0;
+
 /// A comma-separated language list as codes, in order (`parseLanguageCodes`).
 pub fn parse_language_codes(list: &str) -> Vec<String> {
   list

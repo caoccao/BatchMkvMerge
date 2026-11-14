@@ -242,5 +242,30 @@
     "addFolder": "Ajouter un dossier",
     "emptyHint": "Astuce : vous pouvez aussi glisser-déposer des fichiers médias ou des dossiers dans cette fenêtre.",
     "viewOnGithub": "Voir sur GitHub"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Rechercher...",
+      "no_results": "Aucun paramètre correspondant",
+      "no_results_description": "Essayez un autre mot-clé.",
+      "Reset All": "Tout réinitialiser"
+    },
+    "Select": {
+      "placeholder": "Veuillez choisir"
+    },
+    "List": {
+      "search_placeholder": "Rechercher..."
+    },
+    "Input": {
+      "Cut": "Couper",
+      "Copy": "Copier",
+      "Paste": "Coller",
+      "Select All": "Tout sélectionner",
+      "Clear": "Effacer"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "Annuler"
+    }
   }
 }

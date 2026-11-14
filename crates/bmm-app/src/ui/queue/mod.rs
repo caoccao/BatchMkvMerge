@@ -46,10 +46,12 @@ use crate::domain::status::QueueItemStatus;
 use crate::state::Stores;
 use crate::ui::cards::icon_button;
 
-/// Width of the Status column.
-pub const STATUS_WIDTH: f32 = 140.0;
-/// Width of the Start, End, Elapsed and ETA columns.
-pub const TIME_WIDTH: f32 = 72.0;
+/// Width of the Status column: the longest status, German
+/// "Zusammenführen 100%", fits on one line.
+pub const STATUS_WIDTH: f32 = 160.0;
+/// Width of the Start, End, Elapsed and ETA columns: the longest header,
+/// Spanish "Transcurrido", fits on one line.
+pub const TIME_WIDTH: f32 = 92.0;
 /// Width of the column holding a merging row's Cancel.
 pub const ACTION_WIDTH: f32 = 36.0;
 /// The narrowest File Path column; a narrower table scrolls sideways.
@@ -203,9 +205,13 @@ impl QueueView {
     let title = drive_label(drive);
     let header_cell = |key: &str| -> AnyElement {
       let label = tr!(key);
+      // One line: a narrow column clips its header rather than breaking a
+      // word in two.
       div()
         .px(px(8.0))
         .py(px(6.0))
+        .whitespace_nowrap()
+        .overflow_hidden()
         .font_weight(FontWeight::MEDIUM)
         .child(label.clone())
         .test_text(label)

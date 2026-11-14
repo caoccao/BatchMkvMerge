@@ -33,6 +33,7 @@ use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -447,6 +448,11 @@ impl LanguagePicker {
       .cursor_grab()
       .hover(move |style| style.bg(hover))
       .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+      // A narrow pane truncates long names (600 × 450).
+      .tooltip({
+        let text = SharedString::from(text.clone());
+        move |window, cx| Tooltip::new(text.clone()).build(window, cx)
+      })
       .child(
         div()
           .w(px(40.0))

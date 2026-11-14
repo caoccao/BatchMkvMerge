@@ -242,5 +242,30 @@
     "addFolder": "Ordner hinzufügen",
     "emptyHint": "Tipp: Sie können auch Mediendateien oder Ordner per Drag & Drop in dieses Fenster ziehen.",
     "viewOnGithub": "Auf GitHub ansehen"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Suchen...",
+      "no_results": "Keine passenden Einstellungen",
+      "no_results_description": "Versuchen Sie einen anderen Suchbegriff.",
+      "Reset All": "Alle zurücksetzen"
+    },
+    "Select": {
+      "placeholder": "Bitte auswählen"
+    },
+    "List": {
+      "search_placeholder": "Suchen..."
+    },
+    "Input": {
+      "Cut": "Ausschneiden",
+      "Copy": "Kopieren",
+      "Paste": "Einfügen",
+      "Select All": "Alles auswählen",
+      "Clear": "Löschen"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "Abbrechen"
+    }
   }
 }

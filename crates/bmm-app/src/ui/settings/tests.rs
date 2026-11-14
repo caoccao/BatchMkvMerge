@@ -975,3 +975,45 @@ fn the_settings_keep_their_page_while_hidden_and_start_over_when_reopened(cx: &m
     "a reopened tab starts on Appearance"
   );
 }
+
+/// How far below the top of `row` the element `id` starts.
+fn offset_in_row(shell: &Shell, cx: &mut TestAppContext, row: &'static str, id: &'static str) -> Pixels {
+  draw(shell, cx);
+  shell.window(cx, |window, _| {
+    window.find(id).bounds().top() - window.find(row).bounds().top()
+  })
+}
+
+#[gpui_kit::test]
+fn rows_with_buttons_wrap_them_below_the_field_when_narrow(cx: &mut TestAppContext) {
+  let shell = open_with(
+    cx,
+    Config {
+      language: Language::De,
+      ..Config::default()
+    },
+    detector().0,
+  );
+  let rows = [
+    ("Integration", "settings-mkvtoolnix", "settings-mkvtoolnix-browse"),
+    ("Profiles", "settings-profile-row", "settings-profile-add"),
+  ];
+  for (title, row, button) in rows {
+    page(&shell, cx, title);
+    assert!(
+      offset_in_row(&shell, cx, row, button) < px(10.0),
+      "{button} beside the field when wide"
+    );
+  }
+  // Narrower than the field's minimum and the buttons (the test platform's
+  // text is narrower than a real font's, so not the 600 px minimum window);
+  // tall enough for every group.
+  shell.resize(cx, 480.0, 3200.0);
+  for (title, row, button) in rows {
+    page(&shell, cx, title);
+    assert!(
+      offset_in_row(&shell, cx, row, button) > px(24.0),
+      "{button} below the field when narrow"
+    );
+  }
+}

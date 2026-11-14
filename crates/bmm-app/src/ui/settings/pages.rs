@@ -32,31 +32,8 @@ use gpui_kit::*;
 
 use super::{StreamKind, dropdown};
 use crate::state::{ConfigStore, Stores};
+use crate::theme::THEMES;
 use crate::ui::toolbar::{GROUP_MODES, group_mode_label_key};
-
-/// The twenty themes in the order of the theme select (`getThemes`).
-pub const THEMES: [Theme; 20] = [
-  Theme::Ocean,
-  Theme::Aqua,
-  Theme::Sky,
-  Theme::Arctic,
-  Theme::Glacier,
-  Theme::Mist,
-  Theme::Slate,
-  Theme::Charcoal,
-  Theme::Midnight,
-  Theme::Indigo,
-  Theme::Violet,
-  Theme::Lavender,
-  Theme::Rose,
-  Theme::Blush,
-  Theme::Coral,
-  Theme::Sunset,
-  Theme::Amber,
-  Theme::Sand,
-  Theme::Forest,
-  Theme::Emerald,
-];
 
 /// The nine languages with their config codes and own names
 /// (`getLanguages`, `getLanguageLabel`).
@@ -150,15 +127,15 @@ pub fn appearance(stores: &Stores, cx: &App) -> SettingPage {
         SettingField::scrollable_dropdown(
           THEMES
             .iter()
-            .map(|theme| {
-              let name = wire_name(theme);
+            .map(|spec| {
+              let name = wire_name(&spec.theme);
               let key = format!("settings.theme{name}");
               (name, tr!(&key))
             })
             .collect(),
           move |cx| read(&theme_get, cx, |config| wire_name(&config.theme)),
           move |name, cx| {
-            if let Some(theme) = from_wire_name(THEMES, &name) {
+            if let Some(theme) = from_wire_name(THEMES.iter().map(|spec| spec.theme), &name) {
               write(&theme_set, cx, |config| config.theme = theme);
             }
           },

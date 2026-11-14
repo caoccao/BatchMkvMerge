@@ -36,10 +36,10 @@ use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, Sett
 use gpui_kit::component::{Disableable, Icon, Sizable, WindowExt, h_flex};
 use gpui_kit::*;
 
-use super::StreamKind;
 use super::language_picker::LanguagePicker;
 use super::language_select::LanguageChoices;
 use super::track_names::TrackNamesEditor;
+use super::{FIELD_MIN_WIDTH, StreamKind};
 use crate::state::config::active_profile;
 use crate::state::{ConfigStore, Stores};
 
@@ -206,17 +206,11 @@ impl ProfileEditor {
     let can_delete = store.can_delete_active_profile();
     let name = store.config().active_profile.clone();
     let config = self.stores.config.clone();
-    h_flex()
-      .id("settings-profile-row")
-      .test_support()
-      .w_full()
+    // The buttons move below the name field when it would get narrower than
+    // FIELD_MIN_WIDTH.
+    let buttons = h_flex()
+      .flex_none()
       .gap(px(8.0))
-      .child(
-        div()
-          .flex_1()
-          .min_w_0()
-          .child(Input::new(&self.new_name).small().cleanable(true).w_full()),
-      )
       .child(
         Button::new("settings-profile-add")
           .outline()
@@ -263,7 +257,20 @@ impl ProfileEditor {
               move |cx| config.update(cx, |store, cx| store.reset_active_profile(cx)),
             );
           }),
+      );
+    h_flex()
+      .id("settings-profile-row")
+      .test_support()
+      .w_full()
+      .flex_wrap()
+      .gap(px(8.0))
+      .child(
+        div()
+          .flex_1()
+          .min_w(px(FIELD_MIN_WIDTH))
+          .child(Input::new(&self.new_name).small().cleanable(true).w_full()),
       )
+      .child(buttons)
   }
 
   /// A Track Selection row with a language filter: the auto-select box and

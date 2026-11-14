@@ -242,5 +242,30 @@
     "addFolder": "Add Folder",
     "emptyHint": "Tip: you can also drag and drop media files or folders into this window.",
     "viewOnGithub": "View on GitHub"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Search...",
+      "no_results": "No matching settings",
+      "no_results_description": "Try a different keyword.",
+      "Reset All": "Reset All"
+    },
+    "Select": {
+      "placeholder": "Please select"
+    },
+    "List": {
+      "search_placeholder": "Search..."
+    },
+    "Input": {
+      "Cut": "Cut",
+      "Copy": "Copy",
+      "Paste": "Paste",
+      "Select All": "Select All",
+      "Clear": "Clear"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "Cancel"
+    }
   }
 }

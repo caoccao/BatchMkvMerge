@@ -114,6 +114,8 @@ depends = [
   "libvulkan1",
   "libfontconfig1",
   "libfreetype6",
+  # GPUI draws colour emoji (the track-type icons) only from Noto Color Emoji.
+  "fonts-noto-color-emoji",
 ]
 desktop-template = "packaging/BatchMkvMerge.desktop"
 
@@ -140,3 +142,6 @@ vulkan-loader = "*"
 fontconfig = "*"
 libxkbcommon-x11 = "*"
 libwayland-client = "*"
+# GPUI draws colour emoji (the track-type icons) only from Noto Color Emoji;
+# Fedora's and openSUSE's packages of it both provide this font capability.
+"font(notocoloremoji)" = "*"
