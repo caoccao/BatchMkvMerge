@@ -1,5 +1,24 @@
 # Development
 
+## Build rules
+
+- **Always build and run the release profile. Never build a debug build.**
+  Every cargo invocation in this repo, in docs and in CI carries `--release`
+  (or `-r`): `cargo build --release`, `cargo run --release`,
+  `cargo test --release`, `cargo check --release`, `cargo llvm-cov --release`.
+  GPUI debug builds are slow to compile, slow to start and render at a
+  fraction of release frame rates. Do not add `[profile.dev]` tuning as a
+  workaround; use release.
+- **Installers are built with the `dist` profile**, which inherits `release`
+  and adds LTO, `codegen-units = 1` and symbol stripping:
+  `cargo packager --profile dist`, `cargo generate-rpm --profile dist`.
+  `dist` is a release build with slower, tighter optimisation; it is used for
+  packaging only, never for the edit-test loop.
+
+## Migration in progress
+
+The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch, in phases 0-14, one Conventional Commit per phase. The maintainer keeps the plan outside the repository; `CLAUDE.md` lists the phases. Until the Tauri app is removed (Phase 12), it stays buildable and this document describes it.
+
 ## Tech Stack
 
 ### Frontend
@@ -31,6 +50,7 @@
 ## Tooling
 
 - [pnpm](https://pnpm.io/) — package manager
+- [Rust](https://www.rust-lang.org/) 1.100.0 — pinned in `src-tauri/rust-toolchain.toml`
 - [Deno](https://deno.com/) — scripts under `scripts/ts/` (e.g. `change-version.ts`)
 
 ## Repository layout
@@ -47,13 +67,13 @@
 ## Commands
 
 ```bash
-pnpm install         # install JS dependencies
-pnpm tauri dev       # run the app in development (hot-reload frontend + Rust)
-pnpm tauri build     # build installers for the current platform
-pnpm dev             # run only the Vite dev server (no Tauri window)
-pnpm build           # type-check and build the frontend
-cd src-tauri && cargo check   # fast Rust type-check
-cd src-tauri && cargo test    # run Rust unit + integration tests
+pnpm install                           # install JS dependencies
+pnpm tauri dev --release               # run the app in development (hot-reload frontend + Rust, release build)
+pnpm tauri build                       # build installers for the current platform
+pnpm dev                               # run only the Vite dev server (no Tauri window)
+pnpm build                             # type-check and build the frontend
+cd src-tauri && cargo check --release  # fast Rust type-check
+cd src-tauri && cargo test --release   # run Rust unit + integration tests
 ```
 
 To bump the version across `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
@@ -129,6 +149,6 @@ Three GitHub Actions workflows build release bundles on push/PR:
 - `macos_build.yml` — `.dmg` (x86_64 and arm64 via matrix)
 - `windows_build.yml` — `.msi`, `.exe` (NSIS)
 
-Each installs Node 24, pnpm 11, and the stable Rust toolchain, then runs frontend build + Rust tests before packaging.
+Each installs Node 24, pnpm 11, and the Rust toolchain pinned in `src-tauri/rust-toolchain.toml` (1.100.0), then runs frontend build + Rust tests (`cargo test -r`) before packaging.
 
-Linux additionally enforces parser line coverage (`cargo llvm-cov --fail-under-lines 90`) for `src-tauri/src/media_metadata/`.
+Linux additionally enforces parser line coverage (`cargo llvm-cov --fail-under-lines 90`) for `src-tauri/src/media_metadata/`. The CI step gains `--release` in Phase 1 of the migration; run it locally as `cargo llvm-cov --release`.

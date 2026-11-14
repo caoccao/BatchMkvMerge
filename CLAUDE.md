@@ -2,15 +2,54 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Build rules
+
+- **Always build and run the release profile. Never build a debug build.**
+  Every cargo invocation in this repo, in docs and in CI carries `--release`
+  (or `-r`): `cargo build --release`, `cargo run --release`,
+  `cargo test --release`, `cargo check --release`, `cargo llvm-cov --release`.
+  GPUI debug builds are slow to compile, slow to start and render at a
+  fraction of release frame rates. Do not add `[profile.dev]` tuning as a
+  workaround; use release.
+- **Installers are built with the `dist` profile**, which inherits `release`
+  and adds LTO, `codegen-units = 1` and symbol stripping:
+  `cargo packager --profile dist`, `cargo generate-rpm --profile dist`.
+  `dist` is a release build with slower, tighter optimisation; it is used for
+  packaging only, never for the edit-test loop.
+
+## Migration in progress
+
+The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch. The maintainer keeps the migration plan (revision 2, phases 0-14) outside the repository. Each phase lands as one Conventional Commit on that branch, so `git log` shows which phases are done. The work ends with a pull request into `main`; the branch creates no tags and no releases.
+
+Until Phase 12 the Tauri app stays buildable and is the behavioural reference. The sections below describe that Tauri app, not the target architecture.
+
+| Phase | Content |
+| --- | --- |
+| 0 | Ground rules (the Build rules above), branch |
+| 1 | Cargo workspace, `crates/bmm-core` extraction, `MergeEvent` sink |
+| 2 | Spike: packaged skeleton on CI, four platform prototypes, 0.2.0 upgrade identities (go/no-go gate) |
+| 3 | Domain logic ported to Rust with tests |
+| 4 | Application shell |
+| 5 | State entities, metadata pipeline, merge events |
+| 6 | Track table and autocomplete cells |
+| 7 | Cards and file list |
+| 8 | Queue, notifications, taskbar progress |
+| 9 | Settings and toolbar menus |
+| 10 | Themes, i18n polish, visual pass |
+| 11 | Numeric word-boundary navigation |
+| 12 | Parity audit, Tauri removal |
+| 13 | Final packaging, CI, upgrade tests, version 1.0.0 |
+| 14 | Docs, cross-platform QA, pull request |
+
 ## Common commands
 
 ```bash
-pnpm install                     # install JS dependencies
-pnpm tauri dev                   # run the desktop app with frontend + Rust hot-reload
-pnpm tauri build                 # build installers for the current platform
-pnpm build                       # tsc + vite build (type-check + frontend bundle only)
-cd src-tauri && cargo check      # fast Rust type-check without linking
-cd src-tauri && cargo test       # run the Rust unit + integration test suite
+pnpm install                           # install JS dependencies
+pnpm tauri dev --release               # run the desktop app with frontend + Rust hot-reload (release Rust build)
+pnpm tauri build                       # build installers for the current platform
+pnpm build                             # tsc + vite build (type-check + frontend bundle only)
+cd src-tauri && cargo check --release  # fast Rust type-check without linking
+cd src-tauri && cargo test --release   # run the Rust unit + integration test suite
 ```
 
 Version bumps are done with a Deno script — edit the two arguments at the bottom of `scripts/ts/change-version.ts` and run:
@@ -23,14 +62,14 @@ That rewrites `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json
 
 ### Rust toolchain
 
-The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.94.0**). The pin is required by `specta-2.0.0-rc.25`, which relies on `debug_closure_helpers` (stable since 1.91). The GitHub Actions workflows use `actions-rust-lang/setup-rust-toolchain@v1`, which honours the pin. They also clear `rustflags` so the action's default `-D warnings` doesn't fail CI on intentionally-not-yet-consumed parser surface during phased delivery.
+The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.100.0**). The pin must stay at 1.91 or newer for `specta-2.0.0-rc.25`, which relies on `debug_closure_helpers` (stable since 1.91); the gpui-kit migration needs 1.92 or newer. The GitHub Actions workflows use `actions-rust-lang/setup-rust-toolchain@v1`, which honours the pin. They also clear `rustflags` so the action's default `-D warnings` doesn't fail CI on intentionally-not-yet-consumed parser surface during phased delivery.
 
 ### Tests
 
-The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90`. The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `merge.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test --release` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90` (the CI step gains `--release` in Phase 1 of the migration; run it locally as `cargo llvm-cov --release`). The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `merge.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
 
 ```bash
-cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
+cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript
 ```
 
 The non-regen run of that test fails with a line-by-line diff when the checked-in file is stale — CI catches drift automatically.
@@ -44,7 +83,7 @@ The non-regen run of that test fails with a line-by-line diff when the checked-i
 
 ### Frontend ↔ Backend split
 
-React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
+React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
 
 The Tauri command surface for files / metadata is:
 
@@ -215,7 +254,7 @@ The sub-tree opts into `#![forbid(unsafe_code)]` at `media_metadata/mod.rs`.
 - `u64` / `i64` fields **must** carry `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>`) — specta-typescript otherwise rejects them to prevent JS precision loss. Accept the loss explicitly via the override.
 - `protocol_version: u32` (currently 1) is ours; bump it on breaking changes.
 
-The TypeScript counterpart `src/protocol.generated.ts` is **auto-generated by specta** from the model structs and **must be regenerated** any time a model struct changes (`BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript`). The non-regen run of the same test asserts the checked-in file matches what specta would emit, so CI catches drift. Don't edit it by hand.
+The TypeScript counterpart `src/protocol.generated.ts` is **auto-generated by specta** from the model structs and **must be regenerated** any time a model struct changes (`BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`). The non-regen run of the same test asserts the checked-in file matches what specta would emit, so CI catches drift. Don't edit it by hand.
 
 **Configurable timeout** (see [[feedback_parser_timeout]] memory): the per-file budget comes from `config.parser.timeoutMs` (default 10000, clamped 100–60000). It is not surfaced in the UI — edit the config file to change it. On expiry the parser returns `Err(ParseError::Timeout { budget_ms, stage })` immediately — no partial result. The `BMM_PARSER_BUDGET_MS` env var is kept as a dev-only override; the persisted config wins when both are set.
 
@@ -236,5 +275,5 @@ Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfo
 - When cards register their `handleMerge` into `fileMergeHandlers`, the signature is `() => Promise<void>`. The toolbar's Merge All awaits each handler sequentially so backend per-drive queue order matches the on-screen file order.
 - All `if-else` must have braces.
 - Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `refactor:`, `docs:`, `test:`, `build:`) with a detailed body. The parser delivery uses one commit per phase.
-- When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.
+- When adding `u64` / `i64` fields to any `media_metadata::model` struct, annotate them with `#[specta(type = specta_typescript::Number)]` (or `Option<Number>` / `Vec<Number>` as appropriate) and re-run `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript` so `src/protocol.generated.ts` stays in sync.
 - Never edit `src/protocol.generated.ts` by hand — it is regenerated from the Rust model.
