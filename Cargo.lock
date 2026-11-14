@@ -6,6 +6,8 @@ version = 4
 name = "BatchMkvMerge"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
+ "async-channel",
  "bmm-core",
  "bmm-platform",
  "gpui-kit",

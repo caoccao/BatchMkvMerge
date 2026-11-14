@@ -19,6 +19,9 @@ name = "BatchMkvMerge"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+# Merge events from the core's worker threads to the foreground executor.
+async-channel = "2"
 bmm-core = { path = "../bmm-core" }
 gpui-kit = "=0.9.1"
 log.workspace = true

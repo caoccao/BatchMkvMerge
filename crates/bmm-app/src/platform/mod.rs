@@ -35,14 +35,21 @@ pub fn ingest_launch_args(stores: &Stores, cx: &mut App) {
 
 /// Quit (Cmd+Q on macOS) asks like closing the main window does: the window
 /// geometry is saved and an active merge needs a confirmation first.
+///
+/// A key press is dispatched while its window is being updated, and a window
+/// cannot be updated from inside its own update, so the close request is
+/// deferred until the dispatch is over. Done inline, the update failed and
+/// read as "the window is gone", which quit without asking.
 pub fn install_quit(handle: AnyWindowHandle, stores: &Stores, cx: &mut App) {
   let stores = stores.clone();
   cx.on_action(move |_: &Quit, cx| {
     let stores = stores.clone();
-    let closed = handle.update(cx, |_, window, cx| window::close_requested(&stores, window, cx));
-    // The window is gone already, or it agreed to close.
-    if closed.unwrap_or(true) {
-      cx.quit();
-    }
+    cx.defer(move |cx| {
+      let closed = handle.update(cx, |_, window, cx| window::close_requested(&stores, window, cx));
+      // The window is gone already, or it agreed to close.
+      if closed.unwrap_or(true) {
+        cx.quit();
+      }
+    });
   });
 }

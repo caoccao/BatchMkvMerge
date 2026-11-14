@@ -16,8 +16,9 @@
 */
 
 //! The main window: initial geometry from the config, geometry persistence,
-//! and the close request (`application.rs::configure_main_window` and
-//! `save_window_state` of the Tauri shell).
+//! the title with the queue count, and the close request
+//! (`application.rs::configure_main_window` and `save_window_state` of the
+//! Tauri shell).
 //!
 //! Positions are logical pixels; sizes are the content size. GPUI's macOS
 //! window reports its frame (title bar included) but opens with a content
@@ -31,6 +32,7 @@ use gpui_kit::{
 
 use super::close_guard;
 use crate::state::Stores;
+use crate::state::queue::QueueSummary;
 use crate::ui::root::AppView;
 
 /// The smallest window, and the smallest geometry that is saved (0.2.0's).
@@ -135,12 +137,24 @@ pub fn save_geometry(stores: &Stores, window: &Window, cx: &mut App) {
     .update(cx, |config, cx| config.update(cx, |config| config.window = geometry));
 }
 
+/// The window title: `BatchMkvMerge v<version>`, followed by ` - done/total`
+/// while a merge is waiting or running (`App.tsx`).
+pub fn title(summary: &QueueSummary) -> String {
+  if summary.active {
+    format!("{} - {}/{}", crate::window_title(), summary.done, summary.total)
+  } else {
+    crate::window_title().to_string()
+  }
+}
+
 /// A request to close the main window (title bar, Alt+F4, Quit): saves the
-/// geometry, then lets the close guard decide. `true` lets it close.
+/// geometry, then lets the close guard decide; its Yes cancels every active
+/// merge. `true` lets the window close.
 pub fn close_requested(stores: &Stores, window: &mut Window, cx: &mut App) -> bool {
   save_geometry(stores, window, cx);
-  close_guard::should_close(stores.has_active_merges(cx), window, cx, |_, _| {
-    // Cancelling the active merges is wired with the merge queue.
+  let cancel_stores = stores.clone();
+  close_guard::should_close(stores.has_active_merges(cx), window, cx, move |_, cx| {
+    crate::actions::cancel_all(&cancel_stores, cx)
   })
 }
 
@@ -157,6 +171,26 @@ mod tests {
 
   fn display(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
     Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+  }
+
+  #[test]
+  fn the_title_counts_finished_merges_while_one_is_active() {
+    let base = crate::window_title().to_string();
+    assert_eq!(title(&QueueSummary::default()), base);
+    let summary = QueueSummary {
+      done: 1,
+      total: 3,
+      active: true,
+      percent: 40,
+    };
+    assert_eq!(title(&summary), format!("{base} - 1/3"));
+    let finished = QueueSummary {
+      done: 3,
+      total: 3,
+      active: false,
+      percent: 100,
+    };
+    assert_eq!(title(&finished), base);
   }
 
   #[test]

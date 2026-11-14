@@ -19,8 +19,17 @@
 
 use std::sync::{Arc, Mutex};
 
-use bmm_core::config::Config;
+use bmm_core::config::{Config, ConfigProfile};
 use gpui_kit::{AppContext, Context, Subscription};
+
+/// The active profile, else the first one (`getActiveProfile`).
+pub fn active_profile(config: &Config) -> Option<&ConfigProfile> {
+  config
+    .profiles
+    .iter()
+    .find(|profile| profile.name == config.active_profile)
+    .or_else(|| config.profiles.first())
+}
 
 /// Where configuration writes go: the config file in the app, a recorder in
 /// tests. Writes carry a revision and run one at a time, and a write older
@@ -152,6 +161,26 @@ mod tests {
     assert_eq!(last.language, Language::Fr);
     assert!(matches!(last.group_mode, GroupMode::None));
     assert_eq!(store.read_with(cx, |store, _| store.config().language), Language::Fr);
+  }
+
+  #[test]
+  fn the_active_profile_falls_back_to_the_first() {
+    let mut config = Config::default();
+    let mut other = config.profiles[0].clone();
+    other.name = "Other".to_string();
+    config.profiles.push(other);
+    config.active_profile = "Other".to_string();
+    assert_eq!(
+      active_profile(&config).map(|profile| profile.name.as_str()),
+      Some("Other")
+    );
+    config.active_profile = "Missing".to_string();
+    assert_eq!(
+      active_profile(&config).map(|profile| profile.name.as_str()),
+      Some(config.profiles[0].name.as_str())
+    );
+    config.profiles.clear();
+    assert!(active_profile(&config).is_none());
   }
 
   #[test]

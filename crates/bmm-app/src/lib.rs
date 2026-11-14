@@ -27,9 +27,11 @@ macro_rules! tr {
   };
 }
 
+pub mod actions;
 pub mod assets;
 pub mod domain;
 pub mod i18n;
+pub mod merge_events;
 pub mod platform;
 pub mod state;
 pub mod theme;
@@ -72,7 +74,14 @@ pub fn run() {
     i18n::set_language(config.language);
     theme::install(cx);
     theme::apply(&config, cx.window_appearance(), cx);
-    let stores = state::Stores::new(config, state::config::Persistence::disk(), cx);
+    let (merge_sink, merge_events) = merge_events::channel();
+    let services = state::Services {
+      persistence: state::Persistence::disk(),
+      metadata: state::MetadataSource::parser(),
+      merges: merge_events::MergeBackend::system(merge_sink),
+    };
+    let stores = state::Stores::new(config, services, cx);
+    merge_events::start(&stores, merge_events, cx);
     ui::actions::bind_keys(cx);
     ui::actions::install(&stores, cx);
     platform::menus::install(cx);

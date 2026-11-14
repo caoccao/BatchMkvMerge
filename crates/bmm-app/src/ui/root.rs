@@ -17,7 +17,8 @@
 
 //! The window content (`Layout.tsx`): toolbar, tabs and footer, plus what
 //! belongs to the whole window: OS file drop, toasts, geometry persistence,
-//! live language and theme changes, and the close request.
+//! the title with the queue count (`App.tsx`), live language and theme
+//! changes, and the close request.
 
 use std::time::Duration;
 
@@ -44,6 +45,8 @@ pub struct AppView {
   /// The applied language, theme and display mode, to act only on changes.
   language: Language,
   theme: (ThemeName, DisplayMode),
+  /// The title last set on the window.
+  title: String,
   save_geometry: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
@@ -61,6 +64,14 @@ impl AppView {
         }
       }),
       cx.observe_window_bounds(window, |this, window, cx| this.schedule_geometry_save(window, cx)),
+      // Done and total change only with a status, which notifies.
+      cx.observe_in(&stores.queue, window, |this, queue, window, cx| {
+        let title = main_window::title(&queue.read(cx).summary());
+        if title != this.title {
+          window.set_window_title(&title);
+          this.title = title;
+        }
+      }),
       cx.subscribe_in(&stores.ui, window, |_, _, event: &UiEvent, window, cx| {
         let UiEvent::Toast(toast) = event;
         let notification = match toast.kind {
@@ -85,6 +96,7 @@ impl AppView {
       stores,
       language,
       theme,
+      title: crate::window_title().to_string(),
       save_geometry: None,
       _subscriptions: subscriptions,
     }

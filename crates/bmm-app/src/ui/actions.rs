@@ -39,6 +39,10 @@ actions!(
     OpenSettings,
     /// Ctrl+Q: remove every file unless a merge is active.
     ClearFiles,
+    /// F3: merge every card with selected tracks.
+    MergeAll,
+    /// F4: cancel every waiting or running merge.
+    CancelAll,
     SelectTab1,
     SelectTab2,
     SelectTab3,
@@ -51,10 +55,12 @@ actions!(
   ]
 );
 
-/// Binds the application shortcuts; Merge All (F3), Cancel All (F4) and the
-/// group (F8) and profile (F9) menus join with their actions.
+/// Binds the application shortcuts; the group (F8) and profile (F9) menus
+/// join with the menus.
 pub fn bind_keys(cx: &mut App) {
   cx.bind_keys([
+    KeyBinding::new("f3", MergeAll, None),
+    KeyBinding::new("f4", CancelAll, None),
     KeyBinding::new("ctrl-tab", NextTab, None),
     KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     KeyBinding::new("ctrl-w", CloseTab, None),
@@ -70,19 +76,6 @@ pub fn bind_keys(cx: &mut App) {
     KeyBinding::new("ctrl-8", SelectTab8, None),
     KeyBinding::new("ctrl-9", SelectTab9, None),
   ]);
-}
-
-/// Whether Clear (toolbar and Ctrl+Q) is available: files listed and no merge
-/// waiting or running.
-pub fn can_clear(stores: &Stores, cx: &App) -> bool {
-  stores.files.read(cx).has_files() && !stores.has_active_merges(cx)
-}
-
-/// Clears the file list if [`can_clear`].
-pub fn clear_files(stores: &Stores, cx: &mut App) {
-  if can_clear(stores, cx) {
-    stores.files.update(cx, |files, cx| files.clear_files(cx));
-  }
 }
 
 /// Registers the global handlers of the actions above (except Quit, which
@@ -107,7 +100,19 @@ pub fn install(stores: &Stores, cx: &mut App) {
   });
   cx.on_action({
     let stores = stores.clone();
-    move |_: &ClearFiles, cx| clear_files(&stores, cx)
+    move |_: &ClearFiles, cx| crate::actions::clear_files(&stores, cx)
+  });
+  cx.on_action({
+    let stores = stores.clone();
+    move |_: &MergeAll, cx| {
+      if crate::actions::can_merge_all(&stores, cx) {
+        crate::actions::merge_all(&stores, cx).detach();
+      }
+    }
+  });
+  cx.on_action({
+    let stores = stores.clone();
+    move |_: &CancelAll, cx| crate::actions::cancel_all(&stores, cx)
   });
   macro_rules! select_tab {
     ($($action:ident => $index:expr),*) => {

@@ -16,8 +16,8 @@
 */
 
 //! The toolbar (`Toolbar.tsx`): icon buttons with tooltips and the same
-//! enabled states. Settings, About, Clear and Group by file name work; Merge
-//! All, Cancel All, the global output path and the group-mode and profile
+//! enabled states. Merge All, Cancel All, Clear, Group by file name, Settings
+//! and About work; the global output path and the group-mode and profile
 //! menus join with the features they drive.
 
 use bmm_core::config::GroupMode;
@@ -27,7 +27,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, h_flex};
 use gpui_kit::*;
 
-use super::actions;
+use crate::actions;
 use crate::state::{Stores, TabType};
 
 /// The i18n key naming a group mode (`groupModeLabelKey`).
@@ -49,6 +49,7 @@ impl Toolbar {
     let subscriptions = vec![
       cx.observe(&stores.config, |_, _, cx| cx.notify()),
       cx.observe(&stores.files, |_, _, cx| cx.notify()),
+      cx.observe(&stores.queue, |_, _, cx| cx.notify()),
       cx.observe(&stores.ui, |_, _, cx| cx.notify()),
     ];
     Self {
@@ -89,8 +90,7 @@ impl Render for Toolbar {
     let active_tab = self.stores.ui.read(cx).active_tab();
     let has_active_jobs = self.stores.has_active_merges(cx);
     let can_clear = actions::can_clear(&self.stores, cx);
-    // Merge All needs selected tracks, which the track table provides.
-    let can_merge_all = false;
+    let can_merge_all = actions::can_merge_all(&self.stores, cx);
     let group_color = match group_mode {
       GroupMode::None => muted.opacity(0.6),
       GroupMode::TrackCountAndLanguage => success,
@@ -108,21 +108,27 @@ impl Render for Toolbar {
           tr!("toolbar.setGlobalOutputPath"),
           true,
         ))
-        .child(icon_button(
-          "toolbar-merge-all",
-          IconName::Combine,
-          None,
-          tr!("toolbar.mergeAll"),
-          can_merge_all,
-        ))
+        .child(
+          icon_button(
+            "toolbar-merge-all",
+            IconName::Combine,
+            None,
+            tr!("toolbar.mergeAll"),
+            can_merge_all,
+          )
+          .on_click(cx.listener(|this, _, _, cx| actions::merge_all(&this.stores, cx).detach())),
+        )
         .child(divider(cx))
-        .child(icon_button(
-          "toolbar-cancel-all",
-          IconName::CircleX,
-          Some(danger),
-          tr!("toolbar.cancelAll"),
-          has_active_jobs,
-        ))
+        .child(
+          icon_button(
+            "toolbar-cancel-all",
+            IconName::CircleX,
+            Some(danger),
+            tr!("toolbar.cancelAll"),
+            has_active_jobs,
+          )
+          .on_click(cx.listener(|this, _, _, cx| actions::cancel_all(&this.stores, cx))),
+        )
         .child(
           icon_button("toolbar-clear", IconName::Trash, None, tr!("toolbar.clear"), can_clear)
             .on_click(cx.listener(|this, _, _, cx| actions::clear_files(&this.stores, cx))),

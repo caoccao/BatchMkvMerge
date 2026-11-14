@@ -19,13 +19,15 @@
 //! merge is waiting or running asks first.
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::button::ButtonVariant;
-use gpui_kit::{App, Window};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::{App, ParentElement, Window};
 
 /// Decides a close request. Without active merges the window closes. With
-/// them, a dialog asks (No, the default, keeps the window; Yes runs
-/// `on_confirm`, which cancels the merges, then closes the window) and the
-/// request is refused for now.
+/// them, a dialog asks and the request is refused for now: No keeps the
+/// window, Yes runs `on_confirm` (which cancels the merges), then closes it.
+/// Enter and Escape answer No, as in the React dialog, whose No button had
+/// the focus; gpui-kit's own OK button would take Enter.
 pub fn should_close(
   has_active_merges: bool,
   window: &mut Window,
@@ -42,16 +44,27 @@ pub fn should_close(
       dialog
         .title(tr!("confirm.exitTitle"))
         .description(tr!("confirm.exitMessage"))
-        .show_cancel(true)
-        .cancel_text(tr!("confirm.no"))
-        .cancel_variant(ButtonVariant::Success)
-        .ok_text(tr!("confirm.yes"))
-        .ok_variant(ButtonVariant::Danger)
-        .on_ok(move |_, window, cx| {
-          on_confirm(window, cx);
-          window.remove_window();
-          true
-        })
+        // Enter (OK) and Escape (Cancel) only close the dialog.
+        .on_ok(|_, _, _| true)
+        .on_cancel(|_, _, _| true)
+        .footer(
+          DialogFooter::new()
+            .child(
+              Button::new("exit-no")
+                .success()
+                .label(tr!("confirm.no"))
+                .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+            .child(
+              Button::new("exit-yes")
+                .danger()
+                .label(tr!("confirm.yes"))
+                .on_click(move |_, window, cx| {
+                  on_confirm(window, cx);
+                  window.remove_window();
+                }),
+            ),
+        )
     });
   }
   false

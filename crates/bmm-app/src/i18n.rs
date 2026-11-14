@@ -21,6 +21,8 @@
 
 use bmm_core::config::Language;
 
+use crate::domain::metadata_error::LocalizedMessage;
+
 /// Every shipped locale, as file names under `locales/` and as locale codes.
 pub const LOCALES: [&str; 9] = ["de", "en-US", "es", "fr", "it", "ja", "zh-CN", "zh-HK", "zh-TW"];
 
@@ -45,6 +47,19 @@ pub fn locale_code(language: Language) -> &'static str {
 /// refresh the windows afterwards.
 pub fn set_language(language: Language) {
   gpui_kit::component::set_locale(locale_code(language));
+}
+
+/// A message whose key and arguments are only known at run time, in the
+/// current locale.
+pub fn translate(message: &LocalizedMessage) -> String {
+  translate_in(message, &rust_i18n::locale())
+}
+
+fn translate_in(message: &LocalizedMessage, locale: &str) -> String {
+  let template = rust_i18n::t!(message.key, locale = locale);
+  let (names, values): (Vec<&str>, Vec<String>) =
+    message.args.iter().map(|(name, value)| (*name, value.clone())).unzip();
+  rust_i18n::replace_patterns(&template, &names, &values)
 }
 
 #[cfg(test)]
@@ -162,6 +177,30 @@ pub(crate) mod tests {
         detail = "x"
       ),
       "Parser timed out after 100ms at probe: x"
+    );
+  }
+
+  #[test]
+  fn run_time_messages_are_translated_with_their_arguments() {
+    let message = LocalizedMessage {
+      key: "merge.error.parser.timeout",
+      args: vec![
+        ("budgetMs", "100".to_string()),
+        ("stage", "probe".to_string()),
+        ("detail", "x".to_string()),
+      ],
+    };
+    assert_eq!(
+      translate_in(&message, "en-US"),
+      "Parser timed out after 100ms at probe: x"
+    );
+    let message = LocalizedMessage {
+      key: "merge.error.parser.io",
+      args: vec![("detail", "denied".to_string())],
+    };
+    assert_eq!(
+      translate_in(&message, "de"),
+      "Datei konnte nicht gelesen werden: denied"
     );
   }
 

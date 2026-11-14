@@ -24,7 +24,7 @@
 use std::time::Duration;
 
 use bmm_core::config::{ConfigFormatField, ConfigFormatting, FormatPrecision, FormatUnit};
-use bmm_core::media_track::MediaTrackType;
+use bmm_core::media_track::{MediaTrackCounts, MediaTrackType};
 
 const KIBI: f64 = 1024.0;
 const MEBI: f64 = 1_048_576.0;
@@ -113,6 +113,24 @@ pub fn format_track_bit_rate(bps: f64, track_type: MediaTrackType, formatting: O
   format_value(bps, &field_for(formatting, track_type, true), "bps")
 }
 
+/// A unit's track counts as a card summary shows them (`CardSummary.tsx`):
+/// count and emoji per type that has any, e.g. `1 🎞️ 2 🔊 3 💬`; empty
+/// without tracks.
+pub fn format_track_counts(counts: &MediaTrackCounts) -> String {
+  [
+    (counts.video, "🎞️"),
+    (counts.audio, "🔊"),
+    (counts.subtitles, "💬"),
+    (counts.chapters, "📑"),
+    (counts.attachments, "📎"),
+  ]
+  .into_iter()
+  .filter(|(count, _)| *count > 0)
+  .map(|(count, emoji)| format!("{count} {emoji}"))
+  .collect::<Vec<_>>()
+  .join(" ")
+}
+
 /// `HH:MM:SS` with whole seconds rounded down (hours keep growing past 99);
 /// `--:--:--` when there is no duration (not started, or a negative span).
 pub fn format_hms(duration: Option<Duration>) -> String {
@@ -130,6 +148,19 @@ mod tests {
 
   fn field(precision: FormatPrecision, unit: FormatUnit) -> ConfigFormatField {
     ConfigFormatField { precision, unit }
+  }
+
+  #[test]
+  fn formats_track_counts_like_the_card_summary() {
+    assert_eq!(format_track_counts(&MediaTrackCounts::default()), "");
+    let counts = MediaTrackCounts {
+      video: 1,
+      audio: 2,
+      subtitles: 0,
+      chapters: 1,
+      attachments: 3,
+    };
+    assert_eq!(format_track_counts(&counts), "1 🎞️ 2 🔊 1 📑 3 📎");
   }
 
   #[test]

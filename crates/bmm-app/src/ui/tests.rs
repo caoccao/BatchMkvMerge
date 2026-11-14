@@ -17,10 +17,13 @@
 
 //! Headless smoke tests of the application shell.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bmm_core::config::{Config, Language};
+use bmm_core::media_metadata::model::MediaMetadata;
+use bmm_core::merge::{MergeEvent, MergeEventSink, MergeOutcome};
 use core::prelude::v1::test;
 use gpui_kit::component::WindowExt;
 use gpui_kit::test::{TestQueryExt, TestWindowExt};
@@ -28,28 +31,60 @@ use gpui_kit::*;
 
 use super::actions;
 use super::root::AppView;
+use crate::domain::status::QueueItemStatus;
 use crate::i18n::tests::LOCALE_LOCK;
+use crate::merge_events::{self, MergeBackend};
 use crate::platform::close_guard;
-use crate::state::files::tests::TempDir;
+use crate::state::files::tests::{TempDir, fixture_source, movie};
 use crate::state::ui::NotificationKind;
-use crate::state::{Persistence, Stores, TabType};
+use crate::state::{Persistence, Services, Stores, TabType};
+
+/// What the shell's merge queue was asked to do.
+#[derive(Default)]
+struct MergeCalls {
+  enqueued: Vec<(String, Vec<String>)>,
+  cancelled: Vec<String>,
+}
 
 /// The shell in a test window, in English. The locale is process-wide, and a
 /// test switching it would change the text width under another test's click,
 /// so every shell test holds the locale lock while it runs.
+///
+/// Files parse from fixtures; merges are recorded, and their events are sent
+/// by the test through [`Self::send`] into the same channel the app uses.
 struct Shell {
   handle: AnyWindowHandle,
   stores: Stores,
   written: Arc<Mutex<Vec<Config>>>,
+  merges: Arc<Mutex<MergeCalls>>,
+  events: MergeEventSink,
   _locale: MutexGuard<'static, ()>,
 }
 
 impl Shell {
   fn open(cx: &mut TestAppContext) -> Self {
+    Self::with_files(cx, HashMap::new())
+  }
+
+  fn with_files(cx: &mut TestAppContext, fixtures: HashMap<String, MediaMetadata>) -> Self {
     let locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     crate::i18n::set_language(Language::EnUS);
     let written = Arc::new(Mutex::new(Vec::new()));
     let sink = written.clone();
+    let merges = Arc::new(Mutex::new(MergeCalls::default()));
+    let (enqueue_calls, cancel_calls) = (merges.clone(), merges.clone());
+    let backend = MergeBackend::new(
+      move |file, args| {
+        enqueue_calls.lock().unwrap().enqueued.push((file, args));
+        Ok(())
+      },
+      move |file| {
+        cancel_calls.lock().unwrap().cancelled.push(file.to_string());
+        Ok(())
+      },
+    );
+    let (events, receiver) = merge_events::channel();
+    let (metadata, _) = fixture_source(fixtures);
     let (handle, stores) = cx.update(|cx| {
       gpui_kit::init(cx);
       crate::theme::install(cx);
@@ -57,11 +92,13 @@ impl Shell {
         language: Language::EnUS,
         ..Config::default()
       };
-      let stores = Stores::new(
-        config,
-        Persistence::new(move |config| sink.lock().unwrap().push(config)),
-        cx,
-      );
+      let services = Services {
+        persistence: Persistence::new(move |config| sink.lock().unwrap().push(config)),
+        metadata,
+        merges: backend,
+      };
+      let stores = Stores::new(config, services, cx);
+      merge_events::start(&stores, receiver, cx);
       actions::bind_keys(cx);
       actions::install(&stores, cx);
       let options = WindowOptions {
@@ -82,10 +119,29 @@ impl Shell {
       handle,
       stores,
       written,
+      merges,
+      events,
       _locale: locale,
     };
     shell.window(cx, |window, cx| window.render_frame(cx));
     shell
+  }
+
+  /// Sends a merge event as a worker thread of the core would.
+  fn send(&self, cx: &mut TestAppContext, event: MergeEvent) {
+    (self.events)(event);
+    cx.run_until_parked();
+  }
+
+  /// The title the window shows.
+  fn title(&self, cx: &mut TestAppContext) -> String {
+    VisualTestContext::from_window(self.handle, cx)
+      .window_title()
+      .unwrap_or_else(|| crate::window_title().to_string())
+  }
+
+  fn toasts(&self, cx: &mut TestAppContext) -> usize {
+    self.window(cx, |window, cx| window.notifications(cx).len())
   }
 
   fn window<R>(&self, cx: &mut TestAppContext, f: impl FnOnce(&mut Window, &mut App) -> R) -> R {
@@ -309,7 +365,7 @@ fn the_close_guard_asks_only_while_merges_are_active(cx: &mut TestAppContext) {
   // A second request while the dialog is open does not stack another one.
   shell.window(cx, |window, cx| close_guard::should_close(true, window, cx, |_, _| {}));
   shell.window(cx, |window, cx| window.render_frame(cx));
-  shell.click(cx, "cancel");
+  shell.click(cx, "exit-no");
   assert!(!confirmed.get());
   assert!(!shell.window(cx, |window, cx| window.has_active_dialog(cx)));
 
@@ -319,7 +375,7 @@ fn the_close_guard_asks_only_while_merges_are_active(cx: &mut TestAppContext) {
   });
   cx.run_until_parked();
   shell.window(cx, |window, cx| window.render_frame(cx));
-  shell.click(cx, "ok");
+  shell.click(cx, "exit-yes");
   assert!(confirmed.get());
   assert!(
     cx.update_window(shell.handle, |_, _, _| ()).is_err(),
@@ -346,4 +402,236 @@ fn the_geometry_is_saved_once_the_window_is_still(cx: &mut TestAppContext) {
     .config
     .read_with(cx, |config, _| config.config().window.clone());
   assert_eq!((config.size.width, config.size.height), (900, 700));
+}
+
+fn movies(files: &[&str]) -> HashMap<String, MediaMetadata> {
+  files.iter().map(|file| ((*file).to_string(), movie())).collect()
+}
+
+fn started(file: &str) -> MergeEvent {
+  MergeEvent::Started {
+    file: file.to_string(),
+    at: SystemTime::now(),
+  }
+}
+
+fn finished(file: &str, outcome: MergeOutcome, error: Option<&str>) -> MergeEvent {
+  MergeEvent::Finished {
+    file: file.to_string(),
+    outcome,
+    error: error.map(str::to_string),
+    at: SystemTime::now(),
+  }
+}
+
+impl Shell {
+  fn enqueued(&self) -> Vec<String> {
+    self
+      .merges
+      .lock()
+      .unwrap()
+      .enqueued
+      .iter()
+      .map(|(file, _)| file.clone())
+      .collect()
+  }
+
+  fn cancelled(&self) -> Vec<String> {
+    self.merges.lock().unwrap().cancelled.clone()
+  }
+
+  fn status(&self, cx: &mut TestAppContext, file: &str) -> Option<QueueItemStatus> {
+    self
+      .stores
+      .queue
+      .read_with(cx, |queue, _| queue.item(file).map(|item| item.status))
+  }
+
+  fn disabled(&self, cx: &mut TestAppContext, id: &'static str) -> bool {
+    self.window(cx, |window, cx| {
+      window.render_frame(cx);
+      window.find(id).disabled() == Some(true)
+    })
+  }
+
+  /// Adds parsed files and lets the profile select their tracks.
+  fn add_parsed(&self, cx: &mut TestAppContext, files: &[&str]) {
+    self.add_files(cx, files);
+    cx.run_until_parked();
+    self.window(cx, |window, cx| window.render_frame(cx));
+  }
+}
+
+#[gpui_kit::test]
+fn merge_all_enqueues_every_card_and_the_title_counts_the_queue(cx: &mut TestAppContext) {
+  let (a, b) = ("/media/a.mkv", "/media/b.mkv");
+  let shell = Shell::with_files(cx, movies(&[a, b]));
+  let base = crate::window_title().to_string();
+  assert!(shell.disabled(cx, "toolbar-merge-all"));
+  shell.add_parsed(cx, &[a, b]);
+  assert!(!shell.disabled(cx, "toolbar-merge-all"), "the profile selected tracks");
+  shell.click(cx, "toolbar-merge-all");
+  assert_eq!(shell.enqueued(), [a, b], "in file list order");
+  let args = shell.merges.lock().unwrap().enqueued[0].1.clone();
+  assert_eq!(args[0], "-o");
+  assert!(args.contains(&"--track-order".to_string()));
+  assert_eq!(shell.status(cx, a), Some(QueueItemStatus::Waiting));
+  assert_eq!(shell.title(cx), format!("{base} - 0/2"));
+  assert!(!shell.disabled(cx, "toolbar-cancel-all"));
+  assert!(shell.disabled(cx, "toolbar-clear"), "no clearing while merges wait");
+
+  shell.send(cx, started(a));
+  shell.send(
+    cx,
+    MergeEvent::Progress {
+      file: a.to_string(),
+      percent: 50,
+    },
+  );
+  let progress = shell
+    .stores
+    .queue
+    .read_with(cx, |queue, _| queue.item(a).map(|item| item.progress));
+  assert_eq!(progress, Some(50));
+  shell.window(cx, |window, cx| window.render_frame(cx));
+  shell.send(cx, finished(a, MergeOutcome::Completed, None));
+  assert_eq!(shell.title(cx), format!("{base} - 1/2"));
+  assert_eq!(shell.toasts(cx), 1, "a success toast");
+
+  shell.send(cx, started(b));
+  shell.send(
+    cx,
+    finished(b, MergeOutcome::Failed, Some("mkvmerge exited with code Some(2)")),
+  );
+  assert_eq!(shell.status(cx, b), Some(QueueItemStatus::Failed));
+  assert_eq!(shell.title(cx), base, "the plain title once nothing is active");
+  assert_eq!(shell.toasts(cx), 2, "an error toast");
+  assert!(!shell.disabled(cx, "toolbar-clear"));
+  assert!(shell.disabled(cx, "toolbar-cancel-all"));
+}
+
+#[gpui_kit::test]
+fn f3_merges_once_and_f4_cancels(cx: &mut TestAppContext) {
+  let a = "/media/a.mkv";
+  let shell = Shell::with_files(cx, movies(&[a]));
+  shell.press(cx, "f3");
+  assert!(shell.enqueued().is_empty(), "nothing selected yet");
+  shell.add_parsed(cx, &[a]);
+  shell.press(cx, "f3");
+  shell.press(cx, "f3");
+  assert_eq!(shell.enqueued(), [a], "a waiting card is not enqueued again");
+  shell.press(cx, "ctrl-q");
+  assert!(
+    shell.stores.files.read_with(cx, |files, _| files.has_files()),
+    "Ctrl+Q waits too"
+  );
+  shell.press(cx, "f4");
+  assert_eq!(shell.cancelled(), [a]);
+  let requested = shell
+    .stores
+    .queue
+    .read_with(cx, |queue, _| queue.item(a).map(|item| item.cancel_requested));
+  assert_eq!(requested, Some(true));
+  shell.send(cx, finished(a, MergeOutcome::Cancelled, None));
+  assert_eq!(shell.status(cx, a), Some(QueueItemStatus::Cancelled));
+  assert_eq!(shell.toasts(cx), 0, "a cancelled merge shows no toast");
+  shell.press(cx, "f4");
+  assert_eq!(shell.cancelled(), [a], "nothing active to cancel");
+  shell.press(cx, "ctrl-q");
+  assert!(!shell.stores.files.read_with(cx, |files, _| files.has_files()));
+  assert_eq!(shell.status(cx, a), None, "clearing empties the queue too");
+}
+
+#[gpui_kit::test]
+fn the_rows_follow_loading_and_merging(cx: &mut TestAppContext) {
+  let (a, bad) = ("/media/a.mkv", "/media/bad.mkv");
+  let shell = Shell::with_files(cx, movies(&[a]));
+  shell.add_files(cx, &[a, bad]);
+  shell.window(cx, |window, _| {
+    window.find(("file-row", 0usize));
+    window.find(("file-row", 1usize));
+  });
+  cx.run_until_parked();
+  shell.press(cx, "f3");
+  shell.send(cx, started(a));
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window.find(("file-row", 1usize));
+  });
+  shell.stores.files.read_with(cx, |files, _| {
+    assert!(matches!(files.load_state(a), crate::state::files::LoadState::Loaded));
+    assert!(matches!(
+      files.load_state(bad),
+      crate::state::files::LoadState::Failed(_)
+    ));
+  });
+}
+
+#[gpui_kit::test]
+fn closing_while_a_merge_runs_asks_and_yes_cancels_it(cx: &mut TestAppContext) {
+  let a = "/media/a.mkv";
+  let shell = Shell::with_files(cx, movies(&[a]));
+  shell.add_parsed(cx, &[a]);
+  shell.press(cx, "f3");
+  shell.send(cx, started(a));
+  let stores = shell.stores.clone();
+  let closes = shell.window(cx, |window, cx| {
+    crate::platform::window::close_requested(&stores, window, cx)
+  });
+  assert!(!closes);
+  cx.run_until_parked();
+  shell.window(cx, |window, cx| window.render_frame(cx));
+  shell.click(cx, "exit-yes");
+  assert_eq!(shell.cancelled(), [a]);
+  assert!(
+    cx.update_window(shell.handle, |_, _, _| ()).is_err(),
+    "the window closed"
+  );
+}
+
+/// Quit by keyboard (macOS Cmd+Q) while a merge runs asks first, like the
+/// title bar: the key is dispatched while its window is being updated.
+#[gpui_kit::test]
+fn quitting_by_keyboard_while_a_merge_runs_asks_first(cx: &mut TestAppContext) {
+  let a = "/media/a.mkv";
+  let shell = Shell::with_files(cx, movies(&[a]));
+  cx.update(|cx| {
+    cx.bind_keys([KeyBinding::new("cmd-q", actions::Quit, None)]);
+    crate::platform::install_quit(shell.handle, &shell.stores, cx);
+  });
+  shell.add_parsed(cx, &[a]);
+  shell.press(cx, "f3");
+  shell.send(cx, started(a));
+  shell.press(cx, "cmd-q");
+  assert!(
+    shell.window(cx, |window, cx| window.has_active_dialog(cx)),
+    "the exit confirmation is open"
+  );
+  shell.window(cx, |window, cx| window.render_frame(cx));
+  shell.click(cx, "exit-no");
+  assert!(shell.cancelled().is_empty());
+  assert!(
+    cx.update_window(shell.handle, |_, _, _| ()).is_ok(),
+    "No keeps the window"
+  );
+}
+
+#[gpui_kit::test]
+fn enter_and_escape_answer_no_in_the_exit_dialog(cx: &mut TestAppContext) {
+  let shell = Shell::open(cx);
+  let confirmed = std::rc::Rc::new(std::cell::Cell::new(false));
+  for key in ["enter", "escape"] {
+    let flag = confirmed.clone();
+    shell.window(cx, |window, cx| {
+      close_guard::should_close(true, window, cx, move |_, _| flag.set(true))
+    });
+    cx.run_until_parked();
+    shell.window(cx, |window, cx| window.render_frame(cx));
+    shell.press(cx, key);
+    assert!(!confirmed.get(), "{key} does not confirm");
+    assert!(
+      !shell.window(cx, |window, cx| window.has_active_dialog(cx)),
+      "{key} closes the dialog"
+    );
+  }
 }
