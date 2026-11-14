@@ -23,9 +23,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use bmm_core::config::{Config, Language};
+use bmm_core::config::{Config, GroupMode, Language};
 use bmm_core::media_metadata::model::MediaMetadata;
 use bmm_core::merge::{MergeEvent, MergeEventSink, MergeOutcome};
+use bmm_core::protocol::UpdateCheckResult;
 use core::prelude::v1::test;
 use gpui_kit::component::WindowExt;
 use gpui_kit::test::{TestQueryExt, TestWindowExt};
@@ -39,8 +40,9 @@ use crate::merge_events::{self, MergeBackend};
 use crate::platform::close_guard;
 use crate::platform::taskbar::Taskbar;
 use crate::state::files::tests::{TempDir, fixture_source, movie};
-use crate::state::ui::NotificationKind;
+use crate::state::ui::{NotificationKind, ToolbarMenu};
 use crate::state::{Persistence, Services, Stores, TabType};
+use crate::tools::ToolDetector;
 
 /// What the shell's merge queue was asked to do.
 #[derive(Default)]
@@ -59,7 +61,8 @@ pub(super) struct Shell {
   pub(super) handle: AnyWindowHandle,
   pub(super) view: Entity<AppView>,
   pub(super) stores: Stores,
-  written: Arc<Mutex<Vec<Config>>>,
+  /// Every config the store wrote, in order.
+  pub(super) written: Arc<Mutex<Vec<Config>>>,
   pub(super) merges: Arc<Mutex<MergeCalls>>,
   /// Every value the window's taskbar progress was set to.
   pub(super) taskbar: Rc<RefCell<Vec<Option<u8>>>>,
@@ -85,6 +88,16 @@ impl Shell {
 
   /// The shell with `config` (its language is set to English).
   pub(super) fn with_config(cx: &mut TestAppContext, config: Config, fixtures: HashMap<String, MediaMetadata>) -> Self {
+    Self::with_tools(cx, config, fixtures, ToolDetector::system())
+  }
+
+  /// The shell with `config` whose tool detection is `tools`.
+  pub(super) fn with_tools(
+    cx: &mut TestAppContext,
+    config: Config,
+    fixtures: HashMap<String, MediaMetadata>,
+    tools: ToolDetector,
+  ) -> Self {
     let locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     crate::i18n::set_language(Language::EnUS);
     let written = Arc::new(Mutex::new(Vec::new()));
@@ -122,6 +135,7 @@ impl Shell {
           let progress = progress.clone();
           Box::new(move |percent| progress.borrow_mut().push(percent))
         }),
+        tools,
       };
       let stores = Stores::new(config, services, cx);
       merge_events::start(&stores, receiver, cx);
@@ -184,7 +198,7 @@ impl Shell {
       .expect("window open")
   }
 
-  fn active_tab(&self, cx: &mut TestAppContext) -> TabType {
+  pub(super) fn active_tab(&self, cx: &mut TestAppContext) -> TabType {
     self.stores.ui.read_with(cx, |ui, _| ui.active_tab())
   }
 
@@ -200,7 +214,7 @@ impl Shell {
 
   /// Whether an element with this accessible name (a tab, a labelled button)
   /// is on screen.
-  fn shows(&self, cx: &mut TestAppContext, label: &str) -> bool {
+  pub(super) fn shows(&self, cx: &mut TestAppContext, label: &str) -> bool {
     self.window(cx, |window, cx| {
       window.render_frame(cx);
       window.try_find_by_label(label).is_some()
@@ -669,4 +683,193 @@ fn enter_and_escape_answer_no_in_the_exit_dialog(cx: &mut TestAppContext) {
       "{key} closes the dialog"
     );
   }
+}
+
+/// The menu items on screen, by accessible name, with their checked state.
+fn menu_items(shell: &Shell, cx: &mut TestAppContext) -> Vec<(String, bool)> {
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window
+      .elements()
+      .into_iter()
+      .filter(|element| matches!(element.role(), Some(Role::MenuItem | Role::MenuItemCheckBox)))
+      .filter_map(|element| {
+        let checked = element.checked().unwrap_or(false);
+        element.label().map(|label| (label.to_string(), checked))
+      })
+      .collect()
+  })
+}
+
+fn click_menu_item(shell: &Shell, cx: &mut TestAppContext, label: &str) {
+  let center = shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window
+      .find_all_by_label(label)
+      .into_iter()
+      .find(|element| matches!(element.role(), Some(Role::MenuItem | Role::MenuItemCheckBox)))
+      .expect("the menu item")
+      .bounds()
+      .center()
+  });
+  VisualTestContext::from_window(shell.handle, cx).simulate_click(center, Modifiers::none());
+  cx.run_until_parked();
+}
+
+fn open_menu(shell: &Shell, cx: &mut TestAppContext) -> Option<ToolbarMenu> {
+  shell.stores.ui.read_with(cx, |ui, _| ui.open_menu())
+}
+
+#[gpui_kit::test]
+fn f8_and_a_click_open_the_group_mode_menu_and_a_choice_closes_it(cx: &mut TestAppContext) {
+  let shell = Shell::open(cx);
+  shell.window(cx, |window, _| window.activate_window());
+  shell.press(cx, "f8");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::GroupMode));
+  assert_eq!(
+    menu_items(&shell, cx),
+    [
+      ("No grouping".to_string(), false),
+      ("Group by identical track count per type".to_string(), true),
+      (
+        "Group by identical track count and language per type".to_string(),
+        false
+      ),
+    ]
+  );
+  click_menu_item(&shell, cx, "No grouping");
+  assert_eq!(open_menu(&shell, cx), None);
+  assert!(menu_items(&shell, cx).is_empty());
+  let config = shell.stores.config.read_with(cx, |store, _| store.config().clone());
+  assert_eq!(config.group_mode, GroupMode::None);
+  cx.run_until_parked();
+  assert_eq!(
+    shell.written.lock().unwrap().last().unwrap().group_mode,
+    GroupMode::None
+  );
+  // A click on the button opens it again with the new mode checked; Escape
+  // closes it.
+  shell.click(cx, "toolbar-group-mode");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::GroupMode));
+  assert_eq!(menu_items(&shell, cx)[0], ("No grouping".to_string(), true));
+  shell.press(cx, "escape");
+  assert_eq!(open_menu(&shell, cx), None);
+}
+
+#[gpui_kit::test]
+fn f9_opens_the_profile_menu_and_a_choice_activates_the_profile(cx: &mut TestAppContext) {
+  let shell = Shell::open(cx);
+  shell.window(cx, |window, _| window.activate_window());
+  shell.stores.config.update(cx, |store, cx| {
+    store.add_profile("Anime", cx);
+    store.set_active_profile("Default", cx);
+  });
+  shell.press(cx, "f9");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::Profile));
+  assert_eq!(
+    menu_items(&shell, cx),
+    [("Default".to_string(), true), ("Anime".to_string(), false)]
+  );
+  click_menu_item(&shell, cx, "Anime");
+  assert_eq!(open_menu(&shell, cx), None);
+  assert_eq!(
+    shell
+      .stores
+      .config
+      .read_with(cx, |store, _| store.config().active_profile.clone()),
+    "Anime"
+  );
+  // F8 while the profile menu is open switches to the group menu.
+  shell.press(cx, "f9");
+  shell.press(cx, "f8");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::GroupMode));
+}
+
+fn update_shell(cx: &mut TestAppContext, config: Config, result: anyhow::Result<UpdateCheckResult>) -> Shell {
+  let shell = Shell::with_config(cx, config, HashMap::new());
+  let result = Arc::new(Mutex::new(Some(result)));
+  let source = crate::updates::UpdateSource::new(move |version| {
+    assert_eq!(version, crate::APP_VERSION);
+    result.lock().unwrap().take().expect("one check")
+  });
+  cx.update(|cx| crate::updates::start(&shell.stores, source, cx));
+  cx.run_until_parked();
+  shell.window(cx, |window, cx| window.render_frame(cx));
+  shell
+}
+
+fn found(version: &str) -> anyhow::Result<UpdateCheckResult> {
+  Ok(UpdateCheckResult {
+    has_update: true,
+    latest_version: Some(version.to_string()),
+  })
+}
+
+fn banner(shell: &Shell, cx: &mut TestAppContext) -> Option<String> {
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window.try_find("update-banner")?;
+    gpui_kit::base::test_support::texts(window)
+      .into_iter()
+      .map(|text| text.text().to_string())
+      .find(|text| text.contains("is available"))
+  })
+}
+
+#[gpui_kit::test]
+fn a_new_release_shows_the_banner_and_records_the_check(cx: &mut TestAppContext) {
+  let shell = update_shell(cx, Config::default(), found("9.9.0"));
+  assert_eq!(
+    banner(&shell, cx),
+    Some("A new version 9.9.0 is available.".to_string())
+  );
+  let config = shell.stores.config.read_with(cx, |store, _| store.config().clone());
+  assert!(config.update.last_checked > 0);
+  assert_eq!(config.update.last_version, "9.9.0");
+  assert_eq!(
+    shell.written.lock().unwrap().last().unwrap().update.last_version,
+    "9.9.0"
+  );
+  // Closing without the box only hides it.
+  shell.click(cx, "update-close");
+  assert_eq!(banner(&shell, cx), None);
+  assert!(
+    shell
+      .stores
+      .config
+      .read_with(cx, |store, _| store.config().update.ignore_version.is_empty())
+  );
+}
+
+#[gpui_kit::test]
+fn skipping_a_version_hides_it_from_the_next_start(cx: &mut TestAppContext) {
+  let shell = update_shell(cx, Config::default(), found("9.9.0"));
+  shell.window(cx, |window, _| window.activate_window());
+  shell.click(cx, "update-skip");
+  shell.click(cx, "update-close");
+  assert_eq!(banner(&shell, cx), None);
+  let config = shell.stores.config.read_with(cx, |store, _| store.config().clone());
+  assert_eq!(config.update.ignore_version, "9.9.0");
+  drop(shell);
+  // The next start reuses the check, and the version stays hidden.
+  let shell = update_shell(cx, config.clone(), Err(anyhow::anyhow!("not asked")));
+  assert_eq!(banner(&shell, cx), None);
+  // A cached newer version that was not skipped shows without asking.
+  let mut config = config;
+  config.update.ignore_version.clear();
+  drop(shell);
+  let shell = update_shell(cx, config, Err(anyhow::anyhow!("not asked")));
+  assert_eq!(
+    banner(&shell, cx),
+    Some("A new version 9.9.0 is available.".to_string())
+  );
+}
+
+#[gpui_kit::test]
+fn a_failed_check_shows_nothing_and_records_nothing(cx: &mut TestAppContext) {
+  let shell = update_shell(cx, Config::default(), Err(anyhow::anyhow!("offline")));
+  assert_eq!(banner(&shell, cx), None);
+  let config = shell.stores.config.read_with(cx, |store, _| store.config().clone());
+  assert_eq!(config.update.last_checked, 0, "the next start tries again");
+  assert!(shell.written.lock().unwrap().is_empty());
 }

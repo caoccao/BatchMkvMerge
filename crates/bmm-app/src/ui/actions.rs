@@ -23,6 +23,7 @@
 use gpui_kit::{App, KeyBinding, actions};
 
 use crate::state::Stores;
+use crate::state::ui::ToolbarMenu;
 
 actions!(
   batch_mkvmerge,
@@ -35,6 +36,10 @@ actions!(
     PreviousTab,
     /// Ctrl+W: close the active tab if it is closable.
     CloseTab,
+    /// F8: the group-mode menu.
+    OpenGroupModeMenu,
+    /// F9: the profile menu.
+    OpenProfileMenu,
     /// F10.
     OpenSettings,
     /// Ctrl+Q: remove every file unless a merge is active.
@@ -55,12 +60,13 @@ actions!(
   ]
 );
 
-/// Binds the application shortcuts; the group (F8) and profile (F9) menus
-/// join with the menus.
+/// Binds the application shortcuts.
 pub fn bind_keys(cx: &mut App) {
   cx.bind_keys([
     KeyBinding::new("f3", MergeAll, None),
     KeyBinding::new("f4", CancelAll, None),
+    KeyBinding::new("f8", OpenGroupModeMenu, None),
+    KeyBinding::new("f9", OpenProfileMenu, None),
     KeyBinding::new("ctrl-tab", NextTab, None),
     KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     KeyBinding::new("ctrl-w", CloseTab, None),
@@ -98,6 +104,19 @@ pub fn install(stores: &Stores, cx: &mut App) {
   cx.on_action({
     let ui = ui.clone();
     move |_: &OpenSettings, cx| ui.update(cx, |ui, cx| ui.open_settings(cx))
+  });
+  cx.on_action({
+    let ui = ui.clone();
+    move |_: &OpenGroupModeMenu, cx| ui.update(cx, |ui, cx| ui.show_menu(ToolbarMenu::GroupMode, cx))
+  });
+  cx.on_action({
+    let stores = stores.clone();
+    move |_: &OpenProfileMenu, cx| {
+      // The profile button is disabled without profiles.
+      if !stores.config.read(cx).config().profiles.is_empty() {
+        stores.ui.update(cx, |ui, cx| ui.show_menu(ToolbarMenu::Profile, cx));
+      }
+    }
   });
   cx.on_action({
     let stores = stores.clone();

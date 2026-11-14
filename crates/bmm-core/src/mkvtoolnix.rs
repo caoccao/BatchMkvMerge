@@ -269,37 +269,120 @@ fn mkvtoolnix_gui_process_name() -> &'static str {
   }
 }
 
-pub fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
-  if check_running {
-    if let Some(dir) = crate::services::find_running_process_dir(mkvtoolnix_gui_process_name()) {
-      if has_mkvtoolnix(&dir) {
-        let mut cfg = config::get_config();
-        let path_string = dir.to_string_lossy().to_string();
-        if cfg.external_tools.mkv_toolnix_path != path_string {
-          cfg.external_tools.mkv_toolnix_path = path_string.clone();
-          config::set_config(cfg)?;
-        }
-        return Ok(MkvToolNixStatus {
-          found: true,
-          mkv_toolnix_path: path_string,
-        });
-      }
-    }
+/// Where MKVToolNix was found, and whether the config should keep that path
+/// (a running GUI's directory, or a versioned macOS bundle found from the
+/// default path).
+struct Located {
+  status: MkvToolNixStatus,
+  remember: bool,
+}
+
+fn locate_mkvtoolnix(path: &str, check_running: bool) -> Located {
+  if check_running
+    && let Some(dir) = crate::services::find_running_process_dir(mkvtoolnix_gui_process_name())
+    && has_mkvtoolnix(&dir)
+  {
+    return Located {
+      status: MkvToolNixStatus {
+        found: true,
+        mkv_toolnix_path: dir.to_string_lossy().to_string(),
+      },
+      remember: true,
+    };
   }
   let trimmed_path = path.trim();
   if trimmed_path.is_empty() {
-    return Ok(MkvToolNixStatus {
-      found: false,
-      mkv_toolnix_path: String::new(),
-    });
+    return Located {
+      status: MkvToolNixStatus {
+        found: false,
+        mkv_toolnix_path: String::new(),
+      },
+      remember: false,
+    };
   }
   let resolution = resolve_mkvtoolnix(trimmed_path, MKVTOOLNIX_TOOLS[0]);
   let found = has_mkvtoolnix(&resolution.path);
-  if found {
-    persist_mkvtoolnix_path_if_auto_detected(&resolution)?;
+  Located {
+    status: MkvToolNixStatus {
+      found,
+      mkv_toolnix_path: resolution.path.to_string_lossy().to_string(),
+    },
+    remember: found && resolution.auto_detected,
   }
-  Ok(MkvToolNixStatus {
-    found,
-    mkv_toolnix_path: resolution.path.to_string_lossy().to_string(),
-  })
+}
+
+/// Finds MKVToolNix without touching the config: with `check_running`, the
+/// directory of a running `mkvtoolnix-gui` first, then `path` (on macOS the
+/// default path also finds the newest `MKVToolNix-<version>.app`). A shell
+/// that keeps its own copy of the config stores the returned path itself.
+pub fn detect_mkvtoolnix(path: &str, check_running: bool) -> MkvToolNixStatus {
+  locate_mkvtoolnix(path, check_running).status
+}
+
+/// [`detect_mkvtoolnix`], also writing a running GUI's directory or an
+/// auto-detected bundle into the config file.
+pub fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
+  let located = locate_mkvtoolnix(&path, check_running);
+  if located.remember {
+    let mut cfg = config::get_config();
+    if cfg.external_tools.mkv_toolnix_path != located.status.mkv_toolnix_path {
+      cfg.external_tools.mkv_toolnix_path = located.status.mkv_toolnix_path.clone();
+      config::set_config(cfg)?;
+    }
+  }
+  Ok(located.status)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A fresh directory under the system temp dir, removed when dropped.
+  struct Dir(PathBuf);
+
+  impl Dir {
+    fn new(name: &str) -> Self {
+      let path = std::env::temp_dir().join(format!("bmm_mkvtoolnix_{name}_{}", std::process::id()));
+      let _ = std::fs::remove_dir_all(&path);
+      std::fs::create_dir_all(&path).unwrap();
+      Self(path)
+    }
+  }
+
+  impl Drop for Dir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  #[test]
+  fn detection_finds_mkvmerge_in_the_given_directory() {
+    let dir = Dir::new("found");
+    let tool = if cfg!(target_os = "windows") {
+      "mkvmerge.exe"
+    } else {
+      "mkvmerge"
+    };
+    std::fs::write(dir.0.join(tool), b"").unwrap();
+    let path = dir.0.to_string_lossy().to_string();
+    let status = detect_mkvtoolnix(&format!("  {path} "), false);
+    assert!(status.found);
+    assert_eq!(status.mkv_toolnix_path, path);
+  }
+
+  #[test]
+  fn detection_reports_a_directory_without_mkvmerge_as_not_found() {
+    let dir = Dir::new("missing");
+    let path = dir.0.to_string_lossy().to_string();
+    let status = detect_mkvtoolnix(&path, false);
+    assert!(!status.found);
+    assert_eq!(status.mkv_toolnix_path, path);
+  }
+
+  #[test]
+  fn detection_of_an_empty_path_finds_nothing() {
+    let status = detect_mkvtoolnix("   ", false);
+    assert!(!status.found);
+    assert!(status.mkv_toolnix_path.is_empty());
+  }
 }

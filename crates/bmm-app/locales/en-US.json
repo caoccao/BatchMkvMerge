@@ -213,7 +213,11 @@
     "exitTitle": "Exit",
     "exitMessage": "There are merges in progress. Are you sure you want to exit?",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "deleteProfileTitle": "Delete Profile",
+    "deleteProfileMessage": "Delete the profile \"%{name}\"?",
+    "resetProfileTitle": "Reset Profile",
+    "resetProfileMessage": "Reset the profile \"%{name}\" to its default settings?"
   },
   "card": {
     "summary": {

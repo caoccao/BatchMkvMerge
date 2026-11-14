@@ -15,7 +15,8 @@
 *   limitations under the License.
 */
 
-//! The window content (`Layout.tsx`): toolbar, tabs and footer, plus what
+//! The window content (`Layout.tsx`): update banner, toolbar, tabs and
+//! footer, plus what
 //! belongs to the whole window: OS file drop, toasts, geometry persistence,
 //! the title with the queue count and the taskbar progress (`App.tsx`), the
 //! OS notification and the topmost window of a drained queue, live language
@@ -33,6 +34,7 @@ use super::footer::Footer;
 use super::main_content::MainContent;
 use super::toolbar::Toolbar;
 use super::topmost::TopmostWindow;
+use super::update_banner::UpdateBanner;
 use crate::platform::taskbar::{self, ProgressFn};
 use crate::platform::window as main_window;
 use crate::state::queue::QueueEvent;
@@ -44,6 +46,7 @@ const GEOMETRY_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 pub struct AppView {
   stores: Stores,
+  banner: Entity<UpdateBanner>,
   toolbar: Entity<Toolbar>,
   main: Entity<MainContent>,
   /// The applied language, theme and display mode, to act only on changes.
@@ -114,6 +117,7 @@ impl AppView {
       crate::theme::apply(&config, window.appearance(), cx);
     }
     Self {
+      banner: cx.new(|cx| UpdateBanner::new(stores.clone(), cx)),
       toolbar: cx.new(|cx| Toolbar::new(stores.clone(), cx)),
       main: cx.new(|cx| MainContent::new(stores.clone(), cx)),
       taskbar: stores.taskbar.attach(window),
@@ -168,6 +172,10 @@ impl AppView {
     &self.main
   }
 
+  pub fn toolbar(&self) -> &Entity<Toolbar> {
+    &self.toolbar
+  }
+
   /// Applies a changed language, theme or display mode at once.
   fn config_changed(&mut self, config: Entity<ConfigStore>, window: &mut Window, cx: &mut Context<Self>) {
     let config = config.read(cx).config().clone();
@@ -212,6 +220,7 @@ impl Render for AppView {
           .collect();
         files::add_paths(&this.stores.files, paths, cx);
       }))
+      .child(self.banner.clone())
       .child(self.toolbar.clone())
       .child(div().flex_1().min_h_0().child(self.main.clone()))
       .child(Footer)

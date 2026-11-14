@@ -213,7 +213,11 @@
     "exitTitle": "Beenden",
     "exitMessage": "Es laufen noch Zusammenführungen. Möchten Sie wirklich beenden?",
     "yes": "Ja",
-    "no": "Nein"
+    "no": "Nein",
+    "deleteProfileTitle": "Profil löschen",
+    "deleteProfileMessage": "Das Profil „%{name}“ löschen?",
+    "resetProfileTitle": "Profil zurücksetzen",
+    "resetProfileMessage": "Das Profil „%{name}“ auf die Standardeinstellungen zurücksetzen?"
   },
   "card": {
     "summary": {

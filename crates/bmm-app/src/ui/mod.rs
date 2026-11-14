@@ -23,15 +23,18 @@
 pub mod about;
 pub mod actions;
 pub mod cards;
+pub mod checkbox;
 pub mod file_list;
 pub mod footer;
 pub mod main_content;
 pub mod output_dialog;
 pub mod queue;
 pub mod root;
+pub mod settings;
 pub mod toolbar;
 pub mod topmost;
 pub mod track_table;
+pub mod update_banner;
 pub mod welcome;
 
 #[cfg(test)]

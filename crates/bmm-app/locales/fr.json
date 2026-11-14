@@ -213,7 +213,11 @@
     "exitTitle": "Quitter",
     "exitMessage": "Des fusions sont en cours. Voulez-vous vraiment quitter ?",
     "yes": "Oui",
-    "no": "Non"
+    "no": "Non",
+    "deleteProfileTitle": "Supprimer le profil",
+    "deleteProfileMessage": "Supprimer le profil « %{name} » ?",
+    "resetProfileTitle": "Réinitialiser le profil",
+    "resetProfileMessage": "Réinitialiser le profil « %{name} » à ses paramètres par défaut ?"
   },
   "card": {
     "summary": {

@@ -41,6 +41,7 @@ use crate::domain::file_tree::combine_unit_tracks;
 use crate::domain::status::QueueItemStatus;
 use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
+use crate::tools::Tool;
 
 /// Where a merge writes: a card's full output path wins, else its directory
 /// override, else the session's global directory, else the input's own
@@ -438,22 +439,22 @@ pub fn watch_better_media_info(stores: &Stores, cx: &mut App) {
   let detected_path: Rc<RefCell<Option<String>>> = Rc::default();
   let generation = Rc::new(Cell::new(0_u64));
   let detect = {
-    let files = stores.files.clone();
+    let (files, tools) = (stores.files.clone(), stores.tools.clone());
     move |path: String, cx: &mut App| {
       if detected_path.borrow().as_ref() == Some(&path) {
         return;
       }
       *detected_path.borrow_mut() = Some(path.clone());
       generation.set(generation.get() + 1);
-      let (files, generation, current) = (files.clone(), generation.clone(), generation.get());
+      let (files, tools, generation, current) = (files.clone(), tools.clone(), generation.clone(), generation.get());
       cx.spawn(async move |cx| {
         let status = cx
-          .background_spawn(async move { bmm_core::services::detect_better_media_info(path, false) })
+          .background_spawn(async move { tools.detect(Tool::BetterMediaInfo, path.trim(), false) })
           .await;
         if generation.get() != current {
           return;
         }
-        let dir = status.ok().filter(|status| status.found).map(|status| status.path);
+        let dir = status.found.then_some(status.path);
         files.update(cx, |files, cx| files.set_better_media_info(dir, cx));
       })
       .detach();

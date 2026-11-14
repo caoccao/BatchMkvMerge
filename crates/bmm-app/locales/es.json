@@ -213,7 +213,11 @@
     "exitTitle": "Salir",
     "exitMessage": "Hay combinaciones en curso. ¿Seguro que quieres salir?",
     "yes": "Sí",
-    "no": "No"
+    "no": "No",
+    "deleteProfileTitle": "Eliminar perfil",
+    "deleteProfileMessage": "¿Eliminar el perfil «%{name}»?",
+    "resetProfileTitle": "Restablecer perfil",
+    "resetProfileMessage": "¿Restablecer el perfil «%{name}» a su configuración predeterminada?"
   },
   "card": {
     "summary": {

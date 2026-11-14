@@ -213,7 +213,11 @@
     "exitTitle": "Esci",
     "exitMessage": "Ci sono unioni in corso. Vuoi uscire?",
     "yes": "Sì",
-    "no": "No"
+    "no": "No",
+    "deleteProfileTitle": "Elimina profilo",
+    "deleteProfileMessage": "Eliminare il profilo «%{name}»?",
+    "resetProfileTitle": "Reimposta profilo",
+    "resetProfileMessage": "Reimpostare il profilo «%{name}» alle impostazioni predefinite?"
   },
   "card": {
     "summary": {

@@ -146,7 +146,7 @@ impl Default for ConfigFormatField {
 }
 
 /// Number of fractional digits shown.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum FormatPrecision {
   Zero,
   One,
@@ -160,7 +160,7 @@ impl Default for FormatPrecision {
 }
 
 /// Unit ladder: `K*` use 1024-step divisors, `K*i` use 1000-step divisors.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum FormatUnit {
   K,
   KM,
@@ -178,7 +178,7 @@ impl Default for FormatUnit {
 }
 
 /// How the file list buckets dropped files into group cards.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum GroupMode {
   /// Render every file on its own card.
   None,
@@ -262,7 +262,7 @@ impl Default for ConfigUpdate {
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum UpdateCheckInterval {
   Daily,
   Weekly,
@@ -444,6 +444,22 @@ impl Default for ConfigProfile {
       track_names_audio: Self::default_track_names_video_audio(),
       track_names_subtitle: Self::default_track_names_subtitle(),
       automation: ConfigAutomation::default(),
+    }
+  }
+}
+
+impl ConfigProfile {
+  /// A fresh profile called `name` (`createDefaultProfile` of the React
+  /// app): the Default profile's values, except that a profile with another
+  /// name auto-selects no audio, subtitle or chapter tracks.
+  pub fn named(name: &str) -> Self {
+    let is_default = name == Self::DEFAULT_NAME;
+    Self {
+      name: name.to_owned(),
+      select_audio: is_default,
+      select_subtitle: is_default,
+      select_chapters: is_default,
+      ..Self::default()
     }
   }
 }
@@ -907,5 +923,127 @@ mod tests {
     let json = serde_json::to_string(&cfg).unwrap();
     let back: Config = serde_json::from_str(&json).unwrap();
     assert_eq!(back.parser.timeout_ms, 2500);
+  }
+
+  /// Every field of the config with a value other than its default, as the
+  /// gpui-kit app writes it.
+  const FULL_CONFIG: &str = r#"{
+    "displayMode": "Dark",
+    "theme": "Forest",
+    "language": "ja",
+    "externalTools": { "mkvToolNixPath": "/opt/mkvtoolnix", "betterMediaInfoPath": "/opt/bmi" },
+    "profiles": [
+      {
+        "name": "Default",
+        "selectVideo": true,
+        "selectAudio": false,
+        "selectSubtitle": false,
+        "selectChapters": false,
+        "selectAttachments": true,
+        "videoLanguagesForTrackSelection": "jpn",
+        "audioLanguagesForTrackSelection": "eng, jpn",
+        "subtitleLanguagesForTrackSelection": "chi",
+        "preferredVideoLanguages": "jpn",
+        "preferredAudioLanguages": "jpn, eng",
+        "preferredSubtitleLanguages": "chi, eng",
+        "trackNamesVideo": { "jpn": "Japanese" },
+        "trackNamesAudio": { "jpn": "Japanese\nCommentary" },
+        "trackNamesSubtitle": { "chi": "Simplified Chinese" },
+        "automation": {
+          "reset_und_language": { "enabled": true, "language": "ja" },
+          "set_track_name": { "enabled": true },
+          "reset_default_track": { "enabled": true },
+          "reset_forced_display": { "enabled": true }
+        }
+      },
+      {
+        "name": "Anime",
+        "selectVideo": false,
+        "selectAudio": true,
+        "selectSubtitle": true,
+        "selectChapters": true,
+        "selectAttachments": false,
+        "videoLanguagesForTrackSelection": "",
+        "audioLanguagesForTrackSelection": "jpn",
+        "subtitleLanguagesForTrackSelection": "eng",
+        "preferredVideoLanguages": "",
+        "preferredAudioLanguages": "jpn",
+        "preferredSubtitleLanguages": "eng",
+        "trackNamesVideo": {},
+        "trackNamesAudio": {},
+        "trackNamesSubtitle": {},
+        "automation": {
+          "reset_und_language": { "enabled": false, "language": "en" },
+          "set_track_name": { "enabled": false },
+          "reset_default_track": { "enabled": false },
+          "reset_forced_display": { "enabled": false }
+        }
+      }
+    ],
+    "activeProfile": "Anime",
+    "window": { "position": { "x": 120, "y": 80 }, "size": { "width": 1440, "height": 960 } },
+    "update": { "checkInterval": "Monthly", "lastChecked": 1800000000, "lastVersion": "1.0.1", "ignoreVersion": "1.0.1" },
+    "parser": { "timeoutMs": 2500, "subtitleCharset": "windows-1252" },
+    "groupMode": "TrackCountAndLanguage",
+    "groupByFileName": false,
+    "formatting": {
+      "video": { "bitRate": { "precision": "Zero", "unit": "K" }, "size": { "precision": "One", "unit": "KM" } },
+      "audio": { "bitRate": { "precision": "One", "unit": "KMG" }, "size": { "precision": "Zero", "unit": "KMi" } },
+      "subtitle": { "bitRate": { "precision": "Two", "unit": "KMiGi" }, "size": { "precision": "One", "unit": "KMiGiTi" } }
+    }
+  }"#;
+
+  /// The object keys at every depth, as `a.b.c` paths; maps keyed by data
+  /// (track names) and arrays are not entered.
+  fn key_paths(value: &serde_json::Value, prefix: &str, paths: &mut Vec<String>) {
+    if let serde_json::Value::Object(map) = value {
+      for (key, value) in map {
+        let path = format!("{prefix}{key}");
+        paths.push(path.clone());
+        if !key.starts_with("trackNames") {
+          key_paths(value, &format!("{path}."), paths);
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn a_config_with_every_field_round_trips() {
+    let written: serde_json::Value = serde_json::from_str(FULL_CONFIG).unwrap();
+    let config: Config = serde_json::from_str(FULL_CONFIG).unwrap();
+    assert_eq!(serde_json::to_value(&config).unwrap(), written);
+    // The fixture covers every field the config has.
+    let profile = serde_json::to_value(ConfigProfile::default()).unwrap();
+    let mut expected = Vec::new();
+    key_paths(&serde_json::to_value(Config::default()).unwrap(), "", &mut expected);
+    key_paths(&profile, "profiles.", &mut expected);
+    let mut actual = Vec::new();
+    key_paths(&written, "", &mut actual);
+    key_paths(&written["profiles"][0], "profiles.", &mut actual);
+    expected.sort();
+    actual.sort();
+    assert_eq!(actual, expected);
+  }
+
+  #[test]
+  fn a_named_profile_selects_audio_subtitles_and_chapters_only_as_default() {
+    let default = ConfigProfile::named(ConfigProfile::DEFAULT_NAME);
+    assert_eq!(
+      serde_json::to_value(&default).unwrap(),
+      serde_json::to_value(ConfigProfile::default()).unwrap()
+    );
+    let other = ConfigProfile::named("Anime");
+    assert_eq!(other.name, "Anime");
+    assert!(!other.select_video && !other.select_audio && !other.select_subtitle);
+    assert!(!other.select_chapters && !other.select_attachments);
+    assert_eq!(
+      other.audio_languages_for_track_selection,
+      ConfigProfile::DEFAULT_LANGUAGES
+    );
+    assert_eq!(other.preferred_subtitle_languages, ConfigProfile::DEFAULT_LANGUAGES);
+    assert_eq!(
+      other.track_names_subtitle,
+      ConfigProfile::default().track_names_subtitle
+    );
   }
 }

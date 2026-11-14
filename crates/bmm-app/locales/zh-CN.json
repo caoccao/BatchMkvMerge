@@ -213,7 +213,11 @@
     "exitTitle": "退出",
     "exitMessage": "当前有正在进行的合并任务。确定要退出吗?",
     "yes": "是",
-    "no": "否"
+    "no": "否",
+    "deleteProfileTitle": "删除配置文件",
+    "deleteProfileMessage": "删除配置文件“%{name}”?",
+    "resetProfileTitle": "重置配置文件",
+    "resetProfileMessage": "将配置文件“%{name}”重置为默认设置?"
   },
   "card": {
     "summary": {

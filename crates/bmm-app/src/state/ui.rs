@@ -15,10 +15,11 @@
 *   limitations under the License.
 */
 
-//! Navigation state: the tabs, the in-app toast and the completion
+//! Navigation state: the tabs, the in-app toast, the completion
 //! notifications (`activeTab`, `showSettings`, `showAbout`,
 //! `showNotification`, `systemNotificationEnabled`,
-//! `topmostNotificationEnabled` of the React store).
+//! `topmostNotificationEnabled` of the React store), the open toolbar menu
+//! and the version the update banner announces.
 
 use gpui_kit::{Context, EventEmitter};
 
@@ -54,6 +55,23 @@ impl TabType {
       Self::Queue => "queue",
       Self::Settings => "settings",
       Self::About => "about",
+    }
+  }
+}
+
+/// The toolbar's two menus (F8, F9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ToolbarMenu {
+  GroupMode,
+  Profile,
+}
+
+impl ToolbarMenu {
+  /// A stable name for element ids.
+  pub fn name(self) -> &'static str {
+    match self {
+      Self::GroupMode => "group-mode",
+      Self::Profile => "profile",
     }
   }
 }
@@ -123,6 +141,9 @@ pub struct UiState {
   topmost_notification: bool,
   /// The main window is closing: no more completions.
   closing: bool,
+  open_menu: Option<ToolbarMenu>,
+  /// A newer release the banner announces.
+  update_available: Option<String>,
 }
 
 impl EventEmitter<UiEvent> for UiState {}
@@ -142,6 +163,8 @@ impl UiState {
       system_notification: false,
       topmost_notification: false,
       closing: false,
+      open_menu: None,
+      update_available: None,
     }
   }
 
@@ -229,6 +252,41 @@ impl UiState {
   pub fn select_index(&mut self, index: usize, cx: &mut Context<Self>) {
     if let Some(tab) = self.tabs().get(index).copied() {
       self.set_active_tab(tab, cx);
+    }
+  }
+
+  /// The toolbar menu that is open.
+  pub fn open_menu(&self) -> Option<ToolbarMenu> {
+    self.open_menu
+  }
+
+  /// Opens a toolbar menu (a click on its button, F8, F9); another open menu
+  /// closes.
+  pub fn show_menu(&mut self, menu: ToolbarMenu, cx: &mut Context<Self>) {
+    if self.open_menu != Some(menu) {
+      self.open_menu = Some(menu);
+      cx.notify();
+    }
+  }
+
+  /// Closes `menu` if it is the open one.
+  pub fn hide_menu(&mut self, menu: ToolbarMenu, cx: &mut Context<Self>) {
+    if self.open_menu == Some(menu) {
+      self.open_menu = None;
+      cx.notify();
+    }
+  }
+
+  /// The version the update banner announces.
+  pub fn update_available(&self) -> Option<&str> {
+    self.update_available.as_deref()
+  }
+
+  /// Shows the update banner for `version`, or hides it.
+  pub fn set_update_available(&mut self, version: Option<String>, cx: &mut Context<Self>) {
+    if self.update_available != version {
+      self.update_available = version;
+      cx.notify();
     }
   }
 
@@ -425,6 +483,39 @@ mod tests {
         file: "a.mkv".into(),
         detail: "boom".into(),
       })]
+    );
+  }
+
+  #[gpui_kit::test]
+  fn one_toolbar_menu_is_open_at_a_time(cx: &mut TestAppContext) {
+    let ui = state(cx);
+    ui.update(cx, |ui, cx| ui.show_menu(ToolbarMenu::GroupMode, cx));
+    assert_eq!(ui.read_with(cx, |ui, _| ui.open_menu()), Some(ToolbarMenu::GroupMode));
+    ui.update(cx, |ui, cx| ui.show_menu(ToolbarMenu::Profile, cx));
+    assert_eq!(ui.read_with(cx, |ui, _| ui.open_menu()), Some(ToolbarMenu::Profile));
+    // Hiding a menu that is not open changes nothing.
+    ui.update(cx, |ui, cx| ui.hide_menu(ToolbarMenu::GroupMode, cx));
+    assert_eq!(ui.read_with(cx, |ui, _| ui.open_menu()), Some(ToolbarMenu::Profile));
+    ui.update(cx, |ui, cx| ui.hide_menu(ToolbarMenu::Profile, cx));
+    assert_eq!(ui.read_with(cx, |ui, _| ui.open_menu()), None);
+  }
+
+  #[gpui_kit::test]
+  fn the_update_banner_shows_and_hides_a_version(cx: &mut TestAppContext) {
+    let ui = state(cx);
+    assert_eq!(
+      ui.read_with(cx, |ui, _| ui.update_available().map(str::to_string)),
+      None
+    );
+    ui.update(cx, |ui, cx| ui.set_update_available(Some("1.0.1".into()), cx));
+    assert_eq!(
+      ui.read_with(cx, |ui, _| ui.update_available().map(str::to_string)),
+      Some("1.0.1".to_string())
+    );
+    ui.update(cx, |ui, cx| ui.set_update_available(None, cx));
+    assert_eq!(
+      ui.read_with(cx, |ui, _| ui.update_available().map(str::to_string)),
+      None
     );
   }
 }

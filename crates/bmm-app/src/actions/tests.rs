@@ -211,6 +211,7 @@ fn merge_all_runs_through_the_core_queue(cx: &mut TestAppContext) {
       metadata,
       merges: MergeBackend::queue(queue),
       taskbar: Taskbar::none(),
+      tools: crate::tools::ToolDetector::system(),
     };
     let stores = Stores::new(Config::default(), services, cx);
     merge_events::start(&stores, events, cx);
@@ -266,6 +267,7 @@ fn cancel_requests_reach_the_queue_and_clear_waits_for_the_merges(cx: &mut TestA
         },
       ),
       taskbar: Taskbar::none(),
+      tools: crate::tools::ToolDetector::system(),
     };
     Stores::new(Config::default(), services, cx)
   });
@@ -302,6 +304,7 @@ fn a_failing_enqueue_takes_the_item_off_the_queue(cx: &mut TestAppContext) {
       metadata,
       merges: MergeBackend::new(|_, _| Err(anyhow::anyhow!("no queue")), |_| Ok(())),
       taskbar: Taskbar::none(),
+      tools: crate::tools::ToolDetector::system(),
     };
     Stores::new(Config::default(), services, cx)
   });

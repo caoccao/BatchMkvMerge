@@ -213,7 +213,11 @@
     "exitTitle": "終了",
     "exitMessage": "結合処理が実行中です。終了してもよろしいですか?",
     "yes": "はい",
-    "no": "いいえ"
+    "no": "いいえ",
+    "deleteProfileTitle": "プロファイルの削除",
+    "deleteProfileMessage": "プロファイル「%{name}」を削除しますか?",
+    "resetProfileTitle": "プロファイルのリセット",
+    "resetProfileMessage": "プロファイル「%{name}」を既定の設定に戻しますか?"
   },
   "card": {
     "summary": {

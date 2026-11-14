@@ -213,7 +213,11 @@
     "exitTitle": "結束",
     "exitMessage": "目前有合併作業進行中。確定要結束嗎?",
     "yes": "係",
-    "no": "唔係"
+    "no": "唔係",
+    "deleteProfileTitle": "刪除設定檔",
+    "deleteProfileMessage": "刪除設定檔「%{name}」?",
+    "resetProfileTitle": "重設設定檔",
+    "resetProfileMessage": "將設定檔「%{name}」重設為預設設定?"
   },
   "card": {
     "summary": {

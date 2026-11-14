@@ -36,7 +36,9 @@ pub mod notifications;
 pub mod platform;
 pub mod state;
 pub mod theme;
+pub mod tools;
 pub mod ui;
+pub mod updates;
 
 use gpui_kit::*;
 
@@ -81,6 +83,7 @@ pub fn run() {
       metadata: state::MetadataSource::parser(),
       merges: merge_events::MergeBackend::system(merge_sink),
       taskbar: platform::taskbar::Taskbar::system(),
+      tools: tools::ToolDetector::system(),
     };
     let stores = state::Stores::new(config, services, cx);
     merge_events::start(&stores, merge_events, cx);
@@ -94,6 +97,7 @@ pub fn run() {
     platform::install_quit(handle, &stores, cx);
     platform::ingest_launch_args(&stores, cx);
     actions::watch_better_media_info(&stores, cx);
+    updates::start(&stores, updates::UpdateSource::github(), cx);
     // Bring the app to the front also when started from a terminal; GPUI
     // delivers focus events only to the active window.
     cx.activate(true);

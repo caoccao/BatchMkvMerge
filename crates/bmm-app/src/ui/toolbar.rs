@@ -16,22 +16,31 @@
 */
 
 //! The toolbar (`Toolbar.tsx`): icon buttons with tooltips and the same
-//! enabled states. The global output path, Merge All, Cancel All, Clear,
-//! Group by file name, Settings and About work; the group-mode and profile
-//! menus join with the settings.
+//! enabled states, and the group-mode and profile menus, which F8 and F9
+//! open too. A menu's open state lives in [`crate::state::UiState`], so the
+//! shortcuts reach it; the menu itself is a gpui-kit `PopupMenu` in a
+//! controlled `Popover`, built when it opens.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use bmm_core::config::GroupMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, h_flex};
 use gpui_kit::*;
 
 use crate::actions;
+use crate::state::ui::ToolbarMenu;
 use crate::state::{Stores, TabType};
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
+
+/// The group modes in menu order (`getGroupModes`).
+pub const GROUP_MODES: [GroupMode; 3] = [GroupMode::None, GroupMode::TrackCount, GroupMode::TrackCountAndLanguage];
 
 /// The i18n key naming a group mode (`groupModeLabelKey`).
 pub fn group_mode_label_key(mode: &GroupMode) -> &'static str {
@@ -42,8 +51,13 @@ pub fn group_mode_label_key(mode: &GroupMode) -> &'static str {
   }
 }
 
+/// The open menus' entities; a menu is built when it opens and dropped when
+/// it closes, so it always lists the current choices.
+type Menus = Rc<RefCell<HashMap<ToolbarMenu, Entity<PopupMenu>>>>;
+
 pub struct Toolbar {
   stores: Stores,
+  menus: Menus,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -53,13 +67,92 @@ impl Toolbar {
       cx.observe(&stores.config, |_, _, cx| cx.notify()),
       cx.observe(&stores.files, |_, _, cx| cx.notify()),
       cx.observe(&stores.queue, |_, _, cx| cx.notify()),
-      cx.observe(&stores.ui, |_, _, cx| cx.notify()),
+      cx.observe(&stores.ui, |this, ui, cx| {
+        let open = ui.read(cx).open_menu();
+        this.menus.borrow_mut().retain(|menu, _| Some(*menu) == open);
+        cx.notify();
+      }),
     ];
     Self {
       stores,
+      menus: Menus::default(),
       _subscriptions: subscriptions,
     }
   }
+
+  /// The menu's entity while it is open (tests).
+  pub fn menu(&self, menu: ToolbarMenu) -> Option<Entity<PopupMenu>> {
+    self.menus.borrow().get(&menu).cloned()
+  }
+}
+
+/// The choices of a toolbar menu, the current one checked (`Toolbar.tsx`'s
+/// two `Menu`s).
+fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut App) -> Entity<PopupMenu> {
+  let config = stores.config.read(cx).config().clone();
+  let store = stores.config.clone();
+  PopupMenu::build(window, cx, move |popup, _, _| match menu {
+    ToolbarMenu::GroupMode => GROUP_MODES.iter().fold(popup, |popup, mode| {
+      let (mode, store) = (mode.clone(), store.clone());
+      popup.item(
+        PopupMenuItem::new(tr!(group_mode_label_key(&mode)))
+          .checked(mode == config.group_mode)
+          .on_click(move |_, _, cx| {
+            let mode = mode.clone();
+            store.update(cx, |store, cx| store.update(cx, |config| config.group_mode = mode));
+          }),
+      )
+    }),
+    ToolbarMenu::Profile => config.profiles.iter().fold(popup, |popup, profile| {
+      let (name, store) = (profile.name.clone(), store.clone());
+      popup.item(
+        PopupMenuItem::new(profile.name.clone())
+          .checked(profile.name == config.active_profile)
+          .on_click(move |_, _, cx| store.update(cx, |store, cx| store.set_active_profile(&name, cx))),
+      )
+    }),
+  })
+}
+
+/// `trigger` with its menu below it, open while [`UiState`] says so; a
+/// click on the trigger opens it, a choice, Escape or a click elsewhere
+/// closes it.
+///
+/// [`UiState`]: crate::state::UiState
+fn menu_popover(stores: &Stores, menus: &Menus, menu: ToolbarMenu, trigger: Button, cx: &App) -> Popover {
+  let open = stores.ui.read(cx).open_menu() == Some(menu);
+  let ui = stores.ui.clone();
+  let (stores, menus) = (stores.clone(), menus.clone());
+  Popover::new(SharedString::from(format!("toolbar-menu-{}", menu.name())))
+    .appearance(false)
+    .overlay_closable(false)
+    .trigger(trigger)
+    .open(open)
+    .on_open_change(move |open, _, cx| {
+      ui.update(cx, |ui, cx| {
+        if *open {
+          ui.show_menu(menu, cx);
+        } else {
+          ui.hide_menu(menu, cx);
+        }
+      })
+    })
+    .content(move |_, window, cx| {
+      if let Some(popup) = menus.borrow().get(&menu).cloned() {
+        return popup;
+      }
+      let popup = build_menu(&stores, menu, window, cx);
+      popup.focus_handle(cx).focus(window, cx);
+      let (ui, closed) = (stores.ui.clone(), menus.clone());
+      window
+        .subscribe(&popup, cx, move |_, _: &DismissEvent, _, cx| {
+          closed.borrow_mut().remove(&menu);
+          ui.update(cx, |ui, cx| ui.hide_menu(menu, cx));
+        })
+        .detach();
+      menus.borrow_mut().insert(menu, popup.clone());
+      popup
+    })
 }
 
 /// A 28 px ghost icon button (gpui-kit's default size at the 14 px base font);
@@ -158,12 +251,18 @@ impl Render for Toolbar {
             .on_click(cx.listener(|this, _, _, cx| actions::clear_files(&this.stores, cx))),
         )
         .child(divider(cx))
-        .child(icon_button(
-          "toolbar-group-mode",
-          IconName::Images,
-          Some(group_color),
-          tr!(group_mode_label_key(&group_mode)),
-          true,
+        .child(menu_popover(
+          &self.stores,
+          &self.menus,
+          ToolbarMenu::GroupMode,
+          icon_button(
+            "toolbar-group-mode",
+            IconName::Images,
+            Some(group_color),
+            tr!(group_mode_label_key(&group_mode)),
+            true,
+          ),
+          cx,
         ))
         .child(
           icon_button(
@@ -179,12 +278,18 @@ impl Render for Toolbar {
             });
           })),
         )
-        .child(icon_button(
-          "toolbar-profile",
-          IconName::User,
-          None,
-          tr!("toolbar.profile"),
-          has_profiles,
+        .child(menu_popover(
+          &self.stores,
+          &self.menus,
+          ToolbarMenu::Profile,
+          icon_button(
+            "toolbar-profile",
+            IconName::User,
+            None,
+            tr!("toolbar.profile"),
+            has_profiles,
+          ),
+          cx,
         ))
         .child(
           icon_button(

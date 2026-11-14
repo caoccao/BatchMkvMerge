@@ -33,16 +33,18 @@ pub use ui::{TabType, UiState};
 
 use crate::merge_events::MergeBackend;
 use crate::platform::taskbar::Taskbar;
+use crate::tools::ToolDetector;
 
 /// What the stores talk to outside the UI: the config file, the parser, the
-/// merge queue and the taskbar progress. The app uses the real ones; tests
-/// pass stand-ins.
+/// merge queue, the taskbar progress and the external tools' detection. The
+/// app uses the real ones; tests pass stand-ins.
 #[derive(Clone)]
 pub struct Services {
   pub persistence: Persistence,
   pub metadata: MetadataSource,
   pub merges: MergeBackend,
   pub taskbar: Taskbar,
+  pub tools: ToolDetector,
 }
 
 /// Handles to every store; cheap to clone and handed to every view.
@@ -57,6 +59,8 @@ pub struct Stores {
   pub merges: MergeBackend,
   /// The main window's taskbar progress.
   pub taskbar: Taskbar,
+  /// Finds MKVToolNix and BetterMediaInfo.
+  pub tools: ToolDetector,
 }
 
 impl Stores {
@@ -66,6 +70,7 @@ impl Stores {
       metadata,
       merges,
       taskbar,
+      tools,
     } = services;
     let config = cx.new(|cx| ConfigStore::new(config, persistence, cx));
     Self {
@@ -75,6 +80,7 @@ impl Stores {
       ui: cx.new(|_| UiState::new()),
       merges,
       taskbar,
+      tools,
     }
   }
 

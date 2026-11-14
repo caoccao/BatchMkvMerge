@@ -22,7 +22,7 @@
 
 use anyhow::Result;
 
-use crate::config::{self, Config, UpdateCheckInterval};
+use crate::config::{self, Config, ConfigUpdate, UpdateCheckInterval};
 use crate::constants::APP_NAME;
 use crate::protocol::UpdateCheckResult;
 
@@ -112,18 +112,26 @@ pub fn run_check(app_version: &str) -> UpdateCheckResult {
   match check_result {
     Ok(update_result) => {
       let mut updated_config = config::get_config();
-      updated_config.update.last_checked = current_timestamp();
-      if let Some(ref version) = update_result.latest_version {
-        updated_config.update.last_version = version.clone();
-      }
-      let _ = config::set_config(updated_config.clone());
-      without_ignored_version(update_result, &updated_config.update.ignore_version)
+      let result = record_check(&mut updated_config.update, update_result, current_timestamp());
+      let _ = config::set_config(updated_config);
+      result
     }
     Err(error) => {
       log::warn!("Update check failed: {}", error);
       no_update()
     }
   }
+}
+
+/// Records a finished check in `update` (`lastChecked` = `now`, and
+/// `lastVersion` when a newer release was found) and returns what to show:
+/// the update, unless it is the version the user skipped.
+pub fn record_check(update: &mut ConfigUpdate, result: UpdateCheckResult, now: i64) -> UpdateCheckResult {
+  update.last_checked = now;
+  if let Some(ref version) = result.latest_version {
+    update.last_version = version.clone();
+  }
+  without_ignored_version(result, &update.ignore_version)
 }
 
 /// Remember `version` as the one the user does not want to be told about.
@@ -262,5 +270,17 @@ mod tests {
   #[test]
   fn current_timestamp_is_after_2020() {
     assert!(current_timestamp() > 1_577_836_800);
+  }
+
+  #[test]
+  fn a_recorded_check_stores_the_time_and_version_and_hides_a_skipped_one() {
+    let mut update = ConfigUpdate::default();
+    assert_eq!(record_check(&mut update, found("0.3.0"), NOW), found("0.3.0"));
+    assert_eq!((update.last_checked, update.last_version.as_str()), (NOW, "0.3.0"));
+    update.ignore_version = "0.3.1".to_owned();
+    assert_eq!(record_check(&mut update, found("0.3.1"), NOW + 1), no_update());
+    assert_eq!((update.last_checked, update.last_version.as_str()), (NOW + 1, "0.3.1"));
+    assert_eq!(record_check(&mut update, no_update(), NOW + 2), no_update());
+    assert_eq!((update.last_checked, update.last_version.as_str()), (NOW + 2, "0.3.1"));
   }
 }

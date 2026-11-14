@@ -48,7 +48,7 @@ use bmm_core::languages::{build_language_options, build_track_name_options};
 use bmm_core::media_metadata::model::track_properties_common::TrackFlag;
 use bmm_core::media_track::{MediaTrackKind, MediaTrackType};
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{self as kit_base, CheckboxIndicator, CheckboxState, TestSupportExt as _};
+use gpui_kit::base::{self as kit_base, CheckboxState, TestSupportExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -877,52 +877,21 @@ impl TrackTable {
 }
 
 /// The select-all checkbox: ticked when every row is, indeterminate when
-/// some are. gpui-kit's checkbox has no indeterminate state; gpui-base's
-/// does, so this one is drawn like gpui-kit's with a minus mark.
+/// some are.
 fn select_all_checkbox(state: CheckboxState, disabled: bool, cx: &Context<TrackTable>) -> impl IntoElement {
-  let theme = cx.theme();
-  let on = state != CheckboxState::Unchecked;
-  let fill = if disabled {
-    theme.primary.opacity(0.5)
-  } else {
-    theme.primary
-  };
-  let border = if on {
-    fill
-  } else {
-    theme.input.opacity(if disabled { 0.5 } else { 1.0 })
-  };
-  let mark = match state {
-    CheckboxState::Checked => Some(IconName::Check),
-    CheckboxState::Indeterminate => Some(IconName::Minus),
-    CheckboxState::Unchecked => None,
-  };
-  let mark_color = theme.primary_foreground;
   let table = cx.entity().downgrade();
-  kit_base::Checkbox::new("track-check-all")
-    .state(state)
-    .disabled(disabled)
-    .accessibility_label(tr!("merge.header.selectAll"))
-    .on_change(move |state, _, _, cx| {
-      let checked = state == CheckboxState::Checked;
+  crate::ui::checkbox::tri_state_checkbox(
+    "track-check-all",
+    state,
+    disabled,
+    tr!("merge.header.selectAll"),
+    cx,
+    move |checked, _, cx| {
       let _ = table.update(cx, |this, cx| {
         this.edit(cx, |files, scope, cx| files.set_all_rows_checked(scope, checked, cx));
       });
-    })
-    .child(
-      CheckboxIndicator::new()
-        .state(state)
-        .size(rems(0.875))
-        .flex()
-        .items_center()
-        .justify_center()
-        .border_1()
-        .rounded(px(4.0))
-        .border_color(border)
-        .when(on, |indicator| indicator.bg(fill))
-        .when(!on, |indicator| indicator.bg(theme.background))
-        .children(mark.map(|mark| Icon::new(mark).size(px(10.0)).text_color(mark_color))),
-    )
+    },
+  )
 }
 
 impl Render for TrackTable {
