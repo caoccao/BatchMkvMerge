@@ -41,7 +41,9 @@
       "trackName": "トラック名",
       "language": "言語",
       "defaultTrack": "既定のトラック",
-      "forcedDisplay": "強制表示"
+      "forcedDisplay": "強制表示",
+      "selectAll": "すべて選択",
+      "tracks": "トラック"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge が使用できません。設定で MKVToolNix のパスを確認してください。%{detail}",

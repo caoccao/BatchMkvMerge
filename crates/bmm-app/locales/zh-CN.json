@@ -41,7 +41,9 @@
       "trackName": "轨道名称",
       "language": "语言",
       "defaultTrack": "默认轨道",
-      "forcedDisplay": "强制显示"
+      "forcedDisplay": "强制显示",
+      "selectAll": "全选",
+      "tracks": "轨道"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge 不可用。请在设置中检查 MKVToolNix 路径。%{detail}",

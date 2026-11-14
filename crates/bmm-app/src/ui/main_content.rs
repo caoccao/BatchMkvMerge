@@ -46,6 +46,10 @@ impl MainContent {
     }
   }
 
+  pub fn file_list(&self) -> &Entity<FileListView> {
+    &self.file_list
+  }
+
   fn tab(&self, tab: TabType, cx: &mut Context<Self>) -> Tab {
     let label = Tab::new().label(tr!(tab.label_key()));
     if !tab.is_closable() {

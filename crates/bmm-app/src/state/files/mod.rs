@@ -27,9 +27,11 @@
 //! selected or the last one cleared. Every change also emits
 //! [`FileEvent::Changed`] naming the files, so a card can repaint alone.
 //!
-//! Parsing and the profile's automation live in [`load`].
+//! Parsing and the profile's automation live in [`load`]; the track tables'
+//! edits, which fan out over a group card's units, in [`table`].
 
 pub mod load;
+pub mod table;
 
 use std::collections::{HashMap, HashSet};
 
@@ -45,6 +47,7 @@ use bmm_core::protocol::MediaMetadataErrorPayload;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Subscription};
 
 pub use load::{LoadState, MetadataSource};
+pub use table::TableScope;
 
 use super::config::{ConfigStore, active_profile};
 use crate::domain::file_tree::{FlagKind, build_merge_units};
@@ -658,5 +661,7 @@ pub fn add_paths(files: &Entity<FileStore>, paths: Vec<String>, cx: &mut App) {
   .detach();
 }
 
+#[cfg(test)]
+mod table_tests;
 #[cfg(test)]
 pub(crate) mod tests;

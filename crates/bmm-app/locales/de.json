@@ -41,7 +41,9 @@
       "trackName": "Spurname",
       "language": "Sprache",
       "defaultTrack": "Standardspur",
-      "forcedDisplay": "Erzwungene Anzeige"
+      "forcedDisplay": "Erzwungene Anzeige",
+      "selectAll": "Alle auswählen",
+      "tracks": "Spuren"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge ist nicht verfügbar. Bitte MKVToolNix-Pfad in den Einstellungen prüfen. %{detail}",

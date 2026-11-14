@@ -119,14 +119,14 @@ pub(crate) fn fixture_source(
   (source, parses)
 }
 
-fn settings(profile: ConfigProfile) -> FileSettings {
+pub(super) fn settings(profile: ConfigProfile) -> FileSettings {
   FileSettings {
     profile: Some(profile),
     ..FileSettings::from_config(&Config::default())
   }
 }
 
-fn default_profile() -> ConfigProfile {
+pub(super) fn default_profile() -> ConfigProfile {
   Config::default().profiles[0].clone()
 }
 
@@ -148,13 +148,13 @@ fn automating_profile() -> ConfigProfile {
   profile
 }
 
-fn s(values: &[&str]) -> Vec<String> {
+pub(super) fn s(values: &[&str]) -> Vec<String> {
   values.iter().map(|value| (*value).to_string()).collect()
 }
 
 /// A store, the events it emitted and how often it notified.
-struct Harness {
-  store: Entity<FileStore>,
+pub(super) struct Harness {
+  pub(super) store: Entity<FileStore>,
   events: Rc<RefCell<Vec<FileEvent>>>,
   notified: Rc<RefCell<usize>>,
   _subscriptions: Vec<Subscription>,
@@ -184,7 +184,7 @@ impl Harness {
 
   /// A store whose files are the keys of `fixtures`, added in `order` and
   /// parsed.
-  fn loaded(
+  pub(super) fn loaded(
     cx: &mut TestAppContext,
     settings: FileSettings,
     order: &[&str],
@@ -199,24 +199,28 @@ impl Harness {
     harness
   }
 
-  fn update<R>(&self, cx: &mut TestAppContext, f: impl FnOnce(&mut FileStore, &mut Context<FileStore>) -> R) -> R {
+  pub(super) fn update<R>(
+    &self,
+    cx: &mut TestAppContext,
+    f: impl FnOnce(&mut FileStore, &mut Context<FileStore>) -> R,
+  ) -> R {
     self.store.update(cx, f)
   }
 
-  fn read<R>(&self, cx: &mut TestAppContext, f: impl FnOnce(&FileStore) -> R) -> R {
+  pub(super) fn read<R>(&self, cx: &mut TestAppContext, f: impl FnOnce(&FileStore) -> R) -> R {
     self.store.read_with(cx, |store, _| f(store))
   }
 
-  fn take_events(&self) -> Vec<FileEvent> {
+  pub(super) fn take_events(&self) -> Vec<FileEvent> {
     std::mem::take(&mut self.events.borrow_mut())
   }
 
-  fn take_notified(&self) -> usize {
+  pub(super) fn take_notified(&self) -> usize {
     std::mem::take(&mut self.notified.borrow_mut())
   }
 }
 
-fn row<'a>(store: &'a FileStore, file: &str, key: &str) -> &'a bmm_core::media_track::MediaTrack {
+pub(super) fn row<'a>(store: &'a FileStore, file: &str, key: &str) -> &'a bmm_core::media_track::MediaTrack {
   store
     .tracks(file)
     .unwrap()

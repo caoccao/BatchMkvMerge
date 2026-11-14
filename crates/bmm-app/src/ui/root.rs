@@ -106,6 +106,10 @@ impl AppView {
     &self.stores
   }
 
+  pub fn main(&self) -> &Entity<MainContent> {
+    &self.main
+  }
+
   /// Applies a changed language, theme or display mode at once.
   fn config_changed(&mut self, config: Entity<ConfigStore>, window: &mut Window, cx: &mut Context<Self>) {
     let config = config.read(cx).config().clone();

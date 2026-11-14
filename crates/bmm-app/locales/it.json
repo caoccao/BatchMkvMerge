@@ -41,7 +41,9 @@
       "trackName": "Nome traccia",
       "language": "Lingua",
       "defaultTrack": "Traccia predefinita",
-      "forcedDisplay": "Visualizzazione forzata"
+      "forcedDisplay": "Visualizzazione forzata",
+      "selectAll": "Seleziona tutto",
+      "tracks": "Tracce"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge non è disponibile. Controlla il percorso MKVToolNix in Impostazioni. %{detail}",

@@ -202,6 +202,16 @@ pub enum FlagKind {
   Forced,
 }
 
+/// The value a click on a flag button sets (`nextTrackFlag`): true → false →
+/// unspecified → true.
+pub fn next_track_flag(flag: TrackFlag) -> TrackFlag {
+  match flag {
+    TrackFlag::True => TrackFlag::False,
+    TrackFlag::False => TrackFlag::Unspecified,
+    TrackFlag::Unspecified => TrackFlag::True,
+  }
+}
+
 /// One `setTrackFlag` call: set `kind` to `value` on rows `keys` of `file`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlagEdit {
@@ -571,6 +581,13 @@ mod tests {
     assert_eq!(parse_row_key("0:chapters:0"), Some((0, "chapters:0")));
     assert_eq!(parse_row_key("audio:2"), None);
     assert_eq!(parse_row_key("nokey"), None);
+  }
+
+  #[test]
+  fn a_flag_click_cycles_true_false_unspecified() {
+    assert_eq!(next_track_flag(TrackFlag::True), TrackFlag::False);
+    assert_eq!(next_track_flag(TrackFlag::False), TrackFlag::Unspecified);
+    assert_eq!(next_track_flag(TrackFlag::Unspecified), TrackFlag::True);
   }
 
   #[test]

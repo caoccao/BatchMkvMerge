@@ -41,7 +41,9 @@
       "trackName": "Track Name",
       "language": "Language",
       "defaultTrack": "Default Track",
-      "forcedDisplay": "Forced Display"
+      "forcedDisplay": "Forced Display",
+      "selectAll": "Select all",
+      "tracks": "Tracks"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. %{detail}",

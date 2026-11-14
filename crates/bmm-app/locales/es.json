@@ -41,7 +41,9 @@
       "trackName": "Nombre de pista",
       "language": "Idioma",
       "defaultTrack": "Pista predeterminada",
-      "forcedDisplay": "Visualización forzada"
+      "forcedDisplay": "Visualización forzada",
+      "selectAll": "Seleccionar todo",
+      "tracks": "Pistas"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge no está disponible. Verifique la ruta de MKVToolNix en Ajustes. %{detail}",

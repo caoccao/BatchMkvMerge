@@ -41,7 +41,9 @@
       "trackName": "軌道名稱",
       "language": "語言",
       "defaultTrack": "預設軌道",
-      "forcedDisplay": "強制顯示"
+      "forcedDisplay": "強制顯示",
+      "selectAll": "全選",
+      "tracks": "軌道"
     },
     "error": {
       "mkvmergeNotAvailable": "mkvmerge 無法使用。請在設定中檢查 MKVToolNix 路徑。%{detail}",

@@ -113,16 +113,30 @@ pub fn format_track_bit_rate(bps: f64, track_type: MediaTrackType, formatting: O
   format_value(bps, &field_for(formatting, track_type, true), "bps")
 }
 
+/// The emoji the track table and the card summary show for a row type
+/// (`TRACK_TYPE_EMOJI`); `❓` for an unknown type.
+pub fn track_type_emoji(track_type: MediaTrackType) -> &'static str {
+  match track_type {
+    MediaTrackType::Video => "🎞️",
+    MediaTrackType::Audio => "🔊",
+    MediaTrackType::Subtitles => "💬",
+    MediaTrackType::Chapters => "📑",
+    MediaTrackType::Attachment => "📎",
+    MediaTrackType::Buttons => "🔘",
+    MediaTrackType::Unknown => "❓",
+  }
+}
+
 /// A unit's track counts as a card summary shows them (`CardSummary.tsx`):
 /// count and emoji per type that has any, e.g. `1 🎞️ 2 🔊 3 💬`; empty
 /// without tracks.
 pub fn format_track_counts(counts: &MediaTrackCounts) -> String {
   [
-    (counts.video, "🎞️"),
-    (counts.audio, "🔊"),
-    (counts.subtitles, "💬"),
-    (counts.chapters, "📑"),
-    (counts.attachments, "📎"),
+    (counts.video, track_type_emoji(MediaTrackType::Video)),
+    (counts.audio, track_type_emoji(MediaTrackType::Audio)),
+    (counts.subtitles, track_type_emoji(MediaTrackType::Subtitles)),
+    (counts.chapters, track_type_emoji(MediaTrackType::Chapters)),
+    (counts.attachments, track_type_emoji(MediaTrackType::Attachment)),
   ]
   .into_iter()
   .filter(|(count, _)| *count > 0)
@@ -161,6 +175,23 @@ mod tests {
       attachments: 3,
     };
     assert_eq!(format_track_counts(&counts), "1 🎞️ 2 🔊 1 📑 3 📎");
+  }
+
+  #[test]
+  fn every_row_type_has_an_emoji() {
+    let emojis: Vec<&str> = [
+      MediaTrackType::Video,
+      MediaTrackType::Audio,
+      MediaTrackType::Subtitles,
+      MediaTrackType::Buttons,
+      MediaTrackType::Chapters,
+      MediaTrackType::Attachment,
+      MediaTrackType::Unknown,
+    ]
+    .into_iter()
+    .map(track_type_emoji)
+    .collect();
+    assert_eq!(emojis, ["🎞️", "🔊", "💬", "🔘", "📑", "📎", "❓"]);
   }
 
   #[test]
