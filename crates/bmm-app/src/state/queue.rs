@@ -25,6 +25,10 @@
 //! care about that. Every change, progress included, is also emitted as
 //! [`QueueEvent::ItemChanged`] naming the file, so a card or a queue row can
 //! repaint alone.
+//!
+//! A batch runs from the moment an item waits or merges until none does; its
+//! end is emitted once as [`QueueEvent::Drained`], which sends the completion
+//! notifications (the React app sent them for every finished file).
 
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -52,6 +56,57 @@ pub enum QueueEvent {
   },
   /// A second passed while at least one merge runs.
   Tick,
+  /// The last waiting or merging item finished or went: the batch is over.
+  Drained(QueueBatch),
+}
+
+/// What one batch of merges ended with: every merge that finished between
+/// the queue becoming active and the last active item going.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueBatch {
+  pub completed: usize,
+  pub failed: usize,
+  pub cancelled: usize,
+  /// The batch's first merge start and its last end.
+  pub started: Option<SystemTime>,
+  pub ended: Option<SystemTime>,
+  /// The file that finished last, with its own elapsed time.
+  pub last: Option<(String, Duration)>,
+}
+
+impl QueueBatch {
+  /// Merges that finished in the batch.
+  pub fn finished(&self) -> usize {
+    self.completed + self.failed + self.cancelled
+  }
+
+  /// Whether the batch is worth a notification: a merge completed or
+  /// failed. A batch the user cancelled entirely is not.
+  pub fn notifies(&self) -> bool {
+    self.completed + self.failed > 0
+  }
+
+  /// From the first start to the last end; zero without either.
+  pub fn elapsed(&self) -> Duration {
+    match (self.started, self.ended) {
+      (Some(started), Some(ended)) => ended.duration_since(started).unwrap_or_default(),
+      _ => Duration::ZERO,
+    }
+  }
+
+  fn start(&mut self, at: SystemTime) {
+    self.started = Some(self.started.map_or(at, |started| started.min(at)));
+  }
+
+  fn finish(&mut self, file: &str, outcome: MergeOutcome, at: SystemTime, elapsed: Duration) {
+    match outcome {
+      MergeOutcome::Completed => self.completed += 1,
+      MergeOutcome::Failed => self.failed += 1,
+      MergeOutcome::Cancelled => self.cancelled += 1,
+    }
+    self.ended = Some(self.ended.map_or(at, |ended| ended.max(at)));
+    self.last = Some((file.to_string(), elapsed));
+  }
 }
 
 /// The queue in numbers, for the window title and the taskbar progress.
@@ -98,6 +153,8 @@ pub struct QueueStore {
   order: Vec<String>,
   /// Runs while an item is merging and emits [`QueueEvent::Tick`].
   ticker: Option<Task<()>>,
+  /// The batch running while an item is waiting or merging.
+  batch: Option<QueueBatch>,
 }
 
 impl EventEmitter<QueueEvent> for QueueStore {}
@@ -137,6 +194,24 @@ impl QueueStore {
 
   pub fn summary(&self) -> QueueSummary {
     QueueSummary::of(self.items.values())
+  }
+
+  /// The drives with their files, each in queue order; the drives in the
+  /// order their first file was enqueued (`Queue.tsx`'s grouping).
+  pub fn drives(&self) -> Vec<(String, Vec<String>)> {
+    let mut drives: Vec<(String, Vec<String>)> = Vec::new();
+    for item in self.items() {
+      match drives.iter_mut().find(|(drive, _)| *drive == item.drive) {
+        Some((_, files)) => files.push(item.file.clone()),
+        None => drives.push((item.drive.clone(), vec![item.file.clone()])),
+      }
+    }
+    drives
+  }
+
+  /// The items of one drive, in queue order.
+  pub fn items_in_drive<'a>(&'a self, drive: &'a str) -> impl Iterator<Item = &'a QueueItem> + 'a {
+    self.items().filter(move |item| item.drive == drive)
   }
 
   /// Lists `file` as waiting (`addToQueue`). A file that is waiting or merging
@@ -188,8 +263,16 @@ impl QueueStore {
         true
       }
     };
+    if let MergeEvent::Started { at, .. } = event {
+      self.batch.get_or_insert_default().start(*at);
+    }
     if let MergeEvent::Finished { outcome, error, at, .. } = event {
       let elapsed = self.items[file].elapsed(*at).unwrap_or_default();
+      // A finish while nothing was active (a late `Cancelled` for a removed
+      // item) belongs to no batch.
+      if let Some(batch) = self.batch.as_mut() {
+        batch.finish(file, *outcome, *at, elapsed);
+      }
       cx.emit(QueueEvent::Finished {
         file: file.to_string(),
         outcome: *outcome,
@@ -216,6 +299,16 @@ impl QueueStore {
     }
   }
 
+  /// Moves the item of `file` to `drive`, as if it were on another drive
+  /// (drive keys come from Windows paths only).
+  #[cfg(test)]
+  pub(crate) fn move_to_drive(&mut self, file: &str, drive: &str, cx: &mut Context<Self>) {
+    if let Some(item) = self.items.get_mut(file) {
+      item.drive = drive.to_string();
+      self.changed(file, true, cx);
+    }
+  }
+
   /// Removes every item (the queue part of `clearFiles`).
   pub fn clear(&mut self, cx: &mut Context<Self>) {
     let removed = std::mem::take(&mut self.order);
@@ -231,6 +324,17 @@ impl QueueStore {
       cx.notify();
     }
     self.update_ticker(cx);
+    self.update_batch(cx);
+  }
+
+  /// Starts a batch when an item waits or merges, and ends it (emitting
+  /// [`QueueEvent::Drained`] once) when none does any more.
+  fn update_batch(&mut self, cx: &mut Context<Self>) {
+    if self.has_active() {
+      self.batch.get_or_insert_default();
+    } else if let Some(batch) = self.batch.take() {
+      cx.emit(QueueEvent::Drained(batch));
+    }
   }
 
   /// Starts the ticker when a merge runs and stops it when none does.
@@ -505,6 +609,121 @@ mod tests {
     harness.apply(cx, finished(c, MergeOutcome::Completed, 2));
     let summary = harness.queue.read_with(cx, |queue, _| queue.summary());
     assert_eq!((summary.done, summary.active, summary.percent), (3, false, 100));
+  }
+
+  fn drained(events: &[QueueEvent]) -> Vec<QueueBatch> {
+    events
+      .iter()
+      .filter_map(|event| match event {
+        QueueEvent::Drained(batch) => Some(batch.clone()),
+        _ => None,
+      })
+      .collect()
+  }
+
+  #[gpui_kit::test]
+  fn a_batch_drains_once_after_its_last_merge(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx);
+    let c = "/media/c.mkv";
+    harness.queue.update(cx, |queue, cx| {
+      for file in [A, B, c] {
+        queue.add_to_queue(file, cx);
+      }
+    });
+    harness.apply(cx, started(A, 10));
+    harness.apply(cx, finished(A, MergeOutcome::Completed, 40));
+    harness.apply(cx, started(B, 40));
+    harness.apply(cx, finished(B, MergeOutcome::Failed, 45));
+    assert_eq!(drained(&harness.take_events()), [], "a merge still waits");
+    harness.apply(cx, started(c, 45));
+    harness.apply(cx, finished(c, MergeOutcome::Completed, 100));
+    let batches = drained(&harness.take_events());
+    assert_eq!(
+      batches,
+      [QueueBatch {
+        completed: 2,
+        failed: 1,
+        cancelled: 0,
+        started: Some(at(10)),
+        ended: Some(at(100)),
+        last: Some((c.to_string(), Duration::from_secs(55))),
+      }]
+    );
+    assert_eq!(batches[0].elapsed(), Duration::from_secs(90));
+    assert_eq!(batches[0].finished(), 3);
+    assert!(batches[0].notifies());
+    // A late event of a finished item starts no batch.
+    harness.apply(cx, progress(c, 50));
+    assert_eq!(drained(&harness.take_events()), []);
+  }
+
+  #[gpui_kit::test]
+  fn the_next_batch_starts_afresh(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx);
+    harness.queue.update(cx, |queue, cx| queue.add_to_queue(A, cx));
+    harness.apply(cx, started(A, 0));
+    harness.apply(cx, finished(A, MergeOutcome::Completed, 5));
+    harness.take_events();
+    harness.queue.update(cx, |queue, cx| queue.add_to_queue(B, cx));
+    harness.apply(cx, started(B, 20));
+    harness.apply(cx, finished(B, MergeOutcome::Completed, 23));
+    let batches = drained(&harness.take_events());
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+      (batches[0].completed, batches[0].elapsed()),
+      (1, Duration::from_secs(3))
+    );
+    assert_eq!(batches[0].last, Some((B.to_string(), Duration::from_secs(3))));
+  }
+
+  #[gpui_kit::test]
+  fn a_batch_cancelled_entirely_does_not_notify(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx);
+    harness.queue.update(cx, |queue, cx| {
+      queue.add_to_queue(A, cx);
+      queue.add_to_queue(B, cx);
+    });
+    harness.apply(cx, started(A, 0));
+    harness.apply(cx, finished(A, MergeOutcome::Cancelled, 2));
+    harness.apply(cx, finished(B, MergeOutcome::Cancelled, 2));
+    let batches = drained(&harness.take_events());
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].cancelled, 2);
+    assert!(!batches[0].notifies());
+  }
+
+  #[gpui_kit::test]
+  fn removing_the_last_waiting_item_ends_the_batch(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx);
+    harness.queue.update(cx, |queue, cx| {
+      queue.add_to_queue(A, cx);
+      queue.add_to_queue(B, cx);
+    });
+    harness.apply(cx, started(A, 0));
+    harness.apply(cx, finished(A, MergeOutcome::Completed, 8));
+    harness.take_events();
+    harness.queue.update(cx, |queue, cx| queue.remove_from_queue(B, cx));
+    let batches = drained(&harness.take_events());
+    assert_eq!(batches.len(), 1);
+    assert_eq!((batches[0].completed, batches[0].cancelled), (1, 0));
+    // The late `Cancelled` of the removed item lists it again, outside any batch.
+    harness.apply(cx, finished(B, MergeOutcome::Cancelled, 9));
+    assert_eq!(drained(&harness.take_events()), []);
+    assert_eq!(harness.status(cx, B), Some(QueueItemStatus::Cancelled));
+  }
+
+  #[gpui_kit::test]
+  fn drives_keep_the_order_of_their_first_file(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx);
+    harness.queue.update(cx, |queue, cx| {
+      queue.add_to_queue(A, cx);
+      queue.add_to_queue(B, cx);
+      let drive = bmm_core::merge::get_drive_key(A);
+      assert_eq!(queue.drives(), [(drive.clone(), vec![A.to_string(), B.to_string()])]);
+      let files: Vec<&str> = queue.items_in_drive(&drive).map(|item| item.file.as_str()).collect();
+      assert_eq!(files, [A, B]);
+      assert_eq!(queue.items_in_drive("elsewhere").count(), 0);
+    });
   }
 
   #[gpui_kit::test]

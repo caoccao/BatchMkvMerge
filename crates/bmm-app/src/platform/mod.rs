@@ -16,11 +16,13 @@
 */
 
 //! What Tauri's plugins and window events did: window geometry, the close
-//! guard, the macOS menus, file dialogs and launch arguments.
+//! guard, the macOS menus, file dialogs, launch arguments and the taskbar
+//! progress.
 
 pub mod close_guard;
 pub mod dialogs;
 pub mod menus;
+pub mod taskbar;
 pub mod window;
 
 use gpui_kit::{AnyWindowHandle, App};

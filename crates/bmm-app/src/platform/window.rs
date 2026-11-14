@@ -149,11 +149,13 @@ pub fn title(summary: &QueueSummary) -> String {
 
 /// A request to close the main window (title bar, Alt+F4, Quit): saves the
 /// geometry, then lets the close guard decide; its Yes cancels every active
-/// merge. `true` lets the window close.
+/// merge, without the completion notifications their end would send.
+/// `true` lets the window close.
 pub fn close_requested(stores: &Stores, window: &mut Window, cx: &mut App) -> bool {
   save_geometry(stores, window, cx);
   let cancel_stores = stores.clone();
   close_guard::should_close(stores.has_active_merges(cx), window, cx, move |_, cx| {
+    cancel_stores.ui.update(cx, |ui, _| ui.set_closing());
     crate::actions::cancel_all(&cancel_stores, cx)
   })
 }

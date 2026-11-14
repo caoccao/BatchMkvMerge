@@ -21,7 +21,7 @@
 //! The `K…` unit ladders divide by 1024, the `K…i` ladders by 1000 (the
 //! labels are BetterMediaInfo's, so `Ki` means 1000 here).
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bmm_core::config::{ConfigFormatField, ConfigFormatting, FormatPrecision, FormatUnit};
 use bmm_core::media_track::{MediaTrackCounts, MediaTrackType};
@@ -190,6 +190,26 @@ where
   Some(shown.format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
+/// A queue row's Start or End: the local time of day as `HH:MM:SS`
+/// (`Queue.tsx::formatClockTime`); `--:--:--` without one.
+pub fn format_clock(time: Option<SystemTime>) -> String {
+  format_clock_in(time, &chrono::Local)
+}
+
+/// [`format_clock`] in the time zone `tz`.
+pub fn format_clock_in<Tz: chrono::TimeZone>(time: Option<SystemTime>, tz: &Tz) -> String
+where
+  Tz::Offset: std::fmt::Display,
+{
+  match time {
+    Some(time) => chrono::DateTime::<chrono::Utc>::from(time)
+      .with_timezone(tz)
+      .format("%H:%M:%S")
+      .to_string(),
+    None => "--:--:--".to_string(),
+  }
+}
+
 /// `HH:MM:SS` with whole seconds rounded down (hours keep growing past 99);
 /// `--:--:--` when there is no duration (not started, or a negative span).
 pub fn format_hms(duration: Option<Duration>) -> String {
@@ -324,6 +344,17 @@ mod tests {
     assert_eq!(trim_fraction_zeros("100"), "100");
     assert_eq!(trim_fraction_zeros("100.0"), "100");
     assert_eq!(trim_fraction_zeros("0.05"), "0.05");
+  }
+
+  #[test]
+  fn shows_clock_times_in_the_time_zone() {
+    let tokyo = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    // 2026-05-24T07:27:25Z.
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_779_607_645);
+    assert_eq!(format_clock_in(Some(time), &chrono::Utc), "07:27:25");
+    assert_eq!(format_clock_in(Some(time), &tokyo), "16:27:25");
+    assert_eq!(format_clock_in(None, &tokyo), "--:--:--");
+    assert_eq!(format_clock(None), "--:--:--");
   }
 
   #[test]

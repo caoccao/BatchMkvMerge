@@ -17,7 +17,9 @@
 
 //! Headless smoke tests of the application shell.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
@@ -35,6 +37,7 @@ use crate::domain::status::QueueItemStatus;
 use crate::i18n::tests::LOCALE_LOCK;
 use crate::merge_events::{self, MergeBackend};
 use crate::platform::close_guard;
+use crate::platform::taskbar::Taskbar;
 use crate::state::files::tests::{TempDir, fixture_source, movie};
 use crate::state::ui::NotificationKind;
 use crate::state::{Persistence, Services, Stores, TabType};
@@ -58,6 +61,8 @@ pub(super) struct Shell {
   pub(super) stores: Stores,
   written: Arc<Mutex<Vec<Config>>>,
   pub(super) merges: Arc<Mutex<MergeCalls>>,
+  /// Every value the window's taskbar progress was set to.
+  pub(super) taskbar: Rc<RefCell<Vec<Option<u8>>>>,
   events: MergeEventSink,
   _locale: MutexGuard<'static, ()>,
 }
@@ -98,8 +103,12 @@ impl Shell {
     );
     let (events, receiver) = merge_events::channel();
     let (metadata, _) = fixture_source(fixtures);
+    let taskbar: Rc<RefCell<Vec<Option<u8>>>> = Rc::default();
+    let progress = taskbar.clone();
     let (handle, view, stores) = cx.update(|cx| {
       gpui_kit::init(cx);
+      // The test platform records system notifications only with an identity.
+      cx.set_app_identity(crate::APP_IDENTIFIER, crate::APP_NAME);
       crate::theme::install(cx);
       let config = Config {
         language: Language::EnUS,
@@ -109,6 +118,10 @@ impl Shell {
         persistence: Persistence::new(move |config| sink.lock().unwrap().push(config)),
         metadata,
         merges: backend,
+        taskbar: Taskbar::new(move |_| {
+          let progress = progress.clone();
+          Box::new(move |percent| progress.borrow_mut().push(percent))
+        }),
       };
       let stores = Stores::new(config, services, cx);
       merge_events::start(&stores, receiver, cx);
@@ -134,6 +147,7 @@ impl Shell {
       stores,
       written,
       merges,
+      taskbar,
       events,
       _locale: locale,
     };
@@ -148,7 +162,7 @@ impl Shell {
   }
 
   /// The title the window shows.
-  fn title(&self, cx: &mut TestAppContext) -> String {
+  pub(super) fn title(&self, cx: &mut TestAppContext) -> String {
     VisualTestContext::from_window(self.handle, cx)
       .window_title()
       .unwrap_or_else(|| crate::window_title().to_string())
@@ -425,7 +439,7 @@ fn the_geometry_is_saved_once_the_window_is_still(cx: &mut TestAppContext) {
   assert_eq!((config.size.width, config.size.height), (900, 700));
 }
 
-fn movies(files: &[&str]) -> HashMap<String, MediaMetadata> {
+pub(super) fn movies(files: &[&str]) -> HashMap<String, MediaMetadata> {
   files.iter().map(|file| ((*file).to_string(), movie())).collect()
 }
 
@@ -457,7 +471,7 @@ impl Shell {
       .collect()
   }
 
-  fn cancelled(&self) -> Vec<String> {
+  pub(super) fn cancelled(&self) -> Vec<String> {
     self.merges.lock().unwrap().cancelled.clone()
   }
 

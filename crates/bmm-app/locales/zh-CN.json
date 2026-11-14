@@ -205,7 +205,9 @@
   },
   "notification": {
     "completedIn": "%{elapsed} 内完成",
-    "unknownError": "未知错误"
+    "unknownError": "未知错误",
+    "summary": "已完成 %{completed} 个，失败 %{failed} 个，已取消 %{cancelled} 个",
+    "finishedIn": "%{elapsed} 内结束"
   },
   "confirm": {
     "exitTitle": "退出",

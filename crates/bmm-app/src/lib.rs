@@ -32,6 +32,7 @@ pub mod assets;
 pub mod domain;
 pub mod i18n;
 pub mod merge_events;
+pub mod notifications;
 pub mod platform;
 pub mod state;
 pub mod theme;
@@ -79,6 +80,7 @@ pub fn run() {
       persistence: state::Persistence::disk(),
       metadata: state::MetadataSource::parser(),
       merges: merge_events::MergeBackend::system(merge_sink),
+      taskbar: platform::taskbar::Taskbar::system(),
     };
     let stores = state::Stores::new(config, services, cx);
     merge_events::start(&stores, merge_events, cx);
@@ -95,8 +97,11 @@ pub fn run() {
     // Bring the app to the front also when started from a terminal; GPUI
     // delivers focus events only to the active window.
     cx.activate(true);
-    cx.on_window_closed(|cx, _| {
-      if cx.windows().is_empty() {
+    // The app ends with its main window; an open topmost notification does
+    // not keep it running.
+    let main = handle.window_id();
+    cx.on_window_closed(move |cx, closed| {
+      if closed == main || cx.windows().is_empty() {
         cx.quit();
       }
     })

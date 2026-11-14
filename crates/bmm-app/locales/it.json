@@ -205,7 +205,9 @@
   },
   "notification": {
     "completedIn": "Completato in %{elapsed}",
-    "unknownError": "Errore sconosciuto"
+    "unknownError": "Errore sconosciuto",
+    "summary": "%{completed} completati, %{failed} falliti, %{cancelled} annullati",
+    "finishedIn": "Terminato in %{elapsed}"
   },
   "confirm": {
     "exitTitle": "Esci",

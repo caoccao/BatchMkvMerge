@@ -27,13 +27,10 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use async_channel::Receiver;
-use bmm_core::merge::{MergeEvent, MergeEventSink, MergeOutcome, MergeQueue};
+use bmm_core::merge::{MergeEvent, MergeEventSink, MergeQueue};
 use gpui_kit::App;
 
-use crate::domain::format::format_hms;
 use crate::state::Stores;
-use crate::state::queue::QueueEvent;
-use crate::state::ui::NotificationKind;
 
 /// A sink for the core's events and the receiver [`start`] reads them from.
 pub fn channel() -> (MergeEventSink, Receiver<MergeEvent>) {
@@ -97,39 +94,9 @@ impl MergeBackend {
 }
 
 /// Applies `events` to the queue store on the foreground, in order, and
-/// shows the toast of a finished merge (`FileList.tsx`'s `merge-finished`
-/// listener): a success with the elapsed time, a failure with the error. A
-/// cancelled merge shows none.
+/// starts what a finished merge tells the user ([`crate::notifications`]).
 pub fn start(stores: &Stores, events: Receiver<MergeEvent>, cx: &mut App) {
-  let ui = stores.ui.clone();
-  cx.subscribe(&stores.queue, move |_, event: &QueueEvent, cx| {
-    let QueueEvent::Finished {
-      file,
-      outcome,
-      error,
-      elapsed,
-    } = event
-    else {
-      return;
-    };
-    let toast = match outcome {
-      MergeOutcome::Completed => Some((
-        NotificationKind::Success,
-        rust_i18n::t!("notification.completedIn", elapsed = format_hms(Some(*elapsed))).into_owned(),
-      )),
-      MergeOutcome::Failed => Some((
-        NotificationKind::Error,
-        error
-          .clone()
-          .unwrap_or_else(|| rust_i18n::t!("notification.unknownError").into_owned()),
-      )),
-      MergeOutcome::Cancelled => None,
-    };
-    if let Some((kind, detail)) = toast {
-      ui.update(cx, |ui, cx| ui.show_toast(kind, file.clone(), detail, cx));
-    }
-  })
-  .detach();
+  crate::notifications::watch(stores, cx);
   let queue = stores.queue.clone();
   cx.spawn(async move |cx| {
     while let Ok(event) = events.recv().await {

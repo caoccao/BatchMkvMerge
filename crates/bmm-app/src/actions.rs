@@ -281,6 +281,52 @@ pub fn cancel_all(stores: &Stores, cx: &mut App) {
   cancel_merges(stores, &files, cx);
 }
 
+/// A drive card's Cancel All (`Queue.tsx`): the drive's waiting and merging
+/// files.
+pub fn cancel_drive(stores: &Stores, drive: &str, cx: &mut App) {
+  let files: Vec<String> = stores
+    .queue
+    .read(cx)
+    .items_in_drive(drive)
+    .filter(|item| item.status.is_active())
+    .map(|item| item.file.clone())
+    .collect();
+  cancel_merges(stores, &files, cx);
+}
+
+/// A drive card's Resume All (`Queue.tsx`): merges again every cancelled or
+/// failed root of the drive. A root merges its whole card unit with the
+/// current selection, as its card would; a listed file that is no longer a
+/// unit root merges alone; a file no longer listed is skipped.
+pub fn resume_drive(stores: &Stores, drive: &str, cx: &mut App) -> Task<()> {
+  let roots: Vec<String> = stores
+    .queue
+    .read(cx)
+    .items_in_drive(drive)
+    .filter(|item| matches!(item.status, QueueItemStatus::Cancelled | QueueItemStatus::Failed))
+    .map(|item| item.file.clone())
+    .collect();
+  let files = stores.files.read(cx);
+  let requests = roots
+    .iter()
+    .filter_map(
+      |root| match files.units().iter().find(|unit| unit.first() == Some(root)) {
+        Some(unit) => MergeRequest::unit_selection(files, unit),
+        None if files.files().contains(root) => MergeRequest::unit_selection(files, std::slice::from_ref(root)),
+        None => None,
+      },
+    )
+    .collect();
+  enqueue(stores, requests, cx)
+}
+
+/// A drive card's Clear Completed: its completed, cancelled and failed rows.
+pub fn clear_completed_in_drive(stores: &Stores, drive: &str, cx: &mut App) {
+  stores
+    .queue
+    .update(cx, |queue, cx| queue.clear_completed_in_drive(drive, cx));
+}
+
 /// Whether Clear (toolbar, Ctrl+Q) is available: files listed and no merge
 /// waiting or running.
 pub fn can_clear(stores: &Stores, cx: &App) -> bool {

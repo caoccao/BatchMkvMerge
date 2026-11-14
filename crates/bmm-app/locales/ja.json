@@ -205,7 +205,9 @@
   },
   "notification": {
     "completedIn": "%{elapsed} で完了しました",
-    "unknownError": "不明なエラー"
+    "unknownError": "不明なエラー",
+    "summary": "完了 %{completed} 件、失敗 %{failed} 件、キャンセル %{cancelled} 件",
+    "finishedIn": "%{elapsed} で終了しました"
   },
   "confirm": {
     "exitTitle": "終了",

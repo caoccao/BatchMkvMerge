@@ -205,7 +205,9 @@
   },
   "notification": {
     "completedIn": "Abgeschlossen in %{elapsed}",
-    "unknownError": "Unbekannter Fehler"
+    "unknownError": "Unbekannter Fehler",
+    "summary": "%{completed} fertig, %{failed} fehlgeschlagen, %{cancelled} abgebrochen",
+    "finishedIn": "Beendet in %{elapsed}"
   },
   "confirm": {
     "exitTitle": "Beenden",

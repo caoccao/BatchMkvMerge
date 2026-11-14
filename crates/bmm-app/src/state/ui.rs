@@ -15,8 +15,10 @@
 *   limitations under the License.
 */
 
-//! Navigation state: the tabs, and the in-app toast (`activeTab`,
-//! `showSettings`, `showAbout`, `showNotification` of the React store).
+//! Navigation state: the tabs, the in-app toast and the completion
+//! notifications (`activeTab`, `showSettings`, `showAbout`,
+//! `showNotification`, `systemNotificationEnabled`,
+//! `topmostNotificationEnabled` of the React store).
 
 use gpui_kit::{Context, EventEmitter};
 
@@ -78,6 +80,29 @@ pub struct Snackbar {
   pub message: String,
 }
 
+/// What a drained queue reports through the OS notification and the
+/// topmost window (`TopmostNotification` of the React protocol, without the
+/// close label).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionNotice {
+  pub title: String,
+  /// The file of a one-file batch, else the counts.
+  pub line: String,
+  pub detail: String,
+  /// A merge of the batch failed: the topmost window shows an alert.
+  pub failed: bool,
+}
+
+/// A completion to deliver, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Completion {
+  pub notice: CompletionNotice,
+  /// Post it to the OS notification centre.
+  pub system: bool,
+  /// Show it in the topmost window.
+  pub topmost: bool,
+}
+
 /// Events for the window that shows the state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiEvent {
@@ -85,12 +110,19 @@ pub enum UiEvent {
   Toast(Toast),
   /// Show a card's message at the bottom of the main window.
   Snackbar(Snackbar),
+  /// The queue drained: notify the OS and/or show the topmost window.
+  Completion(Completion),
 }
 
 pub struct UiState {
   active_tab: TabType,
   show_settings: bool,
   show_about: bool,
+  /// The queue's two notification toggles; off at every start, as in React.
+  system_notification: bool,
+  topmost_notification: bool,
+  /// The main window is closing: no more completions.
+  closing: bool,
 }
 
 impl EventEmitter<UiEvent> for UiState {}
@@ -107,6 +139,9 @@ impl UiState {
       active_tab: TabType::FileList,
       show_settings: false,
       show_about: false,
+      system_notification: false,
+      topmost_notification: false,
+      closing: false,
     }
   }
 
@@ -207,6 +242,48 @@ impl UiState {
   pub fn show_snackbar(&mut self, kind: NotificationKind, message: String, cx: &mut Context<Self>) {
     cx.emit(UiEvent::Snackbar(Snackbar { kind, message }));
   }
+
+  /// Whether a drained queue posts an OS notification.
+  pub fn system_notification(&self) -> bool {
+    self.system_notification
+  }
+
+  /// Whether a drained queue shows the topmost window.
+  pub fn topmost_notification(&self) -> bool {
+    self.topmost_notification
+  }
+
+  /// The queue's System Notification toggle. React asked the OS for
+  /// permission first; the OS asks on the first post instead.
+  pub fn toggle_system_notification(&mut self, cx: &mut Context<Self>) {
+    self.system_notification = !self.system_notification;
+    cx.notify();
+  }
+
+  /// The queue's Topmost Notification toggle.
+  pub fn toggle_topmost_notification(&mut self, cx: &mut Context<Self>) {
+    self.topmost_notification = !self.topmost_notification;
+    cx.notify();
+  }
+
+  /// The main window is closing (its exit dialog said Yes): the merges it
+  /// cancels drain the queue, which must not notify.
+  pub fn set_closing(&mut self) {
+    self.closing = true;
+  }
+
+  /// Delivers the notice of a drained queue through the enabled channels;
+  /// nothing when both are off or the window is closing.
+  pub fn show_completion(&mut self, notice: CompletionNotice, cx: &mut Context<Self>) {
+    if self.closing || !(self.system_notification || self.topmost_notification) {
+      return;
+    }
+    cx.emit(UiEvent::Completion(Completion {
+      notice,
+      system: self.system_notification,
+      topmost: self.topmost_notification,
+    }));
+  }
 }
 
 #[cfg(test)]
@@ -292,6 +369,43 @@ mod tests {
       ui.select_index(5, cx);
       assert_eq!(ui.active_tab(), TabType::Queue);
     });
+  }
+
+  #[gpui_kit::test]
+  fn completions_go_only_through_enabled_channels(cx: &mut TestAppContext) {
+    let ui = state(cx);
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let _subscription =
+      cx.update(|cx| cx.subscribe(&ui, move |_, event: &UiEvent, _| sink.borrow_mut().push(event.clone())));
+    let notice = CompletionNotice {
+      title: "Merge complete.".into(),
+      line: "a.mkv".into(),
+      detail: "Completed in 00:00:01".into(),
+      failed: false,
+    };
+    ui.update(cx, |ui, cx| {
+      assert!(!ui.system_notification() && !ui.topmost_notification(), "off at start");
+      ui.show_completion(notice.clone(), cx);
+      ui.toggle_topmost_notification(cx);
+      ui.show_completion(notice.clone(), cx);
+      ui.toggle_system_notification(cx);
+      ui.toggle_topmost_notification(cx);
+      ui.show_completion(notice.clone(), cx);
+      ui.set_closing();
+      ui.show_completion(notice.clone(), cx);
+    });
+    let completion = |system, topmost| {
+      UiEvent::Completion(Completion {
+        notice: notice.clone(),
+        system,
+        topmost,
+      })
+    };
+    assert_eq!(
+      seen.borrow().as_slice(),
+      [completion(false, true), completion(true, false)]
+    );
   }
 
   #[gpui_kit::test]

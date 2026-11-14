@@ -32,14 +32,17 @@ pub use queue::QueueStore;
 pub use ui::{TabType, UiState};
 
 use crate::merge_events::MergeBackend;
+use crate::platform::taskbar::Taskbar;
 
-/// What the stores talk to outside the UI: the config file, the parser and
-/// the merge queue. The app uses the real ones; tests pass stand-ins.
+/// What the stores talk to outside the UI: the config file, the parser, the
+/// merge queue and the taskbar progress. The app uses the real ones; tests
+/// pass stand-ins.
 #[derive(Clone)]
 pub struct Services {
   pub persistence: Persistence,
   pub metadata: MetadataSource,
   pub merges: MergeBackend,
+  pub taskbar: Taskbar,
 }
 
 /// Handles to every store; cheap to clone and handed to every view.
@@ -52,6 +55,8 @@ pub struct Stores {
   /// Enqueues and cancels merges; their events reach `queue` through
   /// [`crate::merge_events::start`].
   pub merges: MergeBackend,
+  /// The main window's taskbar progress.
+  pub taskbar: Taskbar,
 }
 
 impl Stores {
@@ -60,6 +65,7 @@ impl Stores {
       persistence,
       metadata,
       merges,
+      taskbar,
     } = services;
     let config = cx.new(|cx| ConfigStore::new(config, persistence, cx));
     Self {
@@ -68,6 +74,7 @@ impl Stores {
       queue: cx.new(|_| QueueStore::new()),
       ui: cx.new(|_| UiState::new()),
       merges,
+      taskbar,
     }
   }
 

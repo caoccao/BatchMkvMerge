@@ -27,8 +27,10 @@ pub mod file_list;
 pub mod footer;
 pub mod main_content;
 pub mod output_dialog;
+pub mod queue;
 pub mod root;
 pub mod toolbar;
+pub mod topmost;
 pub mod track_table;
 pub mod welcome;
 

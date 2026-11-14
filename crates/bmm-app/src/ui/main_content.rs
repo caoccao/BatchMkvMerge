@@ -28,11 +28,13 @@ use gpui_kit::*;
 
 use super::about::About;
 use super::file_list::FileListView;
+use super::queue::QueueView;
 use crate::state::{Stores, TabType};
 
 pub struct MainContent {
   stores: Stores,
   file_list: Entity<FileListView>,
+  queue: Entity<QueueView>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -41,6 +43,7 @@ impl MainContent {
     let subscriptions = vec![cx.observe(&stores.ui, |_, _, cx| cx.notify())];
     Self {
       file_list: cx.new(|cx| FileListView::new(stores.clone(), cx)),
+      queue: cx.new(|cx| QueueView::new(stores.clone(), cx)),
       stores,
       _subscriptions: subscriptions,
     }
@@ -48,6 +51,10 @@ impl MainContent {
 
   pub fn file_list(&self) -> &Entity<FileListView> {
     &self.file_list
+  }
+
+  pub fn queue(&self) -> &Entity<QueueView> {
+    &self.queue
   }
 
   fn tab(&self, tab: TabType, cx: &mut Context<Self>) -> Tab {
@@ -89,8 +96,9 @@ impl Render for MainContent {
     let tab_elements: Vec<Tab> = tabs.iter().map(|tab| self.tab(*tab, cx)).collect();
     let content = match active {
       TabType::FileList => self.file_list.clone().into_any_element(),
+      TabType::Queue => self.queue.clone().into_any_element(),
       TabType::About => About.into_any_element(),
-      TabType::Queue | TabType::Settings => Self::pending(active, cx),
+      TabType::Settings => Self::pending(active, cx),
     };
     let border = cx.theme().border;
     v_flex()

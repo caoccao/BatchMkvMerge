@@ -205,7 +205,9 @@
   },
   "notification": {
     "completedIn": "Completado en %{elapsed}",
-    "unknownError": "Error desconocido"
+    "unknownError": "Error desconocido",
+    "summary": "%{completed} completados, %{failed} fallidos, %{cancelled} cancelados",
+    "finishedIn": "Finalizado en %{elapsed}"
   },
   "confirm": {
     "exitTitle": "Salir",

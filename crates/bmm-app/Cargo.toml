@@ -23,6 +23,8 @@ anyhow.workspace = true
 # Merge events from the core's worker threads to the foreground executor.
 async-channel = "2"
 bmm-core = { path = "../bmm-core" }
+# Taskbar, Dock and launcher progress.
+bmm-platform = { path = "../bmm-platform" }
 # The card summary's encoded date in the local time zone; gpui already
 # compiles it with these features.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -36,7 +38,6 @@ unicode-segmentation = "1"
 # windows, `Window::render_to_image`) only reaches targets built with
 # dev-dependencies, never the shipped binary.
 [dev-dependencies]
-bmm-platform = { path = "../bmm-platform" }
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 serde_json.workspace = true
 

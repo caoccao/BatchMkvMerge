@@ -41,6 +41,9 @@ use crate::ui::file_list::{CardView, DropTarget, drop_target};
 use crate::ui::tests::{Shell, finished, started};
 use crate::ui::track_table::tests::{golden_files, movie_shell, selected_ids, shell};
 
+/// Select All in a text field: Cmd+A on macOS, Ctrl+A elsewhere.
+const SELECT_ALL: &str = if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" };
+
 fn s(values: &[&str]) -> Vec<String> {
   values.iter().map(|value| (*value).to_string()).collect()
 }
@@ -671,7 +674,7 @@ fn has_dialog(shell: &Shell, cx: &mut TestAppContext) -> bool {
 /// Replaces the focused dialog field's text and presses Enter.
 fn type_and_confirm(shell: &Shell, cx: &mut TestAppContext, text: &str) {
   shell.window(cx, |window, cx| {
-    window.press("cmd-a", cx);
+    window.press(SELECT_ALL, cx);
     window.press("backspace", cx);
     if !text.is_empty() {
       window.input(text, cx);
@@ -725,7 +728,7 @@ fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut T
   click_in(&shell, cx, 0, "card-output");
   let missing = dir.path().join("new").join("Movie.mkv").to_string_lossy().into_owned();
   shell.window(cx, |window, cx| {
-    window.press("cmd-a", cx);
+    window.press(SELECT_ALL, cx);
     window.input(&missing, cx);
   });
   cx.executor().advance_clock(Duration::from_millis(400));

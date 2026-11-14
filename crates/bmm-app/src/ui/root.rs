@@ -17,8 +17,9 @@
 
 //! The window content (`Layout.tsx`): toolbar, tabs and footer, plus what
 //! belongs to the whole window: OS file drop, toasts, geometry persistence,
-//! the title with the queue count (`App.tsx`), live language and theme
-//! changes, and the close request.
+//! the title with the queue count and the taskbar progress (`App.tsx`), the
+//! OS notification and the topmost window of a drained queue, live language
+//! and theme changes, and the close request.
 
 use std::time::Duration;
 
@@ -31,8 +32,11 @@ use gpui_kit::*;
 use super::footer::Footer;
 use super::main_content::MainContent;
 use super::toolbar::Toolbar;
+use super::topmost::TopmostWindow;
+use crate::platform::taskbar::{self, ProgressFn};
 use crate::platform::window as main_window;
-use crate::state::ui::{NotificationKind, UiEvent};
+use crate::state::queue::QueueEvent;
+use crate::state::ui::{Completion, NotificationKind, UiEvent};
 use crate::state::{ConfigStore, Stores, files};
 
 /// How long the window must stay still before its geometry is saved.
@@ -47,6 +51,10 @@ pub struct AppView {
   theme: (ThemeName, DisplayMode),
   /// The title last set on the window.
   title: String,
+  /// The taskbar, Dock or launcher progress of the window, and its value.
+  taskbar: ProgressFn,
+  progress: Option<u8>,
+  topmost: TopmostWindow,
   save_geometry: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
@@ -72,7 +80,13 @@ impl AppView {
           this.title = title;
         }
       }),
-      cx.subscribe_in(&stores.ui, window, |_, _, event: &UiEvent, window, cx| {
+      // The progress moves with every merge event, not only on a status.
+      cx.subscribe_in(&stores.queue, window, |this, queue, event: &QueueEvent, _, cx| {
+        if let QueueEvent::ItemChanged { .. } = event {
+          this.update_progress(taskbar::progress(&queue.read(cx).summary()));
+        }
+      }),
+      cx.subscribe_in(&stores.ui, window, |this, _, event: &UiEvent, window, cx| {
         let notification = |kind: NotificationKind, message: &str| match kind {
           NotificationKind::Success => Notification::success(message.to_string()),
           NotificationKind::Error => Notification::error(message.to_string()),
@@ -82,6 +96,10 @@ impl AppView {
             .title(toast.file.clone())
             .placement(Anchor::TopCenter),
           UiEvent::Snackbar(snackbar) => notification(snackbar.kind, &snackbar.message).placement(Anchor::BottomCenter),
+          UiEvent::Completion(completion) => {
+            this.complete(completion, window, cx);
+            return;
+          }
         };
         window.push_notification(notification, cx);
       }),
@@ -98,12 +116,47 @@ impl AppView {
     Self {
       toolbar: cx.new(|cx| Toolbar::new(stores.clone(), cx)),
       main: cx.new(|cx| MainContent::new(stores.clone(), cx)),
+      taskbar: stores.taskbar.attach(window),
+      progress: None,
+      topmost: TopmostWindow::default(),
       stores,
       language,
       theme,
       title: crate::window_title().to_string(),
       save_geometry: None,
       _subscriptions: subscriptions,
+    }
+  }
+
+  /// The topmost completion window.
+  pub fn topmost(&self) -> &TopmostWindow {
+    &self.topmost
+  }
+
+  /// Shows the queue's progress on the taskbar if it changed.
+  fn update_progress(&mut self, progress: Option<u8>) {
+    if progress != self.progress {
+      self.progress = progress;
+      (self.taskbar)(progress);
+    }
+  }
+
+  /// A drained queue's notice: an OS notification (`.system()`: the OS
+  /// notification centre only, title and the two lines as its body, as the
+  /// Tauri shell posted it) and/or the topmost window.
+  fn complete(&mut self, completion: &Completion, window: &mut Window, cx: &mut Context<Self>) {
+    let notice = &completion.notice;
+    if completion.system {
+      let body = format!("{}\n{}", notice.line, notice.detail);
+      let notification = if notice.failed {
+        Notification::error(body)
+      } else {
+        Notification::success(body)
+      };
+      window.push_notification(notification.title(notice.title.clone()).system(), cx);
+    }
+    if completion.topmost {
+      self.topmost.show(notice.clone(), window, cx);
     }
   }
 
