@@ -31,8 +31,8 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 
 ### Backend
 
-- Rust (edition 2024) with Tauri v2
-- Native Rust media metadata parser under `src-tauri/src/media_metadata/`
+- Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library and the Tauri v2 shell `src-tauri`
+- Native Rust media metadata parser under `crates/bmm-core/src/media_metadata/`
 - JSON-only wire protocol (`invoke` commands + Tauri events)
 - Tokio runtime for async command handling plus dedicated worker threads for merge processes
 
@@ -50,7 +50,7 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 ## Tooling
 
 - [pnpm](https://pnpm.io/) — package manager
-- [Rust](https://www.rust-lang.org/) 1.100.0 — pinned in `src-tauri/rust-toolchain.toml`
+- [Rust](https://www.rust-lang.org/) 1.100.0 — pinned in `rust-toolchain.toml` at the repository root
 - [Deno](https://deno.com/) — scripts under `scripts/ts/` (e.g. `change-version.ts`)
 
 ## Repository layout
@@ -58,9 +58,12 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 - `src/`: React app (UI, state store, protocol/types, service wrappers)
 - `src/components/`: UI screens/widgets (cards, queue, settings, toolbar)
 - `src/i18n/locales/`: locale dictionaries (9 languages)
-- `src-tauri/src/`: Tauri backend (config, controller, merge queue, protocol)
-- `src-tauri/src/media_metadata/`: native parser implementation
-- `src-tauri/tests/`: Rust integration tests (including TypeScript protocol regeneration checks)
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `src-tauri`; one `target/`)
+- `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, wire DTOs)
+- `crates/bmm-core/src/media_metadata/`: native parser implementation
+- `crates/bmm-core/tests/`: parser fixture integration tests
+- `src-tauri/src/`: Tauri shell (commands, window state, notifications)
+- `src-tauri/tests/`: TypeScript protocol regeneration check
 - `docs/parsers/`: parser coverage and behavior notes per format
 - `scripts/ts/`: maintenance scripts (including multi-file version bumping)
 
@@ -72,11 +75,12 @@ pnpm tauri dev --release               # run the app in development (hot-reload 
 pnpm tauri build                       # build installers for the current platform
 pnpm dev                               # run only the Vite dev server (no Tauri window)
 pnpm build                             # type-check and build the frontend
-cd src-tauri && cargo check --release  # fast Rust type-check
-cd src-tauri && cargo test --release   # run Rust unit + integration tests
+cargo check --release --workspace      # fast Rust type-check
+cargo test --release --workspace       # run Rust unit + integration tests
+cargo llvm-cov --release -p bmm-core   # line coverage of the core crate (CI gate: 90 %)
 ```
 
-To bump the version across `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
+To bump the version across `package.json`, `src-tauri/Cargo.toml`, `crates/bmm-core/Cargo.toml`, `src-tauri/tauri.conf.json`, and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
 
 ```bash
 cd scripts/ts
@@ -123,7 +127,7 @@ All communication goes through Tauri's `invoke` and event system; there's no IPC
 ### Events
 
 - `merge-finished`
-	- Emitted by the backend when a merge worker exits.
+	- Emitted by the backend when a merge worker exits, or right away when a still-waiting file is cancelled (the shell forwards `bmm-core`'s `MergeEvent::Finished`).
 	- Payload: file path, terminal outcome (`Completed`, `Cancelled`, `Failed`), optional error.
 	- Frontend listens in `FileList.tsx` and finalizes queue status/notifications.
 
@@ -149,6 +153,6 @@ Three GitHub Actions workflows build release bundles on push/PR:
 - `macos_build.yml` — `.dmg` (x86_64 and arm64 via matrix)
 - `windows_build.yml` — `.msi`, `.exe` (NSIS)
 
-Each installs Node 24, pnpm 11, and the Rust toolchain pinned in `src-tauri/rust-toolchain.toml` (1.100.0), then runs frontend build + Rust tests (`cargo test -r`) before packaging.
+Each installs Node 24, pnpm 11, and the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), then runs frontend build + Rust tests (`cargo test --release --workspace`) before packaging. Installers land in `target/release/bundle/`.
 
-Linux additionally enforces parser line coverage (`cargo llvm-cov --fail-under-lines 90`) for `src-tauri/src/media_metadata/`. The CI step gains `--release` in Phase 1 of the migration; run it locally as `cargo llvm-cov --release`.
+Linux additionally enforces ≥ 90 % line coverage for the `bmm-core` crate (`cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`).

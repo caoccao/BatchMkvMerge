@@ -16,29 +16,27 @@
 */
 
 mod application;
-mod config;
-mod constants;
-mod controller;
-pub mod media_metadata;
-mod merge;
-mod mkvtoolnix;
 mod notification;
-mod protocol;
 mod window_state;
 
-use media_metadata::model::MediaMetadata;
-use protocol::{MediaMetadataErrorPayload, UpdateCheckResult, UpdateCheckState};
+use bmm_core::media_metadata::model::MediaMetadata;
+use bmm_core::protocol::{self, MediaMetadataErrorPayload, UpdateCheckResult};
+use bmm_core::{config, merge, mkvtoolnix, services, update};
+
+use application::UpdateCheckState;
+
+/// Version of the shipped application (this crate), shown in About and the
+/// window title and compared against GitHub releases.
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tauri::command]
 async fn cancel_merge(file: String) -> Result<(), String> {
-  controller::cancel_merge(file).map_err(convert_error)
+  merge::cancel(file).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn check_output_path_writable(path: String) -> Result<bool, String> {
-  controller::check_output_path_writable(path)
-    .await
-    .map_err(convert_error)
+  services::check_output_path_writable(path).map_err(convert_error)
 }
 
 #[tauri::command]
@@ -46,7 +44,7 @@ fn close_topmost_notification(
   window: tauri::WebviewWindow,
   state: tauri::State<'_, notification::NotificationState>,
 ) -> Result<(), String> {
-  controller::close_topmost_notification(&window, &state).map_err(convert_error)
+  notification::close_topmost_notification(&window, &state).map_err(convert_error)
 }
 
 fn convert_error(error: anyhow::Error) -> String {
@@ -58,83 +56,84 @@ async fn detect_better_media_info(
   path: String,
   check_running: bool,
 ) -> Result<protocol::BetterMediaInfoStatus, String> {
-  controller::detect_better_media_info(path, check_running)
-    .await
-    .map_err(convert_error)
+  services::detect_better_media_info(path, check_running).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn enqueue_merge(file: String, args: Vec<String>) -> Result<(), String> {
-  controller::enqueue_merge(file, args).map_err(convert_error)
+  merge::enqueue(file, args).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn get_about() -> Result<protocol::About, String> {
-  controller::get_about().await.map_err(convert_error)
+  Ok(protocol::About {
+    app_version: APP_VERSION.to_owned(),
+  })
 }
 
 #[tauri::command]
 async fn get_config() -> Result<config::Config, String> {
-  controller::get_config().await.map_err(convert_error)
+  Ok(config::get_config())
 }
 
 #[tauri::command]
 fn get_launch_args() -> Vec<String> {
-  controller::get_launch_args()
+  services::get_launch_args()
 }
 
 #[tauri::command]
 async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>, String> {
-  controller::get_media_files(paths).await.map_err(convert_error)
+  services::get_media_files(paths).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn get_media_metadata(file: String) -> Result<MediaMetadata, MediaMetadataErrorPayload> {
-  controller::get_media_metadata(file).await
+  tauri::async_runtime::spawn_blocking(move || services::get_media_metadata(file))
+    .await
+    .map_err(|join_err| MediaMetadataErrorPayload::internal(join_err.to_string()))?
+    .map_err(|err| MediaMetadataErrorPayload::from_parse_error(&err))
 }
 
 #[tauri::command]
 async fn get_merge_status() -> Result<protocol::MergeSnapshot, String> {
-  Ok(controller::get_merge_status())
+  Ok(merge::snapshot())
 }
 
 #[tauri::command]
 fn get_topmost_notification(
   state: tauri::State<'_, notification::NotificationState>,
 ) -> Result<Option<notification::TopmostNotification>, String> {
-  controller::get_topmost_notification(&state).map_err(convert_error)
+  notification::get_topmost_notification(&state).map_err(convert_error)
 }
 
 #[tauri::command]
 fn get_update_result(state: tauri::State<'_, UpdateCheckState>) -> Option<UpdateCheckResult> {
-  controller::get_update_result(&state)
+  state.result.lock().unwrap().clone()
 }
 
 #[tauri::command]
 async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<protocol::MkvToolNixStatus, String> {
-  controller::is_mkvtoolnix_found(path, check_running)
-    .await
-    .map_err(convert_error)
+  mkvtoolnix::is_mkvtoolnix_found(path, check_running).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn launch_better_media_info(paths: Vec<String>) -> Result<(), String> {
-  controller::launch_better_media_info(paths).await.map_err(convert_error)
+  services::launch_better_media_info(paths).map_err(convert_error)
 }
 
 #[tauri::command]
 async fn output_path_exists(path: String) -> Result<bool, String> {
-  controller::output_path_exists(path).await.map_err(convert_error)
+  services::output_path_exists(path).map_err(convert_error)
 }
 
 #[tauri::command]
 fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
-  controller::resolve_merge_output_path(output_dir, source_file)
+  services::resolve_merge_output_path(output_dir, source_file)
 }
 
 #[tauri::command]
 fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
-  controller::resolve_overridden_output_path(output_path, source_file)
+  services::resolve_overridden_output_path(output_path, source_file)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -147,12 +146,13 @@ pub fn run() {
 
 #[tauri::command]
 async fn set_config(config: config::Config) -> Result<config::Config, String> {
-  controller::set_config(config).await.map_err(convert_error)
+  config::set_config(config).map_err(convert_error)?;
+  Ok(config::get_config())
 }
 
 #[tauri::command]
 fn show_system_notification(app: tauri::AppHandle, title: String, file: String, detail: String) -> Result<(), String> {
-  controller::show_system_notification(&app, title, file, detail).map_err(convert_error)
+  notification::show_system_notification(&app, title, file, detail).map_err(convert_error)
 }
 
 #[tauri::command]
@@ -161,10 +161,10 @@ async fn show_topmost_notification(
   state: tauri::State<'_, notification::NotificationState>,
   notification: notification::TopmostNotification,
 ) -> Result<(), String> {
-  controller::show_topmost_notification(&app, &state, notification).map_err(convert_error)
+  notification::show_topmost_notification(&app, &state, notification).map_err(convert_error)
 }
 
 #[tauri::command]
 fn skip_version(version: String) -> Result<(), String> {
-  controller::skip_version(version).map_err(convert_error)
+  update::skip_version(version).map_err(convert_error)
 }

@@ -96,6 +96,9 @@ class ChangeVersion {
     this._change(".github/workflows/windows_build.yml", [
       /^\s*BATCH_MKV_MERGE_VERSION:\s*(?<version>\d+\.\d+\.\d+)/gim,
     ]);
+    this._change("crates/bmm-core/Cargo.toml", [
+      /^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"/gim,
+    ]);
     this._change("src-tauri/Cargo.toml", [
       /^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"/gim,
     ]);

@@ -8,7 +8,7 @@ The IVF parser recognises IVF files containing VP8, VP9, or AV1 and reports one 
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/ivf.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/ivf.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_ivf.cpp`, `../mkvtoolnix/src/input/r_ivf.h`, `../mkvtoolnix/src/common/ivf.cpp`, `../mkvtoolnix/src/common/ivf.h`
 
 The parser parses the `DKIF` header, version, header length, FourCC, width, height, frame-rate numerator/denominator, and frame count. It accepts AV1, VP8, and VP9, derives default duration, and reads the declared first AV1 frame for Dolby Vision RPU metadata without an IVF-local 1 MiB cap, bounded only by the shared parser element-size limit and deadline. For AV1 Dolby Vision, the bounded first-frame path decodes the AV1 sequence header color fields, reuses the shared AV1 OBU parser's first-operating-point metadata filter, converts the retained ITU-T T.35 Dolby Vision payload into the regular RPU byte layout, parses the RPU header fields needed to infer the DV profile, and derives the `dvvC` compatibility id from that profile plus the AV1 color triplet (PARSER-352, PARSER-379).

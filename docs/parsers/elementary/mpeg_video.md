@@ -8,7 +8,7 @@ The MPEG video parser recognises MPEG-1 and MPEG-2 video elementary streams, ext
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/mpeg_video.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/mpeg_video.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_es.cpp`, `../mkvtoolnix/src/input/r_mpeg_es.h`, `../mkvtoolnix/src/mpegparser/*`, `../mkvtoolnix/src/common/mpeg1_2.*`, `../mkvtoolnix/src/common/mpeg.*`
 
 The parser scans the first 1 MiB for the upstream MPEG ES probe predicates: sequence header, picture start, slice count, whether the file begins with a start code, and the GOP-plus-extension pattern. It accepts only the same structural cases mkvtoolnix accepts before invoking `M2VParser`: a slice pattern from the beginning of the stream, a GOP+extension slice pattern, or at least 25 slice start codes. A bounded frame-header validation then requires a decodable sequence header, nonzero dimensions/frame rate, a valid picture coding type, and a following slice before metadata is reported. Header parsing decodes width, height, aspect-ratio code, and frame-rate code from the base sequence header. When an MPEG-2 sequence extension is present, it marks the stream as MPEG-2 and reads `progressiveSequence`, but it intentionally ignores sequence-extension size and frame-rate factor fields because mkvtoolnix's identify path does the same.

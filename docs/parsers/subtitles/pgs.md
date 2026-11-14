@@ -8,7 +8,7 @@ The PGS parser recognises HDMV Presentation Graphics `.sup` files and reports on
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/pgs.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/pgs.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_hdmv_pgs.cpp`, `../mkvtoolnix/src/input/r_hdmv_pgs.h`, upstream HDMV PGS helpers
 
 The parser validates the leading `PG` segment chain exactly as `hdmv_pgs_reader_c::probe_file` does — it reads the first segment header, checks the `PG` magic, seeks by the declared 16-bit `segment_length`, and confirms the next segment also carries the `PG` magic. It does **not** gate on `segment_type`, so interactive-composition (`0x18`) and future segment types near the start are walked rather than rejected. Once at least two `PG`-magic segments are observed it emits a single image subtitle track.

@@ -269,9 +269,9 @@ fn mkvtoolnix_gui_process_name() -> &'static str {
   }
 }
 
-pub async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
+pub fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
   if check_running {
-    if let Some(dir) = crate::controller::find_running_process_dir(mkvtoolnix_gui_process_name()) {
+    if let Some(dir) = crate::services::find_running_process_dir(mkvtoolnix_gui_process_name()) {
       if has_mkvtoolnix(&dir) {
         let mut cfg = config::get_config();
         let path_string = dir.to_string_lossy().to_string();

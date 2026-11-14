@@ -8,8 +8,8 @@ The Matroska parser recognises Matroska and WebM EBML documents and extracts hea
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/matroska/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/matroska/ebml.rs`, `info.rs`, `tracks/`, `attachments.rs`, `chapters.rs`, `tags.rs`, `cues.rs`, `seek_head.rs`, `tail_analyzer.rs`, `cluster_timestamps.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/matroska/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/matroska/ebml.rs`, `info.rs`, `tracks/`, `attachments.rs`, `chapters.rs`, `tags.rs`, `cues.rs`, `seek_head.rs`, `tail_analyzer.rs`, `cluster_timestamps.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_matroska.cpp`, `../mkvtoolnix/src/input/r_matroska.h`
 
 The Rust reader is a pure-Rust EBML walker. It probes the EBML header and Matroska/WebM doc type, locates `Segment`, processes level-1 elements, follows chained `SeekHead` entries, and falls back to a tail scan for deferred metadata. While locating `Segment`, it skips level-0 `Void`, `CRC32`, and finite-size unknown EBML elements that libebml would return as `EbmlDummy`, while still rejecting known Matroska level-1 elements found outside `Segment` (PARSER-392). Cluster payloads are not demuxed, but the parser samples opening cluster timestamps to improve track timing metadata.

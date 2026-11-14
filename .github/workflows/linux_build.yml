@@ -46,9 +46,13 @@ jobs:
 
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
+      # No `toolchain:` input: the action then installs the toolchain pinned in
+      # rust-toolchain.toml. Passing `toolchain: stable` would also run
+      # `rustup override set stable` on the repository root, which outranks the
+      # pin now that rust-toolchain.toml lives there.
       with:
-        toolchain: stable
-        # llvm-tools-preview is needed by cargo-llvm-cov for the coverage gate.
+        # llvm-tools-preview is needed by cargo-llvm-cov for the coverage gate;
+        # it is added to the pinned toolchain.
         components: llvm-tools-preview
         # The action sets RUSTFLAGS=-D warnings by default, which turns every
         # rustc warning into a CI failure. Phased delivery of the
@@ -71,22 +75,19 @@ jobs:
         pnpm build
 
     - name: Run Rust tests
-      working-directory: src-tauri
-      run: cargo test -r
+      run: cargo test --release --workspace
 
-    # Coverage gate: every media_metadata parser sub-module is held to >= 90%
-    # line coverage. Top-level Tauri glue (lib.rs, merge.rs, etc.) is
-    # excluded because it isn't unit-test covered.
+    # Coverage gate: the UI-free bmm-core crate (parser, config, merge queue,
+    # services, MKVToolNix, update check) is held to >= 90% line coverage.
+    # Scoping by package replaces the old file-name exclusion list; the Tauri
+    # shell is not measured.
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-llvm-cov
 
-    - name: Coverage gate (media_metadata >= 90%)
-      working-directory: src-tauri
-      run: |
-        cargo llvm-cov --summary-only --fail-under-lines 90 \
-          --ignore-filename-regex 'src/(config|constants|controller|merge|lib|main|mkvtoolnix|protocol)\.rs|build\.rs'
+    - name: Coverage gate (bmm-core >= 90%)
+      run: cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90
 
     - name: Build BatchMkvMerge
       run: pnpm tauri build
@@ -96,18 +97,18 @@ jobs:
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-deb
         path: |
-          src-tauri/target/release/bundle/deb/*.deb
+          target/release/bundle/deb/*.deb
 
     - name: Upload the rpm
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-rpm
         path: |
-          src-tauri/target/release/bundle/rpm/*.rpm
+          target/release/bundle/rpm/*.rpm
 
     - name: Upload the AppImage
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-linux-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-AppImage
         path: |
-          src-tauri/target/release/bundle/appimage/*.AppImage
+          target/release/bundle/appimage/*.AppImage

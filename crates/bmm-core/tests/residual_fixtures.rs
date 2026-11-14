@@ -20,9 +20,9 @@
 
 use std::io::Write;
 
-use batch_mkvmerge_lib::media_metadata::model::container::ContainerFormat;
-use batch_mkvmerge_lib::media_metadata::model::track::TrackType;
-use batch_mkvmerge_lib::media_metadata::{ParseOptions, parse};
+use bmm_core::media_metadata::model::container::ContainerFormat;
+use bmm_core::media_metadata::model::track::TrackType;
+use bmm_core::media_metadata::{ParseOptions, parse};
 
 fn write_tempfile(bytes: &[u8], ext: &str) -> std::path::PathBuf {
   let dir = std::env::temp_dir();

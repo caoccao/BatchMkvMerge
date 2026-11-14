@@ -8,7 +8,7 @@ The DV parser recognises a narrow raw DV DIF header shape and reports the contai
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/dv.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/dv.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_dv.cpp`, `../mkvtoolnix/src/input/r_dv.h`
 
 The Rust implementation ports mkvtoolnix's FFmpeg-derived marker-density scan (`dv_reader_c::probe_file`): a sliding 32-bit big-endian window walks up to 20 MiB of the file counting primary DIF section markers (`0x1f07003f` with the channel/sequence bits masked off), secondary section markers, and the `0xff3f0701` audio-section marker that trails a `0x..3f0700` marker by exactly 80 bytes. DV is reported only when the marker density crosses the upstream thresholds (`matches > 4`, or `secondary_matches >= 10` with a tight average spacing). On a positive result it sets `ContainerFormat::Dv` with `supported = false` and emits no tracks.

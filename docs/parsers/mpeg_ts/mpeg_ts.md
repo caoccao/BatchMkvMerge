@@ -8,7 +8,7 @@ The MPEG-TS parser recognises transport streams, detects packet size, builds pro
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/mpeg_ts/reader.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/mpeg_ts/reader.rs`
 - Related modules: `packet.rs`, `pat.rs`, `pmt.rs`, `pes.rs`, `stream_table.rs`, `identify.rs`, `descriptors/`
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ts.cpp`, `../mkvtoolnix/src/input/r_mpeg_ts.h`
 

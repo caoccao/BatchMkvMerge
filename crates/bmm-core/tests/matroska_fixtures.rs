@@ -23,10 +23,10 @@
 
 use std::io::Write;
 
-use batch_mkvmerge_lib::media_metadata::matroska::ids;
-use batch_mkvmerge_lib::media_metadata::model::container::ContainerFormat;
-use batch_mkvmerge_lib::media_metadata::model::track::TrackType;
-use batch_mkvmerge_lib::media_metadata::{ParseError, ParseOptions, parse};
+use bmm_core::media_metadata::matroska::ids;
+use bmm_core::media_metadata::model::container::ContainerFormat;
+use bmm_core::media_metadata::model::track::TrackType;
+use bmm_core::media_metadata::{ParseError, ParseOptions, parse};
 
 // =============================================================================
 //   EBML / VINT encoders (duplicated minimally so the test crate stays
@@ -357,7 +357,7 @@ fn track_default_flag_round_trip_through_parse() {
   let path = write_to_tempfile(&bytes, "mkv");
   let m = parse(&path, ParseOptions::default()).unwrap();
   let _ = std::fs::remove_file(&path);
-  use batch_mkvmerge_lib::media_metadata::model::track_properties_common::TrackFlag;
+  use bmm_core::media_metadata::model::track_properties_common::TrackFlag;
   assert_eq!(m.tracks[0].properties.common.default, TrackFlag::True);
   assert_eq!(m.tracks[2].properties.common.forced, TrackFlag::True);
 }

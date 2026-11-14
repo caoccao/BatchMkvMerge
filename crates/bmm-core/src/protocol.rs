@@ -16,7 +16,6 @@
 */
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct About {
@@ -104,6 +103,8 @@ pub struct MergeSnapshot {
   pub entries: Vec<MergeEntry>,
 }
 
+/// Payload of the Tauri shell's `merge-finished` event, built from
+/// [`crate::merge::MergeEvent::Finished`].
 #[derive(Debug, Clone, Serialize)]
 pub struct MergeFinishedEvent {
   pub file: String,
@@ -111,14 +112,10 @@ pub struct MergeFinishedEvent {
   pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UpdateCheckResult {
   #[serde(rename = "hasUpdate")]
   pub has_update: bool,
   #[serde(rename = "latestVersion")]
   pub latest_version: Option<String>,
-}
-
-pub struct UpdateCheckState {
-  pub result: Arc<Mutex<Option<UpdateCheckResult>>>,
 }

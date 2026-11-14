@@ -42,6 +42,7 @@ Thumbs.db
 .env.*.local
 
 # Rust / Tauri build artifacts (in addition to src-tauri/.gitignore)
+/target
 src-tauri/target
 src-tauri/gen/schemas
 

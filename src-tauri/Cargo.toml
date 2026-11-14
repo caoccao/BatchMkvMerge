@@ -18,28 +18,24 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+bmm-core = { path = "../crates/bmm-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-log = "0.4"
-thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread"] }
-sysinfo = { version = "0.32", default-features = false, features = ["system"] }
-sys-locale = "0.3.2"
-ureq = { version = "2", features = ["json"] }
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
-specta-serde = "0.0.12"
-specta-typescript = "0.0.12"
-language-tags = "0.3"
-encoding_rs = "0.8"
-flate2 = "1"
-quick-xml = "=0.39.2"
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2"
+serde.workspace = true
+anyhow.workspace = true
+log.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-winrt-notification = "0.7.3"
 windows-registry = "0.6.1"
+
+# Only `tests/protocol_typescript.rs` uses specta directly; the model derives
+# live in `bmm-core`.
+[dev-dependencies]
+specta.workspace = true
+specta-serde.workspace = true
+specta-typescript.workspace = true

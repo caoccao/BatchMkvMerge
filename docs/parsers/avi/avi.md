@@ -8,8 +8,8 @@ The AVI parser recognises RIFF/AVI files and extracts container duration, dimens
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/avi/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/avi/riff.rs`, `avih.rs`, `strl.rs`, `odml.rs`, `identify.rs`, `subtitles.rs`, `mpeg4_par.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/avi/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/avi/riff.rs`, `avih.rs`, `strl.rs`, `odml.rs`, `identify.rs`, `subtitles.rs`, `mpeg4_par.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_avi.cpp`, `../mkvtoolnix/src/input/r_avi.h`, `../mkvtoolnix/src/common/mpeg4_p2.cpp`, `../mkvtoolnix/lib/avilib-0.6.10/*`
 
 The reader walks RIFF chunks directly instead of using avilib. It accepts the top-level `RIFF` and `AVI ` form signatures case-insensitively, matching mkvtoolnix's lowercased probe path, while leaving child chunk dispatch on normal RIFF FOURCCs. It processes `LIST hdrl`, `avih`, one or more `LIST strl` entries, `strh`, `strf`, `vprp`, and ODML `dmlh`. The identify layer maps FOURCC and WAVE format tags into the shared track model.

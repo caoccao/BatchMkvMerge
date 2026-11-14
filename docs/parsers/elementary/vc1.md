@@ -8,7 +8,7 @@ The VC-1 parser recognises Advanced-profile elementary streams with sequence hea
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/vc1.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/vc1.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_vc1.cpp`, `../mkvtoolnix/src/input/r_vc1.h`, `../mkvtoolnix/src/common/vc1.*`
 
 The parser scans a bounded region for VC-1 start codes and decodes Advanced-profile sequence-header fields, porting the identify-relevant portions of `mtx::vc1::parse_sequence_header` (`common/vc1.cpp`). The two profile bits are checked: a non-Advanced profile (`PROFILE_ADVANCED == 3`) is rejected exactly as upstream's `return false`, so non-Advanced or start-code-shaped non-VC-1 data is no longer claimed. A sequence-header unit must be delimited by a following start code before it is decoded, matching `es_parser_c::add_bytes`, and the parser consumes the mandatory `hrd_param_flag` plus HRD leaky-bucket fields when present before accepting the header. The decoded fields include coded dimensions, the optional `display_info` block (display dimensions, aspect-ratio syntax), the frame-rate syntax (both the explicit `32/den` form and the `nr`/`dr` table form), and the color description, so the track reports display dimensions (falling back to coded dimensions when `display_info_flag` is unset) and a frame-rate-derived `default_duration_ns` (`p_vc1.cpp:61-73`). The raw sequence-header and entry-point bit-stream units are concatenated and stored as codec private, mirroring `m_raw_headers = raw_seqhdr + raw_entrypoint` (`p_vc1.cpp:118-127`). The result is a `ContainerFormat::Vc1` with `CodecInfo` and `VideoTrackProperties`.

@@ -51,8 +51,11 @@ jobs:
 
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
+      # No `toolchain:` input: the action then installs the toolchain pinned in
+      # rust-toolchain.toml. Passing `toolchain: stable` would also run
+      # `rustup override set stable` on the repository root, which outranks the
+      # pin now that rust-toolchain.toml lives there.
       with:
-        toolchain: stable
         # The action sets RUSTFLAGS=-D warnings by default, which turns every
         # rustc warning into a CI failure. Phased delivery of the
         # media_metadata parser intentionally lands public fns before their
@@ -74,8 +77,7 @@ jobs:
         pnpm build
 
     - name: Run Rust tests
-      working-directory: src-tauri
-      run: cargo test -r
+      run: cargo test --release --workspace
 
     - name: Build BatchMkvMerge
       run: pnpm tauri build
@@ -85,4 +87,4 @@ jobs:
       with:
         name: BatchMkvMerge-${{ matrix.os }}-${{ matrix.arch }}-${{ env.BATCH_MKV_MERGE_VERSION }}
         path: |
-          src-tauri/target/release/bundle/dmg/*.dmg
+          target/release/bundle/dmg/*.dmg

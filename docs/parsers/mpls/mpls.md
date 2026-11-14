@@ -8,8 +8,8 @@ The MPLS parser recognises Blu-ray playlist files, resolves referenced stream cl
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/mpls/mod.rs`
-- Binary parser: `src-tauri/src/media_metadata/mpls/parser.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/mpls/mod.rs`
+- Binary parser: `crates/bmm-core/src/media_metadata/mpls/parser.rs`
 - Upstream basis: `../mkvtoolnix/src/common/bluray/mpls.cpp`, `../mkvtoolnix/src/common/bluray/mpls.h`, `../mkvtoolnix/src/common/mm_mpls_multi_file_io.cpp`, MPEG-TS playlist hooks in `../mkvtoolnix/src/input/r_mpeg_ts.cpp`
 
 `parser.rs` validates the MPLS header, version, playlist offsets, play items, sub paths, sub play items, STN stream entries, and chapter marks. `mod.rs` attempts content-based playlist opening before the normal probe cascade for every input path, resolves `STREAM/*.m2ts` files, parses available segments through the MPEG-TS reader, merges tracks by PID, records playlist metadata, mirrors the playlist chapter count into the standard `MediaMetadata.chapters` summary, and applies STN languages to matching tracks (PARSER-353, PARSER-369).

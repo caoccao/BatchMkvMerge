@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Migration in progress
 
-The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch. The maintainer keeps the migration plan (revision 2, phases 0-14) outside the repository. Each phase lands as one Conventional Commit on that branch, so `git log` shows which phases are done. The work ends with a pull request into `main`; the branch creates no tags and no releases.
+The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch. The maintainer keeps the migration plan (phases 0-14) outside the repository. Each phase lands as one Conventional Commit on that branch, so `git log` shows which phases are done. The work ends with a pull request into `main`; the branch creates no tags and no releases.
 
 Until Phase 12 the Tauri app stays buildable and is the behavioural reference. The sections below describe that Tauri app, not the target architecture.
 
@@ -48,8 +48,8 @@ pnpm install                           # install JS dependencies
 pnpm tauri dev --release               # run the desktop app with frontend + Rust hot-reload (release Rust build)
 pnpm tauri build                       # build installers for the current platform
 pnpm build                             # tsc + vite build (type-check + frontend bundle only)
-cd src-tauri && cargo check --release  # fast Rust type-check without linking
-cd src-tauri && cargo test --release   # run the Rust unit + integration test suite
+cargo check --release --workspace      # fast Rust type-check without linking
+cargo test --release --workspace       # run the Rust unit + integration test suite
 ```
 
 Version bumps are done with a Deno script — edit the two arguments at the bottom of `scripts/ts/change-version.ts` and run:
@@ -58,18 +58,18 @@ Version bumps are done with a Deno script — edit the two arguments at the bott
 cd scripts/ts && deno task change-version
 ```
 
-That rewrites `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and all three `.github/workflows/*.yml` files.
+That rewrites `package.json`, `src-tauri/Cargo.toml`, `crates/bmm-core/Cargo.toml`, `src-tauri/tauri.conf.json`, and all three `.github/workflows/*.yml` files.
 
 ### Rust toolchain
 
-The toolchain is pinned in `src-tauri/rust-toolchain.toml` (currently **1.100.0**). The pin must stay at 1.91 or newer for `specta-2.0.0-rc.25`, which relies on `debug_closure_helpers` (stable since 1.91); the gpui-kit migration needs 1.92 or newer. The GitHub Actions workflows use `actions-rust-lang/setup-rust-toolchain@v1`, which honours the pin. They also clear `rustflags` so the action's default `-D warnings` doesn't fail CI on intentionally-not-yet-consumed parser surface during phased delivery.
+The toolchain is pinned in `rust-toolchain.toml` at the repository root (currently **1.100.0**). The pin must stay at 1.91 or newer for `specta-2.0.0-rc.25`, which relies on `debug_closure_helpers` (stable since 1.91); the gpui-kit migration needs 1.92 or newer. The GitHub Actions workflows use `actions-rust-lang/setup-rust-toolchain@v1` **without** a `toolchain:` input, so the action installs the pinned toolchain; with `toolchain: stable` it would also run `rustup override set stable` on the repository root, and that directory override outranks the toolchain file. They also clear `rustflags` so the action's default `-D warnings` doesn't fail CI on intentionally-not-yet-consumed parser surface during phased delivery.
 
 ### Tests
 
-The parser sub-tree (`src-tauri/src/media_metadata/`) ships with unit tests inline (`#[cfg(test)] mod tests {}`) and one integration test at `src-tauri/tests/protocol_typescript.rs`. `cargo test --release` runs both. Coverage is measured with `cargo-llvm-cov` — every parser sub-module is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --fail-under-lines 90` (the CI step gains `--release` in Phase 1 of the migration; run it locally as `cargo llvm-cov --release`). The gate scopes the parser sub-tree only via `--ignore-filename-regex` over the non-parser top-level files (`lib.rs`, `merge.rs`, `controller.rs`, `mkvtoolnix.rs`, `protocol.rs`, `config.rs`, `constants.rs`, `main.rs`, `build.rs`); local baseline is ~96 % parser line coverage. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
+The Rust code is a Cargo workspace (root `Cargo.toml`, one `Cargo.lock`, one `target/`): `crates/bmm-core` holds everything UI-free — the parser sub-tree `crates/bmm-core/src/media_metadata/`, config, merge queue, services, MKVToolNix and update check — and `src-tauri` is the Tauri shell on top of it. Unit tests are inline (`#[cfg(test)] mod tests {}`); the parser fixture tests are `crates/bmm-core/tests/*_fixtures.rs`, and the TypeScript drift check is `src-tauri/tests/protocol_typescript.rs`. `cargo test --release --workspace` runs all of them. Coverage is measured with `cargo-llvm-cov`: the whole `bmm-core` crate is held to ≥ 90 % line coverage, enforced by the Linux CI workflow (`.github/workflows/linux_build.yml`) via `cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`. Scoping by package keeps the Tauri shell out and every new core file in, with no file-name exclusion list; local baseline is ~93 % for the crate (~96 % for the parser alone). `merge.rs` is tested through a fake process launcher (`MergeQueue::new`), never a real `mkvmerge`. To refresh the checked-in `src/protocol.generated.ts` after changing any model struct:
 
 ```bash
-cd src-tauri && BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript
+BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript   # from the repository root
 ```
 
 The non-regen run of that test fails with a line-by-line diff when the checked-in file is stale — CI catches drift automatically.
@@ -83,12 +83,12 @@ The non-regen run of that test fails with a line-by-line diff when the checked-i
 
 ### Frontend ↔ Backend split
 
-React app under `src/` talks to a Rust Tauri v2 backend under `src-tauri/`. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `src-tauri/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `src-tauri/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
+React app under `src/` talks to a Rust Tauri v2 backend: the thin shell under `src-tauri/` (commands, window, notifications) on top of the UI-free `crates/bmm-core` library. All communication goes through Tauri's `invoke` (commands) and the event system — no other IPC. Everything crossing the boundary is JSON. The parser model lives in `crates/bmm-core/src/media_metadata/model/` and is auto-mirrored into `src/protocol.generated.ts` via specta (regenerate with `BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript`); `src/protocol.ts` re-exports those types and adds UI-only ones (`MkvToolNixStatus`, `BetterMediaInfoStatus`, `QueueItemStatus`, `MediaMetadataError`, …). The hand-written `crates/bmm-core/src/protocol.rs` only carries the non-parser wire types (config status DTOs, merge events, the structured `MediaMetadataErrorPayload`).
 
 The Tauri command surface for files / metadata is:
 
 - `get_media_files(paths)` — recursive directory walk filtered by `media_metadata::probe::extension_hint::is_supported_media_path`.
-- `get_media_metadata(file)` — wraps `media_metadata::parse` with `ParseOptions` built by `controller::parser_options_from_config`. The persisted `config.parser.timeoutMs` wins over the legacy `BMM_PARSER_BUDGET_MS` env override; env only applies while the config still holds the default timeout. The timeout is no longer exposed in the UI — edit the config file to change it. Failures arrive on the frontend as a tagged `MediaMetadataError` (`io | unexpectedEof | unrecognised | timeout | malformed | oversizedElement | internal`); `MkvFileCard.formatMetadataError` maps each kind to a `merge.error.parser.*` i18n key.
+- `get_media_metadata(file)` — wraps `media_metadata::parse` with `ParseOptions` built by `services::parser_options_from_config` (`crates/bmm-core/src/services.rs`). The persisted `config.parser.timeoutMs` wins over the legacy `BMM_PARSER_BUDGET_MS` env override; env only applies while the config still holds the default timeout. The timeout is no longer exposed in the UI — edit the config file to change it. Failures arrive on the frontend as a tagged `MediaMetadataError` (`io | unexpectedEof | unrecognised | timeout | malformed | oversizedElement | internal`); `MkvFileCard.formatMetadataError` maps each kind to a `merge.error.parser.*` i18n key.
 
 The old `get_mkv_files` / `get_mkv_tracks` commands and the `MkvTrack` wire struct were removed in Phase 11; the MKV-only `is_mkv` predicate is replaced by `is_supported_media_path` (Phase 11), so the drag-drop accept-list now covers every extension `mkvmerge -J` recognises. It also accepts a VobSub `.sub` data file directly when the sibling `.idx` manifest is present, matching mkvtoolnix's path-aware VobSub open flow.
 
@@ -107,7 +107,7 @@ The old `get_mkv_files` / `get_mkv_tracks` commands and the `MkvTrack` wire stru
 
 `QueueItemStatus` is a string enum in `src/protocol.ts`: `Waiting | Merging | Completed | Cancelled | Failed`. Backend snapshots only ever carry `Waiting` / `Merging`; terminal states are set on the frontend:
 
-1. The backend emits a `merge-finished` event when the worker exits, carrying the authoritative outcome (`Completed`, `Cancelled`, or `Failed`) — `FileList.tsx` listens and calls `recordFinishedOutcome` which sets the status directly.
+1. The backend emits a `merge-finished` event when the worker exits (or right away when a still-waiting file is cancelled), carrying the authoritative outcome (`Completed`, `Cancelled`, or `Failed`) — `FileList.tsx` listens and calls `recordFinishedOutcome` which sets the status directly.
 2. As a fallback, `applyMergeSnapshot` transitions any item that's disappeared from the backend snapshot to `Completed` (or `Cancelled` if `cancelRequested` was flagged). This handles races where the event arrives after the next poll.
 3. The terminal-status check in `applyMergeSnapshot` skips items already in a terminal state, so the event-driven update is never overwritten.
 
@@ -115,15 +115,17 @@ Polling runs every **200 ms** from `FileList.tsx` via `get_merge_status`.
 
 ### Per-drive merge queue (backend)
 
-`src-tauri/src/merge.rs` owns all live merge state via a module-level `OnceLock<Mutex<MergeState>>`:
+`crates/bmm-core/src/merge.rs` owns all live merge state in a `MergeQueue`. One process-wide instance sits behind the free functions `enqueue` / `cancel` / `snapshot`; tests build their own with a fake launcher.
 
 - `tasks: HashMap<file, TaskState>` — metadata (status, progress, args, cancel flag).
 - `drives: HashMap<drive_key, DriveState>` — per-drive `merging + queued`.
-- `children: HashMap<file, Arc<Mutex<Child>>>` — kept separately so `cancel()` can `kill()` from a different call site.
+- `children: HashMap<file, Arc<Mutex<Box<dyn MergeProcessControl>>>>` — kept separately so `cancel()` can `kill()` from a different call site.
 
-`get_drive_key` returns the Windows path `Prefix` component (`C:`, `\\server\share`) uppercased, else `"default"`. When a file is enqueued and the drive's `merging` slot is free, it's promoted immediately and a worker is `std::thread::spawn`'d. When a worker finishes, `on_worker_finished` emits the event, drops the task, and pops the next file for the same drive.
+`get_drive_key` returns the Windows path `Prefix` component (`C:`, `\\server\share`) uppercased, else `"default"`. When a file is enqueued and the drive's `merging` slot is free, it's promoted immediately and a worker is `std::thread::spawn`'d. When a worker finishes, `finish` sends `MergeEvent::Finished`, drops the task, and pops the next file for the same drive.
 
-The tokio runtime is intentionally capped at 4 workers (see `lib.rs` → `tauri::async_runtime::set(runtime.handle().clone())` with `worker_threads(4)`). The actual merge work runs on dedicated `std::thread::spawn` threads, not on those 4 workers, so the polling endpoint stays responsive under load.
+Workers push `MergeEvent`s into the sink installed with `merge::init`: `Started`, `Progress` (only when the percentage changes), and `Finished` with `Completed | Cancelled | Failed`. Every enqueued file gets exactly one `Finished` — also a file cancelled while still waiting, and a worker that panics (`Failed`). The Tauri shell's sink (`src-tauri/src/application.rs`) forwards only `Finished`, as the `merge-finished` event; the frontend still polls `get_merge_status` for progress.
+
+The tokio runtime is intentionally capped at 4 workers (see `src-tauri/src/application.rs::configure_runtime` → `tauri::async_runtime::set(runtime.handle().clone())` with `worker_threads(4)`). The actual merge work runs on dedicated `std::thread::spawn` threads, not on those 4 workers, so the polling endpoint stays responsive under load.
 
 ### Profiles
 
@@ -133,7 +135,7 @@ The active profile is consumed both on track auto-select (once per card, guarded
 
 ### Window flicker
 
-`tauri.conf.json` creates the main window with `visible: false`. The setup hook in `src-tauri/src/lib.rs` applies the stored position and size, then calls `window.show()` — this is why users don't see a default-geometry flash on startup. Don't flip `visible` back on.
+`tauri.conf.json` creates the main window with `visible: false`. The setup hook in `src-tauri/src/application.rs` applies the stored position and size, then calls `window.show()` — this is why users don't see a default-geometry flash on startup. Don't flip `visible` back on.
 
 ### Config file location
 
@@ -142,7 +144,7 @@ Config is stored per-OS:
 - Linux — `$XDG_CONFIG_HOME/BatchMkvMerge/`, else `$HOME/.config/BatchMkvMerge/`.
 - macOS — `~/Library/Application Support/BatchMkvMerge/`.
 
-Detection lives in `src-tauri/src/config.rs::get_config_dir`. Old config files from earlier schema versions still load because every new field has `#[serde(default = "...")]`. Notable nested blocks:
+Detection lives in `crates/bmm-core/src/config.rs::get_config_dir`. Old config files from earlier schema versions still load because every new field has `#[serde(default = "...")]`. Notable nested blocks:
 
 - `config.externalTools` — MKVToolNix + BetterMediaInfo paths.
 - `config.parser.timeoutMs` — per-file parse budget for the native parser (default 10000, clamped to 100–60000 ms by `ConfigParser::effective_timeout_ms`). Not exposed in the UI — edit the config file to change it.
@@ -153,12 +155,12 @@ Nine locales (`de`, `en-US`, `es`, `fr`, `it`, `ja`, `zh-CN`, `zh-HK`, `zh-TW`).
 
 ### Native media-metadata parser
 
-A pure-Rust header-only parser lives under `src-tauri/src/media_metadata/`. It has fully replaced the `mkvmerge -J` subprocess shellout, the drag-drop filter is broadened to every extension `mkvmerge -J` recognises plus path-aware VobSub `.sub` inputs, and CI gates parser line coverage at ≥ 90 %. Delivery was split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase landed as one Conventional Commits commit on the `implement-parser` branch.
+A pure-Rust header-only parser lives under `crates/bmm-core/src/media_metadata/`. It has fully replaced the `mkvmerge -J` subprocess shellout, the drag-drop filter is broadened to every extension `mkvmerge -J` recognises plus path-aware VobSub `.sub` inputs, and CI gates parser line coverage at ≥ 90 %. Delivery was split into 12 phases (Phase 1 = io/error/deadline foundations, Phase 2 = model + codec/language tables + Settings UI, Phase 3 = matroska reader + probe foundation, Phase 4 = MP4/QuickTime reader, Phase 5 = AVI + Ogg/OGM readers, Phase 6 = MPEG-TS + MPEG-PS readers, Phase 7 = 10 audio readers + CoreAudio, Phase 8 = elementary video streams (AVC + HEVC + AV1 OBU + MPEG + VC-1 + Dirac + DV), Phases 9-10 = subtitles + residuals, Phase 11 = Tauri command + frontend migration, Phase 12 = i18n widening + CI coverage gate). Each phase landed as one Conventional Commits commit on the `implement-parser` branch.
 
 Layout (one module tree per format family — every file under 1000 LOC):
 
 ```
-src-tauri/src/media_metadata/
+crates/bmm-core/src/media_metadata/
 ├── mod.rs              # `pub fn parse(path, ParseOptions)`; ParseError; Deadline
 ├── error.rs            # ParseError enum (Timeout / Io / Malformed / OversizedElement / ...)
 ├── deadline.rs         # soft per-file budget; `check(stage)` at every coarse boundary
@@ -265,7 +267,7 @@ Two optional external binaries are integrated, both opt-in via Settings:
 - **MKVToolNix** (`mkvmerge`, `mkvmerge`) — required for the core merge flow; the app shells out to them.
 - **BetterMediaInfo** — optional; when its path is configured, the "Open in BetterMediaInfo" entry becomes available on each card.
 
-Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfoPath`). Backend probe commands return `MkvToolNixStatus` / `BetterMediaInfoStatus` (`src-tauri/src/protocol.rs`) with auto-detected directories — see `controller.rs` for the per-OS search paths (Windows registry / `Program Files`, macOS `/Applications`, Linux `$PATH`). The shared **`src/components/settings/ExternalToolPathRow.tsx`** + **`useToolPathDetection.ts`** drive the Browse/Detect UI for both tools — change them once and both settings rows update.
+Both paths live under `config.externalTools` (`mkvToolNixPath`, `betterMediaInfoPath`). Backend probe commands return `MkvToolNixStatus` / `BetterMediaInfoStatus` (`crates/bmm-core/src/protocol.rs`) with auto-detected directories — see `crates/bmm-core/src/services.rs` (BetterMediaInfo) and `mkvtoolnix.rs` (MKVToolNix) for the per-OS search paths (Windows registry / `Program Files`, macOS `/Applications`, Linux `$PATH`). The shared **`src/components/settings/ExternalToolPathRow.tsx`** + **`useToolPathDetection.ts`** drive the Browse/Detect UI for both tools — change them once and both settings rows update.
 
 ## Project conventions
 

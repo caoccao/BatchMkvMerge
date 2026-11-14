@@ -19,9 +19,9 @@
 
 use std::io::Write;
 
-use batch_mkvmerge_lib::media_metadata::model::container::ContainerFormat;
-use batch_mkvmerge_lib::media_metadata::model::track::TrackType;
-use batch_mkvmerge_lib::media_metadata::{ParseError, ParseOptions, parse};
+use bmm_core::media_metadata::model::container::ContainerFormat;
+use bmm_core::media_metadata::model::track::TrackType;
+use bmm_core::media_metadata::{ParseError, ParseOptions, parse};
 
 fn start_code(stream_id: u8) -> [u8; 4] {
   [0x00, 0x00, 0x01, stream_id]

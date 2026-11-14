@@ -8,8 +8,8 @@ The SRT parser recognises SubRip text subtitle files and reports one UTF-8 subti
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/srt.rs`
-- Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/srt.rs`
+- Encoding helper: `crates/bmm-core/src/media_metadata/subtitles/encoding.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_srt.cpp`, `../mkvtoolnix/src/input/r_srt.h`, upstream text subtitle helpers, and `../mkvtoolnix/src/merge/reader_detection_and_creation.cpp`
 
 The reader decodes the text stream with BOM and configured charset support, then checks SRT structure exactly as `srt_parser_c::probe` does: it skips leading blank lines, requires the first non-empty line to parse as a numeric cue index, and only then tests the immediately following line against the SRT timecode grammar (`looks_like_srt`). The probe path uses mkvtoolnix-style bounded decoded-character line reads instead of loading the whole file: leading blank/index reads are capped like `getline(10)`, the timestamp line is capped like `getline(100)`, one follow-up line is consumed, and the cursor is rewound (PARSER-396, PARSER-397). Overlong physical lines are split across successive reads just like `mm_text_io_c::getline(max)`. The header read still decodes the complete file under the parser deadline, so files with long leading blank regions classify like mkvtoolnix once the SRT reader has claimed them. It records the detected encoding and emits `S_TEXT/UTF8` metadata. The whole-line scanner `has_srt_timecode_line` is retained for classifying already-extracted subtitle payloads (e.g. AVI GAB2), not for whole-file probing. `populate_empty_srt` supports the explicit empty-file path used by the dispatcher; the extension fallback subtracts the detected BOM length before applying mkvtoolnix's `<= 1` payload-size threshold, so BOM-only UTF-8/UTF-16 `.srt` files are accepted (PARSER-398).

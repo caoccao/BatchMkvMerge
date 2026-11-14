@@ -20,8 +20,8 @@
 //! Drift between Rust and TypeScript is caught at test time.  Set
 //! `BMM_REGEN_PROTOCOL_TS=1` to refresh the checked-in file.
 
-use batch_mkvmerge_lib::media_metadata::language::Language;
-use batch_mkvmerge_lib::media_metadata::model::{
+use bmm_core::media_metadata::language::Language;
+use bmm_core::media_metadata::model::{
   AlphaMode, Attachment, AudioCodecConfig, AudioEmphasis, AudioTrackProperties, ChannelLayout, ChannelLayoutKind,
   ChapterSummary, ChromaFormat, ChromaSiting, ChromaSubsampling, Chromaticity, CodecInfo, CodecPrivate, ColorMetadata,
   ColorRange, CommonTrackProperties, Container, ContainerFormat, ContainerProperties, CropRect, Dimensions2D,
@@ -36,10 +36,10 @@ use specta_typescript::Typescript;
 const HEADER: &str = "\
 // THIS FILE IS GENERATED — DO NOT EDIT BY HAND.
 // Regenerate by running:
-//     BMM_REGEN_PROTOCOL_TS=1 cargo test --test protocol_typescript
-// from src-tauri/, then commit the updated file.
+//     BMM_REGEN_PROTOCOL_TS=1 cargo test --release --test protocol_typescript
+// from the repository root, then commit the updated file.
 //
-// Source of truth: media_metadata::model in src-tauri/src/media_metadata/model/.
+// Source of truth: media_metadata::model in crates/bmm-core/src/media_metadata/model/.
 
 ";
 
@@ -117,8 +117,7 @@ fn normalise(s: &str) -> String {
 }
 
 fn target_path() -> std::path::PathBuf {
-  // Tests run with the manifest dir as cwd, so the frontend's src/ is one
-  // level up.
+  // The test belongs to src-tauri; the frontend's src/ is its sibling.
   std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .parent()
     .expect("src-tauri has a parent")

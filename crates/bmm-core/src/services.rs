@@ -19,18 +19,11 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::config;
-use crate::constants::APP_NAME;
 use crate::media_metadata;
 use crate::media_metadata::model::MediaMetadata;
 use crate::media_metadata::probe::extension_hint::is_supported_media_path;
 use crate::media_metadata::{ParseError, ParseOptions};
-use crate::merge;
-use crate::mkvtoolnix;
-use crate::notification::{NotificationState, TopmostNotification};
-use crate::protocol::{
-  About, BetterMediaInfoStatus, MediaMetadataErrorPayload, MergeSnapshot, MkvToolNixStatus, UpdateCheckResult,
-  UpdateCheckState,
-};
+use crate::protocol::BetterMediaInfoStatus;
 
 fn better_media_info_exe_name() -> &'static str {
   if cfg!(target_os = "windows") {
@@ -40,38 +33,7 @@ fn better_media_info_exe_name() -> &'static str {
   }
 }
 
-pub fn cancel_merge(file: String) -> Result<()> {
-  merge::cancel(file)
-}
-
-pub fn check_for_updates() -> Result<UpdateCheckResult> {
-  let app_version = get_app_version();
-  log::info!("Checking for updates. Current version: {}", app_version);
-  let resp = ureq::get("https://api.github.com/repos/caoccao/BatchMkvMerge/releases")
-    .set("User-Agent", APP_NAME)
-    .call()
-    .map_err(|e| anyhow::anyhow!("Failed to fetch releases: {}", e))?;
-  let json: serde_json::Value = resp
-    .into_json()
-    .map_err(|e| anyhow::anyhow!("Failed to parse releases: {}", e))?;
-  if let Some(first) = json.as_array().and_then(|arr| arr.first()) {
-    let tag = first["tag_name"].as_str().unwrap_or("");
-    log::info!("Latest release tag: {}", tag);
-    if is_newer_version(tag, app_version) {
-      let version = tag.trim_start_matches('v').to_owned();
-      return Ok(UpdateCheckResult {
-        has_update: true,
-        latest_version: Some(version),
-      });
-    }
-  }
-  Ok(UpdateCheckResult {
-    has_update: false,
-    latest_version: None,
-  })
-}
-
-pub async fn check_output_path_writable(path: String) -> Result<bool> {
+pub fn check_output_path_writable(path: String) -> Result<bool> {
   let mut current = PathBuf::from(&path);
   loop {
     if current.exists() {
@@ -94,10 +56,6 @@ pub async fn check_output_path_writable(path: String) -> Result<bool> {
     }
     Err(_) => Ok(false),
   }
-}
-
-pub fn close_topmost_notification(window: &tauri::WebviewWindow, state: &NotificationState) -> Result<()> {
-  crate::notification::close_topmost_notification(window, state)
 }
 
 fn common_better_media_info_dirs() -> Vec<PathBuf> {
@@ -131,7 +89,7 @@ fn common_better_media_info_dirs() -> Vec<PathBuf> {
   dirs
 }
 
-pub async fn detect_better_media_info(user_path: String, check_running: bool) -> Result<BetterMediaInfoStatus> {
+pub fn detect_better_media_info(user_path: String, check_running: bool) -> Result<BetterMediaInfoStatus> {
   if check_running {
     if let Some(dir) = find_running_better_media_info_dir() {
       return Ok(BetterMediaInfoStatus {
@@ -161,10 +119,6 @@ pub async fn detect_better_media_info(user_path: String, check_running: bool) ->
     found: false,
     path: String::new(),
   })
-}
-
-pub fn enqueue_merge(file: String, args: Vec<String>) -> Result<()> {
-  merge::enqueue(file, args)
 }
 
 fn find_better_media_info_dir(path: &Path) -> Option<PathBuf> {
@@ -224,25 +178,11 @@ pub fn find_running_process_dir(exe_name: &str) -> Option<PathBuf> {
   None
 }
 
-pub async fn get_about() -> Result<About> {
-  Ok(About {
-    app_version: get_app_version().to_owned(),
-  })
-}
-
-pub fn get_app_version() -> &'static str {
-  env!("CARGO_PKG_VERSION")
-}
-
-pub async fn get_config() -> Result<config::Config> {
-  Ok(config::get_config())
-}
-
 pub fn get_launch_args() -> Vec<String> {
   std::env::args().skip(1).collect()
 }
 
-pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
+pub fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
   let mut result: Vec<String> = Vec::new();
   for input in paths {
     let path = Path::new(input.as_str());
@@ -269,50 +209,14 @@ pub async fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
   Ok(result)
 }
 
-pub async fn get_media_metadata(file: String) -> std::result::Result<MediaMetadata, MediaMetadataErrorPayload> {
-  let options = parser_options_from_config(&config::get_config());
-  tauri::async_runtime::spawn_blocking(move || read_media_metadata(file, options))
-    .await
-    .map_err(|join_err| MediaMetadataErrorPayload::internal(join_err.to_string()))?
-    .map_err(|err| MediaMetadataErrorPayload::from_parse_error(&err))
+/// Parse `file` with the native parser, using the per-file options from the
+/// persisted config. Blocking: callers on a UI or async thread run it on a
+/// background thread.
+pub fn get_media_metadata(file: String) -> Result<MediaMetadata, ParseError> {
+  read_media_metadata(file, parser_options_from_config(&config::get_config()))
 }
 
-pub fn get_merge_status() -> MergeSnapshot {
-  merge::snapshot()
-}
-
-pub fn get_topmost_notification(state: &NotificationState) -> Result<Option<TopmostNotification>> {
-  crate::notification::get_topmost_notification(state)
-}
-
-pub fn get_update_result(state: &UpdateCheckState) -> Option<UpdateCheckResult> {
-  state.result.lock().unwrap().clone()
-}
-
-pub async fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
-  mkvtoolnix::is_mkvtoolnix_found(path, check_running).await
-}
-
-pub fn is_newer_version(latest: &str, current: &str) -> bool {
-  let latest = latest.trim_start_matches('v');
-  let current = current.trim_start_matches('v');
-  let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-  let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-  let len = latest_parts.len().max(current_parts.len());
-  for i in 0..len {
-    let l = latest_parts.get(i).copied().unwrap_or(0);
-    let c = current_parts.get(i).copied().unwrap_or(0);
-    if l > c {
-      return true;
-    }
-    if l < c {
-      return false;
-    }
-  }
-  false
-}
-
-pub async fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
+pub fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
   let cfg = config::get_config();
   let configured = cfg.external_tools.better_media_info_path.trim().to_owned();
   if configured.is_empty() {
@@ -364,7 +268,7 @@ pub async fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
 
 /// Whether the exact directory `path` already exists. Used by the output-path
 /// dialog to warn that a non-existent path will be created at merge time.
-pub async fn output_path_exists(path: String) -> Result<bool> {
+pub fn output_path_exists(path: String) -> Result<bool> {
   Ok(Path::new(&path).is_dir())
 }
 
@@ -389,9 +293,8 @@ pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
   }
 }
 
-/// Resolve the file's media metadata using the native parser. Extracted as a
-/// plain function (no `#[tauri::command]`) so unit tests can exercise it
-/// without spinning up Tauri.
+/// Resolve the file's media metadata using the native parser with explicit
+/// options, so unit tests can exercise it without touching the config file.
 pub fn read_media_metadata(file: String, options: ParseOptions) -> Result<MediaMetadata, ParseError> {
   media_metadata::parse(Path::new(&file), options)
 }
@@ -438,29 +341,6 @@ pub fn resolve_overridden_output_path(output_path: String, source_file: String) 
     .and_then(|s| s.to_str())
     .unwrap_or("output.mkv");
   path.join(name).to_string_lossy().into_owned()
-}
-
-pub async fn set_config(config: config::Config) -> Result<config::Config> {
-  config::set_config(config)?;
-  Ok(config::get_config())
-}
-
-pub fn show_system_notification(app: &tauri::AppHandle, title: String, file: String, detail: String) -> Result<()> {
-  crate::notification::show_system_notification(app, title, file, detail)
-}
-
-pub fn show_topmost_notification(
-  app: &tauri::AppHandle,
-  state: &NotificationState,
-  notification: TopmostNotification,
-) -> Result<()> {
-  crate::notification::show_topmost_notification(app, state, notification)
-}
-
-pub fn skip_version(version: String) -> Result<()> {
-  let mut config = config::get_config();
-  config.update.ignore_version = version;
-  config::set_config(config)
 }
 
 #[cfg(test)]

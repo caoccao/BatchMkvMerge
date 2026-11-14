@@ -8,8 +8,8 @@ The RealMedia parser recognises `.RMF` files, reads RealMedia chunks, and report
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/realmedia/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/realmedia/chunks.rs`, `stream_props.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/realmedia/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/realmedia/chunks.rs`, `stream_props.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_real.cpp`, `../mkvtoolnix/src/input/r_real.h`, upstream librmff code
 
 The reader manually parses `.RMF`, `PROP`, `CONT`, `MDPR`, and `DATA` chunks. It follows librmff's strict header loop for top-level chunks: unknown chunk IDs, truncated known chunks, common headers with impossible sizes, and trailing bytes inside known `PROP`/`CONT`/`MDPR` objects are malformed because known objects are consumed field-by-field rather than skipped to their declared object end (PARSER-297, PARSER-362). The container is only marked recognised after mandatory `PROP` and `DATA` chunks have been accepted. It decodes MDPR video properties, RealAudio v3/v4/v5 headers, AAC wrapper data, and `dnet` AC-3 byte-order hints from selected first packets. RealAudio AAC (`raac`/`racp`) and Cook (`cook`) FourCC classification is ASCII-case-insensitive, matching the upstream `strcasecmp` paths while preserving the original private header bytes (PARSER-355).

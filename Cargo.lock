@@ -7,18 +7,12 @@ name = "BatchMkvMerge"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "encoding_rs",
- "flate2",
- "language-tags",
+ "bmm-core",
  "log",
- "quick-xml 0.39.2",
  "serde",
- "serde_json",
  "specta",
  "specta-serde",
  "specta-typescript",
- "sys-locale",
- "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -26,9 +20,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-winrt-notification",
- "thiserror 2.0.18",
  "tokio",
- "ureq",
  "windows-registry",
 ]
 
@@ -341,6 +333,26 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "bmm-core"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "encoding_rs",
+ "flate2",
+ "language-tags",
+ "log",
+ "quick-xml 0.39.2",
+ "serde",
+ "serde_json",
+ "specta",
+ "specta-typescript",
+ "sys-locale",
+ "sysinfo",
+ "thiserror 2.0.18",
+ "ureq",
 ]
 
 [[package]]

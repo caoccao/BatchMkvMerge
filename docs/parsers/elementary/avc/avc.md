@@ -8,8 +8,8 @@ The AVC parser recognises raw Annex B H.264 elementary streams and reports one v
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/avc/reader.rs`
-- Helpers: `src-tauri/src/media_metadata/elementary/avc/nal.rs`, `src-tauri/src/media_metadata/elementary/avc/sps.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/avc/reader.rs`
+- Helpers: `crates/bmm-core/src/media_metadata/elementary/avc/nal.rs`, `crates/bmm-core/src/media_metadata/elementary/avc/sps.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_avc.cpp`, `../mkvtoolnix/src/input/r_avc.h`, `../mkvtoolnix/src/common/avc/*`, `../mkvtoolnix/src/common/xyzvc/*`
 
 The reader scans a bounded prefix for Annex B start codes in 1 MiB chunks, up to the same fifty chunks mkvtoolnix feeds into its AVC elementary-stream parser. `read_headers` checks the configured parser deadline between chunks. The raw probe rejects a first probe byte of `0x47` to avoid claiming MPEG-TS sync-prefixed data, matching mkvtoolnix's `might_be_xyzvc` guard. The dispatcher's strict elementary phase additionally requires an Annex B start code at payload byte zero before accepting the same SPS/PPS/access-unit evidence; the late loose AVC retry keeps the bounded long scan for headers that start after leading bytes (PARSER-387). The scan splits NAL units, requires SPS/PPS, and marks the configuration ready on the same NAL classes that make `mtx::avc::es_parser_c::headers_parsed()` possible: non-IDR/IDR/data-partition slice NALs or non-filler default-branch NALs after the parameter sets. AUD, end-of-sequence, end-of-stream, and filler NALs do not count by themselves. The parser strips emulation-prevention bytes, parses the SPS RBSP, rejects SPS entries whose cropped dimensions are zero, and builds AVCDecoderConfigurationRecord-style codec private data. The SPS constraint-set / profile-compatibility byte (`rbsp[1]`) is captured as `AvcSps::profile_compat` and written verbatim into avcC byte 2, mirroring `buffer[2] = sps.profile_compat` in `../mkvtoolnix/src/common/avc/avcc.cpp::pack`.

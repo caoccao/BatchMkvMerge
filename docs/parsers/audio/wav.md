@@ -8,7 +8,7 @@ The WAV parser recognises RIFF/WAVE, RF64, and Wave64 files. It extracts WAVEFOR
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/audio/wav.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/audio/wav.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_wav.cpp`, `../mkvtoolnix/src/input/r_wav.h`, plus upstream Wave64 helpers
 
 The parser detects the wrapper type only after reading the 40-byte `mtx::w64::header_t`-sized prefix mkvtoolnix requires, so truncated 12-byte `RIFF`/`RF64` stubs are not claimed as WAV files (PARSER-391). It then scans RIFF/RF64/Wave64 chunks until EOF/truncation or the parser deadline, parses `fmt `, reads RF64 `ds64` where present, detects Wave64 GUID chunks, and derives duration from data size and block alignment. The payload byte total **sums the lengths of every `data` chunk** (mirroring `scan_chunks_wave`'s `m_bytes_in_data_chunks += new_chunk.len`); RF64 overrides the total with the `ds64` `data_size`. For classic RIFF/WAVE files larger than 4 GiB whose 32-bit `data` length wrapped or was written incorrectly, `scan_chunks_riff` mirrors `scan_chunks_wave`'s repair: when a non-`data` chunk follows a `data` chunk and the file is larger than 4 GiB, the previous `data` chunk's length is recomputed from `file_size - previous.pos` and the scan stops (PARSER-254). Classic RIFF chunk scanning advances by exactly the declared chunk length and does not consume an odd-byte word-alignment pad, matching mkvtoolnix's `scan_chunks_wave` behavior (PARSER-301).

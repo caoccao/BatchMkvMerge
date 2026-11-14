@@ -18,14 +18,22 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
+use bmm_core::config;
+use bmm_core::merge::{self, MergeEvent};
+use bmm_core::protocol::{MergeFinishedEvent, UpdateCheckResult};
+use bmm_core::update::{self, StartupUpdateCheck};
+use tauri::{Emitter, Manager};
 
-use crate::config;
-use crate::controller;
-use crate::merge;
+use crate::APP_VERSION;
 use crate::notification::NotificationState;
-use crate::protocol::{UpdateCheckResult, UpdateCheckState};
 use crate::window_state;
+
+const EVENT_MERGE_FINISHED: &str = "merge-finished";
+
+/// Result of the background update check, read by `get_update_result`.
+pub struct UpdateCheckState {
+  pub result: Arc<Mutex<Option<UpdateCheckResult>>>,
+}
 
 pub fn builder() -> tauri::Builder<tauri::Wry> {
   tauri::Builder::default()
@@ -67,45 +75,13 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
 
 fn check_for_updates_in_background(result_state: Arc<Mutex<Option<UpdateCheckResult>>>) {
   std::thread::spawn(move || {
-    let check_result = std::panic::catch_unwind(controller::check_for_updates).unwrap_or_else(|_| {
-      log::error!("Update check panicked");
-      Err(anyhow::anyhow!("Update check panicked"))
-    });
-    match check_result {
-      Ok(update_result) => {
-        let mut updated_config = config::get_config();
-        updated_config.update.last_checked = current_timestamp();
-        if let Some(ref version) = update_result.latest_version {
-          updated_config.update.last_version = version.clone();
-        }
-        let _ = config::set_config(updated_config.clone());
-        let final_result = if update_result.has_update
-          && update_result.latest_version.as_deref() == Some(updated_config.update.ignore_version.as_str())
-          && !updated_config.update.ignore_version.is_empty()
-        {
-          UpdateCheckResult {
-            has_update: false,
-            latest_version: None,
-          }
-        } else {
-          update_result
-        };
-        *result_state.lock().unwrap() = Some(final_result);
-      }
-      Err(error) => {
-        log::warn!("Update check failed: {}", error);
-        *result_state.lock().unwrap() = Some(UpdateCheckResult {
-          has_update: false,
-          latest_version: None,
-        });
-      }
-    }
+    let result = update::run_check(APP_VERSION);
+    *result_state.lock().unwrap() = Some(result);
   });
 }
-
 fn configure_main_window(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
   let window = app.get_webview_window("main").unwrap();
-  window.set_title(&format!("BatchMkvMerge v{}", env!("CARGO_PKG_VERSION")))?;
+  window.set_title(&format!("BatchMkvMerge v{}", APP_VERSION))?;
 
   let mut config = config::get_config();
   let (window_width, window_height) =
@@ -149,39 +125,11 @@ pub fn configure_runtime() -> tokio::runtime::Runtime {
 
 fn configure_update_check(app: &tauri::App<tauri::Wry>) {
   let result = app.state::<UpdateCheckState>().result.clone();
-  let update_config = config::get_config();
-  let interval_seconds: i64 = match update_config.update.check_interval {
-    config::UpdateCheckInterval::Daily => 86_400,
-    config::UpdateCheckInterval::Weekly => 604_800,
-    config::UpdateCheckInterval::Monthly => 2_592_000,
-  };
-  if update_config.update.last_checked == 0
-    || current_timestamp() - update_config.update.last_checked > interval_seconds
-  {
-    check_for_updates_in_background(result);
-  } else if !update_config.update.last_version.is_empty()
-    && controller::is_newer_version(&update_config.update.last_version, controller::get_app_version())
-    && update_config.update.last_version != update_config.update.ignore_version
-  {
-    *result.lock().unwrap() = Some(UpdateCheckResult {
-      has_update: true,
-      latest_version: Some(update_config.update.last_version),
-    });
-  } else {
-    *result.lock().unwrap() = Some(UpdateCheckResult {
-      has_update: false,
-      latest_version: None,
-    });
+  match update::startup_check(&config::get_config(), update::current_timestamp(), APP_VERSION) {
+    StartupUpdateCheck::CheckNow => check_for_updates_in_background(result),
+    StartupUpdateCheck::Cached(cached) => *result.lock().unwrap() = Some(cached),
   }
 }
-
-fn current_timestamp() -> i64 {
-  std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|duration| duration.as_secs() as i64)
-    .unwrap_or(0)
-}
-
 pub fn on_window_event(window: &tauri::Window<tauri::Wry>, event: &tauri::WindowEvent) {
   if !window_state::WINDOW_READY.load(Ordering::SeqCst) || window.label() != "main" {
     return;
@@ -220,8 +168,29 @@ fn save_window_state(window: &tauri::Window<tauri::Wry>) {
   }
 }
 
+/// Forward `Finished` as the `merge-finished` event the frontend listens for.
+/// The React queue still polls `get_merge_status` for progress, so `Started`
+/// and `Progress` are not forwarded.
+fn merge_event_sink(handle: tauri::AppHandle) -> merge::MergeEventSink {
+  Box::new(move |event| {
+    if let MergeEvent::Finished {
+      file, outcome, error, ..
+    } = event
+    {
+      let payload = MergeFinishedEvent {
+        file,
+        outcome: outcome.as_str().to_owned(),
+        error,
+      };
+      if let Err(err) = handle.emit(EVENT_MERGE_FINISHED, payload) {
+        log::error!("Failed to emit merge-finished event: {}", err);
+      }
+    }
+  })
+}
+
 pub fn setup(app: &mut tauri::App<tauri::Wry>) -> Result<(), Box<dyn std::error::Error>> {
-  merge::init_app_handle(app.handle().clone());
+  merge::init(merge_event_sink(app.handle().clone()));
   configure_main_window(app)?;
   configure_update_check(app);
   window_state::WINDOW_READY.store(true, Ordering::SeqCst);
