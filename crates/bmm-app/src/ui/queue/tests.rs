@@ -24,6 +24,7 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::*;
 
 use super::*;
+use crate::domain::status::QueueItemStatus;
 use crate::state::TabType;
 use crate::ui::tests::{Shell, finished, movies, started};
 
@@ -131,7 +132,7 @@ fn topmost_texts(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<Vec
 }
 
 #[gpui_kit::test]
-fn an_empty_queue_shows_one_card_with_its_actions(cx: &mut TestAppContext) {
+fn an_empty_queue_shows_one_card_and_the_toolbar_has_the_queue_actions(cx: &mut TestAppContext) {
   let shell = Shell::with_files(cx, movies(&[]));
   shell
     .stores
@@ -143,11 +144,34 @@ fn an_empty_queue_shows_one_card_with_its_actions(cx: &mut TestAppContext) {
     assert!(shown.iter().any(|text| text == expected), "{expected} in {shown:?}");
   }
   // The toggles are always available; the queue actions are not.
-  assert_eq!(control(&shell, cx, "queue", "queue-system:"), Some(false));
-  assert_eq!(control(&shell, cx, "queue", "queue-topmost:"), Some(false));
-  for action in ["queue-resume:", "queue-cancel-all:", "queue-clear:"] {
-    assert_eq!(control(&shell, cx, "queue", action), Some(true), "{action}");
+  for toggle in ["toolbar-system-notification", "toolbar-topmost-notification"] {
+    assert_eq!(control(&shell, cx, "toolbar", toggle), Some(false), "{toggle}");
   }
+  for action in ["toolbar-resume-all", "toolbar-cancel-all", "toolbar-clear-completed"] {
+    assert_eq!(control(&shell, cx, "toolbar", action), Some(true), "{action}");
+  }
+  shell.resize(cx, 600.0, 450.0);
+  shell.window(cx, |window, _| {
+    let toolbar = window.within("toolbar");
+    let bounds = [
+      "toolbar-global-output",
+      "toolbar-merge-all",
+      "toolbar-resume-all",
+      "toolbar-cancel-all",
+      "toolbar-clear-completed",
+      "toolbar-clear",
+      "toolbar-system-notification",
+      "toolbar-topmost-notification",
+      "toolbar-group-mode",
+      "toolbar-group-by-file-name",
+      "toolbar-profile",
+      "toolbar-settings",
+      "toolbar-about",
+    ]
+    .map(|id| toolbar.find(id).bounds());
+    assert!(bounds.windows(2).all(|pair| pair[0].right() <= pair[1].left()));
+    assert!(bounds.last().unwrap().right() <= window.find("app-root").bounds().right());
+  });
 }
 
 #[gpui_kit::test]
@@ -187,20 +211,26 @@ fn rows_show_each_status_with_its_label_and_times(cx: &mut TestAppContext) {
   let completed = row_texts(&shell, cx, B);
   assert!(completed[2..5].iter().all(|time| time != "--:--:--"), "{completed:?}");
   assert_eq!(completed[5], "--:--:--", "no ETA once finished");
-  // Cancel only on the merging row.
-  assert_eq!(
-    control(&shell, cx, QueueRow::element_id(A), "queue-cancel"),
-    Some(false)
-  );
-  for file in [B, C, D, E] {
-    assert_eq!(
-      control(&shell, cx, QueueRow::element_id(file), "queue-cancel"),
-      None,
-      "{file}"
-    );
+  for file in [A, E] {
+    let row = QueueRow::element_id(file);
+    assert_eq!(control(&shell, cx, row.clone(), "queue-cancel"), Some(false));
+    assert_eq!(control(&shell, cx, row.clone(), "queue-resume"), None);
+    shell.window(cx, |window, cx| window.within(row.clone()).click("queue-cancel", cx));
+    assert_eq!(control(&shell, cx, row, "queue-cancel"), Some(true));
   }
-  click(&shell, cx, "queue-cancel");
-  assert_eq!(shell.cancelled(), [A]);
+  assert_eq!(shell.cancelled(), [A, E]);
+
+  for file in [B, C, D] {
+    let row = QueueRow::element_id(file);
+    assert_eq!(control(&shell, cx, row.clone(), "queue-cancel"), None);
+    assert_eq!(control(&shell, cx, row, "queue-resume"), (file != B).then_some(false));
+  }
+  shell.window(cx, |window, cx| {
+    window.within(QueueRow::element_id(C)).click("queue-resume", cx)
+  });
+  assert_eq!(shell.enqueued(), [A, B, C, D, E, C]);
+  assert_eq!(shell.status(cx, C), Some(QueueItemStatus::Waiting));
+  assert_eq!(shell.status(cx, D), Some(QueueItemStatus::Cancelled));
 }
 
 #[gpui_kit::test]
@@ -232,23 +262,28 @@ fn one_card_per_drive(cx: &mut TestAppContext) {
     assert!(card.iter().any(|text| text == file), "{file} in {card:?}");
     assert_eq!(card.iter().filter(|text| text.starts_with("/media/")).count(), 1);
   }
-  // Cancel All of one drive cancels only its files.
-  click(&shell, cx, "queue-cancel-all:D:");
-  assert_eq!(shell.cancelled(), [B]);
+  click(&shell, cx, "toolbar-cancel-all");
+  assert_eq!(shell.cancelled(), [A, B, C]);
 }
 
 #[gpui_kit::test]
 fn resume_all_merges_again_only_cancelled_and_failed_roots(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C, D]);
-  assert_eq!(control(&shell, cx, "queue", &id("queue-resume")), Some(true));
+  assert_eq!(control(&shell, cx, "toolbar", "toolbar-resume-all"), Some(true));
+  shell
+    .stores
+    .queue
+    .update(cx, |queue, cx| queue.move_to_drive(C, "D:", cx));
   shell.send(cx, started(A));
   shell.send(cx, finished(A, MergeOutcome::Completed, None));
   shell.send(cx, finished(B, MergeOutcome::Cancelled, None));
   shell.send(cx, started(C));
   shell.send(cx, finished(C, MergeOutcome::Failed, Some("boom")));
   shell.send(cx, started(D));
-  assert_eq!(control(&shell, cx, "queue", &id("queue-resume")), Some(false));
-  click(&shell, cx, &id("queue-resume"));
+  shell.press(cx, "ctrl-1");
+  assert_eq!(shell.active_tab(cx), TabType::FileList);
+  assert_eq!(control(&shell, cx, "toolbar", "toolbar-resume-all"), Some(false));
+  click(&shell, cx, "toolbar-resume-all");
   assert_eq!(
     shell.enqueued(),
     [A, B, C, D, B, C],
@@ -267,18 +302,18 @@ fn resume_all_merges_again_only_cancelled_and_failed_roots(cx: &mut TestAppConte
   shell.send(cx, finished(B, MergeOutcome::Cancelled, None));
   cx.update(|cx| crate::actions::remove_file(&shell.stores, B, cx));
   shell.send(cx, finished(B, MergeOutcome::Cancelled, None));
-  click(&shell, cx, &id("queue-resume"));
+  click(&shell, cx, "toolbar-resume-all");
   assert_eq!(shell.enqueued().len(), 6, "B is gone, C still waits");
 }
 
 #[gpui_kit::test]
 fn clear_completed_removes_only_finished_rows(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C, D]);
-  assert_eq!(control(&shell, cx, "queue", &id("queue-clear")), Some(true));
+  assert_eq!(control(&shell, cx, "toolbar", "toolbar-clear-completed"), Some(true));
   shell.send(cx, finished(A, MergeOutcome::Completed, None));
   shell.send(cx, finished(B, MergeOutcome::Failed, Some("boom")));
   shell.send(cx, finished(C, MergeOutcome::Cancelled, None));
-  click(&shell, cx, &id("queue-clear"));
+  click(&shell, cx, "toolbar-clear-completed");
   assert_eq!(
     statuses(&shell, cx)[..4],
     [None, None, None, Some(QueueItemStatus::Waiting)]
@@ -286,7 +321,7 @@ fn clear_completed_removes_only_finished_rows(cx: &mut TestAppContext) {
   let shown = texts(&shell, cx, "queue");
   assert!(!shown.iter().any(|text| text == A), "{shown:?}");
   assert!(shown.iter().any(|text| text == D), "{shown:?}");
-  assert_eq!(control(&shell, cx, "queue", &id("queue-clear")), Some(true));
+  assert_eq!(control(&shell, cx, "toolbar", "toolbar-clear-completed"), Some(true));
 }
 
 /// With both notifications on, three queued merges send one OS notification
@@ -295,8 +330,8 @@ fn clear_completed_removes_only_finished_rows(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn three_merges_notify_once_after_the_last(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C]);
-  click(&shell, cx, &id("queue-system"));
-  click(&shell, cx, &id("queue-topmost"));
+  click(&shell, cx, "toolbar-system-notification");
+  click(&shell, cx, "toolbar-topmost-notification");
   shell.stores.ui.read_with(cx, |ui, _| {
     assert!(ui.system_notification() && ui.topmost_notification());
   });
@@ -330,7 +365,7 @@ fn three_merges_notify_once_after_the_last(cx: &mut TestAppContext) {
 
   // The next batch of one file reuses the open window with the single-file
   // text.
-  click(&shell, cx, &id("queue-resume"));
+  click(&shell, cx, "toolbar-resume-all");
   shell.send(cx, started(B));
   shell.send(cx, finished(B, MergeOutcome::Completed, None));
   assert_eq!(system_notifications(cx).len(), 2);
@@ -364,9 +399,9 @@ fn nothing_notifies_with_the_toggles_off_or_a_cancelled_batch(cx: &mut TestAppCo
   shell.send(cx, finished(B, MergeOutcome::Completed, None));
   assert_eq!(system_notifications(cx), [], "both toggles are off");
   assert_eq!(topmost(&shell, cx).0, 0);
-  click(&shell, cx, &id("queue-system"));
-  click(&shell, cx, &id("queue-topmost"));
-  click(&shell, cx, &id("queue-resume"));
+  click(&shell, cx, "toolbar-system-notification");
+  click(&shell, cx, "toolbar-topmost-notification");
+  click(&shell, cx, "toolbar-resume-all");
   assert_eq!(shell.enqueued().len(), 2, "nothing to resume");
   shell.press(cx, "f3");
   shell.send(cx, finished(A, MergeOutcome::Cancelled, None));
@@ -378,8 +413,8 @@ fn nothing_notifies_with_the_toggles_off_or_a_cancelled_batch(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn closing_mid_merge_sends_no_completion(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B]);
-  click(&shell, cx, &id("queue-system"));
-  click(&shell, cx, &id("queue-topmost"));
+  click(&shell, cx, "toolbar-system-notification");
+  click(&shell, cx, "toolbar-topmost-notification");
   shell.send(cx, started(A));
   shell.send(cx, finished(A, MergeOutcome::Completed, None));
   shell.send(cx, started(B));

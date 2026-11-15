@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "キュー",
     "cancelAll": "すべてキャンセル",
+    "resume": "再開",
     "resumeAll": "すべて再開",
     "clearCompleted": "完了を消去",
     "systemNotification": "システム通知",

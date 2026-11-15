@@ -25,7 +25,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tab::{Tab, TabBar, TabVariant};
 use gpui_kit::component::{ActiveTheme, Sizable, v_flex};
 use gpui_kit::*;
 
@@ -112,7 +112,7 @@ impl Render for MainContent {
     // Hidden under the same element path as when shown, so its state is the
     // same.
     let hidden_settings = settings.filter(|_| active != TabType::Settings);
-    let border = cx.theme().border;
+    let theme = cx.theme();
     v_flex()
       .id("main-content")
       .test_support()
@@ -120,7 +120,11 @@ impl Render for MainContent {
       .overflow_hidden()
       .child(
         TabBar::new("main-tabs")
-          .small()
+          .with_variant(TabVariant::Tab)
+          .mt(super::SHELL_MARGIN)
+          .bg(theme.tokens.muted)
+          .border_t_1()
+          .border_color(theme.border)
           .selected_index(index)
           .children(tab_elements)
           .on_click(cx.listener(move |this, index: &usize, _, cx| {
@@ -135,11 +139,7 @@ impl Render for MainContent {
           .flex_1()
           .min_h_0()
           .w_full()
-          .p(super::space(1.0))
-          .border_1()
-          .border_t_0()
-          .border_color(border)
-          .rounded_b(px(4.0))
+          .py(super::SHELL_MARGIN)
           .overflow_y_scroll()
           .child(content),
       )

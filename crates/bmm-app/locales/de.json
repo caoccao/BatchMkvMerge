@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "Warteschlange",
     "cancelAll": "Alle abbrechen",
+    "resume": "Fortsetzen",
     "resumeAll": "Alle fortsetzen",
     "clearCompleted": "Abgeschlossene löschen",
     "systemNotification": "Systembenachrichtigung",

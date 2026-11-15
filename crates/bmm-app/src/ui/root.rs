@@ -222,7 +222,7 @@ impl Render for AppView {
         v_flex()
           .flex_1()
           .min_h_0()
-          .px(super::space(1.0))
+          .px(super::SHELL_MARGIN)
           .child(self.banner.clone())
           .child(self.toolbar.clone())
           .child(div().flex_1().min_h_0().child(self.main.clone())),

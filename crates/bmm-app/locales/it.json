@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "Coda",
     "cancelAll": "Interrompi tutto",
+    "resume": "Riprendi",
     "resumeAll": "Riprendi tutto",
     "clearCompleted": "Cancella completati",
     "systemNotification": "Notifica di sistema",

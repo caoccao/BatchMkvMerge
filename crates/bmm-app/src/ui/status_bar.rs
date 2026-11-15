@@ -18,9 +18,9 @@
 //! The main window's status bar with donation and copyright links.
 
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::h_flex;
 use gpui_kit::component::link::Link;
 use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::{ActiveTheme, ThemeColor, h_flex};
 use gpui_kit::*;
 
 const DONATE_URL: &str = "https://paypal.me/caoccao?locale.x=en_US";
@@ -31,11 +31,19 @@ const HOMEPAGE_URL: &str = "https://www.caoccao.com/";
 pub struct AppStatusBar;
 
 impl RenderOnce for AppStatusBar {
-  fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+  fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    // The app themes fall back to the window background for the status bar.
+    let colors = if cx.theme().is_dark() {
+      ThemeColor::dark()
+    } else {
+      ThemeColor::light()
+    };
     div().id("status-bar").test_support().flex_shrink_0().child(
       StatusBar::new()
         .px(super::space(1.0))
         .text_size(super::text::caption())
+        .bg(colors.status_bar)
+        .border_color(colors.status_bar_border)
         .child(
           h_flex()
             .id("status-bar-links")

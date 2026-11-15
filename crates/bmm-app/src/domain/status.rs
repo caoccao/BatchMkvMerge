@@ -74,6 +74,11 @@ impl QueueItemStatus {
   pub fn is_active(self) -> bool {
     !self.is_terminal()
   }
+
+  /// Cancelled or failed jobs can be enqueued again.
+  pub fn is_resumable(self) -> bool {
+    matches!(self, Self::Cancelled | Self::Failed)
+  }
 }
 
 impl From<MergeOutcome> for QueueItemStatus {

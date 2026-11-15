@@ -269,19 +269,17 @@ fn the_welcome_page_fills_the_tab_in_a_tall_window(cx: &mut TestAppContext) {
   shell.resize(cx, 1400.0, 1600.0);
   shell.window(cx, |window, cx| {
     window.render_frame(cx);
-    let panel = window.find("main-content").bounds();
-    let drop_zone = window.find("file-drop-zone").bounds();
+    let toolbar = window.find("toolbar").bounds();
+    let file_tab = window.find_by_label("File List").bounds();
+    let root = window.find("app-root").bounds();
+    let status_bar = window.find("status-bar").bounds();
     let welcome = window.find("welcome").bounds();
-    // Below the welcome page: the drop zone's 2 px border, the panel's
-    // padding and its 1 px border.
-    assert!(
-      panel.bottom() - drop_zone.bottom() <= super::space(1.0) + px(1.0),
-      "{panel:?} {drop_zone:?}"
-    );
-    assert!(
-      drop_zone.bottom() - welcome.bottom() <= px(2.0),
-      "{drop_zone:?} {welcome:?}"
-    );
+    // The tab starts after the strip's 2 px top margin and 1 px top border.
+    assert_eq!(file_tab.top() - toolbar.bottom(), px(3.0));
+    assert_eq!(welcome.top() - file_tab.bottom(), px(2.0));
+    assert_eq!(welcome.left() - root.left(), px(2.0));
+    assert_eq!(root.right() - welcome.right(), px(2.0));
+    assert_eq!(status_bar.top() - welcome.bottom(), px(2.0));
   });
 }
 

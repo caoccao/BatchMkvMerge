@@ -130,17 +130,29 @@ impl Render for QueueRow {
       .when_some(error, |status, error| {
         status.tooltip(move |window, cx| Tooltip::new(error.clone()).build(window, cx))
       });
-    let cancel = (item.status == QueueItemStatus::Merging).then(|| {
-      let file = self.file.clone();
-      icon_button(
-        "queue-cancel",
-        IconName::CircleX,
-        Some(danger),
-        tr!("merge.cancel"),
-        true,
-      )
-      .on_click(cx.listener(move |this, _, _, cx| crate::actions::cancel_merge(&this.stores, &file, cx)))
-    });
+    let action = match item.status {
+      QueueItemStatus::Waiting | QueueItemStatus::Merging => Some(
+        icon_button(
+          "queue-cancel",
+          IconName::CircleX,
+          Some(danger),
+          tr!("merge.cancel"),
+          !item.cancel_requested,
+        )
+        .on_click(cx.listener(|this, _, _, cx| crate::actions::cancel_merge(&this.stores, &this.file, cx))),
+      ),
+      QueueItemStatus::Cancelled | QueueItemStatus::Failed => Some(
+        icon_button(
+          "queue-resume",
+          IconName::RotateCcw,
+          Some(success),
+          tr!("queue.resume"),
+          true,
+        )
+        .on_click(cx.listener(|this, _, _, cx| crate::actions::resume_merge(&this.stores, &this.file, cx))),
+      ),
+      QueueItemStatus::Completed => None,
+    };
     h_flex()
       .id(Self::element_id(&self.file))
       .test_support()
@@ -165,7 +177,7 @@ impl Render for QueueRow {
           .flex_none()
           .w(px(ACTION_WIDTH))
           .justify_center()
-          .children(cancel),
+          .children(action),
       )
       .child(self.height.probe())
       .into_any_element()

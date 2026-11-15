@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "File d'attente",
     "cancelAll": "Tout annuler",
+    "resume": "Reprendre",
     "resumeAll": "Tout reprendre",
     "clearCompleted": "Effacer les terminés",
     "systemNotification": "Notification système",

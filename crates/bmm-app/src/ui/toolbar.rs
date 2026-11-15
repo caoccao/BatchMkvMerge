@@ -211,7 +211,12 @@ impl Render for Toolbar {
     let group_by_file_name = config.group_by_file_name;
     let has_profiles = !config.profiles.is_empty();
     let has_global_output = self.stores.files.read(cx).global_output_dir().is_some();
-    let active_tab = self.stores.ui.read(cx).active_tab();
+    let ui = self.stores.ui.read(cx);
+    let active_tab = ui.active_tab();
+    let (system, topmost) = (ui.system_notification(), ui.topmost_notification());
+    let queue = self.stores.queue.read(cx);
+    let can_resume = queue.resumable_items().next().is_some();
+    let can_clear_completed = queue.items().any(|item| item.status.is_terminal());
     let has_active_jobs = self.stores.has_active_merges(cx);
     let can_clear = actions::can_clear(&self.stores, cx);
     let can_merge_all = actions::can_merge_all(&self.stores, cx);
@@ -235,6 +240,7 @@ impl Render for Toolbar {
           )
           .on_click(cx.listener(|this, _, window, cx| this.open_global_output_dialog(window, cx))),
         )
+        .child(divider(cx))
         .child(
           icon_button(
             "toolbar-merge-all",
@@ -245,7 +251,16 @@ impl Render for Toolbar {
           )
           .on_click(cx.listener(|this, _, _, cx| actions::merge_all(&this.stores, cx))),
         )
-        .child(divider(cx))
+        .child(
+          icon_button(
+            "toolbar-resume-all",
+            "resume-all",
+            Some(success),
+            tr!("queue.resumeAll"),
+            can_resume,
+          )
+          .on_click(cx.listener(|this, _, _, cx| actions::resume_all(&this.stores, cx))),
+        )
         .child(
           icon_button(
             "toolbar-cancel-all",
@@ -256,9 +271,47 @@ impl Render for Toolbar {
           )
           .on_click(cx.listener(|this, _, _, cx| actions::cancel_all(&this.stores, cx))),
         )
+        .child(divider(cx))
+        .child(
+          icon_button(
+            "toolbar-clear-completed",
+            "clear-completed",
+            None,
+            tr!("queue.clearCompleted"),
+            can_clear_completed,
+          )
+          .on_click(cx.listener(|this, _, _, cx| this.stores.queue.update(cx, |queue, cx| queue.clear_completed(cx)))),
+        )
         .child(
           icon_button("toolbar-clear", "clear-list", None, tr!("toolbar.clear"), can_clear)
             .on_click(cx.listener(|this, _, _, cx| actions::clear_files(&this.stores, cx))),
+        )
+        .child(divider(cx))
+        .child(
+          icon_button(
+            "toolbar-system-notification",
+            "system-notification",
+            highlight(system),
+            tr!("queue.systemNotificationTooltip"),
+            true,
+          )
+          .toggled(system)
+          .on_click(
+            cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_system_notification(cx))),
+          ),
+        )
+        .child(
+          icon_button(
+            "toolbar-topmost-notification",
+            "topmost-notification",
+            highlight(topmost),
+            tr!("queue.topmostNotificationTooltip"),
+            true,
+          )
+          .toggled(topmost)
+          .on_click(
+            cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_topmost_notification(cx))),
+          ),
         )
         .child(divider(cx))
         .child(menu_popover(

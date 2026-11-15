@@ -58,6 +58,7 @@ macro_rules! toolbar_icons {
 toolbar_icons!(
   "about",
   "cancel-all",
+  "clear-completed",
   "clear-list",
   "group-by-filename",
   "group-none",
@@ -66,7 +67,10 @@ toolbar_icons!(
   "merge-all",
   "output-directory",
   "profile",
+  "resume-all",
   "settings",
+  "system-notification",
+  "topmost-notification",
 );
 
 // Lucide icons the UI needs that are not part of gpui-kit's default 106-icon
@@ -75,7 +79,6 @@ icon_assets!(
   ExtraIcons,
   [
     Blocks,
-    BrushCleaning,
     CircleMinus,
     Clapperboard,
     Clock,
@@ -85,7 +88,6 @@ icon_assets!(
     FolderCog,
     GripVertical,
     Images,
-    PictureInPicture2,
     RotateCcw,
     SlidersHorizontal,
     SunMoon,

@@ -187,6 +187,11 @@ impl QueueStore {
       .filter_map(|file| self.items.get(file))
   }
 
+  /// Cancelled and failed items in queue order.
+  pub fn resumable_items(&self) -> impl Iterator<Item = &QueueItem> {
+    self.items().filter(|item| item.status.is_resumable())
+  }
+
   /// Whether `file` may be enqueued: it is not waiting or merging, nor a
   /// removed file whose merge is still ending.
   pub fn can_enqueue(&self, file: &str) -> bool {
@@ -339,11 +344,11 @@ impl QueueStore {
     self.changed(file, structural, cx);
   }
 
-  /// Removes the finished items of one drive.
-  pub fn clear_completed_in_drive(&mut self, drive: &str, cx: &mut Context<Self>) {
+  /// Removes completed, cancelled and failed items from the queue.
+  pub fn clear_completed(&mut self, cx: &mut Context<Self>) {
     let removed: Vec<String> = self
       .items()
-      .filter(|item| item.drive == drive && item.status.is_terminal())
+      .filter(|item| item.status.is_terminal())
       .map(|item| item.file.clone())
       .collect();
     for file in &removed {
@@ -653,7 +658,7 @@ mod tests {
   }
 
   #[gpui_kit::test]
-  fn clear_completed_removes_only_finished_items_of_the_drive(cx: &mut TestAppContext) {
+  fn clear_completed_removes_finished_items_across_drives(cx: &mut TestAppContext) {
     let harness = Harness::new(cx);
     let c = "/media/c.mkv";
     harness.queue.update(cx, |queue, cx| {
@@ -663,11 +668,9 @@ mod tests {
     });
     harness.apply(cx, finished(A, MergeOutcome::Completed, 1));
     harness.apply(cx, finished(c, MergeOutcome::Failed, 2));
-    let drive = bmm_core::merge::get_drive_key(A);
     harness.queue.update(cx, |queue, cx| {
-      queue.clear_completed_in_drive("another drive", cx);
-      assert_eq!(queue.items().count(), 3);
-      queue.clear_completed_in_drive(&drive, cx);
+      queue.move_to_drive(c, "another drive", cx);
+      queue.clear_completed(cx);
       let left: Vec<&str> = queue.items().map(|item| item.file.as_str()).collect();
       assert_eq!(left, [B], "the waiting item stays");
       assert_eq!(queue.active_files(), [B]);

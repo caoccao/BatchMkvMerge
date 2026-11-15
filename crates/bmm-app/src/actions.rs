@@ -39,7 +39,7 @@ use std::rc::Rc;
 use gpui_kit::{App, AppContext, ClipboardItem, Task};
 
 use crate::domain::file_tree::combine_unit_tracks;
-use crate::domain::status::QueueItemStatus;
+use crate::domain::status::{QueueItem, QueueItemStatus};
 use crate::state::outputs::{RunningOutputs, TakenOutputs};
 use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
@@ -296,49 +296,40 @@ pub fn cancel_all(stores: &Stores, cx: &mut App) {
   cancel_merges(stores, &files, cx);
 }
 
-/// A drive card's Cancel All: the drive's waiting and merging files.
-pub fn cancel_drive(stores: &Stores, drive: &str, cx: &mut App) {
-  let files: Vec<String> = stores
-    .queue
-    .read(cx)
-    .items_in_drive(drive)
-    .filter(|item| item.status.is_active())
-    .map(|item| item.file.clone())
-    .collect();
-  cancel_merges(stores, &files, cx);
+/// A root merges its whole card unit with the current selection. A listed file
+/// that is no longer a unit root merges alone, and a removed file is skipped.
+fn resume_request(files: &FileStore, item: &QueueItem) -> Option<MergeRequest> {
+  let root = &item.file;
+  match files.units().iter().find(|unit| unit.first() == Some(root)) {
+    Some(unit) => MergeRequest::unit_selection(files, unit),
+    None if files.files().contains(root) => MergeRequest::unit_selection(files, std::slice::from_ref(root)),
+    None => None,
+  }
 }
 
-/// A drive card's Resume All: merges again every cancelled or failed root of
-/// the drive. A root merges its whole card unit with the current selection, as
-/// its card would; a listed file that is no longer a unit root merges alone; a
-/// file no longer listed is skipped.
-pub fn resume_drive(stores: &Stores, drive: &str, cx: &mut App) {
-  let roots: Vec<String> = stores
+/// Resume one cancelled or failed job from its queue row.
+pub fn resume_merge(stores: &Stores, file: &str, cx: &mut App) {
+  let request = stores
     .queue
     .read(cx)
-    .items_in_drive(drive)
-    .filter(|item| matches!(item.status, QueueItemStatus::Cancelled | QueueItemStatus::Failed))
-    .map(|item| item.file.clone())
-    .collect();
+    .item(file)
+    .filter(|item| item.status.is_resumable())
+    .and_then(|item| resume_request(stores.files.read(cx), item));
+  if let Some(request) = request {
+    enqueue(stores, vec![request], cx);
+  }
+}
+
+/// Resume All requeues cancelled and failed roots in queue order.
+pub fn resume_all(stores: &Stores, cx: &mut App) {
   let files = stores.files.read(cx);
-  let requests = roots
-    .iter()
-    .filter_map(
-      |root| match files.units().iter().find(|unit| unit.first() == Some(root)) {
-        Some(unit) => MergeRequest::unit_selection(files, unit),
-        None if files.files().contains(root) => MergeRequest::unit_selection(files, std::slice::from_ref(root)),
-        None => None,
-      },
-    )
+  let requests = stores
+    .queue
+    .read(cx)
+    .resumable_items()
+    .filter_map(|item| resume_request(files, item))
     .collect();
   enqueue(stores, requests, cx)
-}
-
-/// A drive card's Clear Completed: its completed, cancelled and failed rows.
-pub fn clear_completed_in_drive(stores: &Stores, drive: &str, cx: &mut App) {
-  stores
-    .queue
-    .update(cx, |queue, cx| queue.clear_completed_in_drive(drive, cx));
 }
 
 /// Whether Clear (toolbar, Ctrl+Q) is available: files listed and no merge

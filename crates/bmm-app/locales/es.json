@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "Cola",
     "cancelAll": "Cancelar todo",
+    "resume": "Reanudar",
     "resumeAll": "Reanudar todo",
     "clearCompleted": "Eliminar completados",
     "systemNotification": "Notificación del sistema",

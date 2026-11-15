@@ -92,6 +92,7 @@
   "queue": {
     "defaultDrive": "Queue",
     "cancelAll": "Cancel All",
+    "resume": "Resume",
     "resumeAll": "Resume All",
     "clearCompleted": "Clear Completed",
     "systemNotification": "System Notification",

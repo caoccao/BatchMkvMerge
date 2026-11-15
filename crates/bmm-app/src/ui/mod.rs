@@ -44,6 +44,8 @@ mod tests;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{ElementId, Hsla, Pixels, Rgba, Styled, px};
 
+const SHELL_MARGIN: Pixels = px(2.0);
+
 /// The standard minimum width for a button with a visible text label.
 pub(crate) fn text_button(id: impl Into<ElementId>) -> Button {
   Button::new(id).min_w(px(88.0))

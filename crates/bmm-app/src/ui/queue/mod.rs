@@ -16,11 +16,9 @@
 */
 
 //! The Queue tab: one card per drive (`C:`, `\\SERVER\SHARE` on Windows; one
-//! "Queue" card elsewhere), titled with the drive, whose header has the System
-//! Notification and Topmost Notification toggles, Resume All, Cancel All and
-//! Clear Completed, above a table of the drive's files: File Path, Status
+//! "Queue" card elsewhere), with a table of the drive's files: File Path, Status
 //! (with the percentage while merging, coloured by status, the error as a
-//! tooltip when failed), Start, End, Elapsed, ETA and Cancel while merging.
+//! tooltip when failed), Start, End, Elapsed, ETA and each job's action.
 //! Without any item one empty card shows.
 //!
 //! Each row is a [`QueueRow`] entity drawn as a cached view at its measured
@@ -34,7 +32,6 @@ mod tests;
 
 use std::collections::HashMap;
 
-use gpui_kit::assets::IconName;
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
@@ -42,9 +39,7 @@ use gpui_kit::*;
 
 pub use row::QueueRow;
 
-use crate::domain::status::QueueItemStatus;
 use crate::state::Stores;
-use crate::ui::cards::icon_button;
 
 /// Width of the Status column: the longest status, German
 /// "Zusammenführen 100%", fits on one line.
@@ -52,7 +47,7 @@ pub const STATUS_WIDTH: f32 = 160.0;
 /// Width of the Start, End, Elapsed and ETA columns: the longest header,
 /// Spanish "Transcurrido", fits on one line.
 pub const TIME_WIDTH: f32 = 92.0;
-/// Width of the column holding a merging row's Cancel.
+/// Width of the column holding a row's Cancel or Resume button.
 pub const ACTION_WIDTH: f32 = 36.0;
 /// The narrowest File Path column; a narrower table scrolls sideways.
 pub const PATH_MIN_WIDTH: f32 = 200.0;
@@ -82,15 +77,11 @@ pub struct QueueView {
 
 impl QueueView {
   pub fn new(stores: Stores, cx: &mut Context<Self>) -> Self {
-    let subscriptions = vec![
-      // Items added, removed or with a new status.
-      cx.observe(&stores.queue, |this, _, cx| {
-        this.sync_rows(cx);
-        cx.notify();
-      }),
-      // The notification toggles.
-      cx.observe(&stores.ui, |_, _, cx| cx.notify()),
-    ];
+    // Items added, removed or with a new status.
+    let subscriptions = vec![cx.observe(&stores.queue, |this, _, cx| {
+      this.sync_rows(cx);
+      cx.notify();
+    })];
     let mut view = Self {
       stores,
       rows: HashMap::new(),
@@ -125,77 +116,9 @@ impl QueueView {
     Some(row.read(cx).height().view(row, cache))
   }
 
-  fn drive_card(&self, drive: &str, files: &[String], cache: bool, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme();
-    let (primary, success, danger, border) = (theme.primary, theme.success, theme.danger, theme.border);
-    let queue = self.stores.queue.read(cx);
-    let statuses: Vec<QueueItemStatus> = files
-      .iter()
-      .filter_map(|file| queue.item(file).map(|item| item.status))
-      .collect();
-    let has_finished = statuses.iter().any(|status| status.is_terminal());
-    let has_active = statuses.iter().any(|status| status.is_active());
-    let has_resumable = statuses
-      .iter()
-      .any(|status| matches!(status, QueueItemStatus::Cancelled | QueueItemStatus::Failed));
-    let ui = self.stores.ui.read(cx);
-    let (system, topmost) = (ui.system_notification(), ui.topmost_notification());
+  fn drive_card(&self, drive: &str, files: &[String], cache: bool, cx: &App) -> impl IntoElement {
+    let border = cx.theme().border;
     let id = |name: &str| SharedString::from(format!("{name}:{drive}"));
-    let actions = h_flex()
-      .flex_none()
-      .child(
-        icon_button(
-          id("queue-system"),
-          IconName::Bell,
-          system.then_some(primary),
-          tr!("queue.systemNotificationTooltip"),
-          true,
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_system_notification(cx)))),
-      )
-      .child(
-        icon_button(
-          id("queue-topmost"),
-          IconName::PictureInPicture2,
-          topmost.then_some(primary),
-          tr!("queue.topmostNotificationTooltip"),
-          true,
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_topmost_notification(cx)))),
-      )
-      .child({
-        let drive = drive.to_string();
-        icon_button(
-          id("queue-resume"),
-          IconName::RotateCcw,
-          Some(success),
-          tr!("queue.resumeAll"),
-          has_resumable,
-        )
-        .on_click(cx.listener(move |this, _, _, cx| crate::actions::resume_drive(&this.stores, &drive, cx)))
-      })
-      .child({
-        let drive = drive.to_string();
-        icon_button(
-          id("queue-cancel-all"),
-          IconName::CircleX,
-          Some(danger),
-          tr!("queue.cancelAll"),
-          has_active,
-        )
-        .on_click(cx.listener(move |this, _, _, cx| crate::actions::cancel_drive(&this.stores, &drive, cx)))
-      })
-      .child({
-        let drive = drive.to_string();
-        icon_button(
-          id("queue-clear"),
-          IconName::BrushCleaning,
-          None,
-          tr!("queue.clearCompleted"),
-          has_finished,
-        )
-        .on_click(cx.listener(move |this, _, _, cx| crate::actions::clear_completed_in_drive(&this.stores, &drive, cx)))
-      });
     let title = drive_label(drive);
     let header_cell = |key: &str| -> AnyElement {
       let label = tr!(key);
@@ -237,21 +160,13 @@ impl QueueView {
       .border_color(border)
       .text_size(super::text::body2())
       .child(
-        h_flex()
-          .items_center()
-          .gap(super::space(1.0))
+        div()
           .px(super::space(2.0))
           .pt(super::space(1.0))
-          .child(
-            div()
-              .flex_1()
-              .min_w_0()
-              .truncate()
-              .text_size(super::text::h6())
-              .child(title.clone())
-              .test_text(title),
-          )
-          .child(actions),
+          .truncate()
+          .text_size(super::text::h6())
+          .child(title.clone())
+          .test_text(title),
       )
       .child(
         div().w_full().px(super::space(2.0)).pb(super::space(2.0)).child(

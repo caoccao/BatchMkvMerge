@@ -348,15 +348,12 @@ impl Render for FileListView {
       cx.defer_in(window, |this, _, cx| this.set_drag_target(None, cx));
     }
     let primary = cx.theme().primary;
-    // System files dragged over the window outline the list. A column, so
-    // the welcome page grows to the panel's height.
+    // Paint the external-file drop outline without reserving space for it.
     let drop_zone = v_flex()
       .id("file-drop-zone")
       .test_support()
       .size_full()
-      .border_2()
-      .border_color(transparent_black())
-      .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_dashed().border_color(primary));
+      .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_2().border_dashed().border_color(primary));
 
     let files = self.stores.files.read(cx);
     if !files.has_files() {
