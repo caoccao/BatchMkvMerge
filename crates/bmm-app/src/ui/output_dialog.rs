@@ -15,9 +15,9 @@
 *   limitations under the License.
 */
 
-//! The output path dialog (`OutputPathDialog.tsx`): a path field with a
-//! clear button and Browse, a warning while the directory does not exist
-//! (checked 300 ms after the last edit), and a writable check on OK.
+//! The output path dialog: a path field with a clear button and Browse, a
+//! warning while the directory does not exist (checked 300 ms after the last
+//! edit), and a writable check on OK.
 //!
 //! In directory mode the field holds an output folder and Browse picks one;
 //! in file mode it holds a full output file path, Browse opens a save dialog
@@ -219,7 +219,7 @@ impl OutputPathDialog {
         .background_spawn(async move { bmm_core::services::output_path_exists(dir) })
         .await;
       let _ = this.update(cx, |this, cx| {
-        // An error is not a missing directory, as React treated it.
+        // An error is not a missing directory: no warning for it.
         this.missing = matches!(exists, Ok(false));
         cx.notify();
       });

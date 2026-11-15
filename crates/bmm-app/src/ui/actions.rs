@@ -16,9 +16,8 @@
 */
 
 //! Application actions and their shortcuts. The tab shortcuts are Ctrl on
-//! every platform, as the React app read `event.ctrlKey` (Cmd+W and Cmd+1
-//! are not used on macOS either). The handlers are global, so the keys work
-//! whatever has the focus.
+//! every platform (Cmd+W and Cmd+1 are not used on macOS). The handlers are
+//! global, so the keys work whatever has the focus.
 
 use gpui_kit::{App, KeyBinding, actions};
 

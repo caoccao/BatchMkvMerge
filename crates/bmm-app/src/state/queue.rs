@@ -15,10 +15,9 @@
 *   limitations under the License.
 */
 
-//! The merge queue as the UI shows it (`queueItems` / `queueOrder` of the
-//! React store): one [`QueueItem`] per enqueued root file, in the order it was
-//! first enqueued, kept current by `bmm_core::merge`'s events (see
-//! [`crate::merge_events`]).
+//! The merge queue as the UI shows it: one [`QueueItem`] per enqueued root
+//! file, in the order it was first enqueued, kept current by
+//! `bmm_core::merge`'s events (see [`crate::merge_events`]).
 //!
 //! A change notifies observers only when it is structural (an item added or
 //! removed, or a status changed): the toolbar, the title and the close guard
@@ -28,7 +27,7 @@
 //!
 //! A batch runs from the moment an item waits or merges until none does; its
 //! end is emitted once as [`QueueEvent::Drained`], which sends the completion
-//! notifications (the React app sent them for every finished file).
+//! notifications once per batch, not per finished file.
 
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -196,8 +195,8 @@ impl QueueStore {
     QueueSummary::of(self.items.values())
   }
 
-  /// The drives with their files, each in queue order; the drives in the
-  /// order their first file was enqueued (`Queue.tsx`'s grouping).
+  /// The drives with their files, each in queue order; the drives in the order
+  /// their first file was enqueued.
   pub fn drives(&self) -> Vec<(String, Vec<String>)> {
     let mut drives: Vec<(String, Vec<String>)> = Vec::new();
     for item in self.items() {
@@ -214,9 +213,9 @@ impl QueueStore {
     self.items().filter(move |item| item.drive == drive)
   }
 
-  /// Lists `file` as waiting (`addToQueue`). A file that is waiting or merging
-  /// already is left alone (returns `false`); a finished one starts over in
-  /// its old position.
+  /// Lists `file` as waiting. A file that is waiting or merging already is
+  /// left alone (returns `false`); a finished one starts over in its old
+  /// position.
   pub fn add_to_queue(&mut self, file: &str, cx: &mut Context<Self>) -> bool {
     if !self.can_enqueue(file) {
       return false;
@@ -228,7 +227,7 @@ impl QueueStore {
     true
   }
 
-  /// Drops the item of `file` (`removeFromQueue`).
+  /// Drops the item of `file`.
   pub fn remove_from_queue(&mut self, file: &str, cx: &mut Context<Self>) {
     if self.items.remove(file).is_some() {
       self.order.retain(|listed| listed != file);
@@ -236,17 +235,16 @@ impl QueueStore {
     }
   }
 
-  /// Flags a cancel request on a waiting or merging item
-  /// (`markCancelRequested`); the outcome still comes from the merge events.
+  /// Flags a cancel request on a waiting or merging item; the outcome still
+  /// comes from the merge events.
   pub fn mark_cancel_requested(&mut self, file: &str, cx: &mut Context<Self>) {
     if self.items.get_mut(file).is_some_and(QueueItem::request_cancel) {
       self.changed(file, false, cx);
     }
   }
 
-  /// Applies one merge event (`recordFinishedOutcome` and the per-entry part
-  /// of `applyMergeSnapshot`). An event for a file that is not listed lists
-  /// it. `now` stands in for a time the event does not carry.
+  /// Applies one merge event. An event for a file that is not listed lists it.
+  /// `now` stands in for a time the event does not carry.
   pub fn apply_event(&mut self, event: &MergeEvent, now: SystemTime, cx: &mut Context<Self>) {
     let file = event.file();
     let structural = match self.items.get_mut(file) {
@@ -283,7 +281,7 @@ impl QueueStore {
     self.changed(file, structural, cx);
   }
 
-  /// Removes the finished items of one drive (`clearCompletedInDrive`).
+  /// Removes the finished items of one drive.
   pub fn clear_completed_in_drive(&mut self, drive: &str, cx: &mut Context<Self>) {
     let removed: Vec<String> = self
       .items()
@@ -309,7 +307,7 @@ impl QueueStore {
     }
   }
 
-  /// Removes every item (the queue part of `clearFiles`).
+  /// Removes every item (the queue part of Clear).
   pub fn clear(&mut self, cx: &mut Context<Self>) {
     let removed = std::mem::take(&mut self.order);
     self.items.clear();

@@ -16,9 +16,7 @@
 */
 
 //! The main window: initial geometry from the config, geometry persistence,
-//! the title with the queue count, and the close request
-//! (`application.rs::configure_main_window` and `save_window_state` of the
-//! Tauri shell).
+//! the title with the queue count, and the close request.
 //!
 //! Positions are logical pixels; sizes are the content size. GPUI's macOS
 //! window reports its frame (title bar included) but opens with a content
@@ -35,7 +33,7 @@ use crate::state::Stores;
 use crate::state::queue::QueueSummary;
 use crate::ui::root::AppView;
 
-/// The smallest window, and the smallest geometry that is saved (0.2.0's).
+/// The smallest window, and the smallest geometry that is saved.
 pub const MIN_WINDOW_SIZE: (u32, u32) = (600, 450);
 
 /// The saved size, raised to the minimum (a hand-edited config may hold less).
@@ -138,7 +136,7 @@ pub fn save_geometry(stores: &Stores, window: &Window, cx: &mut App) {
 }
 
 /// The window title: `BatchMkvMerge v<version>`, followed by ` - done/total`
-/// while a merge is waiting or running (`App.tsx`).
+/// while a merge is waiting or running.
 pub fn title(summary: &QueueSummary) -> String {
   if summary.active {
     format!("{} - {}/{}", crate::window_title(), summary.done, summary.total)

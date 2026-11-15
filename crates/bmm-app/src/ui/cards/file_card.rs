@@ -15,12 +15,11 @@
 *   limitations under the License.
 */
 
-//! The card of one merge unit (`MkvFileCard.tsx`): the status icon, the
-//! root path with the child-count badge (a popover lists the other members,
-//! each removable), the summary, the actions (output path, Open in
-//! BetterMediaInfo, Copy Command, Merge, Delete, the drag handle), the
-//! progress with `elapsed / ETA` and Cancel while active, and the track
-//! table.
+//! The card of one merge unit: the status icon, the root path with the
+//! child-count badge (a popover lists the other members, each removable), the
+//! summary, the actions (output path, Open in BetterMediaInfo, Copy Command,
+//! Merge, Delete, the drag handle), the progress with `elapsed / ETA` and
+//! Cancel while active, and the track table.
 
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -156,8 +155,8 @@ impl FileCard {
     actions::copy_commands(&self.stores, requests, cx).detach();
   }
 
-  /// Set Output Path: the dialog in file mode, starting from the override
-  /// or the path Merge would write (Q&A: the same rule as Merge).
+  /// Set Output Path: the dialog in file mode, starting from the override or
+  /// the path Merge would write.
   fn open_output_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let root = self.root().to_string();
     let files = self.stores.files.read(cx);
@@ -526,8 +525,8 @@ impl Render for FileCard {
   }
 }
 
-/// The drag handle (`DragIndicator`): dragging it onto another file card
-/// merges this card into that one. Inactive while the card merges or waits.
+/// The drag handle: dragging it onto another file card merges this card into
+/// that one. Inactive while the card merges or waits.
 fn drag_handle(root: &str, active: bool, cx: &App) -> impl IntoElement {
   let theme = cx.theme();
   let color = if active {

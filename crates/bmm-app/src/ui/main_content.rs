@@ -15,11 +15,10 @@
 *   limitations under the License.
 */
 
-//! The tabs (`MainContent.tsx`): File List and Queue, plus the Settings and
-//! About tabs the toolbar opens, each with a close button. Every panel's view
-//! is kept alive while hidden, as the React panels stayed mounted. The
-//! Settings view is made when its tab opens and dropped when it closes (React
-//! unmounted it); while another tab shows, it is still laid out, hidden, so
+//! The tabs: File List and Queue, plus the Settings and About tabs the toolbar
+//! opens, each with a close button. Every panel's view is kept alive while
+//! hidden. The Settings view is made when its tab opens and dropped when it
+//! closes; while another tab shows, it is still laid out, hidden, so
 //! gpui-kit's settings keep their page and search (their state lives only as
 //! long as they are rendered).
 

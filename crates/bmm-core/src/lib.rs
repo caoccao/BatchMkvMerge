@@ -17,11 +17,12 @@
 
 //! UI-free core of BatchMkvMerge.
 //!
-//! Everything here is shared by the Tauri shell (`src-tauri`) and, from the
-//! gpui-kit migration on, the native application. Nothing in this crate
-//! depends on a GUI toolkit or an async runtime: long-running work (merges,
-//! update checks) runs on plain threads, and callers that need it off their
-//! UI thread move the call there themselves.
+//! The media parser, the config file, the merge queue, MKVToolNix and
+//! BetterMediaInfo detection, the update check, and the track rows and
+//! `mkvmerge` command line the application builds from them. Nothing in this
+//! crate depends on a GUI toolkit or an async runtime: long-running work
+//! (merges, update checks) runs on plain threads, and callers that need it off
+//! their UI thread move the call there themselves.
 
 pub mod config;
 pub mod constants;

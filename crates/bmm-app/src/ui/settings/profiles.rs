@@ -16,11 +16,10 @@
 */
 
 //! The Profiles page: the active profile with Add, Delete and Reset (both
-//! asking first), then React's four sub-tabs as groups: Track Selection,
-//! Languages (the [`LanguagePicker`]), Track Names (the
-//! [`TrackNamesEditor`]) and Automation. Every control edits the active
-//! profile at once (`updateActiveProfile`). The page has no Reset All; its
-//! Reset puts the active profile back to its template.
+//! asking first), then four groups: Track Selection, Languages (the
+//! [`LanguagePicker`]), Track Names (the [`TrackNamesEditor`]) and Automation.
+//! Every control edits the active profile at once. The page has no Reset All;
+//! its Reset puts the active profile back to its template.
 
 use std::rc::Rc;
 

@@ -15,9 +15,9 @@
 *   limitations under the License.
 */
 
-//! The queue's progress on the taskbar button (Windows), the Dock tile
-//! (macOS) or the launcher icon (Linux), `App.tsx`'s `setProgressBar`:
-//! shown while a merge waits or runs, hidden otherwise.
+//! The queue's progress on the taskbar button (Windows), the Dock tile (macOS)
+//! or the launcher icon (Linux): shown while a merge waits or runs, hidden
+//! otherwise.
 
 use std::rc::Rc;
 

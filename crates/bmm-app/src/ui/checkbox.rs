@@ -15,9 +15,9 @@
 *   limitations under the License.
 */
 
-//! A checkbox with an indeterminate state (MUI's `indeterminate`), for
-//! select-all headers. gpui-kit's checkbox has no such state; gpui-base's
-//! has, so this one is drawn like gpui-kit's, with a minus mark.
+//! A checkbox with an indeterminate state, for select-all headers. gpui-kit's
+//! checkbox has no such state; gpui-base's has, so this one is drawn like
+//! gpui-kit's, with a minus mark.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{self as kit_base, CheckboxIndicator, CheckboxState};

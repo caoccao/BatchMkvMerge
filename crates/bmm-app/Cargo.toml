@@ -34,25 +34,12 @@ log.workspace = true
 rust-i18n = "4.2"
 unicode-segmentation = "1"
 
-# Tests and the Phase 2 spike example. `test-support` (headless test
-# windows, `Window::render_to_image`) only reaches targets built with
+# Tests and the screenshots example. `test-support` (headless test windows,
+# `Window::render_to_image`) only reaches targets built with
 # dev-dependencies, never the shipped binary.
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 serde_json.workspace = true
-
-# Read-back of AppKit state (Dock tile, panel visibility) in the spike.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSDockTile", "NSResponder", "NSView", "NSWindow"] }
-raw-window-handle = "0.6"
-
-# Phase 2 prototypes: `cargo run --release -p BatchMkvMerge --example spike`.
-# `test = true` runs its tests in `cargo test --release --workspace`.
-[[example]]
-name = "spike"
-path = "examples/spike/main.rs"
-test = true
 
 # Embeds the exe icon and version info on Windows. GPUI embeds its own
 # application manifest, so this resource must not carry one.
@@ -61,7 +48,7 @@ winresource = "0.1"
 
 # Installers: `cargo packager --profile dist -p BatchMkvMerge -f <formats>`
 # (app, dmg, nsis, wix, deb, appimage). Every identity below must match the
-# 0.1.0 Tauri installers so the new ones upgrade an old install in place.
+# 0.1.0 installers so the new ones upgrade an old install in place.
 [package.metadata.packager]
 product-name = "BatchMkvMerge"
 identifier = "com.caoccao.batch-mkvmerge"

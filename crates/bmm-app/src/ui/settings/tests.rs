@@ -16,9 +16,9 @@
 */
 
 //! Headless tests of the Settings tab in the application shell: every page
-//! mounts, every control writes the field its React control wrote (checked
-//! against the serialised config), Reset All, the profile editors, the tool
-//! path rows with a stand-in detector, and typing that never reverts.
+//! mounts, every control writes its config field (checked against the
+//! serialised config), Reset All, the profile editors, the tool path rows with
+//! a stand-in detector, and typing that never reverts.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -714,7 +714,7 @@ fn the_language_picker_adds_removes_and_reorders(cx: &mut TestAppContext) {
 }
 
 #[test]
-fn drops_follow_the_react_picker() {
+fn drops_insert_remove_and_reorder_languages() {
   let list = |codes: &str| -> Vec<String> { parse_language_codes(codes) };
   let drag = |from: Pane, codes: &str| LanguageDrag {
     from,

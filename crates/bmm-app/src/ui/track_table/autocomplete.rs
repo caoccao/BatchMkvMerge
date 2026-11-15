@@ -15,19 +15,19 @@
 *   limitations under the License.
 */
 
-//! The free-text cells of the track table (`TrackCellAutocomplete.tsx`):
-//! the language cell and the track-name cell.
+//! The free-text cells of the track table: the language cell and the
+//! track-name cell.
 //!
 //! Every option is listed (typing filters nothing): the language cell shows
 //! the profile's preferred languages first, then a divider and every other
-//! language; the name cell shows the presets of the row's language. The
-//! first option matching the text is highlighted and scrolled to the middle,
-//! the list opens below the cell unless there is more room above, a click or
-//! a focus selects the whole text, and every keystroke reports the text.
-//! Keyboard as in MUI's Autocomplete: ↓/↑ open the list and move through
-//! it, Enter takes the keyboard option or the typed text (an alias such as
-//! `ger` becomes its short code `de` first), Escape closes the list.
-//! gpui-kit's `Combobox` is not used: it does not take free text.
+//! language; the name cell shows the presets of the row's language. The first
+//! option matching the text is highlighted and scrolled to the middle, the
+//! list opens below the cell unless there is more room above, a click or a
+//! focus selects the whole text, and every keystroke reports the text.
+//! Keyboard as in a combo box: ↓/↑ open the list and move through it, Enter
+//! takes the keyboard option or the typed text (an alias such as `ger` becomes
+//! its short code `de` first), Escape closes the list. gpui-kit's `Combobox`
+//! is not used: it does not take free text.
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -43,8 +43,8 @@ use gpui_kit::*;
 
 pub const OPTION_ROW_HEIGHT: f32 = 34.0;
 pub const OPTION_VISIBLE_ROWS: usize = 10;
-/// The list's width: its widest option, at least this and at most the
-/// window less [`LIST_WINDOW_INSET`] (MUI `minWidth: 280`, `max-content`).
+/// The list's width: its widest option, at least this and at most the window
+/// less [`LIST_WINDOW_INSET`].
 const LIST_MIN_WIDTH: f32 = 280.0;
 const LIST_WINDOW_INSET: f32 = 32.0;
 const OPTION_PADDING_X: f32 = 12.0;
@@ -92,8 +92,8 @@ pub fn first_visible_row(matching: usize, option_count: usize) -> usize {
   matching.saturating_sub(visible / 2)
 }
 
-/// The keyboard option after ↓ (`down`) or ↑ from `current`, wrapping
-/// around as MUI does; from none, ↓ takes the first and ↑ the last.
+/// The keyboard option after ↓ (`down`) or ↑ from `current`, wrapping around;
+/// from none, ↓ takes the first and ↑ the last.
 pub fn step_option(current: Option<usize>, count: usize, down: bool) -> Option<usize> {
   if count == 0 {
     return None;
@@ -120,8 +120,7 @@ pub struct AutocompleteCell {
   preferred_count: usize,
   /// The option matching the text: highlighted, and scrolled to.
   matching: Option<usize>,
-  /// The keyboard option (MUI's focused option): the one equal to the text,
-  /// then moved by ↓/↑.
+  /// The keyboard option: the one equal to the text, then moved by ↓/↑.
   highlighted: Option<usize>,
   open: bool,
   placement: Placement,
@@ -289,8 +288,8 @@ impl AutocompleteCell {
     }
   }
 
-  /// The matching option, and the keyboard option equal to `value` (MUI
-  /// syncs it with the value on every change).
+  /// The matching option, and the keyboard option equal to `value` (kept in
+  /// step with the value on every change).
   fn sync_matches(&mut self, value: &str) {
     self.matching = match self.kind {
       CellKind::Language => first_matching_language_option_index(&self.options, value),

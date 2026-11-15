@@ -15,10 +15,10 @@
 *   limitations under the License.
 */
 
-//! The About tab (`About.tsx`): icon with a glow, name, version, tagline,
-//! and author and GitHub cards that open their pages. The name is solid
-//! primary-coloured text (gradient text is not kept); the glow is a soft
-//! shadow around a disc, as GPUI has no radial gradient or blur filter.
+//! The About tab: icon with a glow, name, version, tagline, and author and
+//! GitHub cards that open their pages. The name is solid primary-coloured text
+//! (gradient text is not kept); the glow is a soft shadow around a disc, as
+//! GPUI has no radial gradient or blur filter.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;

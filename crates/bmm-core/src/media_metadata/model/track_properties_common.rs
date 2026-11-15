@@ -27,8 +27,8 @@ use crate::media_metadata::language::Language;
 pub struct CommonTrackProperties {
   /// Container-assigned 1-based number (Matroska TrackNumber, MP4 trackID).
   pub number: Option<u64>,
-  /// Stable unique id (Matroska TrackUID).  Hex-encoded because 64-bit
-  /// values can exceed JavaScript's safe-integer range.
+  /// Stable unique id (Matroska TrackUID).  Hex-encoded because 64-bit values
+  /// exceed the integers a JSON number keeps exactly in many readers.
   pub uid_hex: Option<String>,
   /// User-facing track name when the container provides one.
   pub track_name: Option<String>,

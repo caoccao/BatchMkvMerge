@@ -1,7 +1,7 @@
 <!--
     WiX template for the BatchMkvMerge MSI. A copy of cargo-packager 0.11.8's
     built-in src/package/wix/main.wxs (Apache-2.0 OR MIT) with one change: the
-    UpgradeCode is fixed to the one the Tauri-built 0.1.0 MSIs carry,
+    UpgradeCode is fixed to the one the 0.1.0 MSIs carry,
     UUIDv5(DNS, "BatchMkvMerge.exe.app.x64"), so a new MSI upgrades an old
     install in place. cargo-packager would derive UUIDv5(DNS,
     "BatchMkvMerge.app.x64") instead and offers no option to override it.

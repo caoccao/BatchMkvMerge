@@ -19,26 +19,26 @@
 //!
 //! Each of the twenty configured themes is a gpui-kit theme set under
 //! `themes/` with a light and a dark variant. They set the primary, ring and
-//! link tokens from the React palette's main colour
-//! (`App.tsx::getPaletteByTheme`) and keep every other token at gpui-kit's
-//! defaults. The files are derived from [`THEMES`] by MUI's rules (hover =
-//! `primary.dark`, the main colour darkened by 30 %; contrast text white or
-//! 87 % black); the test `every_theme_file_is_derived_from_its_main_colour`
-//! checks them and rewrites them when `BMM_WRITE_THEMES=1` is set.
+//! link tokens from the theme's main colour and keep every other token at
+//! gpui-kit's defaults. The files are derived from [`THEMES`] by fixed rules
+//! (hover and active = the main colour darkened by 30 %, the dark-mode link
+//! hover lightened; text on the main colour white or 87 % black by contrast
+//! ratio); the test `every_theme_file_is_derived_from_its_main_colour` checks
+//! them and rewrites them when `BMM_WRITE_THEMES=1` is set.
 
 use bmm_core::config::{Config, DisplayMode, Theme as ThemeName};
 use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};
 use gpui_kit::{App, WindowAppearance};
 
-/// One configured theme: its registry names, React's main colour and its
-/// embedded theme set.
+/// One configured theme: its registry names, its main colour and its embedded
+/// theme set.
 pub struct ThemeSpec {
   pub theme: ThemeName,
   /// The theme set's name and file stem: `Ocean`, `themes/ocean.json`.
   pub name: &'static str,
   pub light: &'static str,
   pub dark: &'static str,
-  /// The React palette's `primary.main`, as `0xRRGGBB`.
+  /// The main (primary) colour, as `0xRRGGBB`.
   pub main: u32,
   set: &'static str,
 }
@@ -56,7 +56,7 @@ macro_rules! theme {
   };
 }
 
-/// The twenty themes in the config's order, with React's main colours.
+/// The twenty themes in the config's order, with their main colours.
 pub const THEMES: [ThemeSpec; 20] = [
   theme!(Ocean, "ocean", 0x0288d1),
   theme!(Aqua, "aqua", 0x00acc1),
@@ -158,17 +158,17 @@ mod tests {
     format!("#{red:02x}{green:02x}{blue:02x}")
   }
 
-  /// MUI's `darken`: every channel times `1 - coefficient`.
+  /// Darkens: every channel times `1 - coefficient`.
   fn darken(color: Rgb, coefficient: f64) -> Rgb {
     color.map(|channel| channel * (1.0 - coefficient))
   }
 
-  /// MUI's `lighten`: every channel moved towards white by `coefficient`.
+  /// Lightens: every channel moved towards white by `coefficient`.
   fn lighten(color: Rgb, coefficient: f64) -> Rgb {
     color.map(|channel| channel + (255.0 - channel) * coefficient)
   }
 
-  /// MUI's `getLuminance` (WCAG relative luminance, three decimals).
+  /// The WCAG relative luminance, rounded to three decimals.
   fn luminance(color: Rgb) -> f64 {
     let [red, green, blue] = color.map(|channel| {
       let value = channel / 255.0;
@@ -181,8 +181,8 @@ mod tests {
     ((0.2126 * red + 0.7152 * green + 0.0722 * blue) * 1000.0).round() / 1000.0
   }
 
-  /// MUI's `getContrastText` with `contrastThreshold: 3`: white when its
-  /// contrast ratio against the colour is at least 3, else 87 % black.
+  /// The text colour on `color`: white when its contrast ratio against the
+  /// colour is at least 3, else 87 % black.
   fn contrast_text(color: Rgb) -> &'static str {
     let ratio = (1.0 + 0.05) / (luminance(color) + 0.05);
     if ratio >= 3.0 { "#ffffff" } else { "#000000de" }
@@ -240,10 +240,10 @@ mod tests {
   }
 
   #[test]
-  fn mui_colour_rules() {
+  fn colour_rules() {
     let ocean = channels(0x0288d1);
     assert_eq!(hex(ocean), "#0288d1");
-    // primary.dark and primary.light of MUI's palette for Ocean.
+    // Ocean's hover colour (darkened) and dark-mode link hover (lightened).
     assert_eq!(hex(darken(ocean, 0.3)), "#015f92");
     assert_eq!(hex(lighten(ocean, 0.2)), "#35a0da");
     assert_eq!(contrast_text(ocean), "#ffffff");

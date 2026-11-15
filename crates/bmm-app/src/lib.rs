@@ -42,8 +42,8 @@ pub mod updates;
 
 use gpui_kit::*;
 
-// The nine locale files under `locales/`; a key missing in a locale falls
-// back to en-US, as i18next did.
+// The nine locale files under `locales/`; a key missing in a locale falls back
+// to en-US.
 rust_i18n::i18n!("locales", fallback = "en-US");
 
 /// Product name: window title, menus, notifications.

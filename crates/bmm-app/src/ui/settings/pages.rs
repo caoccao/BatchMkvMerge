@@ -35,8 +35,7 @@ use crate::state::{ConfigStore, Stores};
 use crate::theme::THEMES;
 use crate::ui::toolbar::{GROUP_MODES, group_mode_label_key};
 
-/// The nine languages with their config codes and own names
-/// (`getLanguages`, `getLanguageLabel`).
+/// The nine languages with their config codes and own names.
 pub const LANGUAGES: [(Language, &str, &str); 9] = [
   (Language::De, "de", "Deutsch"),
   (Language::EnUS, "en-US", "English (US)"),
@@ -242,8 +241,7 @@ impl FormatTarget {
   }
 }
 
-/// The precision and unit selects of one field (`FormatFieldControls`),
-/// each with its caption.
+/// The precision and unit selects of one field, each with its caption.
 fn format_controls(
   store: &Entity<ConfigStore>,
   kind: StreamKind,

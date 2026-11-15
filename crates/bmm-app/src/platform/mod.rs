@@ -15,9 +15,8 @@
 *   limitations under the License.
 */
 
-//! What Tauri's plugins and window events did: window geometry, the close
-//! guard, the macOS menus, file dialogs, launch arguments and the taskbar
-//! progress.
+//! The window and the OS around it: window geometry, the close guard, the
+//! macOS menus, file dialogs, launch arguments and the taskbar progress.
 
 pub mod close_guard;
 pub mod dialogs;

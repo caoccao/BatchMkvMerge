@@ -15,12 +15,12 @@
 *   limitations under the License.
 */
 
-//! The Track Names group (the Track Names tab of `Settings.tsx`): the
-//! Video / Audio / Subtitles toggle, a filterable language list (the kind's
-//! preferred languages first, a divider, then the rest; a language with
-//! names in the success colour; ↑ / ↓ move through it once it has the
-//! focus) and the names of the chosen language, one per line. Every
-//! keystroke stores the names; an empty text removes the language.
+//! The Track Names group of the Profiles page: the Video / Audio / Subtitles
+//! toggle, a filterable language list (the kind's preferred languages first, a
+//! divider, then the rest; a language with names in the success colour; ↑ / ↓
+//! move through it once it has the focus) and the names of the chosen
+//! language, one per line. Every keystroke stores the names; an empty text
+//! removes the language.
 
 use bmm_core::languages::MKV_LANGUAGES;
 use gpui_kit::base::{TestSupportExt, TestTextExt};
@@ -311,8 +311,8 @@ impl Render for TrackNamesEditor {
       .child(kind_toggle("track-names-kind", self.kind, move |kind, _, cx| {
         let _ = editor.update(cx, |editor, cx| editor.set_kind(kind, cx));
       }))
-      // The filter above the list only, so the list and the names start on
-      // the same line (React mirrored the filter with a hidden field).
+      // The filter above the list only, so the list and the names start on the
+      // same line.
       .child(
         h_flex()
           .w_full()

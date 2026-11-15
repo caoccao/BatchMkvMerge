@@ -15,10 +15,9 @@
 *   limitations under the License.
 */
 
-//! The dropped files and what is known about them: the parsed metadata and
-//! its table rows, the track selection, flag, language and name edits, the
-//! output paths, manual card merges and detaches (`files`, `fileMetadata`,
-//! `fileTracks`, … of the React store).
+//! The dropped files and what is known about them: the parsed metadata and its
+//! table rows, the track selection, flag, language and name edits, the output
+//! paths, manual card merges and detaches.
 //!
 //! The card units ([`build_merge_units`]) and the file list's entries
 //! ([`build_render_entries`]) are derived after every change. A change
@@ -212,7 +211,7 @@ impl FileStore {
     &self.file_selected_ids
   }
 
-  /// The selected rows of `file` in table order (`getSelectedTracksForFile`).
+  /// The selected rows of `file` in table order.
   pub fn selected_tracks(&self, file: &str) -> Vec<MediaTrack> {
     let (Some(tracks), Some(selected)) = (self.file_tracks.get(file), self.file_selected_ids.get(file)) else {
       return Vec::new();
@@ -281,8 +280,8 @@ impl FileStore {
     &self.entries
   }
 
-  /// Appends the paths that are not listed yet, in order (`addFiles`), and
-  /// starts parsing them.
+  /// Appends the paths that are not listed yet, in order, and starts parsing
+  /// them.
   pub fn add_files(&mut self, paths: impl IntoIterator<Item = String>, cx: &mut Context<Self>) {
     let mut added = Vec::new();
     for path in paths {
@@ -297,8 +296,8 @@ impl FileStore {
     self.refresh(added, true, cx);
   }
 
-  /// Removes one file and everything about it (`removeFile`), including
-  /// manual merges naming it on either side. Its queue item goes with
+  /// Removes one file and everything about it, including manual merges naming
+  /// it on either side. Its queue item goes with
   /// [`crate::actions::remove_file`].
   pub fn remove_file(&mut self, path: &str, cx: &mut Context<Self>) {
     let Some(index) = self.files.iter().position(|file| file == path) else {
@@ -324,8 +323,8 @@ impl FileStore {
     self.refresh(vec![path.to_string()], true, cx);
   }
 
-  /// Removes every file (`clearFiles`); the global output directory stays.
-  /// The queue is cleared by [`crate::actions::clear_files`].
+  /// Removes every file; the global output directory stays. The queue is
+  /// cleared by [`crate::actions::clear_files`].
   pub fn clear_files(&mut self, cx: &mut Context<Self>) {
     if self.files.is_empty() {
       return;
@@ -347,8 +346,7 @@ impl FileStore {
   }
 
   /// Drag-merges `source_root`'s card (its whole unit) into `dest_root`'s
-  /// card (`mergeCardInto`). Re-merging undoes an earlier detach of the
-  /// source.
+  /// card. Re-merging undoes an earlier detach of the source.
   pub fn merge_card_into(&mut self, source_root: &str, dest_root: &str, cx: &mut Context<Self>) {
     if source_root == dest_root {
       return;
@@ -358,8 +356,8 @@ impl FileStore {
     self.refresh(vec![source_root.to_string(), dest_root.to_string()], false, cx);
   }
 
-  /// Takes `file` out of its card (`detachFileFromRoot`): a drag-merged root
-  /// is un-merged with its own unit, any other member becomes a card alone.
+  /// Takes `file` out of its card: a drag-merged root is un-merged with its
+  /// own unit, any other member becomes a card alone.
   pub fn detach_file_from_root(&mut self, file: &str, cx: &mut Context<Self>) {
     if self.merged_roots.remove(file).is_none() {
       self.detached_files.insert(file.to_string());
@@ -367,7 +365,7 @@ impl FileStore {
     self.refresh(vec![file.to_string()], false, cx);
   }
 
-  /// Sets or clears the card hovered as a drop target (`setDropTarget`).
+  /// Sets or clears the card hovered as a drop target.
   pub fn set_drop_target(&mut self, root: Option<String>, cx: &mut Context<Self>) {
     if self.drop_target_root != root {
       let previous = std::mem::replace(&mut self.drop_target_root, root.clone());
@@ -377,7 +375,7 @@ impl FileStore {
     }
   }
 
-  /// Sets the card the keyboard acts on (`setActiveCard`).
+  /// Sets the card the keyboard acts on.
   pub fn set_active_card(&mut self, id: Option<String>, cx: &mut Context<Self>) {
     if self.active_card != id {
       let previous = std::mem::replace(&mut self.active_card, id.clone());
@@ -387,9 +385,8 @@ impl FileStore {
     }
   }
 
-  /// Stores parsed `metadata` with its rows and counts (`setFileMetadata`).
-  /// The profile's selection and automation follow once the whole unit is
-  /// parsed.
+  /// Stores parsed `metadata` with its rows and counts. The profile's
+  /// selection and automation follow once the whole unit is parsed.
   pub fn set_file_metadata(&mut self, file: &str, metadata: MediaMetadata, cx: &mut Context<Self>) {
     if !self.files.iter().any(|listed| listed == file) {
       return;
@@ -408,14 +405,14 @@ impl FileStore {
     self.load_errors.remove(file);
   }
 
-  /// Replaces the selected row keys of `file` (`setFileSelectedIds`).
+  /// Replaces the selected row keys of `file`.
   pub fn set_file_selected_ids(&mut self, file: &str, ids: Vec<String>, cx: &mut Context<Self>) {
     self.file_selected_ids.insert(file.to_string(), ids);
     self.refresh(vec![file.to_string()], false, cx);
   }
 
-  /// Sets a flag to `value` on the rows `keys` of every file in `files`
-  /// (`setTrackFlag`); the card computes the value of a click.
+  /// Sets a flag to `value` on the rows `keys` of every file in `files`; the
+  /// card computes the value of a click.
   pub fn set_track_flag(
     &mut self,
     files: &[String],
@@ -435,7 +432,7 @@ impl FileStore {
   }
 
   /// Moves the `from_key` row to `to_key`'s position in every file of `files`
-  /// that has both (`reorderTracks`). Track ids are unchanged.
+  /// that has both. Track ids are unchanged.
   pub fn reorder_tracks(&mut self, files: &[String], from_key: &str, to_key: &str, cx: &mut Context<Self>) {
     if from_key == to_key {
       return;
@@ -458,29 +455,28 @@ impl FileStore {
     self.refresh(changed, false, cx);
   }
 
-  /// Sets the combined track order of a multi-member unit by its root
-  /// (`setCombinedTrackOrder`), as combined ids.
+  /// Sets the combined track order of a multi-member unit by its root, as
+  /// combined ids.
   pub fn set_combined_track_order(&mut self, root: &str, order: Vec<String>, cx: &mut Context<Self>) {
     self.combined_track_orders.insert(root.to_string(), order);
     self.refresh(vec![root.to_string()], false, cx);
   }
 
-  /// Sets the language of the rows `keys` in `files` (`setTrackLanguage`).
+  /// Sets the language of the rows `keys` in `files`.
   pub fn set_track_language(&mut self, files: &[String], keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_rows(files, keys, |track| set_language(track, value));
     self.refresh(changed, false, cx);
   }
 
-  /// Sets the track name of the rows `keys` in `files` (`setTrackName`).
+  /// Sets the track name of the rows `keys` in `files`.
   pub fn set_track_name(&mut self, files: &[String], keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_rows(files, keys, |track| track.track_name = value.to_string());
     self.refresh(changed, false, cx);
   }
 
-  /// The profile's per-track automation of one file (`applyAutomationToFile`):
-  /// an `und` language becomes the reset language, then each track takes the
-  /// first preset name of its (new) language. Chapters and attachments are
-  /// left alone.
+  /// The profile's per-track automation of one file: an `und` language becomes
+  /// the reset language, then each track takes the first preset name of its
+  /// (new) language. Chapters and attachments are left alone.
   pub fn apply_automation_to_file(
     &mut self,
     file: &str,
@@ -520,23 +516,22 @@ impl FileStore {
     true
   }
 
-  /// Sets a single-root card's full output path (`setFileOutputPath`); it
-  /// replaces a directory override of the file.
+  /// Sets a single-root card's full output path; it replaces a directory
+  /// override of the file.
   pub fn set_file_output_path(&mut self, file: &str, path: String, cx: &mut Context<Self>) {
     self.file_output_dirs.remove(file);
     self.file_output_paths.insert(file.to_string(), path);
     self.refresh(vec![file.to_string()], false, cx);
   }
 
-  /// `clearFileOutputPath`.
+  /// Clears a single-root card's full output path.
   pub fn clear_file_output_path(&mut self, file: &str, cx: &mut Context<Self>) {
     if self.file_output_paths.remove(file).is_some() {
       self.refresh(vec![file.to_string()], false, cx);
     }
   }
 
-  /// Sets the output directory of every file of a group card
-  /// (`setGroupOutputDir`).
+  /// Sets the output directory of every file of a group card.
   pub fn set_group_output_dir(&mut self, files: &[String], dir: &str, cx: &mut Context<Self>) {
     for file in files {
       self.file_output_dirs.insert(file.clone(), dir.to_string());
@@ -544,7 +539,7 @@ impl FileStore {
     self.refresh(files.to_vec(), false, cx);
   }
 
-  /// `clearGroupOutputDir`.
+  /// Clears the output directory of every file of a group card.
   pub fn clear_group_output_dir(&mut self, files: &[String], cx: &mut Context<Self>) {
     for file in files {
       self.file_output_dirs.remove(file);
@@ -552,8 +547,7 @@ impl FileStore {
     self.refresh(files.to_vec(), false, cx);
   }
 
-  /// Sets the session's default output directory; an empty one clears it
-  /// (`setGlobalOutputDir`).
+  /// Sets the session's default output directory; an empty one clears it.
   pub fn set_global_output_dir(&mut self, dir: String, cx: &mut Context<Self>) {
     let dir = (!dir.is_empty()).then_some(dir);
     if self.global_output_dir != dir {
@@ -562,8 +556,8 @@ impl FileStore {
     }
   }
 
-  /// Where BetterMediaInfo was detected, or `None` when it was not
-  /// (`setBetterMediaInfoAvailable`, with the directory the launch needs).
+  /// Where BetterMediaInfo was detected (the directory the launch needs), or
+  /// `None` when it was not.
   pub fn set_better_media_info(&mut self, dir: Option<String>, cx: &mut Context<Self>) {
     if self.better_media_info != dir {
       self.better_media_info = dir;
@@ -646,7 +640,7 @@ fn set_language(track: &mut MediaTrack, value: &str) {
 
 /// Resolves dropped, chosen or launch-argument paths to media files on the
 /// background executor (directories list their supported files, one level,
-/// sorted) and adds them, as `getMediaFiles` + `addFiles` did.
+/// sorted) and adds them.
 pub fn add_paths(files: &Entity<FileStore>, paths: Vec<String>, cx: &mut App) {
   if paths.is_empty() {
     return;

@@ -17,7 +17,7 @@
 
 //! The `mkvmerge` command line of a merge, built from the selected track rows,
 //! plus the profile's track auto-selection and the path helpers the queue and
-//! the file list share. Port of the React app's `merge.ts`.
+//! the file list share.
 //!
 //! The argument layout mirrors mkvtoolnix-gui (`merge/source_file.cpp`,
 //! `merge/mux_config.cpp`):
@@ -55,7 +55,7 @@ pub struct OrderedTrackRef {
   pub track_type: MediaTrackType,
 }
 
-/// The profile's auto-selection rule for a file's rows (`makeTrackSelector`).
+/// The profile's auto-selection rule for a file's rows.
 ///
 /// Video, audio and subtitles: with the type's checkbox off every track of the
 /// type is selected; with it on only tracks whose language is in the type's
@@ -121,7 +121,7 @@ fn matches_language(filter: Option<&HashSet<String>>, codes: &[String]) -> bool 
 }
 
 /// Everything before the last `/` or `\` (empty without one). Both separators
-/// count on every OS, as in the React app.
+/// count on every OS, so a path behaves the same wherever it was written.
 pub fn parent_dir(path: &str) -> &str {
   path.rfind(['/', '\\']).map_or("", |slash| &path[..slash])
 }

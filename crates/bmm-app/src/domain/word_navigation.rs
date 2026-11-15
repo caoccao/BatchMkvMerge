@@ -17,23 +17,22 @@
 
 //! Ctrl+Arrow (Windows, Linux) / Option+Arrow (macOS) stops inside numbers:
 //! `123.456` and `1,234.567` are one word to the OS, but users expect each
-//! numeric part to be a word. Port of the React app's
-//! `input-word-navigation.ts`, fitted to gpui-kit's inputs in Phase 11.
+//! numeric part to be a word.
 //!
-//! The React rule ([`numeric_word_boundary`], kept with its test table) adds
-//! stops to a browser's word jumps, which differ per platform: Windows jumps
-//! forward to the next word's start, macOS to the word's end. gpui-kit's
-//! inputs jump the same way on every platform ([`stock_word_jump`]): forward
-//! to the end of the next word, backward to the start of the previous one,
-//! over any whitespace, line breaks included. The app therefore uses one
-//! rule, [`word_stop`]: the React macOS rule, skipping line breaks as gpui-kit
-//! does, and stepping over a separator inside a number, which gpui-kit would
-//! give a stop of its own when a jump starts beside it. Word deletion uses
-//! the same stops ([`word_command`]).
+//! The per-platform rule ([`numeric_word_boundary`], kept with its test table
+//! from the versions before 1.0.0) adds stops to word jumps that differ per
+//! platform: Windows jumps forward to the next word's start, macOS to the
+//! word's end. gpui-kit's inputs jump the same way on every platform
+//! ([`stock_word_jump`]): forward to the end of the next word, backward to the
+//! start of the previous one, over any whitespace, line breaks included. The
+//! app therefore uses one rule, [`word_stop`]: the per-platform rule's macOS
+//! variant, skipping line breaks as gpui-kit does, and stepping over a
+//! separator inside a number, which gpui-kit would give a stop of its own when
+//! a jump starts beside it. Word deletion uses the same stops
+//! ([`word_command`]).
 //!
-//! Offsets are UTF-8 byte offsets into the text (GPUI's input offsets); the
-//! React app used UTF-16 offsets. Words are UAX #29 word segments, as with
-//! `Intl.Segmenter`.
+//! Offsets are UTF-8 byte offsets into the text (GPUI's input offsets). Words
+//! are UAX #29 word segments.
 
 use std::ops::Range;
 
@@ -59,9 +58,10 @@ struct Jumps {
 }
 
 impl Jumps {
-  /// A browser's: spaces but not line breaks, forward only on macOS, where a
-  /// jump ends at a word's end; on Windows it lands on the next word's start.
-  fn browser(is_mac: bool) -> Self {
+  /// The per-platform rule's: spaces but not line breaks, forward only on
+  /// macOS, where a jump ends at a word's end; on Windows it lands on the next
+  /// word's start.
+  fn per_platform(is_mac: bool) -> Self {
     Self {
       skips: is_horizontal_space,
       skips_forward: is_mac,
@@ -160,8 +160,9 @@ fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps)
   if numeric { nearest } else { None }
 }
 
-/// The React app's rule: the extra stop inside a number for a browser's word
-/// jump from `caret`, or `None` to let the browser's own navigation run.
+/// The per-platform rule: the extra stop inside a number for a word jump from
+/// `caret` that differs per platform, or `None` to let the input's own
+/// navigation run.
 ///
 /// Backward navigation skips spaces first (macOS forward does too), line
 /// breaks are left alone, and only a stop at a `.` or `,` between two digits
@@ -169,7 +170,7 @@ fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps)
 /// after the separator on Windows and before it on macOS. Other punctuation in
 /// the same word must not be skipped to reach such a stop.
 pub fn numeric_word_boundary(value: &str, caret: usize, direction: Direction, is_mac: bool) -> Option<usize> {
-  stop_in_number(value, caret, direction, Jumps::browser(is_mac))
+  stop_in_number(value, caret, direction, Jumps::per_platform(is_mac))
 }
 
 /// Where gpui-kit's own word jump from `offset` lands: forward at the end of
@@ -296,8 +297,8 @@ pub fn word_command(
 mod tests {
   use super::*;
 
-  // The cases of the React app's `tests/input-word-navigation.test.mjs`, one
-  // for one, in byte offsets.
+  // The per-platform rule's test table from before 1.0.0, one case for one, in
+  // byte offsets.
 
   fn nav(value: &str, caret: usize, direction: &str, is_mac: bool) -> Option<usize> {
     let direction = if direction == "left" {
@@ -396,8 +397,7 @@ mod tests {
     assert_eq!(nav("𝟙𝟚.𝟛𝟜", 17, "left", false), Some(9));
   }
 
-  // Beyond the React tests: caret offsets at the edges, and the selection
-  // update of `handleInputWordNavigation`.
+  // Beyond that table: multi-byte text, and carets at and past the edges.
 
   #[test]
   fn works_on_byte_offsets() {
@@ -481,7 +481,7 @@ mod tests {
   }
 
   #[test]
-  fn the_first_stops_are_the_react_macos_rule() {
+  fn the_first_stops_are_the_per_platform_macos_rule() {
     for (value, caret, direction) in [
       ("123.456", 0, Direction::Right),
       ("123.456", 7, Direction::Left),

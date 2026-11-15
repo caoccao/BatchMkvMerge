@@ -15,9 +15,9 @@
 *   limitations under the License.
 */
 
-//! UI language: the nine locale files under `locales/` (converted once from
-//! the React app's i18next files: same nested keys, `%{name}` placeholders)
-//! and the mapping from the configured [`Language`] to a locale code.
+//! UI language: the nine locale files under `locales/` (nested keys, `%{name}`
+//! placeholders) and the mapping from the configured [`Language`] to a locale
+//! code.
 //!
 //! The `gpui_component` part of every locale file holds gpui-kit's own
 //! strings that the app can show (the settings search and Reset All, the
@@ -142,7 +142,10 @@ pub(crate) mod tests {
         "{locale}: missing {missing:?}, extra {extra:?}"
       );
       for (key, text) in &messages {
-        assert!(!text.contains("{{"), "{locale} {key}: i18next placeholder left: {text}");
+        assert!(
+          !text.contains("{{"),
+          "{locale} {key}: `{{{{name}}}}` placeholder instead of `%{{name}}`: {text}"
+        );
         assert_eq!(placeholders(text), placeholders(&reference[key]), "{locale} {key}");
       }
     }

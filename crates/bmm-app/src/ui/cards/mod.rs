@@ -15,11 +15,10 @@
 *   limitations under the License.
 */
 
-//! The file list's cards: [`FileCard`] (`MkvFileCard.tsx`, one merge unit)
-//! and [`GroupCard`] (`GroupCard.tsx`, structurally identical units edited
-//! in lock-step), with what both show: the queue status icon
-//! (`FileStatusIcon.tsx`), the summary line (`CardSummary.tsx`), the merge
-//! progress and the card drag (`cardDrag.ts`).
+//! The file list's cards: [`FileCard`] (one merge unit) and [`GroupCard`]
+//! (structurally identical units edited in lock-step), with what both show:
+//! the queue status icon, the summary line, the merge progress and the card
+//! drag.
 //!
 //! A card is an entity that repaints itself when one of its files or queue
 //! items changes ([`FileEvent`](crate::state::files::FileEvent),
@@ -52,12 +51,12 @@ pub use group_card::GroupCard;
 use crate::domain::format::{format_hms, format_track_counts};
 use crate::domain::status::{QueueItem, QueueItemStatus};
 
-/// Pixel size of the status icon (`FileStatusIcon`'s default 18).
+/// Pixel size of the status icon.
 const STATUS_ICON_SIZE: f32 = 18.0;
 /// Trailing characters a middle-truncated path always shows.
 const PATH_TAIL_CHARS: usize = 18;
 
-/// A card being dragged onto another to merge into it (`cardDrag.ts`).
+/// A card being dragged onto another to merge into it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CardDrag {
   /// The dragged card's root.
@@ -154,9 +153,9 @@ impl CardHeight {
   }
 }
 
-/// The queue status icon (`FileStatusIcon`): a spinner while merging, a
-/// clock while waiting, a check when completed, an alert when failed,
-/// nothing when cancelled or never queued.
+/// The queue status icon: a spinner while merging, a clock while waiting, a
+/// check when completed, an alert when failed, nothing when cancelled or never
+/// queued.
 pub fn status_icon(status: Option<QueueItemStatus>, cx: &App) -> Option<AnyElement> {
   let theme = cx.theme();
   let size = px(STATUS_ICON_SIZE);
@@ -177,9 +176,9 @@ pub fn status_icon(status: Option<QueueItemStatus>, cx: &App) -> Option<AnyEleme
   })
 }
 
-/// The summary under a card's path (`CardSummary`): the track counts, the
-/// output override, then the file's size, encoded date and title; `None`
-/// when there is nothing to say.
+/// The summary under a card's path: the track counts, the output override,
+/// then the file's size, encoded date and title; `None` when there is nothing
+/// to say.
 pub fn card_summary(
   counts: Option<&MediaTrackCounts>,
   output: Option<&str>,
@@ -293,8 +292,8 @@ pub fn icon_button(
     .disabled(!enabled)
 }
 
-/// The child-count badge of a multi-member unit (MUI's static `Badge`): a
-/// primary pill. Selectable so that it can open a popover.
+/// The child-count badge of a multi-member unit: a primary pill. Selectable so
+/// that it can open a popover.
 #[derive(IntoElement)]
 pub struct ChildBadge {
   id: ElementId,

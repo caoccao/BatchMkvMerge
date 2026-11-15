@@ -15,8 +15,8 @@
 *   limitations under the License.
 */
 
-//! What a track table shows and where its edits land (`MkvFileCard.tsx`,
-//! `GroupCard.tsx`).
+//! What a track table shows and where its edits land, in a file card or a
+//! group card.
 //!
 //! A table shows one unit: a single card's, or the first unit of a group
 //! card, whose edits fan out to the same member position of every unit (the
@@ -101,7 +101,7 @@ impl TableScope {
   }
 
   /// A group of multi-member units cannot reorder: the units would need the
-  /// same combined order, which nothing stores (`reorderDisabled`).
+  /// same combined order, which nothing stores.
   pub fn can_reorder(&self) -> bool {
     !self.is_group() || self.units.iter().all(|unit| unit.len() == 1)
   }
@@ -151,8 +151,8 @@ impl TableScope {
 }
 
 impl FileStore {
-  /// The select-all checkbox (`toggleAll`): every row of every parsed file
-  /// of the scope, or none.
+  /// The select-all checkbox: every row of every parsed file of the scope, or
+  /// none.
   pub fn set_all_rows_checked(&mut self, scope: &TableScope, checked: bool, cx: &mut Context<Self>) {
     let mut changed = Vec::new();
     for file in scope.files() {
@@ -170,8 +170,7 @@ impl FileStore {
     self.refresh(changed, false, cx);
   }
 
-  /// Ticks or clears the merge checkbox of `row_keys` (`toggleOne` with the
-  /// rows it applies to).
+  /// Ticks or clears the merge checkbox of `row_keys`.
   pub fn set_rows_checked(&mut self, scope: &TableScope, row_keys: &[String], checked: bool, cx: &mut Context<Self>) {
     let changed = self.edit_selection(scope, row_keys, |ids, key| {
       let present = ids.iter().any(|id| id == key);
@@ -185,7 +184,7 @@ impl FileStore {
   }
 
   /// Flips the merge checkbox of each of `row_keys` (Space on the selected
-  /// rows, `flipMergeSelection`).
+  /// rows).
   pub fn flip_rows_checked(&mut self, scope: &TableScope, row_keys: &[String], cx: &mut Context<Self>) {
     let changed = self.edit_selection(scope, row_keys, |ids, key| {
       if ids.iter().any(|id| id == key) {
@@ -197,20 +196,20 @@ impl FileStore {
     self.refresh(changed, false, cx);
   }
 
-  /// Sets the language of `row_keys` (`onTrackLanguageChange`).
+  /// Sets the language of `row_keys`.
   pub fn set_rows_language(&mut self, scope: &TableScope, row_keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_targets(scope, row_keys, |track| set_language(track, value));
     self.refresh(changed, false, cx);
   }
 
-  /// Sets the track name of `row_keys` (`onTrackNameChange`).
+  /// Sets the track name of `row_keys`.
   pub fn set_rows_name(&mut self, scope: &TableScope, row_keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_targets(scope, row_keys, |track| track.track_name = value.to_string());
     self.refresh(changed, false, cx);
   }
 
-  /// A click on a flag button (`onCycleFlag`): the clicked row's next value,
-  /// set on `row_keys`.
+  /// A click on a flag button: the clicked row's next value, set on
+  /// `row_keys`.
   pub fn cycle_rows_flag(
     &mut self,
     scope: &TableScope,
@@ -230,9 +229,8 @@ impl FileStore {
     self.refresh(changed, false, cx);
   }
 
-  /// The Default Track / Forced Display header buttons: the reset
-  /// automation over each unit's own checked rows (`onDefaultHeaderClick`,
-  /// `onForcedHeaderClick`).
+  /// The Default Track / Forced Display header buttons: the reset automation
+  /// over each unit's own checked rows.
   pub fn reset_rows_flags(
     &mut self,
     scope: &TableScope,
@@ -266,10 +264,10 @@ impl FileStore {
     self.refresh(changed, false, cx);
   }
 
-  /// Drag-reorder (`onReorder`): moves the `from` row to the `to` row's
-  /// position. A single-member unit reorders its file's rows (every root's,
-  /// in lock-step, for a group); a multi-member unit stores a combined order,
-  /// so a row can move across members and types.
+  /// Drag-reorder: moves the `from` row to the `to` row's position. A
+  /// single-member unit reorders its file's rows (every root's, in lock-step,
+  /// for a group); a multi-member unit stores a combined order, so a row can
+  /// move across members and types.
   pub fn reorder_rows(&mut self, scope: &TableScope, from: &str, to: &str, cx: &mut Context<Self>) {
     if from == to || !scope.can_reorder() {
       return;

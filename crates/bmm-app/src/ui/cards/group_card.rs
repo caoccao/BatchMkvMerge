@@ -15,12 +15,12 @@
 *   limitations under the License.
 */
 
-//! The card of structurally identical units (`GroupCard.tsx`): the
-//! directory and summary, the actions for every unit (output directory,
-//! Open in BetterMediaInfo, Copy All Commands, Merge All, Clear All), and a
-//! split pane: the units' roots with their status and progress on the left,
-//! resizable, and the representative track table on the right, whose edits
-//! go to the same member position of every unit.
+//! The card of structurally identical units: the directory and summary, the
+//! actions for every unit (output directory, Open in BetterMediaInfo, Copy All
+//! Commands, Merge All, Clear All), and a split pane: the units' roots with
+//! their status and progress on the left, resizable, and the representative
+//! track table on the right, whose edits go to the same member position of
+//! every unit.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -45,8 +45,8 @@ use crate::state::queue::QueueEvent;
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
 use crate::ui::track_table::TrackTable;
 
-/// The root list's starting width and its limits (`GroupCard.tsx`): at
-/// least 160 px, and at least 240 px left for the table.
+/// The root list's starting width and its limits: at least 160 px, and at
+/// least 240 px left for the table.
 pub const ROOT_LIST_WIDTH: f32 = 240.0;
 pub const ROOT_LIST_MIN_WIDTH: f32 = 160.0;
 pub const TABLE_MIN_WIDTH: f32 = 240.0;

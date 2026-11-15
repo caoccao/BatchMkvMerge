@@ -449,9 +449,9 @@ impl Default for ConfigProfile {
 }
 
 impl ConfigProfile {
-  /// A fresh profile called `name` (`createDefaultProfile` of the React
-  /// app): the Default profile's values, except that a profile with another
-  /// name auto-selects no audio, subtitle or chapter tracks.
+  /// A fresh profile called `name`: the Default profile's values, except that
+  /// a profile with another name auto-selects no audio, subtitle or chapter
+  /// tracks.
   pub fn named(name: &str) -> Self {
     let is_default = name == Self::DEFAULT_NAME;
     Self {

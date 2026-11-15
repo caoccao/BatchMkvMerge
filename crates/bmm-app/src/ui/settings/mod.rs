@@ -15,18 +15,16 @@
 *   limitations under the License.
 */
 
-//! The Settings tab (`Settings.tsx`) on gpui-kit's `Settings` component: a
-//! searchable, resizable sidebar of six pages (Appearance, Formatting,
-//! Group, Integration, Profiles, Update, in React's order) whose React inner
-//! tabs became titled groups listed under their page. Every control writes
-//! the same config field as its React control, at once (the config store
-//! persists in the background and never reads back). Every page but Profiles
-//! has gpui-kit's Reset All, back to `Config::default()`; Profiles keeps
-//! React's Reset of the active profile.
+//! The Settings tab on gpui-kit's `Settings` component: a searchable,
+//! resizable sidebar of six pages (Appearance, Formatting, Group, Integration,
+//! Profiles, Update) whose groups are listed under their page. Every control
+//! writes its config field at once (the config store persists in the
+//! background and never reads back). Every page but Profiles has gpui-kit's
+//! Reset All, back to `Config::default()`; Profiles has a Reset of the active
+//! profile instead.
 //!
-//! The view lives while the tab is open; its children keep the state React
-//! kept in the component (the text fields, the picker's selection, the track
-//! name language).
+//! The view lives while the tab is open; its children keep the editing state
+//! (the text fields, the picker's selection, the track name language).
 
 pub mod integration;
 pub mod language_picker;
@@ -58,8 +56,8 @@ use crate::domain::format::track_type_emoji;
 use crate::state::Stores;
 use crate::tools::Tool;
 
-/// The stream kinds with languages of their own (`LanguageTrackType` and
-/// the Formatting tabs).
+/// The stream kinds with languages of their own (the Languages and Track Names
+/// groups, and the Formatting page).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StreamKind {
   Video,
@@ -152,7 +150,7 @@ impl StreamKind {
 /// and French labels still fit at the 600 × 450 minimum window size.
 pub const FIELD_MIN_WIDTH: f32 = 200.0;
 
-/// A comma-separated language list as codes, in order (`parseLanguageCodes`).
+/// A comma-separated language list as codes, in order.
 pub fn parse_language_codes(list: &str) -> Vec<String> {
   list
     .split(',')
@@ -162,8 +160,8 @@ pub fn parse_language_codes(list: &str) -> Vec<String> {
     .collect()
 }
 
-/// The Video / Audio / Subtitles toggle (`TrackTypeToggle`): `id` names the
-/// group, each button is `{id}-{kind}`.
+/// The Video / Audio / Subtitles toggle: `id` names the group, each button is
+/// `{id}-{kind}`.
 pub fn kind_toggle(
   id: &'static str,
   current: StreamKind,

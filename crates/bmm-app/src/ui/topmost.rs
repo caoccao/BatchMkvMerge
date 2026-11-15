@@ -15,12 +15,10 @@
 *   limitations under the License.
 */
 
-//! The topmost completion window (`TopmostNotification.tsx` and the Tauri
-//! shell's `show_topmost_notification`): an undecorated 440×200 window above
-//! every other application's, centred on the work area of the main window's
-//! display, showing the title, the file or counts, the detail and Close.
-//! Escape and Enter close it (React focused Close). A later completion
-//! updates the open window in place.
+//! The topmost completion window: an undecorated 440×200 window above every
+//! other application's, centred on the work area of the main window's display,
+//! showing the title, the file or counts, the detail and Close. Escape and
+//! Enter close it. A later completion updates the open window in place.
 //!
 //! The window is GPUI's `PopUp` kind (an `NSPanel` above other applications
 //! on macOS, `WS_EX_TOPMOST` on Windows, override-redirect on X11). On
@@ -37,7 +35,7 @@ use gpui_kit::*;
 use crate::state::ui::CompletionNotice;
 
 pub const KEY_CONTEXT: &str = "TopmostNotification";
-/// The window's size, as the Tauri shell's.
+/// The window's size.
 pub const SIZE: (f32, f32) = (440.0, 200.0);
 
 actions!(

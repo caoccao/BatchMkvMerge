@@ -289,9 +289,9 @@ fn clear_completed_removes_only_finished_rows(cx: &mut TestAppContext) {
   assert_eq!(control(&shell, cx, "queue", &id("queue-clear")), Some(true));
 }
 
-/// The Phase 8 correction: with both notifications on, three queued merges
-/// send one OS notification and open the topmost window once, after the
-/// third finishes; the in-app toast stays per file.
+/// With both notifications on, three queued merges send one OS notification
+/// and open the topmost window once, after the third finishes; the in-app
+/// toast stays per file.
 #[gpui_kit::test]
 fn three_merges_notify_once_after_the_last(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C]);
@@ -328,7 +328,8 @@ fn three_merges_notify_once_after_the_last(cx: &mut TestAppContext) {
   );
   assert_eq!(shell.toasts(cx), 3, "a toast per finished file");
 
-  // The next batch of one file reuses the open window with React's text.
+  // The next batch of one file reuses the open window with the single-file
+  // text.
   click(&shell, cx, &id("queue-resume"));
   shell.send(cx, started(B));
   shell.send(cx, finished(B, MergeOutcome::Completed, None));

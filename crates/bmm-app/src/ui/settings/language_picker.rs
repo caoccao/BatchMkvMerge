@@ -15,16 +15,15 @@
 *   limitations under the License.
 */
 
-//! The Languages group (`LanguagePicker.tsx`): the Video / Audio / Subtitles
-//! toggle, a filter with Add All and Remove All, and two panes: Available
-//! (every MKV language, filtered, the preferred ones in the success colour)
-//! and Preferred (the profile's ordered list). A row, or every checked row
-//! of its pane when it is checked, is dragged with the mouse (GPUI's drag,
-//! with a chip showing the first language and `+N`): from Available into
-//! Preferred inserts before the row under the pointer or at the end, from
-//! Preferred onto Available removes, within Preferred reorders. A 2 px line
-//! shows where the languages go. The checkboxes do not start a drag. The
-//! keyboard drag of dnd-kit is not ported (Q&A decision).
+//! The Languages group: the Video / Audio / Subtitles toggle, a filter with
+//! Add All and Remove All, and two panes: Available (every MKV language,
+//! filtered, the preferred ones in the success colour) and Preferred (the
+//! profile's ordered list). A row, or every checked row of its pane when it is
+//! checked, is dragged with the mouse (GPUI's drag, with a chip showing the
+//! first language and `+N`): from Available into Preferred inserts before the
+//! row under the pointer or at the end, from Preferred onto Available removes,
+//! within Preferred reorders. A 2 px line shows where the languages go. The
+//! checkboxes do not start a drag. There is no keyboard drag.
 
 use std::collections::HashSet;
 
@@ -118,8 +117,7 @@ pub fn filter_languages(filter: &str) -> Vec<&'static MkvLanguage> {
 }
 
 /// The preferred list after dropping `drag` before `target` (an index in
-/// `preferred`, the end when `None`); `None` when nothing changes
-/// (`handleDragEnd`'s cases over the Preferred pane).
+/// `preferred`, the end when `None`); `None` when nothing changes.
 pub fn drop_on_preferred(preferred: &[String], drag: &LanguageDrag, target: Option<usize>) -> Option<Vec<String>> {
   if drag.codes.is_empty() {
     return None;
@@ -247,8 +245,7 @@ impl LanguagePicker {
     });
   }
 
-  /// Shows another kind: a fresh filter and no checked rows (React keyed the
-  /// picker by the kind).
+  /// Shows another kind: a fresh filter and no checked rows.
   pub fn set_kind(&mut self, kind: StreamKind, window: &mut Window, cx: &mut Context<Self>) {
     if kind != self.kind {
       self.kind = kind;

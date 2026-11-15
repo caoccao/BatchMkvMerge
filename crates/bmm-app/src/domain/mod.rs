@@ -16,7 +16,7 @@
 */
 
 //! UI-domain logic without GPUI: what the cards, the queue and the inputs
-//! compute, ported from the React app's TypeScript modules with their tests.
+//! compute, tested without a window.
 
 pub mod file_tree;
 pub mod format;

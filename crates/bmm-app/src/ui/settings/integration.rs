@@ -15,10 +15,9 @@
 *   limitations under the License.
 */
 
-//! The Integration page: one group per tool with its path row
-//! (`ExternalToolPathRow` + `useToolPathDetection`). The text is checked
-//! 250 ms after the last edit and stored when the field loses the focus;
-//! Browse picks a folder and stores it; Detect also looks for a running
+//! The Integration page: one group per tool with its path row. The text is
+//! checked 250 ms after the last edit and stored when the field loses the
+//! focus; Browse picks a folder and stores it; Detect also looks for a running
 //! application. A detection that finds the tool somewhere else (a running
 //! application, a versioned macOS bundle, the folder of an executable) puts
 //! that path into the field and the config.
@@ -79,7 +78,7 @@ impl ToolPathRow {
       pending: None,
       _subscriptions: subscriptions,
     };
-    // As the React hook: the stored path is checked once it is shown.
+    // The stored path is checked once it is shown.
     row.schedule(DETECT_DELAY, false, cx);
     row
   }
@@ -113,7 +112,7 @@ impl ToolPathRow {
     }
   }
 
-  /// The field lost the focus: its trimmed text is stored (`handleBlur`).
+  /// The field lost the focus: its trimmed text is stored.
   fn persist_text(&mut self, cx: &mut Context<Self>) {
     self.persist(self.text(cx), cx);
   }
@@ -160,8 +159,8 @@ impl ToolPathRow {
     }));
   }
 
-  /// `applyResult`: the outcome, and a path found elsewhere into the field
-  /// and the config.
+  /// Applies a detection: the outcome, and a path found elsewhere into the
+  /// field and the config.
   fn apply(&mut self, status: ToolStatus, source: &str, cx: &mut Context<Self>) {
     self.found = Some(status.found);
     self.pending = None;

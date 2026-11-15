@@ -15,13 +15,11 @@
 *   limitations under the License.
 */
 
-//! The startup update check (`configure_update_check` of the Tauri shell,
-//! polled by `UpdateBanner.tsx`): once the configured interval has passed,
-//! GitHub is asked on the background executor; otherwise the version found
-//! by the last check is reused. The result goes to [`crate::state::UiState`]
-//! and the time and version of a check into the config store, so a later
-//! settings edit never writes an older `update` block over them (the Tauri
-//! shell wrote the file behind the React store's back).
+//! The startup update check: once the configured interval has passed, GitHub
+//! is asked on the background executor; otherwise the version found by the
+//! last check is reused. The result goes to [`crate::state::UiState`] and the
+//! time and version of a check into the config store, so a later settings edit
+//! never writes an older `update` block over them.
 
 use std::sync::Arc;
 
@@ -103,8 +101,7 @@ pub fn start(stores: &Stores, source: UpdateSource, cx: &mut App) {
   }
 }
 
-/// Closes the banner; with `skip`, the version is not announced again
-/// (`skipVersion`).
+/// Closes the banner; with `skip`, the version is not announced again.
 pub fn dismiss(stores: &Stores, version: &str, skip: bool, cx: &mut App) {
   if skip {
     let version = version.to_string();

@@ -55,7 +55,7 @@ pub enum MergeOutcome {
 }
 
 impl MergeOutcome {
-  /// The wire spelling, identical to the frontend's `QueueItemStatus` value.
+  /// The outcome's name, the same as the queue status it ends in.
   pub fn as_str(self) -> &'static str {
     match self {
       Self::Completed => "Completed",

@@ -612,8 +612,8 @@ fn copy_command_copies_the_golden_merge_tree_command(cx: &mut TestAppContext) {
   );
   assert_eq!(copied, expected);
   if std::path::MAIN_SEPARATOR == '/' {
-    // The golden selection and edits; a member with nothing selected is
-    // left out, as the React card left it out.
+    // The golden selection and edits; a member with nothing selected is left
+    // out.
     for part in [
       "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 2 -s 3 --language 0:en",
       "--track-name \"0:Director Commentary\"",

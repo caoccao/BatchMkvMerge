@@ -15,8 +15,8 @@
 *   limitations under the License.
 */
 
-//! The link to `bmm_core::merge` (section 3.4 of the plan), replacing the
-//! React app's `invoke` calls, `merge-finished` event and 200 ms status poll.
+//! The link to `bmm_core::merge`: merge events in, enqueue and cancel out;
+//! nothing polls.
 //!
 //! The core's worker threads push [`MergeEvent`]s into an unbounded channel;
 //! one foreground task applies them to the queue store in the order they

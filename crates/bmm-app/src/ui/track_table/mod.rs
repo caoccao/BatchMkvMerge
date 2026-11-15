@@ -15,8 +15,7 @@
 *   limitations under the License.
 */
 
-//! The track selection table (`TrackSelectionTable.tsx`, with the row
-//! selection of `useCardRowSelection.ts`).
+//! The track selection table of a card, with its row selection.
 //!
 //! One table per card: the merge checkboxes (and select-all, indeterminate
 //! when some are ticked), ID, type emoji, codec, description, size and bit
@@ -28,12 +27,12 @@
 //!
 //! A click on a row toggles its selection (a highlight, independent of the
 //! merge checkbox) and moves the keyboard cursor there (a dashed outline).
-//! Pressing a row and moving more than 5 px drags it (dnd-kit's activation
-//! distance; GPUI's own drag starts at 2 px and drops the click), with an
-//! insertion line, a dimmed source row and auto-scroll at the list's edges.
-//! Controls in a row never start a drag or a selection. The keyboard
-//! (↑/↓, Space, Ctrl/Cmd+A, Ctrl/Cmd+Shift+A) reaches the table through the
-//! file list, which knows the active card.
+//! Pressing a row and moving more than 5 px drags it (GPUI's own drag starts
+//! at 2 px and drops the click, so the table runs its own), with an insertion
+//! line, a dimmed source row and auto-scroll at the list's edges. Controls in
+//! a row never start a drag or a selection. The keyboard (↑/↓, Space,
+//! Ctrl/Cmd+A, Ctrl/Cmd+Shift+A) reaches the table through the file list,
+//! which knows the active card.
 
 pub mod autocomplete;
 #[cfg(test)]
@@ -67,7 +66,7 @@ use crate::state::files::table::flag_of;
 use crate::state::files::{FileEvent, LoadState, TableScope};
 use crate::state::queue::QueueEvent;
 
-/// Pointer travel that turns a press into a drag (dnd-kit `distance: 5`).
+/// Pointer travel that turns a press into a drag.
 pub const ACTIVATION_DISTANCE: f32 = 5.0;
 const ROW_HEIGHT: f32 = 34.0;
 const AUTOSCROLL_EDGE: f32 = 28.0;
@@ -99,8 +98,8 @@ pub fn insert_index(row_bounds: &[Bounds<Pixels>], y: Pixels) -> usize {
     .unwrap_or(row_bounds.len())
 }
 
-/// The row a dragged row moves to (dnd-kit's `over`), or `None` when
-/// inserting at `insert_at` leaves it where it is.
+/// The row a dragged row moves to, or `None` when inserting at `insert_at`
+/// leaves it where it is.
 pub fn move_target(from: usize, insert_at: usize) -> Option<usize> {
   let target = if insert_at > from { insert_at - 1 } else { insert_at };
   (target != from).then_some(target)
@@ -439,7 +438,7 @@ impl TrackTable {
   }
 
   /// The rows an edit of `key` applies to: every selected row when `key` is
-  /// selected, else `key` alone (`resolveTargetRowKeys`).
+  /// selected, else `key` alone.
   fn target_rows(&self, key: &str) -> Vec<String> {
     let mut rows = vec![key.to_string()];
     if self.selected.contains(key) {
@@ -466,7 +465,7 @@ impl TrackTable {
   }
 
   fn on_row_mouse_down(&mut self, row: usize, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-    // A click away from the cells leaves them, as a browser blurs an input.
+    // A click away from the cells takes the focus out of them.
     window.focus(&self.focus, cx);
     self.drag = DragState::Pressed {
       row,
@@ -898,7 +897,7 @@ impl Render for TrackTable {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let id = Self::element_id(&self.scope);
     let files = self.stores.files.read(cx);
-    // Loading wins over an error, as in the React table.
+    // Loading wins over an error.
     let mut load_error = None;
     for file in self.scope.files() {
       match files.load_state(file) {

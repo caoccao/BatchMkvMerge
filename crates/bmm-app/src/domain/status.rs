@@ -15,22 +15,15 @@
 *   limitations under the License.
 */
 
-//! The merge queue's item state machine, driven by `bmm_core::merge`'s
-//! ordered [`MergeEvent`]s. Port of the queue-item rules of the React app's
-//! `store.ts` (`addToQueue`, `markCancelRequested`, `recordFinishedOutcome`,
-//! the per-entry part of `applyMergeSnapshot`) and the elapsed / ETA rules of
-//! `Queue.tsx` and the cards.
+//! The merge queue's item state machine, driven by `bmm_core::merge`'s ordered
+//! [`MergeEvent`]s, and the elapsed / ETA rules of the queue and the cards.
 //!
-//! `Waiting → Merging → Completed | Cancelled | Failed`. The React app also
-//! polled a snapshot and, when an item vanished from it, guessed `Completed`
-//! (or `Cancelled` after a cancel request) in case the finish event was late;
-//! that fallback is why "terminal states are never overwritten" was needed.
-//! Here every enqueued file gets exactly one `Finished`, in order after its
-//! `Started` and `Progress`, so there is nothing to guess:
+//! `Waiting → Merging → Completed | Cancelled | Failed`. Every enqueued file
+//! gets exactly one `Finished`, in order after its `Started` and `Progress`,
+//! so no state has to be guessed:
 //!
 //! - `Started` makes an item `Merging`. On a terminal item it starts a new run
-//!   and clears the previous run's times, cancel request and error (what the
-//!   snapshot did when a finished file reappeared).
+//!   and clears the previous run's times, cancel request and error.
 //! - `Progress` updates a waiting or merging item; a terminal item ignores it.
 //! - `Finished` is authoritative and always sets the outcome.
 
@@ -111,7 +104,7 @@ pub struct QueueItem {
 }
 
 /// Whether a file may be (re-)enqueued: not while it is waiting or merging.
-/// Covers `addToQueue`'s guard and the actions' `skipIfActive`.
+/// Both the queue and the merge actions check it.
 pub fn can_enqueue(existing: Option<&QueueItem>) -> bool {
   existing.is_none_or(|item| !item.status.is_active())
 }

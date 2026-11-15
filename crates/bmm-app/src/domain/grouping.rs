@@ -16,8 +16,7 @@
 */
 
 //! Group cards: units whose combined tracks look alike share one card, so a
-//! batch edit applies to all of them. Port of the grouping in the React app's
-//! `FileList.tsx`.
+//! batch edit applies to all of them.
 
 use std::collections::HashMap;
 

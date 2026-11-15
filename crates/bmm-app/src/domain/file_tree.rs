@@ -15,8 +15,7 @@
 *   limitations under the License.
 */
 
-//! Merge units: which files share one card and one output. Port of the React
-//! app's `file-tree.ts`.
+//! Merge units: which files share one card and one output.
 //!
 //! With *Group by file name* on, files are grouped into "merge trees": in each
 //! directory the file with the shortest stem is a root, and every other file
@@ -202,8 +201,7 @@ pub enum FlagKind {
   Forced,
 }
 
-/// The value a click on a flag button sets (`nextTrackFlag`): true → false →
-/// unspecified → true.
+/// The value a click on a flag button sets: true → false → unspecified → true.
 pub fn next_track_flag(flag: TrackFlag) -> TrackFlag {
   match flag {
     TrackFlag::True => TrackFlag::False,
@@ -212,7 +210,7 @@ pub fn next_track_flag(flag: TrackFlag) -> TrackFlag {
   }
 }
 
-/// One `setTrackFlag` call: set `kind` to `value` on rows `keys` of `file`.
+/// One flag edit: set `kind` to `value` on rows `keys` of `file`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlagEdit {
   pub file: String,
@@ -240,9 +238,9 @@ fn group_by_file(pairs: Vec<(String, String)>) -> Vec<(String, Vec<String>)> {
 /// those types lose it; with `reset_forced` every selected track's forced flag
 /// becomes unspecified.
 ///
-/// Returns the edits per file in the order the React app applied them: all
-/// default-on edits, then default-off, then forced. Units are evaluated one at
-/// a time because grouped units can have different layouts.
+/// Returns the edits per file in the order they apply: all default-on edits,
+/// then default-off, then forced. Units are evaluated one at a time because
+/// grouped units can have different layouts.
 pub fn apply_unit_flag_automation(
   members: &[String],
   file_tracks: &HashMap<String, Vec<MediaTrack>>,

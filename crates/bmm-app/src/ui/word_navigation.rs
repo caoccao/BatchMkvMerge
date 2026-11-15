@@ -15,10 +15,10 @@
 *   limitations under the License.
 */
 
-//! Word keys stop inside numbers in every text input of the app (the React
-//! app's `handleInputWordNavigation`): Ctrl+Left/Right on Windows and Linux,
-//! Option+Left/Right on macOS, with Shift, and the word deletions. The stops
-//! are [`crate::domain::word_navigation`]'s.
+//! Word keys stop inside numbers in every text input of the app:
+//! Ctrl+Left/Right on Windows and Linux, Option+Left/Right on macOS, with
+//! Shift, and the word deletions. The stops are
+//! [`crate::domain::word_navigation`]'s.
 //!
 //! A keystroke interceptor sees the key before gpui-kit's input does: it asks
 //! the keymap which action the key would run, so the platform's own word

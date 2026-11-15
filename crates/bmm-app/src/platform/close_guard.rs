@@ -15,8 +15,8 @@
 *   limitations under the License.
 */
 
-//! The exit confirmation (`CloseGuard.tsx`): closing the main window while a
-//! merge is waiting or running asks first.
+//! The exit confirmation: closing the main window while a merge is waiting or
+//! running asks first.
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -26,8 +26,8 @@ use gpui_kit::{App, ParentElement, Window};
 /// Decides a close request. Without active merges the window closes. With
 /// them, a dialog asks and the request is refused for now: No keeps the
 /// window, Yes runs `on_confirm` (which cancels the merges), then closes it.
-/// Enter and Escape answer No, as in the React dialog, whose No button had
-/// the focus; gpui-kit's own OK button would take Enter.
+/// Enter and Escape answer No, so a stray key never stops the merges;
+/// gpui-kit's own OK button would take Enter.
 pub fn should_close(
   has_active_merges: bool,
   window: &mut Window,

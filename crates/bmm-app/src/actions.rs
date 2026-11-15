@@ -15,8 +15,8 @@
 *   limitations under the License.
 */
 
-//! What spans stores: enqueue, cancel, clear and remove (`mergeActions.ts`
-//! and the store actions that touch both the files and the queue).
+//! What spans stores: enqueue, cancel, clear and remove, which touch both the
+//! files and the queue.
 //!
 //! A merge is enqueued in three steps: a [`MergeRequest`] is read from the
 //! stores on the foreground; the output path is resolved and the `mkvmerge`
@@ -64,11 +64,11 @@ impl OutputTarget {
   }
 }
 
-/// The output file of a merge keyed by `file` (`resolveMergeOutputFor`). A
-/// full-path override naming a file is used as is (the save dialog already
-/// confirmed an overwrite); one naming a directory gets the input's file name
-/// with no " (1)" suffix. Otherwise `<dir>/<stem>.mkv`, with " (1)", " (2)", …
-/// while that exists. Checks the file system.
+/// The output file of a merge keyed by `file`. A full-path override naming a
+/// file is used as is (the save dialog already confirmed an overwrite); one
+/// naming a directory gets the input's file name with no " (1)" suffix.
+/// Otherwise `<dir>/<stem>.mkv`, with " (1)", " (2)", … while that exists.
+/// Checks the file system.
 pub fn resolve_merge_output_for(target: &OutputTarget, file: &str) -> String {
   if let Some(path) = target.path.as_deref().filter(|path| !path.is_empty()) {
     return resolve_overridden_output_path(path.to_string(), file.to_string());
@@ -92,8 +92,7 @@ pub struct MergeRequest {
 }
 
 impl MergeRequest {
-  /// The merge of one file's selected `tracks` (`enqueueSelectedTracksForFile`);
-  /// `None` without any.
+  /// The merge of one file's selected `tracks`; `None` without any.
   pub fn file(files: &FileStore, file: &str, tracks: Vec<MediaTrack>) -> Option<Self> {
     (!tracks.is_empty()).then(|| Self {
       root: file.to_string(),
@@ -107,9 +106,8 @@ impl MergeRequest {
     })
   }
 
-  /// One output from several inputs, keyed by `root`
-  /// (`enqueueSelectedTracksForUnit`). Inputs without a selected row are
-  /// dropped; `None` when none is left.
+  /// One output from several inputs, keyed by `root`. Inputs without a
+  /// selected row are dropped; `None` when none is left.
   pub fn unit(
     files: &FileStore,
     root: &str,
@@ -126,9 +124,9 @@ impl MergeRequest {
     })
   }
 
-  /// A card unit with the stores' current selection (`enqueueUnitSelection`):
-  /// one member merges as a file, several as one output in the unit's
-  /// combined display order (its custom order, if any).
+  /// A card unit with the stores' current selection: one member merges as a
+  /// file, several as one output in the unit's combined display order (its
+  /// custom order, if any).
   pub fn unit_selection(files: &FileStore, unit: &[String]) -> Option<Self> {
     let root = unit.first()?;
     if unit.len() == 1 {
@@ -257,8 +255,7 @@ pub fn merge_all(stores: &Stores, cx: &mut App) -> Task<()> {
   enqueue(stores, requests, cx)
 }
 
-/// Asks the queue to cancel `file` (`cancelMerge`); the outcome arrives as a
-/// merge event.
+/// Asks the queue to cancel `file`; the outcome arrives as a merge event.
 pub fn cancel_merge(stores: &Stores, file: &str, cx: &mut App) {
   stores
     .queue
@@ -268,7 +265,7 @@ pub fn cancel_merge(stores: &Stores, file: &str, cx: &mut App) {
   }
 }
 
-/// `cancelMerges`.
+/// [`cancel_merge`] for each of `files`.
 pub fn cancel_merges(stores: &Stores, files: &[String], cx: &mut App) {
   for file in files {
     cancel_merge(stores, file, cx);
@@ -282,8 +279,7 @@ pub fn cancel_all(stores: &Stores, cx: &mut App) {
   cancel_merges(stores, &files, cx);
 }
 
-/// A drive card's Cancel All (`Queue.tsx`): the drive's waiting and merging
-/// files.
+/// A drive card's Cancel All: the drive's waiting and merging files.
 pub fn cancel_drive(stores: &Stores, drive: &str, cx: &mut App) {
   let files: Vec<String> = stores
     .queue
@@ -295,10 +291,10 @@ pub fn cancel_drive(stores: &Stores, drive: &str, cx: &mut App) {
   cancel_merges(stores, &files, cx);
 }
 
-/// A drive card's Resume All (`Queue.tsx`): merges again every cancelled or
-/// failed root of the drive. A root merges its whole card unit with the
-/// current selection, as its card would; a listed file that is no longer a
-/// unit root merges alone; a file no longer listed is skipped.
+/// A drive card's Resume All: merges again every cancelled or failed root of
+/// the drive. A root merges its whole card unit with the current selection, as
+/// its card would; a listed file that is no longer a unit root merges alone; a
+/// file no longer listed is skipped.
 pub fn resume_drive(stores: &Stores, drive: &str, cx: &mut App) -> Task<()> {
   let roots: Vec<String> = stores
     .queue
@@ -334,7 +330,7 @@ pub fn can_clear(stores: &Stores, cx: &App) -> bool {
   stores.files.read(cx).has_files() && !stores.has_active_merges(cx)
 }
 
-/// Clears the file list and the queue if [`can_clear`] (`clearFiles`).
+/// Clears the file list and the queue if [`can_clear`].
 pub fn clear_files(stores: &Stores, cx: &mut App) {
   if can_clear(stores, cx) {
     stores.files.update(cx, |files, cx| files.clear_files(cx));
@@ -342,7 +338,7 @@ pub fn clear_files(stores: &Stores, cx: &mut App) {
   }
 }
 
-/// Removes one file and its queue item (`removeFile`).
+/// Removes one file and its queue item.
 pub fn remove_file(stores: &Stores, file: &str, cx: &mut App) {
   stores.files.update(cx, |files, cx| files.remove_file(file, cx));
   stores.queue.update(cx, |queue, cx| queue.remove_from_queue(file, cx));
@@ -383,9 +379,8 @@ pub fn clear_units(stores: &Stores, units: &[Vec<String>], cx: &mut App) {
   }
 }
 
-/// Copies the commands of `requests`, one per line, to the clipboard and
-/// says so (`handleCopyCommand`, `handleCopyAll`). Output paths are resolved
-/// on the background executor, as for a merge.
+/// Copies the commands of `requests`, one per line, to the clipboard and says
+/// so. Output paths are resolved on the background executor, as for a merge.
 pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
   if requests.is_empty() {
     return Task::ready(());
@@ -411,8 +406,8 @@ pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App)
   })
 }
 
-/// Opens `paths` in the detected BetterMediaInfo
-/// (`launchBetterMediaInfo`); a failure is shown as a card message.
+/// Opens `paths` in the detected BetterMediaInfo; a failure is shown as a card
+/// message.
 pub fn open_in_better_media_info(stores: &Stores, paths: Vec<String>, cx: &mut App) -> Task<()> {
   let Some(dir) = stores.files.read(cx).better_media_info_dir().map(str::to_string) else {
     return Task::ready(());
@@ -432,9 +427,9 @@ pub fn open_in_better_media_info(stores: &Stores, paths: Vec<String>, cx: &mut A
   })
 }
 
-/// Detects BetterMediaInfo now and whenever its configured path changes
-/// (`App.tsx`): the cards show Open in BetterMediaInfo while it is found. A
-/// detection that a newer one overtook is dropped.
+/// Detects BetterMediaInfo now and whenever its configured path changes: the
+/// cards show Open in BetterMediaInfo while it is found. A detection that a
+/// newer one overtook is dropped.
 pub fn watch_better_media_info(stores: &Stores, cx: &mut App) {
   let detected_path: Rc<RefCell<Option<String>>> = Rc::default();
   let generation = Rc::new(Cell::new(0_u64));

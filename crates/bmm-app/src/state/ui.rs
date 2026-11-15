@@ -15,11 +15,9 @@
 *   limitations under the License.
 */
 
-//! Navigation state: the tabs, the in-app toast, the completion
-//! notifications (`activeTab`, `showSettings`, `showAbout`,
-//! `showNotification`, `systemNotificationEnabled`,
-//! `topmostNotificationEnabled` of the React store), the open toolbar menu
-//! and the version the update banner announces.
+//! Navigation state: the tabs, the in-app toast, the completion notifications
+//! and their toggles, the open toolbar menu and the version the update banner
+//! announces.
 
 use gpui_kit::{Context, EventEmitter};
 
@@ -98,9 +96,8 @@ pub struct Snackbar {
   pub message: String,
 }
 
-/// What a drained queue reports through the OS notification and the
-/// topmost window (`TopmostNotification` of the React protocol, without the
-/// close label).
+/// What a drained queue reports through the OS notification and the topmost
+/// window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionNotice {
   pub title: String,
@@ -136,7 +133,7 @@ pub struct UiState {
   active_tab: TabType,
   show_settings: bool,
   show_about: bool,
-  /// The queue's two notification toggles; off at every start, as in React.
+  /// The queue's two notification toggles; off at every start.
   system_notification: bool,
   topmost_notification: bool,
   /// The main window is closing: no more completions.
@@ -211,7 +208,7 @@ impl UiState {
   }
 
   /// Closes a closable tab; when it was active, its left neighbour becomes
-  /// active (`MainContent.tsx::closeTab`).
+  /// active.
   pub fn close_tab(&mut self, tab: TabType, cx: &mut Context<Self>) {
     let tabs = self.tabs();
     let Some(index) = tabs.iter().position(|open| *open == tab) else {
@@ -290,13 +287,12 @@ impl UiState {
     }
   }
 
-  /// Shows a toast in the main window (`showNotification`).
+  /// Shows a toast in the main window.
   pub fn show_toast(&mut self, kind: NotificationKind, file: String, detail: String, cx: &mut Context<Self>) {
     cx.emit(UiEvent::Toast(Toast { kind, file, detail }));
   }
 
-  /// Shows a card's message at the bottom of the main window (the cards'
-  /// `Snackbar`).
+  /// Shows a card's message at the bottom of the main window.
   pub fn show_snackbar(&mut self, kind: NotificationKind, message: String, cx: &mut Context<Self>) {
     cx.emit(UiEvent::Snackbar(Snackbar { kind, message }));
   }
@@ -311,8 +307,8 @@ impl UiState {
     self.topmost_notification
   }
 
-  /// The queue's System Notification toggle. React asked the OS for
-  /// permission first; the OS asks on the first post instead.
+  /// The queue's System Notification toggle. Nothing asks for permission here;
+  /// the OS asks on the first notification.
   pub fn toggle_system_notification(&mut self, cx: &mut Context<Self>) {
     self.system_notification = !self.system_notification;
     cx.notify();

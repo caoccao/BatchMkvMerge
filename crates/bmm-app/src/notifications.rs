@@ -15,13 +15,12 @@
 *   limitations under the License.
 */
 
-//! What a finished merge tells the user (`FileList.tsx`'s `merge-finished`
-//! listener): the in-app toast of every finished file, and the OS
-//! notification and topmost window once the queue drains.
+//! What a finished merge tells the user: the in-app toast of every finished
+//! file, and the OS notification and topmost window once the queue drains.
 //!
-//! The React app sent the OS notification and the topmost window for every
-//! completed file. They are sent once per batch now (the queue ran until
-//! nothing waited or merged), when a merge of the batch completed or failed.
+//! The OS notification and the topmost window are sent once per batch (the
+//! queue ran until nothing waited or merged), not per file, and only when a
+//! merge of the batch completed or failed.
 
 use bmm_core::merge::MergeOutcome;
 use gpui_kit::App;
@@ -31,10 +30,10 @@ use crate::state::Stores;
 use crate::state::queue::{QueueBatch, QueueEvent};
 use crate::state::ui::{CompletionNotice, NotificationKind};
 
-/// The notice of a drained batch; `None` when it does not notify (every
-/// merge was cancelled). A batch of one completed file keeps React's text:
-/// the file and its own time. Any other gives the counts and the time from
-/// the first start to the last end.
+/// The notice of a drained batch; `None` when it does not notify (every merge
+/// was cancelled). A batch of one completed file names the file and its own
+/// time. Any other gives the counts and the time from the first start to the
+/// last end.
 pub fn completion_notice(batch: &QueueBatch) -> Option<CompletionNotice> {
   if !batch.notifies() {
     return None;
@@ -123,7 +122,7 @@ mod tests {
   }
 
   #[test]
-  fn a_batch_of_one_completed_file_keeps_the_react_text() {
+  fn a_batch_of_one_completed_file_names_the_file() {
     let _locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     crate::i18n::set_language(Language::EnUS);
     let notice = completion_notice(&batch(1, 0, 0)).expect("notifies");
@@ -147,7 +146,7 @@ mod tests {
     assert_eq!(notice.line, "3 completed, 1 failed, 1 cancelled");
     assert_eq!(notice.detail, "Finished in 00:12:34");
     assert!(notice.failed);
-    // One file that failed is not React's success text.
+    // One file that failed does not get the single-file success text.
     let notice = completion_notice(&batch(0, 1, 0)).expect("a failure notifies");
     assert_eq!(notice.line, "0 completed, 1 failed, 0 cancelled");
     assert!(notice.failed);

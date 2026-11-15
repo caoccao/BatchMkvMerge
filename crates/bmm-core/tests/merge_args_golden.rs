@@ -19,11 +19,11 @@
 //! names synthetic input files (`tests/golden/fixtures.rs`), a selection
 //! (explicit row keys in table order, or a profile's auto-selection), cell
 //! edits, and for merge trees an optional explicit track order. The expected
-//! rows, `mkvmerge` arguments and copyable command were produced by running
-//! the 0.2.0 React app's own `metadataToMediaTracks`, `makeTrackSelector` and
-//! `buildMergeArgs(Multi)` / `buildCommandString(Multi)` on this parser's
-//! output for the same files, then reviewed. Here the same files go through
-//! the parser, `media_track` and `merge_args`, and everything must match.
+//! rows, `mkvmerge` arguments and copyable command were recorded from the
+//! implementation before 1.0.0 on this parser's output for the same files,
+//! then reviewed, so they pin the merge command: change them only when the
+//! command is meant to change. Here the same files go through the parser,
+//! `media_track` and `merge_args`, and everything must match.
 
 #[path = "golden/fixtures.rs"]
 mod fixtures;
@@ -82,7 +82,7 @@ fn float_numbers(row: &Value) -> Value {
   row
 }
 
-/// A row in the shape of the React app's `MediaTrack` object.
+/// A row in the JSON shape of the golden files.
 fn row_json(track: &MediaTrack) -> Value {
   let kind = match track.kind {
     MediaTrackKind::Track => "track",
@@ -163,7 +163,7 @@ fn strings(value: &Value) -> Vec<String> {
 }
 
 #[test]
-fn merge_arguments_match_the_react_app() {
+fn merge_arguments_match_the_golden_cases() {
   let parsed = parsed_fixtures();
   let files = golden_files();
   assert!(files.len() >= 4, "golden cases missing: {files:?}");

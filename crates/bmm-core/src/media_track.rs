@@ -16,7 +16,7 @@
 */
 
 //! The flattened track rows the selection table renders, derived from a parsed
-//! [`MediaMetadata`]. Port of the React app's `media-metadata.ts`.
+//! [`MediaMetadata`].
 //!
 //! The parser keeps `video / audio / subtitle` sub-trees on each [`Track`],
 //! plus a chapter summary and an attachment list on the file. The table needs
@@ -143,8 +143,8 @@ pub struct MediaTrack {
 }
 
 impl MediaTrack {
-  /// The per-file row key, `"{type}:{id}"` (`trackKey` in `merge.ts`). The
-  /// selection and flag maps are keyed by it.
+  /// The per-file row key, `"{type}:{id}"`. The selection and flag maps are
+  /// keyed by it.
   pub fn key(&self) -> String {
     format!("{}:{}", self.track_type.as_str(), self.id)
   }
@@ -231,7 +231,8 @@ pub fn metadata_to_media_tracks(meta: &MediaMetadata) -> Vec<MediaTrack> {
       codec_id: subtype,
       description: String::new(),
       chapter_entry_count: None,
-      // Precision loss above 2^53 bytes is accepted, as in the React app.
+      // Sizes are f64 like every other row's; precision loss above 2^53 bytes
+      // is accepted.
       size: Some(attachment.size as f64),
       bit_rate: None,
       track_name: attachment.file_name.clone(),

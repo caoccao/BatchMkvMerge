@@ -15,10 +15,9 @@
 *   limitations under the License.
 */
 
-//! The MKV language table, generated once from the 0.2.0 React app's
-//! `src/mkvLanguages.ts` (itself generated from mkvtoolnix's
+//! The MKV language table, generated once from mkvtoolnix's
 //! `src/common/iso639_language_list.cpp`: ISO 639-1-backed languages plus the
-//! Matroska-relevant generic entries). The label format is mkvtoolnix's:
+//! Matroska-relevant generic entries. The label format is mkvtoolnix's:
 //! English name, then the ISO 639 codes in parentheses.
 
 use super::MkvLanguage;

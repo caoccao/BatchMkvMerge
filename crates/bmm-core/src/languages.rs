@@ -19,10 +19,6 @@
 //! language filters, short-code normalisation for the editable Language cell,
 //! and the option lists of the language and track-name autocompletes.
 //!
-//! Ports of the table in `mkvLanguages.ts`, `languageCodeAliases` in
-//! `media-metadata.ts`, and the lookups and option builders in
-//! `TrackCellAutocomplete.tsx` of the React app.
-//!
 //! The canonical cell value is the *short code*: the ISO 639-1 alpha-2 code
 //! from the label's `(xx; yyy)` suffix when there is one, else the 3-letter
 //! MKV code. Track-name presets in the settings are keyed by the MKV code.

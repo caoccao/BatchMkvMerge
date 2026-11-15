@@ -15,10 +15,10 @@
 *   limitations under the License.
 */
 
-//! The views, one module per screen of the React app.
+//! The views, one module per screen.
 //!
-//! Sizes follow the React layout: MUI spacing units are 8 px ([`space`]) and
-//! the type scale is MUI's at `typography.fontSize: 12` ([`text`]).
+//! Sizes follow one grid: spacing units are 8 px ([`space`]), and the type
+//! scale is built on a 12 px body text ([`text`]).
 
 pub mod about;
 pub mod actions;
@@ -43,12 +43,12 @@ mod tests;
 
 use gpui_kit::{Hsla, Pixels, Rgba, px};
 
-/// `n` MUI spacing units (8 px each).
+/// `n` spacing units (8 px each).
 pub fn space(n: f32) -> Pixels {
   px(8.0 * n)
 }
 
-/// MUI's type scale at `typography.fontSize: 12` (every variant × 12/14).
+/// The type scale: a 14 px-based scale drawn at 12/14 of its size.
 pub mod text {
   use gpui_kit::{Pixels, px};
 

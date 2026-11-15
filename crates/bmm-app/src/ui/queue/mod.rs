@@ -15,18 +15,18 @@
 *   limitations under the License.
 */
 
-//! The Queue tab (`Queue.tsx`): one card per drive (`C:`, `\\SERVER\SHARE`
-//! on Windows; one "Queue" card elsewhere), titled with the drive, whose
-//! header has the System Notification and Topmost Notification toggles,
-//! Resume All, Cancel All and Clear Completed, above a table of the drive's
-//! files: File Path, Status (with the percentage while merging, coloured by
-//! status, the error as a tooltip when failed), Start, End, Elapsed, ETA and
-//! Cancel while merging. Without any item one empty card shows.
+//! The Queue tab: one card per drive (`C:`, `\\SERVER\SHARE` on Windows; one
+//! "Queue" card elsewhere), titled with the drive, whose header has the System
+//! Notification and Topmost Notification toggles, Resume All, Cancel All and
+//! Clear Completed, above a table of the drive's files: File Path, Status
+//! (with the percentage while merging, coloured by status, the error as a
+//! tooltip when failed), Start, End, Elapsed, ETA and Cancel while merging.
+//! Without any item one empty card shows.
 //!
 //! Each row is a [`QueueRow`] entity drawn as a cached view at its measured
-//! height, so a progress event or a clock tick re-renders the merging row,
-//! not the table; the view itself re-renders on structural changes. A table
-//! narrower than its columns scrolls sideways, as MUI's `TableContainer`.
+//! height, so a progress event or a clock tick re-renders the merging row, not
+//! the table; the view itself re-renders on structural changes. A table
+//! narrower than its columns scrolls sideways.
 
 pub mod row;
 #[cfg(test)]

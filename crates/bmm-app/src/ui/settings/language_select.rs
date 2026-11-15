@@ -16,11 +16,9 @@
 */
 
 //! The options of the Automation tab's und-language select: the profile's
-//! preferred languages (all three lists, `buildCombinedLanguageOptions`)
-//! first, a divider, then every other language, each by its full label
-//! (`German (de; ger)`). Typing in the select's search box filters both
-//! parts by label or code; the React Autocomplete listed every option
-//! unfiltered (Q&A decision).
+//! preferred languages (all three lists) first, a divider, then every other
+//! language, each by its full label (`German (de; ger)`). Typing in the
+//! select's search box filters both parts by label or code.
 
 use bmm_core::config::ConfigProfile;
 use bmm_core::languages::{build_combined_language_options, language_label};

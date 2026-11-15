@@ -15,25 +15,23 @@
 *   limitations under the License.
 */
 
-//! The File List tab (`FileList.tsx`): the Welcome page while it is empty,
-//! otherwise one card per entry: a [`FileCard`] per merge unit, a
-//! [`GroupCard`] per group of structurally identical units.
+//! The File List tab: the Welcome page while it is empty, otherwise one card
+//! per entry: a [`FileCard`] per merge unit, a [`GroupCard`] per group of
+//! structurally identical units.
 //!
 //! The cards and their track tables are kept by the card's first root, so
 //! they survive files being added, grouped and edited (typing in a group's
 //! language cell changes its group key). Each card is drawn as a cached
 //! view at the height it measured, so a card that changes repaints alone.
 //!
-//! A card dragged by its handle onto another file card merges into it
-//! (`cardDrag.ts`): the list hit-tests the cards while the drag moves, marks
-//! the target and sets the cursor (copy over a file card, not-allowed over a
-//! group card or the dragged card itself). Files dragged in from the system
-//! outline the list.
+//! A card dragged by its handle onto another file card merges into it: the
+//! list hit-tests the cards while the drag moves, marks the target and sets
+//! the cursor (copy over a file card, not-allowed over a group card or the
+//! dragged card itself). Files dragged in from the system outline the list.
 //!
-//! A click in a card makes it the active card, the one the table keys act
-//! on: ↑/↓, Space, Ctrl/Cmd+A and Ctrl/Cmd+Shift+A work wherever the focus
-//! is, as React's document listener did, except in a text field and when
-//! another control binds the key.
+//! A click in a card makes it the active card, the one the table keys act on:
+//! ↑/↓, Space, Ctrl/Cmd+A and Ctrl/Cmd+Shift+A work wherever the focus is,
+//! except in a text field and when another control binds the key.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -60,8 +58,8 @@ pub enum TableKey {
   ClearAll,
 }
 
-/// The table key of a keystroke: plain ↑, ↓ and Space, and A with Ctrl or
-/// Cmd (React read `ctrlKey || metaKey`), with Shift to clear.
+/// The table key of a keystroke: plain ↑, ↓ and Space, and A with Ctrl or Cmd
+/// on every platform, with Shift to clear.
 pub fn table_key(keystroke: &Keystroke) -> Option<TableKey> {
   let modifiers = &keystroke.modifiers;
   if modifiers.alt || modifiers.function {
@@ -350,7 +348,7 @@ impl Render for FileListView {
       cx.defer_in(window, |this, _, cx| this.set_drag_target(None, cx));
     }
     let primary = cx.theme().primary;
-    // System files dragged over the window outline the list (Q&A).
+    // System files dragged over the window outline the list.
     let drop_zone = div()
       .id("file-drop-zone")
       .test_support()

@@ -15,12 +15,11 @@
 *   limitations under the License.
 */
 
-//! The window content (`Layout.tsx`): update banner, toolbar, tabs and
-//! footer, plus what
+//! The window content: update banner, toolbar, tabs and footer, plus what
 //! belongs to the whole window: OS file drop, toasts, geometry persistence,
-//! the title with the queue count and the taskbar progress (`App.tsx`), the
-//! OS notification and the topmost window of a drained queue, live language
-//! and theme changes, and the close request.
+//! the title with the queue count and the taskbar progress, the OS
+//! notification and the topmost window of a drained queue, live language and
+//! theme changes, and the close request.
 
 use std::time::Duration;
 
@@ -146,8 +145,8 @@ impl AppView {
   }
 
   /// A drained queue's notice: an OS notification (`.system()`: the OS
-  /// notification centre only, title and the two lines as its body, as the
-  /// Tauri shell posted it) and/or the topmost window.
+  /// notification centre only, the title, and the two lines as its body)
+  /// and/or the topmost window.
   fn complete(&mut self, completion: &Completion, window: &mut Window, cx: &mut Context<Self>) {
     let notice = &completion.notice;
     if completion.system {

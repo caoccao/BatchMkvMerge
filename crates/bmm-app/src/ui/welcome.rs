@@ -15,12 +15,12 @@
 *   limitations under the License.
 */
 
-//! The Welcome page (`Welcome.tsx`), shown while the file list is empty.
+//! The Welcome page, shown while the file list is empty.
 //!
-//! Colours are the React page's fixed blues in light and dark, whatever the
-//! theme; only the headline uses the theme's primary colour (solid, not a
-//! gradient). GPUI has no radial gradient, so the page background is a
-//! diagonal linear one, and the hover lift of the cards is a deeper shadow.
+//! Colours are fixed blues in light and dark, whatever the theme; only the
+//! headline uses the theme's primary colour (solid, not a gradient). GPUI has
+//! no radial gradient, so the page background is a diagonal linear one, and
+//! the hover lift of the cards is a deeper shadow.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -331,7 +331,8 @@ impl RenderOnce for Welcome {
               .child(
                 Button::new("welcome-add-files")
                   .custom(add_files)
-                  // gpui-kit draws a custom variant at 20 % strength; React's is solid.
+                  // gpui-kit draws a custom variant at 20 % strength; this one
+                  // is solid.
                   .bg(hex(0x2563eb))
                   .icon(Icon::new(IconName::FileText))
                   .label(tr!("welcome.addFiles"))

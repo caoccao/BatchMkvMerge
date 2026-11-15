@@ -15,11 +15,11 @@
 *   limitations under the License.
 */
 
-//! The toolbar (`Toolbar.tsx`): icon buttons with tooltips and the same
-//! enabled states, and the group-mode and profile menus, which F8 and F9
-//! open too. A menu's open state lives in [`crate::state::UiState`], so the
-//! shortcuts reach it; the menu itself is a gpui-kit `PopupMenu` in a
-//! controlled `Popover`, built when it opens.
+//! The toolbar: icon buttons with tooltips and their enabled states, and the
+//! group-mode and profile menus, which F8 and F9 open too. A menu's open state
+//! lives in [`crate::state::UiState`], so the shortcuts reach it; the menu
+//! itself is a gpui-kit `PopupMenu` in a controlled `Popover`, built when it
+//! opens.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,10 +39,10 @@ use crate::state::ui::ToolbarMenu;
 use crate::state::{Stores, TabType};
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
 
-/// The group modes in menu order (`getGroupModes`).
+/// The group modes in menu order.
 pub const GROUP_MODES: [GroupMode; 3] = [GroupMode::None, GroupMode::TrackCount, GroupMode::TrackCountAndLanguage];
 
-/// The i18n key naming a group mode (`groupModeLabelKey`).
+/// The i18n key naming a group mode.
 pub fn group_mode_label_key(mode: &GroupMode) -> &'static str {
   match mode {
     GroupMode::None => "groupMode.none",
@@ -86,8 +86,7 @@ impl Toolbar {
   }
 }
 
-/// The choices of a toolbar menu, the current one checked (`Toolbar.tsx`'s
-/// two `Menu`s).
+/// The choices of a toolbar menu, the current one checked.
 fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut App) -> Entity<PopupMenu> {
   let config = stores.config.read(cx).config().clone();
   let store = stores.config.clone();
@@ -175,8 +174,8 @@ fn divider(cx: &App) -> Div {
 }
 
 impl Toolbar {
-  /// The session's default output directory (`Toolbar.tsx`): the output
-  /// dialog in directory mode; empty clears it.
+  /// The session's default output directory: the output dialog in directory
+  /// mode; empty clears it.
   fn open_global_output_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let files = self.stores.files.clone();
     let request = OutputDialogRequest {

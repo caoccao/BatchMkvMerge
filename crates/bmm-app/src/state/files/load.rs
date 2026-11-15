@@ -15,15 +15,15 @@
 *   limitations under the License.
 */
 
-//! Background parsing and the profile's automation (`useFilesLoad.ts`).
+//! Background parsing and the profile's automation.
 //!
 //! Every listed file that is not parsed, not being parsed and has not failed
 //! is parsed once on the background executor. Once all members of a unit are
-//! parsed, its automation runs in the React order: language and track name per
-//! new file, then the unit's default/forced flags scoped to the tracks the
-//! profile will select, then the selection is committed. It runs once per unit
-//! (its member list): again only for files without a selection, or when the
-//! unit's membership changes. Existing selections are never replaced.
+//! parsed, its automation runs in this order: language and track name per new
+//! file, then the unit's default/forced flags scoped to the tracks the profile
+//! will select, then the selection is committed. It runs once per unit (its
+//! member list): again only for files without a selection, or when the unit's
+//! membership changes. Existing selections are never replaced.
 
 use std::collections::HashMap;
 use std::sync::Arc;

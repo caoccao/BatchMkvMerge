@@ -15,8 +15,7 @@
 *   limitations under the License.
 */
 
-//! Size, bit-rate and duration labels. Port of the React app's `format.ts`
-//! (itself from BetterMediaInfo) and `formatHMS` from its `merge.ts`.
+//! Size, bit-rate, duration and clock-time labels.
 //!
 //! The `K…` unit ladders divide by 1024, the `K…i` ladders by 1000 (the
 //! labels are BetterMediaInfo's, so `Ki` means 1000 here).
@@ -127,9 +126,8 @@ pub fn track_type_emoji(track_type: MediaTrackType) -> &'static str {
   }
 }
 
-/// A unit's track counts as a card summary shows them (`CardSummary.tsx`):
-/// count and emoji per type that has any, e.g. `1 🎞️ 2 🔊 3 💬`; empty
-/// without tracks.
+/// A unit's track counts as a card summary shows them: count and emoji per
+/// type that has any, e.g. `1 🎞️ 2 🔊 3 💬`; empty without tracks.
 pub fn format_track_counts(counts: &MediaTrackCounts) -> String {
   [
     (counts.video, track_type_emoji(MediaTrackType::Video)),
@@ -146,16 +144,14 @@ pub fn format_track_counts(counts: &MediaTrackCounts) -> String {
 }
 
 /// A container's mux date (UTC, as the parser stores it) in the local time
-/// zone, `2026-05-24 09:00:00` in every language (Q&A; React used the
-/// browser's `toLocaleString()`). `None` without a date; a value that is no
-/// date is shown as it is, as React did.
+/// zone, `2026-05-24 09:00:00` in every language. `None` without a date; a
+/// value that is no date is shown as it is.
 pub fn format_encoded_date(date_utc: Option<&str>) -> Option<String> {
   format_encoded_date_in(date_utc, &chrono::Local)
 }
 
-/// [`format_encoded_date`] in the time zone `tz`. Like JavaScript's `Date`,
-/// a date or year alone means midnight UTC and a date-time without an
-/// offset means local time.
+/// [`format_encoded_date`] in the time zone `tz`. A date or year alone means
+/// midnight UTC, and a date-time without an offset means local time.
 pub fn format_encoded_date_in<Tz: chrono::TimeZone>(date_utc: Option<&str>, tz: &Tz) -> Option<String>
 where
   Tz::Offset: std::fmt::Display,
@@ -190,8 +186,8 @@ where
   Some(shown.format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
-/// A queue row's Start or End: the local time of day as `HH:MM:SS`
-/// (`Queue.tsx::formatClockTime`); `--:--:--` without one.
+/// A queue row's Start or End: the local time of day as `HH:MM:SS`; `--:--:--`
+/// without one.
 pub fn format_clock(time: Option<SystemTime>) -> String {
   format_clock_in(time, &chrono::Local)
 }
@@ -371,7 +367,7 @@ mod tests {
       format_encoded_date_in(Some("2026-05-23T20:30:15-03:00"), &utc).as_deref(),
       Some("2026-05-23 23:30:15")
     );
-    // A date or year alone is midnight UTC, as JavaScript reads it.
+    // A date or year alone is midnight UTC.
     assert_eq!(
       format_encoded_date_in(Some("2024-01-02"), &tokyo).as_deref(),
       Some("2024-01-02 09:00:00")

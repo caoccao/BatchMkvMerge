@@ -15,7 +15,7 @@
 *   limitations under the License.
 */
 
-//! The footer (`Footer.tsx`): the donation link, copyright and author links.
+//! The footer: the donation link, copyright and author links.
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::link::Link;

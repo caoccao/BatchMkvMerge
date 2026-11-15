@@ -16,16 +16,14 @@
 */
 
 //! The persisted configuration (`bmm_core::config::Config`) and the profile
-//! edits of the React store (`addProfile`, `deleteActiveProfile`,
-//! `setActiveProfile`, `resetActiveProfileTemplates`,
-//! `updateActiveProfile`).
+//! edits: add, delete, switch, reset and edit the active profile.
 
 use std::sync::{Arc, Mutex};
 
 use bmm_core::config::{Config, ConfigProfile};
 use gpui_kit::{AppContext, Context, Subscription};
 
-/// The active profile, else the first one (`getActiveProfile`).
+/// The active profile, else the first one.
 pub fn active_profile(config: &Config) -> Option<&ConfigProfile> {
   active_profile_index(config).map(|index| &config.profiles[index])
 }
@@ -108,7 +106,7 @@ impl ConfigStore {
 
   /// Applies `edit` at once and persists the result in the background. The
   /// result is never read back: an older write finishing late must not revert
-  /// newer edits (the React store's optimistic `updateConfig` rule).
+  /// newer edits.
   pub fn update(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Config)) {
     edit(&mut self.config);
     self.revision += 1;
@@ -118,8 +116,7 @@ impl ConfigStore {
     cx.notify();
   }
 
-  /// Edits the profile the Settings show (`updateActiveProfile`): the active
-  /// one, else the first (React edited nothing when the name matched none).
+  /// Edits the profile the Settings show: the active one, else the first.
   pub fn update_active_profile(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut ConfigProfile)) {
     if let Some(index) = active_profile_index(&self.config) {
       self.update(cx, |config| edit(&mut config.profiles[index]));
@@ -133,8 +130,8 @@ impl ConfigStore {
     !name.is_empty() && !self.config.profiles.iter().any(|profile| profile.name == name)
   }
 
-  /// Adds a fresh profile called `name` (trimmed) and makes it active
-  /// (`addProfile`); `false` when [`Self::can_add_profile`] refuses it.
+  /// Adds a fresh profile called `name` (trimmed) and makes it active; `false`
+  /// when [`Self::can_add_profile`] refuses it.
   pub fn add_profile(&mut self, name: &str, cx: &mut Context<Self>) -> bool {
     if !self.can_add_profile(name) {
       return false;
@@ -152,8 +149,8 @@ impl ConfigStore {
     self.config.active_profile != ConfigProfile::DEFAULT_NAME
   }
 
-  /// Deletes the active profile; Default becomes active
-  /// (`deleteActiveProfile`). The Default profile stays.
+  /// Deletes the active profile; Default becomes active. The Default profile
+  /// stays.
   pub fn delete_active_profile(&mut self, cx: &mut Context<Self>) {
     if !self.can_delete_active_profile() {
       return;
@@ -164,8 +161,7 @@ impl ConfigStore {
     });
   }
 
-  /// Makes the profile called `name` active, if there is one
-  /// (`setActiveProfile`).
+  /// Makes the profile called `name` active, if there is one.
   pub fn set_active_profile(&mut self, name: &str, cx: &mut Context<Self>) {
     if self.config.active_profile != name && self.config.profiles.iter().any(|profile| profile.name == name) {
       let name = name.to_string();
@@ -173,8 +169,7 @@ impl ConfigStore {
     }
   }
 
-  /// Puts the active profile back to a fresh profile of the same name
-  /// (`resetActiveProfileTemplates`).
+  /// Puts the active profile back to a fresh profile of the same name.
   pub fn reset_active_profile(&mut self, cx: &mut Context<Self>) {
     self.update_active_profile(cx, |profile| *profile = ConfigProfile::named(&profile.name));
   }

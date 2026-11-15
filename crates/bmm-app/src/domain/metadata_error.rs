@@ -15,9 +15,9 @@
 *   limitations under the License.
 */
 
-//! The message shown when a file cannot be parsed. Port of the React app's
-//! `metadataError.ts`: each error kind has an i18n key under
-//! `merge.error.parser.*` with named arguments; the caller translates it.
+//! The message shown when a file cannot be parsed: each error kind has an i18n
+//! key under `merge.error.parser.*` with named arguments; the caller
+//! translates it when the message is shown.
 
 use bmm_core::protocol::MediaMetadataErrorPayload;
 

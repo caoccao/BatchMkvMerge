@@ -15,24 +15,15 @@
   `dist` is a release build with slower, tighter optimisation; it is used for
   packaging only, never for the edit-test loop.
 
-## Migration in progress
-
-The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://crates.io/crates/gpui-kit) application on the `migrate-gpui-kit` branch, in phases 0-14, one Conventional Commit per phase. The maintainer keeps the plan outside the repository; `CLAUDE.md` lists the phases. Phase 12 deleted the Tauri shell (`src-tauri/`) and the React app (`src/`); the React files that code comments name as the origin of a port are in the git history before that commit. The app is `crates/bmm-app`.
-
 ## Tech Stack
 
-### gpui-kit app
-
-- [gpui-kit](https://crates.io/crates/gpui-kit) 0.9.1 (exact pin; GPUI with the `gpui-pre` backend), in `crates/bmm-app` (package `BatchMkvMerge`)
+- Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library, `crates/bmm-platform` and the application `crates/bmm-app` (package `BatchMkvMerge`)
+- [gpui-kit](https://crates.io/crates/gpui-kit) 0.9.1 (exact pin; GPUI with the `gpui-pre` backend) for the user interface
 - [rust-i18n](https://crates.io/crates/rust-i18n) 4.2 for localization (9 locales under `crates/bmm-app/locales/`)
 - `crates/bmm-platform`: per-OS integrations GPUI lacks (taskbar / Dock / launcher progress through `ITaskbarList3`, `NSDockTile`, the `com.canonical.Unity.LauncherEntry` D-Bus signal)
-- Installers: cargo-packager 0.11.8 (`.app`, `.dmg`, NSIS `.exe`, WiX `.msi`, `.deb`, `.AppImage`) and cargo-generate-rpm 0.21.1 (`.rpm`)
-
-### Backend
-
-- Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library, `crates/bmm-platform` and `crates/bmm-app`
 - Native Rust media metadata parser under `crates/bmm-core/src/media_metadata/`
 - Dedicated worker threads for merge processes, which push `MergeEvent`s to the app
+- Installers: cargo-packager 0.11.8 (`.app`, `.dmg`, NSIS `.exe`, WiX `.msi`, `.deb`, `.AppImage`) and cargo-generate-rpm 0.21.1 (`.rpm`)
 
 ### External tools
 
@@ -49,7 +40,7 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 ## Repository layout
 
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`: Cargo workspace root (members `crates/bmm-core`, `crates/bmm-platform`, `crates/bmm-app`; one `target/`)
-- `crates/bmm-app/`: the gpui-kit app (`src/`; `src/domain/` holds the UI logic without GPUI: merge trees, group cards, size and time labels, queue states, parse-error messages, numeric word navigation; `src/state/` the config, file, queue and navigation stores, with background parsing, the profile automation, the profile edits (add, delete, reset, switch) and the track tables' edits (which fan out over a group card's units); `src/merge_events.rs` the bridge from the core's merge queue; `src/notifications.rs` the toast of every finished merge and the notice sent once the queue drains; `src/actions.rs` enqueue, copy commands, cancel, delete, clear and the queue's per-drive Resume All / Cancel All / Clear Completed across stores, and BetterMediaInfo detection; `src/tools.rs` the MKVToolNix and BetterMediaInfo detection behind the Integration settings; `src/updates.rs` the startup update check and Skip this version; `src/ui/` the screens and shortcuts, with the file and group cards in `src/ui/cards/`, the output path dialog in `src/ui/output_dialog.rs`, the track table and its language and track-name cells in `src/ui/track_table/`, the Queue tab in `src/ui/queue/`, the topmost completion window in `src/ui/topmost.rs`, the Settings tab (gpui-kit's `Settings` component: pages, the language picker, the track-name editor, the tool path rows) in `src/ui/settings/`, the update banner in `src/ui/update_banner.rs`, the toolbar's group-mode and profile menus in `src/ui/toolbar.rs` and the numeric word stops of every text input in `src/ui/word_navigation.rs`; `src/platform/` window geometry and title, close guard, macOS menus, file dialogs and the taskbar progress; `src/i18n.rs` and `src/theme.rs`), its locale files (`locales/`), theme sets (`themes/`), Phase 2 prototypes (`examples/spike/`), the screenshot renderer (`examples/screenshots.rs`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, WiX template)
+- `crates/bmm-app/`: the application (`src/`; `src/domain/` holds the UI logic without GPUI: merge trees, group cards, size and time labels, queue states, parse-error messages, numeric word navigation; `src/state/` the config, file, queue and navigation stores, with background parsing, the profile automation, the profile edits (add, delete, reset, switch) and the track tables' edits (which fan out over a group card's units); `src/merge_events.rs` the bridge from the core's merge queue; `src/notifications.rs` the toast of every finished merge and the notice sent once the queue drains; `src/actions.rs` enqueue, copy commands, cancel, delete, clear and the queue's per-drive Resume All / Cancel All / Clear Completed across stores, and BetterMediaInfo detection; `src/tools.rs` the MKVToolNix and BetterMediaInfo detection behind the Integration settings; `src/updates.rs` the startup update check and Skip this version; `src/ui/` the screens and shortcuts, with the file and group cards in `src/ui/cards/`, the output path dialog in `src/ui/output_dialog.rs`, the track table and its language and track-name cells in `src/ui/track_table/`, the Queue tab in `src/ui/queue/`, the topmost completion window in `src/ui/topmost.rs`, the Settings tab (gpui-kit's `Settings` component: pages, the language picker, the track-name editor, the tool path rows) in `src/ui/settings/`, the update banner in `src/ui/update_banner.rs`, the toolbar's group-mode and profile menus in `src/ui/toolbar.rs` and the numeric word stops of every text input in `src/ui/word_navigation.rs`; `src/platform/` window geometry and title, close guard, macOS menus, file dialogs and the taskbar progress; `src/i18n.rs` and `src/theme.rs`), its locale files (`locales/`), theme sets (`themes/`), the screenshot renderer (`examples/screenshots.rs`), embedded images (`assets/`) and installer inputs (`packaging/`: icons, desktop entry, the macOS `Info.plist` overlay, WiX template)
 - `crates/bmm-platform/src/`: taskbar / Dock / launcher progress per OS
 - `crates/bmm-core/src/`: UI-free core (config, merge queue and `MergeEvent`s, services, MKVToolNix, update check, the result types of `protocol.rs`; the track rows of the selection table in `media_track.rs`, the `mkvmerge` command line in `merge_args.rs`, and the MKV language list and its lookups in `languages.rs`)
 - `crates/bmm-core/src/media_metadata/`: native parser implementation
@@ -60,8 +51,7 @@ The Tauri v2 + React/MUI shell is being replaced by a native [gpui-kit](https://
 ## Commands
 
 ```bash
-cargo run --release -p BatchMkvMerge                         # run the gpui-kit app
-cargo run --release -p BatchMkvMerge --example spike         # the Phase 2 prototypes
+cargo run --release -p BatchMkvMerge                         # run the app
 cargo run --release -p BatchMkvMerge --example screenshots   # regenerate docs/screenshots/ (macOS)
 cargo check --release --workspace                            # fast Rust type-check
 cargo test --release --workspace                             # run all Rust tests
@@ -73,11 +63,11 @@ cargo generate-rpm --profile dist -p crates/bmm-app          # .rpm on Linux
 
 Installers land in `target/packager/` (`target/generate-rpm/` for the `.rpm`).
 
-The Linux dependencies in `crates/bmm-app/Cargo.toml` come from two sources. `dpkg-shlibdeps` on the `ubuntu-22.04` `dist` binary gives the libraries it links (`libc6 (>= 2.35)`, `libgcc-s1`, `libxcb1`, `libxkbcommon0`, `libxkbcommon-x11-0`; rpm adds the same ones by soname). The rest are what GPUI loads at run time, so no tool sees them: the Vulkan loader, the Wayland client, EGL and wayland-egl (wgpu's GL fallback), fontconfig's `/etc/fonts/fonts.conf` (read by a pure-Rust parser) and Noto Color Emoji. The `.rpm` names them as capabilities (`libvulkan.so.1()(64bit)`, …), so they resolve on Fedora and openSUSE alike. Re-derive the list after a gpui-kit bump: list the binary's `NEEDED` entries and the `lib*.so*` names in it, and run `dpkg-shlibdeps -O` in an `ubuntu:22.04` container.
+The Linux dependencies in `crates/bmm-app/Cargo.toml` come from two sources. `dpkg-shlibdeps` on the `ubuntu-22.04` `dist` binary gives the libraries it links (`libc6 (>= 2.35)`, `libgcc-s1`, `libxcb1`, `libxkbcommon0`, `libxkbcommon-x11-0`; rpm adds the same ones by soname). The rest are what GPUI loads at run time, so no tool sees them: the Vulkan loader, the Wayland client, EGL and wayland-egl (wgpu's GL fallback), fontconfig's `/etc/fonts/fonts.conf` (read by a pure-Rust parser) and Noto Color Emoji. The `.rpm` names them as capabilities (`libvulkan.so.1()(64bit)`, …), so they resolve whichever package provides them. Re-derive the list after a gpui-kit bump: list the binary's `NEEDED` entries and the `lib*.so*` names in it, and run `dpkg-shlibdeps -O` in an `ubuntu:22.04` container.
 
 The screenshots example draws the app from synthetic files (nothing is parsed or merged, the config stays in memory) and overwrites the four pictures of `docs/screenshots/`; `-- --out <dir>` writes them elsewhere, and `-- --review <dir>` renders the visual-review set instead: every locale through every tab, menu, dialog and settings page at the 600 × 450 minimum window size, and every theme in light and dark. It renders offscreen through GPUI's `render_to_image`, which only macOS implements.
 
-The twenty colour themes in `crates/bmm-app/themes/` are derived from the React palette's main colours in `crates/bmm-app/src/theme.rs` (`THEMES`); the test `every_theme_file_is_derived_from_its_main_colour` fails when a file differs. After changing a colour, rewrite the files with:
+The twenty colour themes in `crates/bmm-app/themes/` are derived from their main colours in `crates/bmm-app/src/theme.rs` (`THEMES`); the test `every_theme_file_is_derived_from_its_main_colour` fails when a file differs. After changing a colour, rewrite the files with:
 
 ```bash
 BMM_WRITE_THEMES=1 cargo test --release -p BatchMkvMerge --lib theme::
@@ -121,12 +111,46 @@ The persisted config file is named `BatchMkvMerge.json` and lives at:
 
 ## CI
 
-Three GitHub Actions workflows build the gpui-kit app on push/PR and upload its installers under the artifact names of the Tauri releases:
+Three GitHub Actions workflows build the app on push/PR and upload its installers as seven artifacts named `BatchMkvMerge-<os>-<arch>-<version>`, with `-<format>` on Linux and Windows:
 
 - `linux_build.yml` (`ubuntu-22.04`, for a low glibc floor) — `.deb`, `.AppImage` (cargo-packager), `.rpm` (cargo-generate-rpm)
 - `macos_build.yml` — `.dmg` (x86_64 on `macos-15-intel` and arm64 on `macos-15`)
 - `windows_build.yml` — `.msi` (one per language) and NSIS `.exe`
 
-Each installs the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), runs `cargo test --release --workspace --locked`, builds `BatchMkvMerge` with `--profile dist` and packages it. No Node, pnpm or Deno steps. Linux also installs GPUI's build dependencies and Mesa's Vulkan drivers.
+Each installs the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), runs `cargo test --release --workspace --locked`, builds `BatchMkvMerge` with `--profile dist` and packages it. Linux also installs GPUI's build dependencies and Mesa's Vulkan drivers.
 
 Linux additionally enforces ≥ 90 % line coverage for the `bmm-core` crate (`cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`).
+
+## Release checklist
+
+Run it before tagging a release, on each OS, with the `dist` installers that CI built from the release commit (the workflow artifacts), not with a local `cargo run`. The app checks can use a scratch home (`HOME=/tmp/bmm-home`, see above) or a test account, so they do not touch your own settings; the install and upgrade checks use the real install locations.
+
+Before:
+
+- [ ] The three workflows are green on the release commit and upload seven artifacts whose names carry the new version.
+- [ ] The version is bumped with `deno task change-version`, and `docs/release_notes.md` has its `## <version>` section.
+- [ ] After a gpui-kit bump since the last release: the Linux dependencies are re-derived (see "Commands").
+
+Install, upgrade and uninstall:
+
+- [ ] Windows: the NSIS `-setup.exe` installs for the current user and starts from the Start Menu; run over the previous release, it replaces it (one entry in Apps); uninstalling removes it. The same for an `.msi` (all users; a major upgrade removes the previous MSI install). The app also starts on a machine without WebView2.
+- [ ] macOS, on Intel and on Apple silicon: the `.dmg` opens without a prompt; the app dragged over the previous release in Applications replaces it and starts.
+- [ ] Linux: `sudo apt install ./<file>.deb` on Ubuntu 22.04 and `sudo dnf install ./<file>.rpm` on Fedora install, and upgrade the previous release (one package, the new binary); the `.AppImage` starts; the app runs in an X11 and in a Wayland session.
+- [ ] A config written by the previous release loads unchanged: theme, language, profiles, tool paths and window geometry.
+
+In the app, on each OS:
+
+- [ ] Files and folders dropped onto the window, chosen with Add Files or Add Folder, or given on the command line become cards; files dragged in from the system outline the list.
+- [ ] Group by file name and the group modes give the expected cards and group cards; a card dragged onto another merges into it; the child badge lists the members and removes one.
+- [ ] Track table: the checkboxes and select-all, row drag-reorder, the language and track-name cells (↓ / ↑ / Enter / Escape, `ger` becomes `de`), the default and forced flags and their header buttons, ↑ / ↓ / Space / Ctrl+A on the active card.
+- [ ] Set Output Path, Copy Command (the command Merge runs), Open in BetterMediaInfo when it is installed.
+- [ ] Merge, Merge All (F3), Cancel on the card and in the queue, Cancel All (F4), Resume All, Clear Completed; on Windows, files on two drives merge in parallel, one at a time per drive.
+- [ ] While merging: the card's progress row with elapsed time and ETA, the title's `- done/total`, and the taskbar, Dock or launcher progress, which clears afterwards.
+- [ ] With both queue toggles on, a finished queue sends one system notification (the first one may ask for permission) and opens the topmost window once, above other applications; Enter or Escape closes it.
+- [ ] Closing the window (or Cmd+Q on macOS) while a merge runs asks first; Enter and Escape answer No; Yes stops the merges and quits.
+- [ ] Settings (F10): every page; Browse and Detect for MKVToolNix and BetterMediaInfo; adding, switching, deleting and resetting a profile; the language picker's drags.
+- [ ] The toolbar menus (F8 group mode, F9 profile), Ctrl+Q (clear the list), Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 and Ctrl+W on the tabs.
+- [ ] Every theme in light, dark and auto (auto follows the OS appearance), every language; the emoji track icons and Japanese and Chinese text render.
+- [ ] In a text field, the word keys (Ctrl+Arrow, Option+Arrow on macOS, with Shift, and the word deletions) stop at each part of a number.
+- [ ] The window reopens at its saved size and position; a maximized window keeps its restore size.
+- [ ] The update banner appears for a newer GitHub release, and Skip this version hides it for that version.

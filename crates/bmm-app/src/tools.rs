@@ -15,11 +15,10 @@
 *   limitations under the License.
 */
 
-//! The two external tools of the Integration settings (`isMkvtoolnixFound`,
-//! `detectBetterMediaInfo`): where MKVToolNix and BetterMediaInfo are.
-//! Detection never writes the config; the caller stores a found path through
-//! the config store, as `useToolPathDetection` did. The same holds for the
-//! MKVToolNix directory a merge finds by itself ([`auto_detected_channel`]).
+//! The two external tools of the Integration settings: where MKVToolNix and
+//! BetterMediaInfo are. Detection never writes the config; the caller stores a
+//! found path through the config store. The same holds for the MKVToolNix
+//! directory a merge finds by itself ([`auto_detected_channel`]).
 
 use std::sync::Arc;
 
@@ -139,9 +138,8 @@ pub fn auto_detected_channel() -> (AutoDetectedSink, Receiver<String>) {
 }
 
 /// Stores every directory from `paths` as the MKVToolNix path through the
-/// config store, on the foreground, so the Integration settings show it and
-/// no other write drops it. The React app's core wrote it to the file itself,
-/// and its next settings write lost it again.
+/// config store, on the foreground, so the Integration settings show it and no
+/// other write drops it; the core never writes the config file itself.
 pub fn store_auto_detected(config: &Entity<ConfigStore>, paths: Receiver<String>, cx: &mut App) {
   let config = config.clone();
   cx.spawn(async move |cx| {

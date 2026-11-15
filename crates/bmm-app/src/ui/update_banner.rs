@@ -15,12 +15,12 @@
 *   limitations under the License.
 */
 
-//! The update banner above the toolbar (`UpdateBanner.tsx`): an info alert
-//! whose text opens the releases page, a "Skip this version" checkbox and a
-//! close button. Closing it with the box checked skips that version. The
-//! version comes from [`crate::updates`] through `UiState` instead of a
-//! one-second poll. gpui-kit's `Alert` takes only text, so the banner is
-//! drawn in its info style.
+//! The update banner above the toolbar: an info alert whose text opens the
+//! releases page, a "Skip this version" checkbox and a close button. Closing
+//! it with the box checked skips that version. The version comes from
+//! [`crate::updates`] through `UiState` instead of a one-second poll.
+//! gpui-kit's `Alert` takes only text, so the banner is drawn in its info
+//! style.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{TestSupportExt, TestTextExt};

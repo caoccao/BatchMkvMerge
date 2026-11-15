@@ -440,7 +440,7 @@ async fn docs(shooter: &mut Shooter, cx: &mut AsyncApp) {
   set_tab(&stores, TabType::Queue, cx);
   pause(cx, 300).await;
   shooter.shot(handle, "queue", cx);
-  // The automation options as in the React screenshot.
+  // The automation options the screenshot has always shown.
   update_config(&stores, cx, |config| {
     let automation = &mut config.profiles[0].automation;
     automation.reset_und_language.enabled = true;

@@ -15,8 +15,7 @@
 *   limitations under the License.
 */
 
-//! Tests of the file store: every method ported from a `store.ts` action,
-//! and the loading pipeline.
+//! Tests of the file store: every edit method, and the loading pipeline.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
