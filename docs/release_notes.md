@@ -17,7 +17,9 @@
 - The track table's ↑ / ↓ / Space keys work on the File List tab only, without modifier keys.
 - In every text field, Ctrl+Left/Right (Option on macOS), with or without Shift, and the word deletions stop at each part of a number on every platform: `Movie.2024.1080p` stops at 5, 6, 10 and 16 going right.
 - Visuals follow gpui-kit with Lucide icons: headlines are solid instead of gradient text, glows and hover lifts are shadows.
-- The window reopens at its saved position only when that position is on a connected display.
+- The window reopens on the display it was closed on, also with displays at different scales and on macOS, and at its saved position only when that position is on a connected display.
+- Fixed: two merges into one directory no longer get the same output name while neither is written yet (two `Episode.srt` in one Merge All, or a second Merge while the first waits); mkvmerge overwrote the first output.
+- Fixed: a card is not deleted while one of its files merges, a deleted card's cancelled merge no longer comes back in the queue, Clear waits for a merge that is still being prepared, and a merge started again the moment it finished no longer stays waiting.
 - Fixed default-track reset automation to honor user-reordered track order.
 - Fixed chapter rows to show a localized chapter label and entry count in the proper columns.
 - Added `--no-global-tags` to generated mkvmerge commands.

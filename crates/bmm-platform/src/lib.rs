@@ -20,6 +20,8 @@
 //! The crate has no GPUI dependency: callers pass anything that implements
 //! [`raw_window_handle::HasWindowHandle`], which GPUI's `Window` does.
 
+pub mod display;
 pub mod taskbar;
 
+pub use display::window_display_id;
 pub use taskbar::TaskbarProgress;

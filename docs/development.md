@@ -152,5 +152,5 @@ In the app, on each OS:
 - [ ] The toolbar menus (F8 group mode, F9 profile), Ctrl+Q (clear the list), Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 and Ctrl+W on the tabs.
 - [ ] Every theme in light, dark and auto (auto follows the OS appearance), every language; the emoji track icons and Japanese and Chinese text render.
 - [ ] In a text field, the word keys (Ctrl+Arrow, Option+Arrow on macOS, with Shift, and the word deletions) stop at each part of a number.
-- [ ] The window reopens at its saved size and position; a maximized window keeps its restore size.
+- [ ] The window reopens at its saved size and position; a maximized window keeps its restore size. With a second display at another scale, it reopens on the display it was closed on.
 - [ ] The update banner appears for a newer GitHub release, and Skip this version hides it for that version.

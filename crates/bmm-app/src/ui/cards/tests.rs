@@ -25,6 +25,7 @@ use std::time::{Duration, SystemTime};
 
 use bmm_core::config::{Config, GroupMode};
 use bmm_core::media_metadata::model::MediaMetadata;
+use bmm_core::media_metadata::model::track::TrackType;
 use bmm_core::media_metadata::model::track_properties_common::TrackFlag;
 use bmm_core::media_track::MediaTrackCounts;
 use bmm_core::merge::{MergeEvent, MergeOutcome};
@@ -317,6 +318,30 @@ fn delete_removes_the_card_and_cancels_a_waiting_merge(cx: &mut TestAppContext) 
       .queue
       .read_with(cx, |queue, _| queue.item(&movie).is_none())
   );
+}
+
+/// `Movie.srt` added while `Movie.en.srt` merges becomes the root of a card
+/// that holds the merging file: Delete waits for that merge, which would
+/// otherwise run on untracked.
+#[gpui_kit::test]
+fn delete_waits_for_a_member_that_merges(cx: &mut TestAppContext) {
+  let dir = TempDir::new("cards-member-merges");
+  let (subtitle, base) = (dir.file("Movie.en.srt"), dir.file("Movie.srt"));
+  let english = || crate::state::files::tests::metadata(&[(TrackType::Subtitles, "eng")]);
+  let parsed = HashMap::from([(subtitle.clone(), english()), (base.clone(), english())]);
+  let shell = shell(cx, config(GroupMode::None, true), parsed, &[subtitle.as_str()]);
+  click_in(&shell, cx, 0, "card-merge");
+  shell.send(cx, started(&subtitle));
+  shell.add_parsed(cx, &[base.as_str()]);
+  assert_eq!(units(&shell, cx), [s(&[&base, &subtitle])]);
+  assert_eq!(control(&shell, cx, 0, "card-delete"), Some(true), "a member merges");
+  click_in(&shell, cx, 0, "card-delete");
+  assert_eq!(units(&shell, cx).len(), 1);
+  assert!(cx.update(|cx| shell.stores.has_active_merges(cx)));
+  shell.send(cx, finished(&subtitle, MergeOutcome::Completed, None));
+  assert_eq!(control(&shell, cx, 0, "card-delete"), Some(false));
+  click_in(&shell, cx, 0, "card-delete");
+  assert!(shell.stores.files.read_with(cx, |files, _| !files.has_files()));
 }
 
 #[gpui_kit::test]

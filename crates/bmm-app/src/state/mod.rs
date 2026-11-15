@@ -20,6 +20,7 @@
 
 pub mod config;
 pub mod files;
+pub mod outputs;
 pub mod queue;
 pub mod ui;
 

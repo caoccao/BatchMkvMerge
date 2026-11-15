@@ -317,19 +317,26 @@ impl MergeQueue {
     }
   }
 
-  /// Emit `Finished`, drop the task and start the next file of its drive.
+  /// Drop the task, emit `Finished` and start the next file of its drive.
+  ///
+  /// The task goes before `Finished` is sent, so an enqueue of the same file
+  /// that answers it (a retry) is a new task rather than a duplicate of this
+  /// one. The drive stays taken until `Finished` is out: the retry waits on
+  /// it, and no file of the drive starts before the report.
   fn finish(self: &Arc<Self>, file: &str, outcome: WorkerOutcome) {
-    self.emit_finished(file, &outcome);
-    let next_file = {
+    {
       let mut st = self.lock_state();
       st.children.remove(file);
       st.tasks.remove(file);
+    }
+    self.emit_finished(file, &outcome);
+    let next_file = {
+      let mut st = self.lock_state();
       let drive_key = get_drive_key(file);
       let drive = st.drives.entry(drive_key).or_default();
       if drive.merging.as_deref() == Some(file) {
         drive.merging = None;
       }
-      drive.queued.retain(|f| f != file);
       if drive.merging.is_none() && !drive.queued.is_empty() {
         let next = drive.queued.remove(0);
         drive.merging = Some(next.clone());
@@ -671,7 +678,7 @@ mod tests {
       entries
     }
 
-    /// `Finished` is sent before the task is dropped, so wait for the drop.
+    /// The drive is freed after `Finished` is sent, so wait for that.
     fn wait_until_idle(&self) {
       let deadline = Instant::now() + TIMEOUT;
       while !self.queue.entries().is_empty() {
@@ -764,6 +771,59 @@ mod tests {
     assert_eq!(h.next(), finished(A, MergeOutcome::Completed, None));
     h.wait_until_idle();
     h.assert_quiet();
+  }
+
+  /// The app may enqueue a file again as soon as its `Finished` arrives; the
+  /// sink here does it while the event is being sent. The retry merges.
+  #[test]
+  fn a_file_enqueued_again_on_its_finished_event_merges_again() {
+    struct Done;
+    impl MergeProcessControl for Done {
+      fn kill(&mut self) -> std::io::Result<()> {
+        Ok(())
+      }
+      fn wait(&mut self) -> std::io::Result<Option<i32>> {
+        Ok(Some(0))
+      }
+    }
+    let launches = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    let recorder = Arc::clone(&launches);
+    let launcher: MergeLauncher = Box::new(move |_, args| {
+      recorder.lock().unwrap().push(args.to_vec());
+      Ok(MergeProcess {
+        output: None,
+        control: Box::new(Done),
+      })
+    });
+    let queue_cell: Arc<OnceLock<std::sync::Weak<MergeQueue>>> = Arc::new(OnceLock::new());
+    let retry_queue = Arc::clone(&queue_cell);
+    let retried = AtomicBool::new(false);
+    let (event_tx, events) = mpsc::channel();
+    let sink: MergeEventSink = Box::new(move |event| {
+      if matches!(event, MergeEvent::Finished { .. }) && !retried.swap(true, Ordering::SeqCst) {
+        let queue = retry_queue.get().and_then(std::sync::Weak::upgrade).expect("the queue");
+        queue.enqueue(A.to_owned(), vec!["retry".to_owned()]).unwrap();
+      }
+      let _ = event_tx.send(event);
+    });
+    let queue = MergeQueue::new(launcher, sink);
+    queue_cell.set(Arc::downgrade(&queue)).unwrap();
+    queue.enqueue(A.to_owned(), args_for(A)).unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+      let event = events.recv_timeout(TIMEOUT).expect("a merge event");
+      seen.push(match event {
+        MergeEvent::Started { file, .. } => started(&file),
+        MergeEvent::Finished { file, outcome, .. } => finished(&file, outcome, None),
+        MergeEvent::Progress { file, percent } => progress(&file, percent),
+      });
+    }
+    let done = finished(A, MergeOutcome::Completed, None);
+    assert_eq!(
+      seen,
+      [started(A), finished(A, MergeOutcome::Completed, None), started(A), done]
+    );
+    assert_eq!(*launches.lock().unwrap(), [args_for(A), vec!["retry".to_owned()]]);
   }
 
   #[test]

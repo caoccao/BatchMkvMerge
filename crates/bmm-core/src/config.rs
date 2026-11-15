@@ -641,6 +641,11 @@ fn normalize_locale_tag(locale: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfigWindow {
+  /// The display the window was on, as the platform names it (a display
+  /// UUID); empty when unknown. Displays at different scales can overlap in
+  /// logical coordinates, so the position alone may not say which one it is.
+  #[serde(default)]
+  pub display: String,
   #[serde(default)]
   pub position: ConfigWindowPosition,
   #[serde(default)]
@@ -650,6 +655,7 @@ pub struct ConfigWindow {
 impl Default for ConfigWindow {
   fn default() -> Self {
     Self {
+      display: String::new(),
       position: Default::default(),
       size: Default::default(),
     }
@@ -981,7 +987,11 @@ mod tests {
       }
     ],
     "activeProfile": "Anime",
-    "window": { "position": { "x": 120, "y": 80 }, "size": { "width": 1440, "height": 960 } },
+    "window": {
+      "display": "5f2a7c3e-0d4b-5e1a-9c6f-2b8d4e7a1c90",
+      "position": { "x": 120, "y": 80 },
+      "size": { "width": 1440, "height": 960 }
+    },
     "update": { "checkInterval": "Monthly", "lastChecked": 1800000000, "lastVersion": "1.0.1", "ignoreVersion": "1.0.1" },
     "parser": { "timeoutMs": 2500, "subtitleCharset": "windows-1252" },
     "groupMode": "TrackCountAndLanguage",

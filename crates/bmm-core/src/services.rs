@@ -294,6 +294,17 @@ pub fn read_media_metadata(file: String, options: ParseOptions) -> Result<MediaM
 /// place collides on the base name (it is the source file), so the increment
 /// kicks in automatically.
 pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> String {
+  resolve_merge_output_path_avoiding(output_dir, source_file, |_| false)
+}
+
+/// [`resolve_merge_output_path`] that also passes over every candidate
+/// `taken` claims: the outputs of merges that are queued but not written yet,
+/// which the file system does not show.
+pub fn resolve_merge_output_path_avoiding(
+  output_dir: String,
+  source_file: String,
+  taken: impl Fn(&str) -> bool,
+) -> String {
   let dir = std::path::Path::new(&output_dir);
   let stem = std::path::Path::new(&source_file)
     .file_stem()
@@ -307,8 +318,9 @@ pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> Str
       format!("{stem} ({counter}).mkv")
     };
     let candidate = dir.join(&name);
-    if !candidate.exists() {
-      return candidate.to_string_lossy().into_owned();
+    let path = candidate.to_string_lossy().into_owned();
+    if !candidate.exists() && !taken(&path) {
+      return path;
     }
     counter += 1;
   }
@@ -347,6 +359,29 @@ mod tests {
   /// `BMM_PARSER_BUDGET_MS` env var so they cannot race each other under
   /// cargo's parallel test runner. Poison from a panicking test is tolerated.
   static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+  #[test]
+  fn a_merge_output_passes_over_existing_and_taken_names() {
+    let dir = std::env::temp_dir().join("bmm_output_avoiding");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.to_string_lossy().into_owned();
+    let name = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let source = "/inputs/Episode.srt".to_owned();
+    assert_eq!(
+      resolve_merge_output_path(out.clone(), source.clone()),
+      name("Episode.mkv")
+    );
+    std::fs::write(dir.join("Episode.mkv"), b"").unwrap();
+    let taken = name("Episode (1).mkv");
+    assert_eq!(
+      resolve_merge_output_path_avoiding(out.clone(), source.clone(), |path| path == taken),
+      name("Episode (2).mkv"),
+      "on disk, then taken by a queued merge"
+    );
+    assert_eq!(resolve_merge_output_path(out, source), name("Episode (1).mkv"));
+    let _ = std::fs::remove_dir_all(&dir);
+  }
 
   #[test]
   fn overridden_output_path_appends_source_name_for_existing_dir() {

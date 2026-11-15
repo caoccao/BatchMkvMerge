@@ -75,8 +75,9 @@ impl FileCard {
           cx.notify();
         }
       }),
+      // A member's own merge decides whether Delete is available.
       cx.subscribe(&stores.queue, |this, queue, event: &QueueEvent, cx| match event {
-        QueueEvent::ItemChanged { file } if file == this.root() => cx.notify(),
+        QueueEvent::ItemChanged { file } if this.members.contains(file) => cx.notify(),
         QueueEvent::Tick
           if queue
             .read(cx)
@@ -162,13 +163,14 @@ impl FileCard {
     let files = self.stores.files.read(cx);
     let current = files.output_path(&root).map(str::to_string);
     let target = OutputTarget::of(files, &root);
+    let taken = self.stores.queue.read(cx).reservations().taken();
     let store = self.stores.files.clone();
     cx.spawn_in(window, async move |_, cx| {
       let initial = match current {
         Some(path) => path,
         None => {
           let root = root.clone();
-          cx.background_spawn(async move { resolve_merge_output_for(&target, &root) })
+          cx.background_spawn(async move { resolve_merge_output_for(&target, &root, &taken) })
             .await
         }
       };
@@ -425,7 +427,7 @@ impl Render for FileCard {
           IconName::Trash,
           Some(danger),
           tr!("list.delete"),
-          !merging,
+          !actions::unit_merging(&self.stores, &self.members, cx),
         )
         .on_click(cx.listener(|this, _, _, cx| {
           let members = this.members.clone();

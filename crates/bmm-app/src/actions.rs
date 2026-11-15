@@ -19,19 +19,20 @@
 //! files and the queue.
 //!
 //! A merge is enqueued in three steps: a [`MergeRequest`] is read from the
-//! stores on the foreground; the output path is resolved and the `mkvmerge`
-//! arguments built on the background executor (resolving checks the file
-//! system); then, on the foreground again, every root that is not waiting or
-//! merging is listed as waiting and handed to the merge queue. Requests keep
-//! their order, so a drive's queue follows the file list. The app never
-//! creates the output directory: mkvmerge creates missing directories.
+//! stores on the foreground, and every root that is not waiting or merging is
+//! listed as waiting at once; the output path is resolved and reserved and
+//! the `mkvmerge` arguments built on the background executor (resolving
+//! checks the file system); then, on the foreground again, every root that is
+//! still listed is handed to the merge queue. Requests keep their order, so a
+//! drive's queue follows the file list. The app never creates the output
+//! directory: mkvmerge creates missing directories.
 
 use bmm_core::media_track::MediaTrack;
 use bmm_core::merge_args::{
   MergeInput, OrderedTrackRef, build_command_string, build_command_string_multi, build_merge_args,
   build_merge_args_multi, resolve_output_dir,
 };
-use bmm_core::services::{resolve_merge_output_path, resolve_overridden_output_path};
+use bmm_core::services::{resolve_merge_output_path_avoiding, resolve_overridden_output_path};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -39,6 +40,7 @@ use gpui_kit::{App, AppContext, ClipboardItem, Task};
 
 use crate::domain::file_tree::combine_unit_tracks;
 use crate::domain::status::QueueItemStatus;
+use crate::state::outputs::{Resolution, TakenOutputs};
 use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
 use crate::tools::Tool;
@@ -62,19 +64,24 @@ impl OutputTarget {
       global_dir: files.global_output_dir().map(str::to_string),
     }
   }
+
+  /// Whether the app names the output: no full-path override is set.
+  pub fn is_automatic(&self) -> bool {
+    self.path.as_deref().is_none_or(str::is_empty)
+  }
 }
 
 /// The output file of a merge keyed by `file`. A full-path override naming a
 /// file is used as is (the save dialog already confirmed an overwrite); one
 /// naming a directory gets the input's file name with no " (1)" suffix.
-/// Otherwise `<dir>/<stem>.mkv`, with " (1)", " (2)", … while that exists.
-/// Checks the file system.
-pub fn resolve_merge_output_for(target: &OutputTarget, file: &str) -> String {
+/// Otherwise `<dir>/<stem>.mkv`, with " (1)", " (2)", … while that exists or
+/// is `taken` by a merge that has not written it yet. Checks the file system.
+pub fn resolve_merge_output_for(target: &OutputTarget, file: &str, taken: &TakenOutputs) -> String {
   if let Some(path) = target.path.as_deref().filter(|path| !path.is_empty()) {
     return resolve_overridden_output_path(path.to_string(), file.to_string());
   }
   let dir = resolve_output_dir(file, target.dir.as_deref(), target.global_dir.as_deref());
-  resolve_merge_output_path(dir, file.to_string())
+  resolve_merge_output_path_avoiding(dir, file.to_string(), |path| taken.contains(path))
 }
 
 /// One merge, read from the stores: the queue key (a unit root, the output's
@@ -170,67 +177,79 @@ impl MergeRequest {
     Self::unit(files, root, inputs, None)
   }
 
-  /// The output file the merge writes. Checks the file system.
-  pub fn output_path(&self) -> String {
-    resolve_merge_output_for(&self.output, &self.root)
+  /// The output file the merge writes, passing over the `taken` outputs.
+  /// Checks the file system.
+  pub fn output_path(&self, taken: &TakenOutputs) -> String {
+    resolve_merge_output_for(&self.output, &self.root, taken)
   }
 
-  /// The `mkvmerge` arguments, with the output path resolved. Checks the
-  /// file system.
-  pub fn resolve(&self) -> Vec<String> {
-    let output = self.output_path();
+  /// The `mkvmerge` arguments that write `output`.
+  pub fn args(&self, output: &str) -> Vec<String> {
     if self.multi {
-      build_merge_args_multi(&self.inputs, &output, self.order.as_deref())
+      build_merge_args_multi(&self.inputs, output, self.order.as_deref())
     } else {
-      build_merge_args(&self.root, &output, &self.inputs[0].tracks)
+      build_merge_args(&self.root, output, &self.inputs[0].tracks)
     }
   }
 
-  /// The copyable shell command (`buildCommandString(Multi)`) for the
-  /// MKVToolNix in `mkv_toolnix_path`, with the output Merge would write.
-  /// Checks the file system.
-  pub fn command(&self, mkv_toolnix_path: &str) -> String {
-    let output = self.output_path();
+  /// The copyable shell command (`buildCommandString(Multi)`) that writes
+  /// `output` with the MKVToolNix in `mkv_toolnix_path`.
+  pub fn command(&self, output: &str, mkv_toolnix_path: &str) -> String {
     if self.multi {
-      build_command_string_multi(&self.inputs, &output, mkv_toolnix_path, self.order.as_deref())
+      build_command_string_multi(&self.inputs, output, mkv_toolnix_path, self.order.as_deref())
     } else {
-      build_command_string(&self.root, &output, mkv_toolnix_path, &self.inputs[0].tracks)
+      build_command_string(&self.root, output, mkv_toolnix_path, &self.inputs[0].tracks)
     }
   }
 }
 
-/// Resolves `requests` on the background executor, then enqueues them in
-/// order, skipping a root that is waiting or merging.
+/// Lists the roots of `requests` that are not waiting or merging as waiting,
+/// resolves and reserves their outputs on the background executor, then hands
+/// them to the merge queue in order. A root removed or cancelled meanwhile is
+/// not handed over.
+///
+/// The returned task must run to its end (detach it): the roots it listed
+/// wait for it.
 pub fn enqueue(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
   let queue = stores.queue.clone();
   let backend = stores.merges.clone();
-  let requests: Vec<MergeRequest> = requests
-    .into_iter()
-    .filter(|request| queue.read(cx).can_enqueue(&request.root))
-    .collect();
+  let (prepared, reservations) = queue.update(cx, |queue, cx| {
+    let prepared: Vec<(MergeRequest, u64)> = requests
+      .into_iter()
+      .filter_map(|request| queue.prepare(&request.root, cx).map(|ticket| (request, ticket)))
+      .collect();
+    (prepared, queue.reservations().clone())
+  });
+  if prepared.is_empty() {
+    return Task::ready(());
+  }
   cx.spawn(async move |cx| {
-    if requests.is_empty() {
-      return;
-    }
-    let resolved: Vec<(String, Vec<String>)> = cx
+    let resolved: Vec<(String, u64, Vec<String>)> = cx
       .background_spawn(async move {
-        requests
+        prepared
           .into_iter()
-          .map(|request| {
-            let args = request.resolve();
-            (request.root, args)
+          .map(|(request, ticket)| {
+            let args = reservations.reserve(ticket, |taken| {
+              let output = request.output_path(taken);
+              Resolution {
+                value: request.args(&output),
+                automatic: request.output.is_automatic(),
+                output,
+              }
+            });
+            (request.root, ticket, args)
           })
           .collect()
       })
       .await;
     queue.update(cx, |queue, cx| {
-      for (root, args) in resolved {
-        if !queue.add_to_queue(&root, cx) {
+      for (root, ticket, args) in resolved {
+        if !queue.submit(&root, ticket, cx) {
           continue;
         }
         if let Err(error) = backend.enqueue(root.clone(), args) {
           log::error!("Failed to enqueue {root}: {error}");
-          queue.remove_from_queue(&root, cx);
+          queue.abandon(&root, cx);
         }
       }
     });
@@ -338,27 +357,39 @@ pub fn clear_files(stores: &Stores, cx: &mut App) {
   }
 }
 
-/// Removes one file and its queue item.
+/// Removes one file and its queue item. A merge of the file that waits or
+/// runs is cancelled first, so none goes on without its card; its item stays,
+/// hidden, until the merge queue reports the end.
 pub fn remove_file(stores: &Stores, file: &str, cx: &mut App) {
+  let uncancelled = stores
+    .queue
+    .read(cx)
+    .item(file)
+    .is_some_and(|item| item.status.is_active() && !item.cancel_requested);
+  if uncancelled {
+    cancel_merge(stores, file, cx);
+  }
   stores.files.update(cx, |files, cx| files.remove_file(file, cx));
   stores.queue.update(cx, |queue, cx| queue.remove_from_queue(file, cx));
 }
 
-fn status(stores: &Stores, file: &str, cx: &App) -> Option<QueueItemStatus> {
-  stores.queue.read(cx).item(file).map(|item| item.status)
+/// Whether a member of `unit` merges. Not only the root: a card regrouped
+/// while a file's own merge runs holds that file as a member.
+pub fn unit_merging(stores: &Stores, unit: &[String], cx: &App) -> bool {
+  let queue = stores.queue.read(cx);
+  unit.iter().any(|file| {
+    queue
+      .item(file)
+      .is_some_and(|item| item.status == QueueItemStatus::Merging)
+  })
 }
 
-/// A file card's Delete (`MkvFileCard.handleDelete`): nothing while the
-/// unit's root merges; a waiting root is cancelled first; then every member
-/// goes, with its queue item. `false` when nothing was removed.
+/// A file card's Delete (`MkvFileCard.handleDelete`): nothing while a member
+/// merges; otherwise every member goes, with its queue item, a waiting one
+/// cancelled first. `false` when nothing was removed.
 pub fn delete_unit(stores: &Stores, unit: &[String], cx: &mut App) -> bool {
-  let Some(root) = unit.first() else {
+  if unit.is_empty() || unit_merging(stores, unit, cx) {
     return false;
-  };
-  match status(stores, root, cx) {
-    Some(QueueItemStatus::Merging) => return false,
-    Some(QueueItemStatus::Waiting) => cancel_merge(stores, root, cx),
-    _ => {}
   }
   for file in unit {
     remove_file(stores, file, cx);
@@ -366,33 +397,35 @@ pub fn delete_unit(stores: &Stores, unit: &[String], cx: &mut App) -> bool {
   true
 }
 
-/// A group card's Clear All (`GroupCard.handleClearAll`): every unit whose
-/// root is not merging goes, a waiting root cancelled first.
+/// A group card's Clear All (`GroupCard.handleClearAll`): every unit without
+/// a merging member goes, as with [`delete_unit`].
 pub fn clear_units(stores: &Stores, units: &[Vec<String>], cx: &mut App) {
   for unit in units {
-    if unit
-      .first()
-      .is_some_and(|root| status(stores, root, cx) != Some(QueueItemStatus::Merging))
-    {
-      delete_unit(stores, unit, cx);
-    }
+    delete_unit(stores, unit, cx);
   }
 }
 
 /// Copies the commands of `requests`, one per line, to the clipboard and says
-/// so. Output paths are resolved on the background executor, as for a merge.
+/// so. Output paths are resolved on the background executor as Merge would
+/// resolve them now: past the outputs of the waiting and merging merges, and
+/// past each other's.
 pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
   if requests.is_empty() {
     return Task::ready(());
   }
   let toolnix = stores.config.read(cx).config().external_tools.mkv_toolnix_path.clone();
+  let mut taken = stores.queue.read(cx).reservations().taken();
   let ui = stores.ui.clone();
   cx.spawn(async move |cx| {
     let commands = cx
       .background_spawn(async move {
         requests
           .iter()
-          .map(|request| request.command(&toolnix))
+          .map(|request| {
+            let output = request.output_path(&taken);
+            taken.insert(&output);
+            request.command(&output, &toolnix)
+          })
           .collect::<Vec<_>>()
           .join("\n")
       })

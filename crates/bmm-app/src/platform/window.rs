@@ -26,13 +26,20 @@
 //! one has negative coordinates, and GPUI opens a window at the given bounds
 //! only when their centre lies on the display it is opened for (the primary
 //! one unless `display_id` names another); otherwise it falls back to a
-//! default size centred on that display. On macOS every display reports its
-//! bounds at the origin and a window its position relative to its screen.
+//! default size centred on that display. GPUI divides each display's desktop
+//! coordinates by that display's scale, so displays at different scales
+//! overlap: a 100 % display of 1920 px and a 200 % one right of it share the
+//! logical x 960–1920. On macOS every display reports its bounds at the
+//! origin and a window its position relative to its screen. Either way the
+//! position alone cannot always tell the displays apart, so the geometry is
+//! saved with the display's UUID, and the window reopens on the display it
+//! names; only an older config, or a display that is gone, falls back to the
+//! display under the position.
 
 use bmm_core::config::{ConfigWindow, ConfigWindowPosition, ConfigWindowSize};
 use gpui_kit::{
-  AnyWindowHandle, App, AppContext, Bounds, Pixels, Point, Size, TitlebarOptions, Window, WindowBounds, WindowOptions,
-  point, px, size,
+  AnyWindowHandle, App, AppContext, Bounds, DisplayId, Pixels, Point, Size, TitlebarOptions, Window, WindowBounds,
+  WindowOptions, point, px, size,
 };
 
 use super::close_guard;
@@ -88,10 +95,35 @@ pub fn placement_display(
   under(bounds.center()).or_else(|| under(bounds.origin))
 }
 
-/// The geometry to save for a window in `bounds` showing `content`: only a
-/// normal (not maximized, not fullscreen) window of at least the minimum size
-/// is saved, so the restore geometry survives maximizing.
-pub fn geometry_to_save(bounds: WindowBounds, content: Size<Pixels>) -> Option<ConfigWindow> {
+/// The saved geometry's bounds and the display it opens on, as an index into
+/// `displays` (each with its UUID, if the platform names one): the display
+/// the config names when it is connected and holds the window's centre (what
+/// GPUI checks) or its origin, so a window straddling two displays keeps its
+/// own; else [`placement_display`]. `None` centres the window
+/// ([`initial_bounds`]).
+pub fn initial_placement(
+  saved: &ConfigWindow,
+  displays: &[(Bounds<Pixels>, Option<String>)],
+  primary: Option<usize>,
+) -> Option<(Bounds<Pixels>, Option<usize>)> {
+  let display_bounds: Vec<Bounds<Pixels>> = displays.iter().map(|(bounds, _)| *bounds).collect();
+  let bounds = initial_bounds(saved, &display_bounds)?;
+  let named = displays
+    .iter()
+    .position(|(display, uuid)| {
+      !saved.display.is_empty()
+        && uuid.as_deref() == Some(saved.display.as_str())
+        && (display.contains(&bounds.center()) || display.contains(&bounds.origin))
+    })
+    .or_else(|| placement_display(&bounds, &display_bounds, primary));
+  Some((bounds, named))
+}
+
+/// The geometry to save for a window in `bounds` showing `content` on
+/// `display` (its UUID, or empty): only a normal (not maximized, not
+/// fullscreen) window of at least the minimum size is saved, so the restore
+/// geometry survives maximizing.
+pub fn geometry_to_save(bounds: WindowBounds, content: Size<Pixels>, display: String) -> Option<ConfigWindow> {
   let WindowBounds::Windowed(bounds) = bounds else {
     return None;
   };
@@ -101,6 +133,7 @@ pub fn geometry_to_save(bounds: WindowBounds, content: Size<Pixels>) -> Option<C
     return None;
   }
   Some(ConfigWindow {
+    display,
     position: ConfigWindowPosition {
       x: f32::from(bounds.origin.x).round() as i32,
       y: f32::from(bounds.origin.y).round() as i32,
@@ -110,27 +143,30 @@ pub fn geometry_to_save(bounds: WindowBounds, content: Size<Pixels>) -> Option<C
 }
 
 fn same_geometry(a: &ConfigWindow, b: &ConfigWindow) -> bool {
-  a.position.x == b.position.x
+  a.display == b.display
+    && a.position.x == b.position.x
     && a.position.y == b.position.y
     && a.size.width == b.size.width
     && a.size.height == b.size.height
 }
 
-/// Options of the main window: saved geometry on the display it lies on, or
-/// centred on the primary display; the minimum size, the title, the desktop
-/// id as the Wayland app id.
+/// Options of the main window: saved geometry on the display it was saved
+/// on, or centred on the primary display; the minimum size, the title, the
+/// desktop id as the Wayland app id.
 pub fn main_window_options(saved: &ConfigWindow, cx: &App) -> WindowOptions {
   let displays = cx.displays();
-  let display_bounds: Vec<Bounds<Pixels>> = displays.iter().map(|display| display.bounds()).collect();
+  let described: Vec<(Bounds<Pixels>, Option<String>)> = displays
+    .iter()
+    .map(|display| (display.bounds(), display.uuid().ok().map(|uuid| uuid.to_string())))
+    .collect();
   let primary = cx
     .primary_display()
     .and_then(|primary| displays.iter().position(|display| display.id() == primary.id()));
-  let restored = initial_bounds(saved, &display_bounds);
-  let display_id = restored
-    .as_ref()
-    .and_then(|bounds| placement_display(bounds, &display_bounds, primary))
+  let placement = initial_placement(saved, &described, primary);
+  let display_id = placement
+    .and_then(|(_, display)| display)
     .map(|index| displays[index].id());
-  let bounds = restored.unwrap_or_else(|| {
+  let bounds = placement.map(|(bounds, _)| bounds).unwrap_or_else(|| {
     let (width, height) = sanitize_size(&saved.size);
     Bounds::centered(None, size(px(width as f32), px(height as f32)), cx)
   });
@@ -160,9 +196,27 @@ pub fn open_main(stores: &Stores, cx: &mut App) -> Option<AnyWindowHandle> {
   }
 }
 
+/// The UUID of the display `window` is on; empty when the platform names
+/// none. On Windows the OS says which display that is, as GPUI's own can lag
+/// behind at mixed scales (`bmm_platform::display`).
+fn window_display(window: &Window, cx: &App) -> String {
+  let display = match bmm_platform::window_display_id(window) {
+    Some(id) => cx
+      .displays()
+      .into_iter()
+      .find(|display| display.id() == DisplayId::from(id)),
+    None => window.display(cx),
+  };
+  display
+    .and_then(|display| display.uuid().ok())
+    .map(|uuid| uuid.to_string())
+    .unwrap_or_default()
+}
+
 /// Saves the window's geometry if it is persistable and changed.
 pub fn save_geometry(stores: &Stores, window: &Window, cx: &mut App) {
-  let Some(geometry) = geometry_to_save(window.window_bounds(), window.viewport_size()) else {
+  let display = window_display(window, cx);
+  let Some(geometry) = geometry_to_save(window.window_bounds(), window.viewport_size(), display) else {
     return;
   };
   if same_geometry(&stores.config.read(cx).config().window, &geometry) {
@@ -202,6 +256,7 @@ mod tests {
 
   fn saved(x: i32, y: i32, width: u32, height: u32) -> ConfigWindow {
     ConfigWindow {
+      display: String::new(),
       position: ConfigWindowPosition { x, y },
       size: ConfigWindowSize { width, height },
     }
@@ -297,15 +352,73 @@ mod tests {
     assert_eq!(placement_display(&fits_larger, &displays, Some(1)), Some(0));
   }
 
+  /// A 1920 × 1080 primary display at 100 % and a 3840 × 2160 display right
+  /// of it at 200 %, as GPUI reports them on Windows: they overlap at the
+  /// logical x 960–1920.
+  fn mixed_scales() -> [(Bounds<Pixels>, Option<String>); 2] {
+    [
+      (display(0.0, 0.0, 1920.0, 1080.0), Some("primary".to_string())),
+      (display(960.0, 0.0, 1920.0, 1080.0), Some("scaled".to_string())),
+    ]
+  }
+
+  fn on(display: &str, x: i32, y: i32) -> ConfigWindow {
+    ConfigWindow {
+      display: display.to_string(),
+      ..saved(x, y, 800, 600)
+    }
+  }
+
+  #[test]
+  fn the_window_reopens_on_the_display_it_was_saved_on() {
+    let displays = mixed_scales();
+    // Saved at the physical x 2100 of the scaled display: the logical 1050,
+    // whose centre lies on both displays.
+    let (bounds, display) = initial_placement(&on("scaled", 1050, 100), &displays, Some(0)).expect("restored");
+    assert_eq!(bounds.origin, point(px(1050.0), px(100.0)));
+    assert_eq!(display, Some(1));
+    let placed = |saved: &ConfigWindow| initial_placement(saved, &displays, Some(0)).map(|(_, display)| display);
+    assert_eq!(placed(&on("primary", 1050, 100)), Some(Some(0)));
+    // An older config, or a display that is gone: the display under the position.
+    assert_eq!(placed(&on("", 1050, 100)), Some(Some(0)));
+    assert_eq!(placed(&on("unplugged", 1050, 100)), Some(Some(0)));
+    // Straddling both: the origin on the primary display only, the centre on
+    // both. Windows put it on the scaled display, which holds the centre.
+    assert_eq!(placed(&on("scaled", 900, 100)), Some(Some(1)));
+    // The named display no longer holds the window.
+    assert_eq!(placed(&on("scaled", 100, 100)), Some(Some(0)));
+    // Never saved, or off every display: centred.
+    assert_eq!(placed(&ConfigWindow::default()), None);
+    assert_eq!(placed(&on("scaled", 9000, 100)), None);
+  }
+
+  #[test]
+  fn the_display_is_found_where_every_display_starts_at_the_origin() {
+    // macOS: a window on the second display reports its position on it.
+    let displays = [
+      (display(0.0, 0.0, 2560.0, 1440.0), Some("built-in".to_string())),
+      (display(0.0, 0.0, 1920.0, 1080.0), Some("external".to_string())),
+    ];
+    let on_external = on("external", 100, 100);
+    assert_eq!(initial_placement(&on_external, &displays, Some(0)).unwrap().1, Some(1));
+    // Without UUIDs (Wayland): the primary display.
+    let anonymous = displays.map(|(bounds, _)| (bounds, None));
+    assert_eq!(initial_placement(&on_external, &anonymous, Some(0)).unwrap().1, Some(0));
+  }
+
   #[test]
   fn only_a_normal_window_of_the_minimum_size_is_saved() {
     let bounds = display(10.4, 20.6, 1000.0, 830.0);
     let content = size(px(1000.0), px(802.0));
-    let geometry = geometry_to_save(WindowBounds::Windowed(bounds), content).expect("saved");
-    assert!(same_geometry(&geometry, &saved(10, 21, 1000, 802)));
-    assert!(geometry_to_save(WindowBounds::Maximized(bounds), content).is_none());
-    assert!(geometry_to_save(WindowBounds::Fullscreen(bounds), content).is_none());
-    assert!(geometry_to_save(WindowBounds::Windowed(bounds), size(px(599.0), px(800.0))).is_none());
-    assert!(geometry_to_save(WindowBounds::Windowed(bounds), size(px(800.0), px(449.0))).is_none());
+    let windowed = |content| geometry_to_save(WindowBounds::Windowed(bounds), content, "scaled".to_string());
+    let geometry = windowed(content).expect("saved");
+    let mut expected = saved(10, 21, 1000, 802);
+    assert!(!same_geometry(&geometry, &expected), "on another display");
+    expected.display = "scaled".to_string();
+    assert!(same_geometry(&geometry, &expected));
+    assert!(geometry_to_save(WindowBounds::Maximized(bounds), content, String::new()).is_none());
+    assert!(geometry_to_save(WindowBounds::Fullscreen(bounds), content, String::new()).is_none());
+    assert!(windowed(size(px(599.0), px(800.0))).is_none());
+    assert!(windowed(size(px(800.0), px(449.0))).is_none());
   }
 }

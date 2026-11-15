@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use bmm_core::config::{Config, GroupMode};
 use bmm_core::media_metadata::model::MediaMetadata;
 use bmm_core::media_metadata::model::track::TrackType;
-use bmm_core::merge::{MergeProcess, MergeProcessControl, MergeQueue};
+use bmm_core::merge::{MergeEvent, MergeOutcome, MergeProcess, MergeProcessControl, MergeQueue};
 use core::prelude::v1::test;
 use gpui_kit::{Entity, TestAppContext};
 
@@ -64,7 +64,7 @@ fn the_output_follows_the_overrides() {
   // In place: the source itself is taken, so the name gets a counter.
   let target = OutputTarget::default();
   assert_eq!(
-    resolve_merge_output_for(&target, &source),
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
     join(dir.path(), "Movie (1).mkv")
   );
   // The global directory, then a card's directory win over that.
@@ -73,26 +73,29 @@ fn the_output_follows_the_overrides() {
     ..OutputTarget::default()
   };
   assert_eq!(
-    resolve_merge_output_for(&target, &source),
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
     join(out.path(), "Movie.mkv")
   );
   out.file("Movie.mkv");
   assert_eq!(
-    resolve_merge_output_for(&target, &source),
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
     join(out.path(), "Movie (1).mkv")
   );
   target.dir = Some(String::new());
   assert_eq!(
-    resolve_merge_output_for(&target, &source),
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
     join(out.path(), "Movie (1).mkv"),
     "an empty override counts as unset"
   );
   // A full path is used as given, an existing directory gets the input's name.
   target.path = Some("/somewhere/else.mkv".to_string());
-  assert_eq!(resolve_merge_output_for(&target, &source), "/somewhere/else.mkv");
+  assert_eq!(
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
+    "/somewhere/else.mkv"
+  );
   target.path = Some(out_dir.clone());
   assert_eq!(
-    resolve_merge_output_for(&target, &source),
+    resolve_merge_output_for(&target, &source, &TakenOutputs::default()),
     join(out.path(), "Movie.mkv")
   );
 }
@@ -109,7 +112,7 @@ fn a_single_member_unit_merges_its_selected_rows(cx: &mut TestAppContext) {
     assert_eq!(request.root, "/m/a.mkv");
     assert_eq!(request.inputs[0].tracks.len(), 4);
     assert_eq!(request.output.path.as_deref(), Some("/out/A.mkv"));
-    let args = request.resolve();
+    let args = request.args(&request.output_path(&TakenOutputs::default()));
     assert_eq!(&args[..2], ["-o", "/out/A.mkv"]);
     assert_eq!(args.last().map(String::as_str), Some("0:0,0:1,0:2,0:3"));
     assert!(MergeRequest::file(files, "/m/a.mkv", Vec::new()).is_none());
@@ -157,7 +160,10 @@ fn a_multi_member_unit_merges_in_its_combined_order(cx: &mut TestAppContext) {
       .map(|track| (track.file.as_str(), track.id))
       .collect();
     assert_eq!(order, [("/m/a.en.srt", 0), ("/m/a.mkv", 1), ("/m/a.mkv", 0)]);
-    assert_eq!(request.resolve().last().map(String::as_str), Some("1:0,0:1,0:0"));
+    assert_eq!(
+      request.args("/out/a.mkv").last().map(String::as_str),
+      Some("1:0,0:1,0:0")
+    );
     let empty = vec![bmm_core::merge_args::MergeInput {
       file: "/m/a.mkv".to_string(),
       tracks: Vec::new(),
@@ -315,4 +321,212 @@ fn a_failing_enqueue_takes_the_item_off_the_queue(cx: &mut TestAppContext) {
   cx.update(|cx| merge_all(&stores, cx)).detach();
   cx.run_until_parked();
   assert!(stores.queue.read_with(cx, |queue, _| queue.item("/m/a.mkv").is_none()));
+  cx.update(|cx| {
+    assert!(!stores.has_active_merges(cx));
+    let taken = stores.queue.read(cx).reservations().taken();
+    assert!(!taken.contains("/m/a.mkv"), "its output is free again");
+  });
+}
+
+/// What a recording merge backend was asked to do.
+#[derive(Default)]
+struct Calls {
+  enqueued: Vec<(String, Vec<String>)>,
+  cancelled: Vec<String>,
+}
+
+impl Calls {
+  /// The output (`-o`) `file` was enqueued with.
+  fn output(&self, file: &str) -> Option<String> {
+    self
+      .enqueued
+      .iter()
+      .find(|(enqueued, _)| enqueued == file)
+      .map(|(_, args)| args[1].clone())
+  }
+}
+
+/// Stores without group cards over `fixtures` whose merge backend records
+/// every call; nothing reports merge events but the test.
+fn recording_stores(cx: &mut TestAppContext, fixtures: HashMap<String, MediaMetadata>) -> (Stores, Arc<Mutex<Calls>>) {
+  let calls = Arc::new(Mutex::new(Calls::default()));
+  let (enqueued, cancelled) = (calls.clone(), calls.clone());
+  let (metadata, _) = fixture_source(fixtures);
+  let stores = cx.update(|cx| {
+    let services = Services {
+      persistence: Persistence::new(|_| {}),
+      metadata,
+      merges: MergeBackend::new(
+        move |file, args| {
+          enqueued.lock().unwrap().enqueued.push((file, args));
+          Ok(())
+        },
+        move |file| {
+          cancelled.lock().unwrap().cancelled.push(file.to_string());
+          Ok(())
+        },
+      ),
+      taskbar: Taskbar::none(),
+      tools: crate::tools::ToolDetector::system(),
+    };
+    let config = Config {
+      group_mode: GroupMode::None,
+      ..Config::default()
+    };
+    Stores::new(config, services, cx)
+  });
+  (stores, calls)
+}
+
+fn add(stores: &Stores, cx: &mut TestAppContext, files: &[&str]) {
+  stores.files.update(cx, |store, cx| store.add_files(s(files), cx));
+  cx.run_until_parked();
+}
+
+fn status(stores: &Stores, cx: &mut TestAppContext, file: &str) -> Option<QueueItemStatus> {
+  stores
+    .queue
+    .read_with(cx, |queue, _| queue.item(file).map(|item| item.status))
+}
+
+/// What the merge queue reports when `file`'s merge ends.
+fn report_finished(stores: &Stores, cx: &mut TestAppContext, file: &str, outcome: MergeOutcome) {
+  let at = std::time::SystemTime::now();
+  let event = MergeEvent::Finished {
+    file: file.to_string(),
+    outcome,
+    error: None,
+    at,
+  };
+  stores.queue.update(cx, |queue, cx| queue.apply_event(&event, at, cx));
+}
+
+/// Two `Episode.srt` of one Merge All into one directory, and a third merged
+/// while they wait: each gets an output of its own, as mkvmerge would
+/// overwrite a shared one. An output is free again once its merge ends.
+#[gpui_kit::test]
+fn merges_into_one_directory_never_share_an_output(cx: &mut TestAppContext) {
+  let out = TempDir::new("shared-output");
+  let out_dir = out.path().to_string_lossy().into_owned();
+  let join = |name: &str| out.path().join(name).to_string_lossy().into_owned();
+  let (a, b, c) = ("/m/A/Episode.srt", "/m/B/Episode.srt", "/m/C/Episode.srt");
+  let subtitles = || metadata(&[(TrackType::Subtitles, "eng")]);
+  let fixtures = HashMap::from([
+    (a.into(), subtitles()),
+    (b.into(), subtitles()),
+    (c.into(), subtitles()),
+  ]);
+  let (stores, calls) = recording_stores(cx, fixtures);
+  add(&stores, cx, &[a, b]);
+  stores
+    .files
+    .update(cx, |files, cx| files.set_global_output_dir(out_dir, cx));
+  cx.update(|cx| merge_all(&stores, cx)).detach();
+  cx.run_until_parked();
+  assert_eq!(calls.lock().unwrap().output(a), Some(join("Episode.mkv")));
+  assert_eq!(calls.lock().unwrap().output(b), Some(join("Episode (1).mkv")));
+
+  add(&stores, cx, &[c]);
+  cx.update(|cx| {
+    let request = MergeRequest::unit_selection(stores.files.read(cx), &s(&[c]));
+    let copy = copy_commands(&stores, request.clone().into_iter().collect(), cx);
+    copy.detach();
+    enqueue(&stores, request.into_iter().collect(), cx).detach();
+  });
+  cx.run_until_parked();
+  assert_eq!(calls.lock().unwrap().output(c), Some(join("Episode (2).mkv")));
+  let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+  assert!(
+    copied.is_some_and(|command| command.contains("Episode (2).mkv")),
+    "Copy Command shows the output Merge writes"
+  );
+
+  report_finished(&stores, cx, a, MergeOutcome::Completed);
+  let taken = stores.queue.read_with(cx, |queue, _| queue.reservations().taken());
+  assert!(!taken.contains(&join("Episode.mkv")));
+  assert!(taken.contains(&join("Episode (1).mkv")) && taken.contains(&join("Episode (2).mkv")));
+}
+
+/// Merge All lists its roots as waiting before it resolves their outputs:
+/// Clear waits for them, and a root deleted or cancelled meanwhile never
+/// reaches the merge queue.
+#[gpui_kit::test]
+fn a_merge_being_prepared_is_listed_and_can_be_withdrawn(cx: &mut TestAppContext) {
+  let (a, b, c) = ("/m/a.mkv", "/m/b.mkv", "/m/c.mkv");
+  let fixtures = HashMap::from([(a.into(), movie()), (b.into(), movie()), (c.into(), movie())]);
+  let (stores, calls) = recording_stores(cx, fixtures);
+  add(&stores, cx, &[a, b, c]);
+  let task = cx.update(|cx| merge_all(&stores, cx));
+  assert_eq!(status(&stores, cx, a), Some(QueueItemStatus::Waiting));
+  cx.update(|cx| {
+    assert!(stores.has_active_merges(cx));
+    assert!(!can_clear(&stores, cx));
+    clear_files(&stores, cx);
+    assert_eq!(stores.files.read(cx).files().len(), 3, "Clear waits for the merges");
+    assert!(delete_unit(&stores, &s(&[a]), cx));
+    cancel_merge(&stores, b, cx);
+  });
+  task.detach();
+  cx.run_until_parked();
+  let enqueued: Vec<String> = calls
+    .lock()
+    .unwrap()
+    .enqueued
+    .iter()
+    .map(|(file, _)| file.clone())
+    .collect();
+  assert_eq!(enqueued, [c], "only the root still listed");
+  assert_eq!(status(&stores, cx, a), None);
+  assert_eq!(status(&stores, cx, b), Some(QueueItemStatus::Cancelled));
+  assert_eq!(status(&stores, cx, c), Some(QueueItemStatus::Waiting));
+  let taken = stores.queue.read_with(cx, |queue, _| queue.reservations().taken());
+  assert!(!taken.contains(a) && !taken.contains(b) && taken.contains(c));
+}
+
+/// Deleting a waiting card cancels its merge; the merge queue's late
+/// `Cancelled` lists nothing again, and the merge counts as active until it.
+#[gpui_kit::test]
+fn a_deleted_waiting_merge_does_not_come_back(cx: &mut TestAppContext) {
+  let a = "/m/a.mkv";
+  let (stores, calls) = recording_stores(cx, HashMap::from([(a.into(), movie())]));
+  add(&stores, cx, &[a]);
+  cx.update(|cx| merge_all(&stores, cx)).detach();
+  cx.run_until_parked();
+  assert!(cx.update(|cx| delete_unit(&stores, &s(&[a]), cx)));
+  assert_eq!(calls.lock().unwrap().cancelled, [a]);
+  assert_eq!(status(&stores, cx, a), None);
+  assert!(
+    cx.update(|cx| stores.has_active_merges(cx)),
+    "until the merge queue confirms"
+  );
+  report_finished(&stores, cx, a, MergeOutcome::Cancelled);
+  assert_eq!(status(&stores, cx, a), None);
+  stores.queue.read_with(cx, |queue, _| {
+    assert_eq!(queue.items().count(), 0);
+    assert!(!queue.has_active());
+  });
+}
+
+/// A card regrouped around a file whose own merge runs cannot be deleted:
+/// the merge would run on untracked.
+#[gpui_kit::test]
+fn a_unit_with_a_merging_member_is_not_deleted(cx: &mut TestAppContext) {
+  let (a, b) = ("/m/a.mkv", "/m/b.mkv");
+  let (stores, _) = recording_stores(cx, HashMap::from([(a.into(), movie()), (b.into(), movie())]));
+  add(&stores, cx, &[a, b]);
+  cx.update(|cx| merge_all(&stores, cx)).detach();
+  cx.run_until_parked();
+  let at = std::time::SystemTime::now();
+  let started = MergeEvent::Started {
+    file: b.to_string(),
+    at,
+  };
+  stores.queue.update(cx, |queue, cx| queue.apply_event(&started, at, cx));
+  cx.update(|cx| {
+    assert!(!delete_unit(&stores, &s(&[a, b]), cx));
+    clear_units(&stores, &[s(&[a, b])], cx);
+    assert_eq!(stores.files.read(cx).files().len(), 2);
+    assert!(stores.has_active_merges(cx));
+  });
+  assert_eq!(status(&stores, cx, b), Some(QueueItemStatus::Merging));
 }
