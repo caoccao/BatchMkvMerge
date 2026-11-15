@@ -36,6 +36,7 @@ pub mod topmost;
 pub mod track_table;
 pub mod update_banner;
 pub mod welcome;
+pub mod word_navigation;
 
 #[cfg(test)]
 mod tests;

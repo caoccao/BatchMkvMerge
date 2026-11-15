@@ -686,6 +686,34 @@ fn type_and_confirm(shell: &Shell, cx: &mut TestAppContext, text: &str) {
 }
 
 #[gpui_kit::test]
+fn word_keys_stop_inside_numbers_in_a_dialog_field(cx: &mut TestAppContext) {
+  let (shell, _, _dir) = movie_shell(cx, "cards-word-keys");
+  click_in(&shell, cx, 0, "card-output");
+  assert!(has_dialog(&shell, cx));
+  shell.window(cx, |window, cx| {
+    window.press(SELECT_ALL, cx);
+    window.press("backspace", cx);
+    window.input("Movie.2024.1080p", cx);
+  });
+  cx.run_until_parked();
+  let word_left = if cfg!(target_os = "macos") {
+    "alt-left"
+  } else {
+    "ctrl-left"
+  };
+  let caret = |shell: &Shell, cx: &mut TestAppContext| {
+    shell.window(cx, |window, cx| match window.focused_input(cx) {
+      Some(gpui_kit::component::input::AnyInputState::Input(state)) => state.read(cx).cursor(),
+      _ => panic!("the dialog field has the focus"),
+    })
+  };
+  shell.press(cx, word_left);
+  assert_eq!(caret(&shell, cx), 11);
+  shell.press(cx, word_left);
+  assert_eq!(caret(&shell, cx), 6);
+}
+
+#[gpui_kit::test]
 fn the_output_dialog_sets_and_clears_a_cards_output_path(cx: &mut TestAppContext) {
   let (shell, movie, dir) = movie_shell(cx, "cards-output");
   click_in(&shell, cx, 0, "card-output");

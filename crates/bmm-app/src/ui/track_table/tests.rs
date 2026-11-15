@@ -693,6 +693,39 @@ fn free_text_stays_as_typed_and_names_follow_the_language(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn word_keys_stop_inside_numbers_in_a_cell(cx: &mut TestAppContext) {
+  use gpui_kit::component::WindowExt;
+  use gpui_kit::component::input::{AnyInputState, InputState};
+
+  let (shell, movie, _dir) = movie_shell(cx, "table-word-keys");
+  in_table(&shell, cx, &movie, |window, cx| {
+    window.click("name-0:audio:1-input", cx)
+  });
+  let field = |shell: &Shell, cx: &mut TestAppContext| -> Entity<InputState> {
+    shell.window(cx, |window, cx| match window.focused_input(cx) {
+      Some(AnyInputState::Input(state)) => state,
+      _ => panic!("the name cell has the focus"),
+    })
+  };
+  let input = field(&shell, cx);
+  assert_eq!(
+    input.read_with(cx, |state, _| state.value().to_string()),
+    "Japanese 5.1"
+  );
+  input.update(cx, |state, cx| state.set_selected_range(12..12, cx));
+  let word = if cfg!(target_os = "macos") { "alt" } else { "ctrl" };
+  shell.press(cx, &format!("{word}-left"));
+  assert_eq!(input.read_with(cx, |state, _| state.cursor()), 11);
+  // A word deletion is an edit of the row like any other.
+  input.update(cx, |state, cx| state.set_selected_range(12..12, cx));
+  shell.press(cx, &format!("{word}-backspace"));
+  assert_eq!(
+    track(&shell, cx, &movie, "audio:1", |track| track.track_name.clone()),
+    "Japanese 5."
+  );
+}
+
+#[gpui_kit::test]
 fn the_list_opens_above_a_cell_near_the_bottom_of_the_window(cx: &mut TestAppContext) {
   let dir = TempDir::new("table-placement");
   let (first, mut parsed) = golden_files(&dir, "a-");

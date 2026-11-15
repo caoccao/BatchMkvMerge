@@ -278,8 +278,13 @@ mod tests {
       if write {
         std::fs::write(&path, &derived).unwrap();
       } else {
-        // The embedded set is the file on disk.
-        assert_eq!(spec.set, derived, "{path} differs; run with BMM_WRITE_THEMES=1");
+        // The embedded set is the file on disk, which Git checks out with
+        // CRLF line endings where `core.autocrlf` is set (the Windows runner).
+        assert_eq!(
+          spec.set.replace("\r\n", "\n"),
+          derived,
+          "{path} differs; run with BMM_WRITE_THEMES=1"
+        );
       }
     }
   }
