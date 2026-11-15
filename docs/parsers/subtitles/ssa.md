@@ -8,8 +8,8 @@ The SSA/ASS parser recognises SubStation Alpha and Advanced SubStation Alpha sub
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/ssa.rs`
-- Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/ssa.rs`
+- Encoding helper: `crates/bmm-core/src/media_metadata/subtitles/encoding.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_ssa.cpp`, `../mkvtoolnix/src/input/r_ssa.h`, upstream text subtitle helpers
 
 `classify` mirrors `ssa_parser_c::probe` (`../mkvtoolnix/src/input/subtitles.cpp:305-338`): it inspects the first non-comment, non-empty line (within the first 100 bounded reads, skipping `^\s*$` blanks and `^\s*[!;]` comments) and claims the file only when that line is a `[Script Info]` or `[V4(+)? Styles]` section header. The probe performs repeated mkvtoolnix-style `getline2(line, 1000)` decoded-character reads instead of slicing a fixed byte prefix, so overlong blank/comment physical lines consume multiple probe attempts and UTF-16 inputs get the same character window as upstream (PARSER-402). The SSA-vs-ASS distinction then follows `ssa_parser_c::parse`'s `m_is_ass` flag — it defaults to **SSA** and is promoted to ASS by a `ScriptType: v4.00+` line or a `[V4+ Styles]` section. Section-header matching is a faithful port of the upstream `^\s*\[Name\]` regexes: words are separated by `\s+`, so spacing variants such as `[Script   Info]` and `[V4+    Styles]` are accepted, and trailing content after `]` is tolerated. `parse_ssa` is a single-pass, section-aware port of `ssa_parser_c::parse` (`../mkvtoolnix/src/input/subtitles.cpp:354`). It walks the complete file line by line tracking the current `[...]` section and builds two outputs at once:

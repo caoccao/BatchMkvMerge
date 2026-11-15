@@ -18,7 +18,7 @@ on:
       - "docs/**"
 
 env:
-  BATCH_MKV_MERGE_VERSION: 0.2.0
+  BATCH_MKV_MERGE_VERSION: 1.0.0
 
 jobs:
   build_package:
@@ -29,52 +29,46 @@ jobs:
     - name: Checkout the code
       uses: actions/checkout@v6
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: 24
-
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
+      # No `toolchain:` input: the action then installs the toolchain pinned in
+      # rust-toolchain.toml. Passing `toolchain: stable` would also run
+      # `rustup override set stable` on the repository root, which outranks the
+      # pin now that rust-toolchain.toml lives there.
       with:
-        toolchain: stable
         # The action sets RUSTFLAGS=-D warnings by default, which turns every
-        # rustc warning into a CI failure. Phased delivery of the
-        # media_metadata parser intentionally lands public fns before their
-        # consumers (next phase fills them in), so transient "never used"
-        # warnings are expected. Clearing the flag lets warnings stay warnings.
+        # rustc warning into a CI failure. Clearing the flag lets warnings stay
+        # warnings; CI fails on errors and failing checks only.
         rustflags: ""
 
-    - name: Setup pnpm
-      uses: pnpm/action-setup@v5
-      with:
-        version: 11
-
-    - name: Install JS deps and build frontend
-      # `pnpm build` runs first so `tauri_build::build()` (invoked from
-      # src-tauri/build.rs at every cargo invocation) sees the frontendDist
-      # directory. Without it `cargo test` can't even compile.
-      run: |
-        pnpm install --frozen-lockfile
-        pnpm build
-
     - name: Run Rust tests
-      working-directory: src-tauri
-      run: cargo test -r
+      run: cargo test --release --workspace --locked
 
-    - name: Build BatchMkvMerge
-      run: pnpm tauri build
+    - name: Install cargo-packager
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-packager@0.11.8
+
+    # Installers come from the dist profile: release + thin LTO, one codegen
+    # unit, stripped symbols.
+    - name: Build BatchMkvMerge (dist profile)
+      run: cargo build --profile dist -p BatchMkvMerge --locked
+
+    # cargo-packager downloads WiX 3 and NSIS itself. One MSI per language,
+    # as 0.1.0 shipped.
+    - name: Package the msi and the NSIS installer
+      run: cargo packager --profile dist -p BatchMkvMerge -f nsis,wix
 
     - name: Upload the msi
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-windows-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-msi
         path: |
-          src-tauri/target/release/bundle/msi/*.msi
+          target/packager/*.msi
 
     - name: Upload the nsis
       uses: actions/upload-artifact@v7
       with:
         name: BatchMkvMerge-windows-x86_64-${{ env.BATCH_MKV_MERGE_VERSION }}-nsis
         path: |
-          src-tauri/target/release/bundle/nsis/*.exe
+          target/packager/*-setup.exe

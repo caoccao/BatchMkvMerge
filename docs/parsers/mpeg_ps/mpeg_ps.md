@@ -8,7 +8,7 @@ The MPEG-PS parser recognises MPEG program streams and VOB-like files, discovers
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/mpeg_ps/reader.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/mpeg_ps/reader.rs`
 - Related modules: `packet.rs`, `pes.rs`, `stream_map.rs`, `identify.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_mpeg_ps.cpp`, `../mkvtoolnix/src/input/r_mpeg_ps.h`
 

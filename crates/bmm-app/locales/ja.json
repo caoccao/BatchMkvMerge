@@ -1,0 +1,272 @@
+{
+  "app": {
+    "dropHere": "メディアファイルまたはフォルダーをここにドロップ"
+  },
+  "list": {
+    "delete": "削除"
+  },
+  "merge": {
+    "childCount": "%{count} 個の子ファイルをこの出力に結合",
+    "copyCommand": "コマンドをコピー",
+    "merge": "結合",
+    "cancel": "キャンセル",
+    "ok": "OK",
+    "browse": "参照",
+    "setOutputPath": "出力先を設定",
+    "dragToMerge": "別のファイルにドラッグして結合",
+    "childTable": {
+      "id": "ID",
+      "filePath": "ファイルパス",
+      "action": "操作"
+    },
+    "removeFromRoot": "結合から削除",
+    "outputPath": "出力先",
+    "openInBetterMediaInfo": "BetterMediaInfo で開く",
+    "outputPathNotWritable": "出力先に書き込めません。別のパスを選択してください。",
+    "outputPathDoesNotExist": "出力先が存在しません。作成されます。",
+    "commandCopied": "コマンドをクリップボードにコピーしました。",
+    "mergeComplete": "結合が完了しました。",
+    "noTracks": "トラックが見つかりません。",
+    "chapterEntryCount": {
+      "single": "%{count} エントリ",
+      "multiple": "%{count} エントリ"
+    },
+    "header": {
+      "id": "ID",
+      "type": "種類",
+      "codec": "コーデック",
+      "description": "説明",
+      "size": "サイズ",
+      "bitRate": "ビットレート",
+      "trackName": "トラック名",
+      "language": "言語",
+      "defaultTrack": "既定のトラック",
+      "forcedDisplay": "強制表示",
+      "selectAll": "すべて選択",
+      "tracks": "トラック"
+    },
+    "error": {
+      "mkvmergeNotAvailable": "mkvmerge が使用できません。設定で MKVToolNix のパスを確認してください。%{detail}",
+      "mkvmergeFailed": "mkvmerge が失敗しました: %{detail}",
+      "outputExists": "出力ファイル %{path} は既に存在します。",
+      "parser": {
+        "io": "ファイルを読み取れませんでした: %{detail}",
+        "unexpectedEof": "ファイルが途中で切れています: %{detail}",
+        "unrecognised": "認識できないファイル形式です: %{detail}",
+        "timeout": "パーサーが %{stage} で %{budgetMs} ms を超えてタイムアウトしました: %{detail}",
+        "malformed": "ファイルの形式が不正です: %{detail}",
+        "oversizedElement": "要素がサイズ上限を超えています: %{detail}",
+        "internal": "パーサーの内部エラー: %{detail}"
+      }
+    }
+  },
+  "toolbar": {
+    "setGlobalOutputPath": "グローバル出力先を設定",
+    "mergeAll": "すべて結合 (F3)",
+    "cancelAll": "すべてキャンセル (F4)",
+    "clear": "クリア (Ctrl + Q)",
+    "profile": "プロファイル (F9)",
+    "settings": "設定 (F10)",
+    "about": "情報"
+  },
+  "group": {
+    "copyAllCommands": "すべてのコマンドをコピー",
+    "mergeAll": "すべて結合",
+    "clearAll": "すべて削除"
+  },
+  "groupMode": {
+    "title": "グループ",
+    "none": "グループ化しない",
+    "trackCount": "種類ごとのトラック数が同一のものをグループ化",
+    "trackCountAndLanguage": "種類ごとのトラック数と言語が同一のものをグループ化",
+    "byFileName": "ファイル名でグループ化"
+  },
+  "tabs": {
+    "fileList": "ファイル一覧",
+    "queue": "キュー",
+    "settings": "設定",
+    "about": "情報",
+    "close": "閉じる"
+  },
+  "queue": {
+    "defaultDrive": "キュー",
+    "cancelAll": "すべてキャンセル",
+    "resumeAll": "すべて再開",
+    "clearCompleted": "完了を消去",
+    "systemNotification": "システム通知",
+    "systemNotificationTooltip": "完了時にシステム通知を表示します。",
+    "topmostNotification": "最前面通知",
+    "topmostNotificationTooltip": "完了時に最前面の通知を表示します。",
+    "header": {
+      "filePath": "ファイルパス",
+      "status": "状態",
+      "start": "開始",
+      "end": "終了",
+      "elapsed": "経過時間",
+      "eta": "残り時間"
+    },
+    "status": {
+      "waiting": "待機中",
+      "merging": "結合中",
+      "completed": "完了",
+      "cancelled": "キャンセル済み",
+      "failed": "失敗"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "appearance": "外観",
+    "formatting": "フォーマット",
+    "bitRate": "ビットレート",
+    "size": "サイズ",
+    "precision": "精度",
+    "unit": "単位",
+    "mode": "モード",
+    "autoMode": "自動",
+    "lightMode": "ライト",
+    "darkMode": "ダーク",
+    "theme": "テーマ",
+    "themeOcean": "オーシャン",
+    "themeAqua": "アクア",
+    "themeSky": "スカイ",
+    "themeArctic": "アークティック",
+    "themeGlacier": "グレイシャー",
+    "themeMist": "ミスト",
+    "themeSlate": "スレート",
+    "themeCharcoal": "チャコール",
+    "themeMidnight": "ミッドナイト",
+    "themeIndigo": "インディゴ",
+    "themeViolet": "バイオレット",
+    "themeLavender": "ラベンダー",
+    "themeRose": "ローズ",
+    "themeBlush": "ブラッシュ",
+    "themeCoral": "コーラル",
+    "themeSunset": "サンセット",
+    "themeAmber": "アンバー",
+    "themeSand": "サンド",
+    "themeForest": "フォレスト",
+    "themeEmerald": "エメラルド",
+    "language": "言語",
+    "mkv": "MKV",
+    "integration": "統合",
+    "mkvToolNix": "MKVToolNix",
+    "betterMediaInfo": "BetterMediaInfo",
+    "mkvToolNixPath": "MKVToolNix のパス",
+    "betterMediaInfoPath": "BetterMediaInfo のパス",
+    "browse": "参照",
+    "detect": "検出",
+    "mkvToolNixFound": "MKVToolNix のパスに mkvmerge が見つかりました。",
+    "mkvToolNixNotFound": "MKVToolNix のパスに mkvmerge が見つかりません。",
+    "betterMediaInfoFound": "BetterMediaInfo が見つかりました",
+    "betterMediaInfoNotFound": "BetterMediaInfo が検出されませんでした。パスを確認してもう一度お試しください。",
+    "update": "アップデート",
+    "checkNewVersion": "新しいバージョンを確認",
+    "daily": "毎日",
+    "weekly": "毎週",
+    "monthly": "毎月",
+    "profiles": "プロファイル",
+    "activeProfile": "アクティブなプロファイル",
+    "newProfileName": "新しいプロファイル名",
+    "addProfile": "追加",
+    "deleteProfile": "削除",
+    "video": "ビデオ",
+    "audio": "オーディオ",
+    "subtitles": "字幕",
+    "chapters": "チャプター",
+    "attachments": "添付ファイル",
+    "autoSelectOnDrop": "追加時に自動で選択",
+    "onlyAutoSelectOnDropForLanguages": "追加時のみ言語で自動選択",
+    "reset": "リセット",
+    "trackSelection": "トラック選択",
+    "languages": "言語",
+    "trackNames": "トラック名",
+    "automation": "自動化",
+    "automationResetUndLanguage": "言語 und を次に自動設定",
+    "automationSetTrackName": "トラック名を言語ごとに自動設定",
+    "automationResetDefaultTrack": "既定のトラックを自動的にリセット",
+    "automationResetForcedDisplay": "強制表示を自動的にリセット",
+    "trackNamesHint": "1 行に 1 つのトラック名",
+    "filter": "フィルター",
+    "clear": "クリア",
+    "addAll": "すべて追加",
+    "removeAll": "すべて削除",
+    "available": "利用可能",
+    "preferred": "優先",
+    "languagesInstruction": "テーブル間で言語をドラッグして追加または削除できます。右のテーブル内でドラッグして並べ替えできます。"
+  },
+  "about": {
+    "title": "情報",
+    "tagline": "mkvmerge のバッチ GUI",
+    "author": "作者",
+    "github": "GitHub"
+  },
+  "footer": {
+    "donate": "開発を支援するために寄付する",
+    "copyright": "© Copyright 2026"
+  },
+  "notification": {
+    "completedIn": "%{elapsed} で完了しました",
+    "unknownError": "不明なエラー",
+    "summary": "完了 %{completed} 件、失敗 %{failed} 件、キャンセル %{cancelled} 件",
+    "finishedIn": "%{elapsed} で終了しました"
+  },
+  "confirm": {
+    "exitTitle": "終了",
+    "exitMessage": "結合処理が実行中です。終了してもよろしいですか?",
+    "yes": "はい",
+    "no": "いいえ",
+    "deleteProfileTitle": "プロファイルの削除",
+    "deleteProfileMessage": "プロファイル「%{name}」を削除しますか?",
+    "resetProfileTitle": "プロファイルのリセット",
+    "resetProfileMessage": "プロファイル「%{name}」を既定の設定に戻しますか?"
+  },
+  "card": {
+    "summary": {
+      "toPath": "出力先: %{path}",
+      "size": "サイズ: %{size}",
+      "encoded": "エンコード: %{date}",
+      "title": "タイトル: %{title}"
+    }
+  },
+  "update": {
+    "newVersionAvailable": "新しいバージョン %{version} が利用可能です。",
+    "skipThisVersion": "このバージョンをスキップ"
+  },
+  "welcome": {
+    "title": "BatchMkvMerge へようこそ",
+    "subtitle": "MKVToolNix の mkvmerge 向けのバッチ GUI。",
+    "intro": "メディアファイルを使いやすい方法でバッチ処理。MKVToolNix の mkvmerge を活用した GUI です。",
+    "introBetterMediaInfo": "高速でモダンな UI でどんなメディアファイルでも解析できます。動画・音声・画像・字幕トラックのストリーム、プロパティ、メタデータを一目で確認できます。",
+    "introBatchMkvExtract": "複数の .mkv ファイルからトラック・チャプター・添付ファイルを一括で抽出。MKVToolNix の mkvextract を活用したバッチ向け GUI です。",
+    "introBDMaster": "モダンな GUI で Blu-ray ディスクを解析。ディスク、プレイリスト、ストリーム、トラック、ビットレートグラフを一目で確認できます。",
+    "addFiles": "ファイルを追加",
+    "addFolder": "フォルダを追加",
+    "emptyHint": "ヒント：このウィンドウにメディアファイルやフォルダをドラッグ＆ドロップすることもできます。",
+    "viewOnGithub": "GitHub で見る"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "検索...",
+      "no_results": "一致する設定はありません",
+      "no_results_description": "別のキーワードをお試しください。",
+      "Reset All": "すべてリセット"
+    },
+    "Select": {
+      "placeholder": "選択してください"
+    },
+    "List": {
+      "search_placeholder": "検索..."
+    },
+    "Input": {
+      "Cut": "切り取り",
+      "Copy": "コピー",
+      "Paste": "貼り付け",
+      "Select All": "すべて選択",
+      "Clear": "クリア"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "キャンセル"
+    }
+  }
+}

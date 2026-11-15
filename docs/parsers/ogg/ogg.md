@@ -8,8 +8,8 @@ The Ogg parser recognises Ogg and legacy OGM containers, reconstructs header pac
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/ogg/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/ogg/page.rs`, `identify.rs`, `comments.rs`, `codecs/`
+- Primary implementation: `crates/bmm-core/src/media_metadata/ogg/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/ogg/page.rs`, `identify.rs`, `comments.rs`, `codecs/`
 - Upstream basis: `../mkvtoolnix/src/input/r_ogm.cpp`, `../mkvtoolnix/src/input/r_ogm.h`, `../mkvtoolnix/src/input/r_ogm_flac.cpp`, `../mkvtoolnix/src/input/r_ogm_flac.h`
 
 The reader parses Ogg page headers, lacing segment tables, and packet boundaries. Beginning-of-stream packets are dispatched to Vorbis, Opus, Theora, VP8-in-Ogg, FLAC-in-Ogg, Speex, Kate, and OGM sniffers. Comment packets populate track tags, language/title hints, muxing app, chapter count, and cover-art attachments. The VorbisComment decoder (`comments.rs`) rejects a truncated block outright — if the declared comment count, any comment length, or any comment body runs past the buffer it returns `None` rather than a partial list, mirroring `parse_vorbis_comments_from_packet`'s try/catch that discards the whole comment object on any short read (`../mkvtoolnix/src/common/tags/vorbis.cpp:221-279`).

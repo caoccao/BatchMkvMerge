@@ -8,7 +8,7 @@ The TrueHD parser recognises Dolby TrueHD and MLP streams, extracts sample rate 
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/audio/truehd.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/audio/truehd.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_truehd.cpp`, `../mkvtoolnix/src/input/r_truehd.h`, `../mkvtoolnix/src/common/truehd.cpp`, `../mkvtoolnix/src/common/truehd.h`, `../mkvtoolnix/src/common/ac3.cpp`, `../mkvtoolnix/src/common/ac3.h`
 
 The parser skips ID3v2 data, searches the same 512 KiB probe range mkvtoolnix gives to `truehd_reader_c`, classifies MLP versus TrueHD, decodes rate and channel-map fields, and scans enough frames to find both the main stream and a coupled AC-3 frame (PARSER-356). Its dispatcher slot follows the 64-frame MP3/AC-3/AAC loop and precedes the later loose DTS and VobButton probes, matching mkvtoolnix's ambiguous-reader order (PARSER-388). The shared ID3v2 skipper validates mkvtoolnix's version and synchsafe-size guards before seeking, so malformed `ID3`-looking prefixes are treated as payload rather than skipped (PARSER-359).

@@ -8,8 +8,8 @@ The WebVTT parser recognises Web Video Text Tracks files and reports one `S_TEXT
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/webvtt.rs`
-- Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/webvtt.rs`
+- Encoding helper: `crates/bmm-core/src/media_metadata/subtitles/encoding.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_webvtt.cpp`, `../mkvtoolnix/src/input/r_webvtt.h`, `../mkvtoolnix/src/common/webvtt.*`
 
 The reader checks whether the first decoded line starts with `WEBVTT` after optional BOM/configured-charset handling, matching mkvtoolnix's prefix probe rather than the stricter W3C separator rule. It reads the full text stream for header parsing, parses blank-line-delimited global blocks before the first cue, and preserves them as codec private data. Identification always reports the subtitle encoding as `UTF-8`, because mkvtoolnix normalises WebVTT text before packetisation even when the source file used UTF-16 or a configured charset hint.

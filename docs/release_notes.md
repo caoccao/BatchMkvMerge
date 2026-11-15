@@ -1,8 +1,9 @@
 # Release Notes
 
-## 0.2.0
+## 1.0.0
 
-- Added optional system and topmost notifications when queued merges complete.
+- Rebuilt BatchMkvMerge as a native Rust application on [gpui-kit](https://crates.io/crates/gpui-kit), with the same features and layout; the Tauri shell, the WebView and the React frontend are gone. Configs written by 0.1.0 load unchanged, from the same place.
+- System requirements: macOS 12 Monterey or later; Windows 10 1903 or later with a DirectX 11 graphics driver (WebView2 is no longer needed); Linux with an X11 or Wayland session, a Vulkan driver (Mesa is enough) and glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36 or newer). Older systems stay on 0.1.0.
 - Fixed default-track reset automation to honor user-reordered track order.
 - Fixed chapter rows to show a localized chapter label and entry count in the proper columns.
 - Added `--no-global-tags` to generated mkvmerge commands.

@@ -8,8 +8,8 @@ The MP4 parser recognises ISO BMFF, MP4, M4V, MOV, and QuickTime-style files. It
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/mp4/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/mp4/atom.rs`, `ftyp.rs`, `moov/`, `codec_specific/`, `meta/`, `fragments.rs`, `identify.rs`, `verify.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/mp4/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/mp4/atom.rs`, `ftyp.rs`, `moov/`, `codec_specific/`, `meta/`, `fragments.rs`, `identify.rs`, `verify.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_qtmp4.cpp`, `../mkvtoolnix/src/input/r_qtmp4.h`, upstream helpers under `../mkvtoolnix/src/common`
 
 The parser scans top-level boxes, handles normal and zlib-compressed `moov` boxes, parses `ftyp`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `hdlr`, `stbl`, `stsd`, `stts`, `stsc`, `edts/elst`, `mvex/trex`, `moof/traf/tfhd/trun`, and `udta/meta/ilst`. Track-level `trak/udta/name` atoms are stripped and the first non-empty value becomes `CommonTrackProperties.track_name`, matching `handle_trak_udta_atom` added upstream in June 2026. The `mdia/hdlr` component name is retained only as parser state and is no longer misreported as the user-facing track name (PARSER-403). Compressed QuickTime `cmov` handling reads the declared `cmvd` payload and inflates up to the movie size declared inside the compressed header, rather than using the old 64 MiB local cap. Codec-specific parsers cover AVC, HEVC, AV1, AAC, ALAC, Opus, FLAC, QuickTime PCM, color, pixel aspect ratio, and Dolby Vision block-addition records.

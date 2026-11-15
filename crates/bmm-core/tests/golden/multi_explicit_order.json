@@ -1,0 +1,323 @@
+{
+  "description": "A merge tree with a dragged cross-file track order; refs to chapters and to a file outside the tree are dropped, a ref to an unselected track is kept.",
+  "multi": true,
+  "outputPath": "/out/Movie.mkv",
+  "mkvToolNixPath": "/opt/mkvtoolnix",
+  "inputs": [
+    {
+      "fixture": "movie",
+      "file": "/media/Movie.mkv",
+      "selected": [
+        "video:0",
+        "audio:2",
+        "subtitles:3",
+        "chapters:0"
+      ]
+    },
+    {
+      "fixture": "movie.ja",
+      "file": "/media/Movie.ja.mka",
+      "selected": [
+        "audio:0"
+      ]
+    },
+    {
+      "fixture": "movie.en",
+      "file": "/media/Movie.en.srt",
+      "selected": [
+        "subtitles:0"
+      ]
+    }
+  ],
+  "order": [
+    {
+      "file": "/media/Movie.en.srt",
+      "type": "subtitles",
+      "id": 0
+    },
+    {
+      "file": "/media/Movie.ja.mka",
+      "type": "audio",
+      "id": 0
+    },
+    {
+      "file": "/media/Movie.mkv",
+      "type": "chapters",
+      "id": 0
+    },
+    {
+      "file": "/media/Movie.mkv",
+      "type": "video",
+      "id": 0
+    },
+    {
+      "file": "/media/Other.mkv",
+      "type": "video",
+      "id": 0
+    },
+    {
+      "file": "/media/Movie.mkv",
+      "type": "audio",
+      "id": 2
+    },
+    {
+      "file": "/media/Movie.mkv",
+      "type": "subtitles",
+      "id": 3
+    },
+    {
+      "file": "/media/Movie.mkv",
+      "type": "audio",
+      "id": 1
+    }
+  ],
+  "expected": {
+    "rows": {
+      "movie": [
+        {
+          "kind": "track",
+          "id": 0,
+          "number": 1,
+          "type": "video",
+          "codec": "AVC/H.264/MPEG-4p10",
+          "codecId": "V_MPEG4/ISO/AVC",
+          "description": "1920x1080 23.976fps",
+          "size": 5400000000,
+          "bitRate": 8000000,
+          "trackName": "Main Feature",
+          "language": "en",
+          "languageCodes": [
+            "eng",
+            "en"
+          ],
+          "defaultTrack": "true",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 1,
+          "number": 2,
+          "type": "audio",
+          "codec": "AC-3",
+          "codecId": "A_AC3",
+          "description": "6ch 48kHz",
+          "size": 432000000,
+          "bitRate": 640000,
+          "trackName": "Japanese 5.1",
+          "language": "ja",
+          "languageCodes": [
+            "jpn",
+            "ja"
+          ],
+          "defaultTrack": "true",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 2,
+          "number": 3,
+          "type": "audio",
+          "codec": "AAC",
+          "codecId": "A_AAC",
+          "description": "stereo 44.1kHz",
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "en",
+          "languageCodes": [
+            "eng",
+            "en"
+          ],
+          "defaultTrack": "false",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "track",
+          "id": 3,
+          "number": 4,
+          "type": "subtitles",
+          "codec": "SRT (UTF-8 text)",
+          "codecId": "S_TEXT/UTF8",
+          "description": "Text SRT",
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "fr",
+          "languageCodes": [
+            "fra",
+            "fre",
+            "fr"
+          ],
+          "defaultTrack": "false",
+          "forced": "true"
+        },
+        {
+          "kind": "track",
+          "id": 4,
+          "number": 5,
+          "type": "subtitles",
+          "codec": "SubStationAlpha (ASS)",
+          "codecId": "S_TEXT/ASS",
+          "description": "Text ASS",
+          "size": null,
+          "bitRate": null,
+          "trackName": "Simplified Chinese",
+          "language": "zh",
+          "languageCodes": [
+            "zho",
+            "chi",
+            "zh"
+          ],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "chapters",
+          "id": 0,
+          "number": 0,
+          "type": "chapters",
+          "codec": "",
+          "codecId": "",
+          "description": "",
+          "chapterEntryCount": 3,
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "attachment",
+          "id": 1,
+          "number": 0,
+          "type": "attachment",
+          "codec": "jpg",
+          "codecId": "jpg",
+          "description": "",
+          "size": 2048,
+          "bitRate": null,
+          "trackName": "cover.jpg",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        },
+        {
+          "kind": "attachment",
+          "id": 2,
+          "number": 0,
+          "type": "attachment",
+          "codec": "ttf",
+          "codecId": "ttf",
+          "description": "",
+          "size": 512,
+          "bitRate": null,
+          "trackName": "Subtitle Font.TTF",
+          "language": "",
+          "languageCodes": [],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        }
+      ],
+      "movie.ja": [
+        {
+          "kind": "track",
+          "id": 0,
+          "number": 1,
+          "type": "audio",
+          "codec": "Opus",
+          "codecId": "A_OPUS",
+          "description": "stereo 48kHz",
+          "size": null,
+          "bitRate": null,
+          "trackName": "Commentary",
+          "language": "ja",
+          "languageCodes": [
+            "jpn",
+            "ja"
+          ],
+          "defaultTrack": "false",
+          "forced": "unspecified"
+        }
+      ],
+      "movie.en": [
+        {
+          "kind": "track",
+          "id": 0,
+          "number": 1,
+          "type": "subtitles",
+          "codec": "SubRip Text",
+          "codecId": "S_TEXT/UTF8",
+          "description": "Text SRT UTF-8",
+          "size": null,
+          "bitRate": null,
+          "trackName": "",
+          "language": "und",
+          "languageCodes": [
+            "und"
+          ],
+          "defaultTrack": "unspecified",
+          "forced": "unspecified"
+        }
+      ]
+    },
+    "args": [
+      "-o",
+      "/out/Movie.mkv",
+      "-d",
+      "0",
+      "-a",
+      "2",
+      "-s",
+      "3",
+      "--language",
+      "0:en",
+      "--track-name",
+      "0:Main Feature",
+      "--default-track-flag",
+      "0:1",
+      "--language",
+      "2:en",
+      "--default-track-flag",
+      "2:0",
+      "--language",
+      "3:fr",
+      "--default-track-flag",
+      "3:0",
+      "--forced-display-flag",
+      "3:1",
+      "--no-global-tags",
+      "--no-attachments",
+      "/media/Movie.mkv",
+      "--no-video",
+      "-a",
+      "0",
+      "--no-subtitles",
+      "--language",
+      "0:ja",
+      "--track-name",
+      "0:Commentary",
+      "--default-track-flag",
+      "0:0",
+      "--no-chapters",
+      "--no-global-tags",
+      "--no-attachments",
+      "/media/Movie.ja.mka",
+      "--no-video",
+      "--no-audio",
+      "-s",
+      "0",
+      "--language",
+      "0:und",
+      "--no-chapters",
+      "--no-global-tags",
+      "--no-attachments",
+      "/media/Movie.en.srt",
+      "--track-order",
+      "2:0,1:0,0:0,0:2,0:3,0:1"
+    ],
+    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 2 -s 3 --language 0:en --track-name \"0:Main Feature\" --default-track-flag 0:1 --language 2:en --default-track-flag 2:0 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --no-global-tags --no-attachments /media/Movie.mkv --no-video -a 0 --no-subtitles --language 0:ja --track-name 0:Commentary --default-track-flag 0:0 --no-chapters --no-global-tags --no-attachments /media/Movie.ja.mka --no-video --no-audio -s 0 --language 0:und --no-chapters --no-global-tags --no-attachments /media/Movie.en.srt --track-order 2:0,1:0,0:0,0:2,0:3,0:1"
+  }
+}

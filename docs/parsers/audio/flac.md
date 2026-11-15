@@ -8,8 +8,8 @@ The FLAC parser recognises native FLAC files, extracts STREAMINFO, Vorbis commen
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/audio/flac.rs`
-- Shared helper: `src-tauri/src/media_metadata/audio/id3v2.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/audio/flac.rs`
+- Shared helper: `crates/bmm-core/src/media_metadata/audio/id3v2.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_flac.cpp`, `../mkvtoolnix/src/input/r_flac.h`, `../mkvtoolnix/src/common/flac.cpp`, `../mkvtoolnix/src/common/flac.h`
 
 The parser skips leading ID3v2 data, checks `fLaC`, walks metadata blocks until the on-disk last-metadata-block flag, EOF/truncation, or the parser deadline, decodes STREAMINFO, maps total samples to duration, turns Vorbis comments into tags, promotes title/language fields, and turns PICTURE blocks into attachment metadata. The shared ID3v2 skipper validates mkvtoolnix's version and synchsafe-size guards before seeking, so malformed `ID3`-looking prefixes are treated as payload rather than skipped (PARSER-359).

@@ -8,8 +8,8 @@ The HEVC parser recognises raw Annex B H.265 elementary streams and reports one 
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/hevc/reader.rs`
-- Helpers: `src-tauri/src/media_metadata/elementary/hevc/nal.rs`, `src-tauri/src/media_metadata/elementary/hevc/sps.rs`, `src-tauri/src/media_metadata/elementary/hevc/vps.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/hevc/reader.rs`
+- Helpers: `crates/bmm-core/src/media_metadata/elementary/hevc/nal.rs`, `crates/bmm-core/src/media_metadata/elementary/hevc/sps.rs`, `crates/bmm-core/src/media_metadata/elementary/hevc/vps.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_hevc.cpp`, `../mkvtoolnix/src/input/r_hevc.h`, `../mkvtoolnix/src/common/hevc/*`, `../mkvtoolnix/src/common/xyzvc/*`
 
 The reader scans Annex B HEVC data in 1 MiB chunks, up to the same fifty chunks mkvtoolnix feeds into its HEVC elementary-stream parser. `read_headers` checks the configured parser deadline between chunks. The raw probe rejects a first probe byte of `0x47` to avoid claiming MPEG-TS sync-prefixed data, matching mkvtoolnix's `might_be_xyzvc` guard. The dispatcher's strict elementary phase additionally requires an Annex B start code at payload byte zero before accepting the same VPS/SPS/PPS/first-access-unit evidence; the late loose HEVC retry keeps the bounded long scan for headers that start after leading bytes (PARSER-387). The scan splits HEVC NAL units, requires VPS/SPS/PPS headers plus a first access unit that has begun with VCL data and then flushed at a later mkvtoolnix-equivalent boundary, parses `profile_tier_level`, conformance-window crop, chroma and bit-depth fields, rejects SPS entries whose cropped dimensions are zero, and builds a compact codec-private record for the track (PARSER-343, PARSER-351).

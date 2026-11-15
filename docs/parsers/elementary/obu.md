@@ -8,7 +8,7 @@ The AV1 OBU parser recognises raw AV1 Open Bitstream Units streams and reports o
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/elementary/obu.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/elementary/obu.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_obu.cpp`, `../mkvtoolnix/src/input/r_obu.h`, `../mkvtoolnix/src/common/av1.cpp`, `../mkvtoolnix/src/common/av1.h`
 
 The parser reads the same 1 MiB bounded prefix mkvtoolnix uses for raw OBU probing, decodes OBU headers and extension layer ids, LEB128 sizes, sequence headers, operating profile fields, the first `operating_point_idc`, max frame dimensions, bit depth, monochrome/chroma-subsampling flags, and color description fields. Probing requires a sequence header and a frame-like OBU so isolated headers do not claim arbitrary binary files. Metadata OBUs are accepted before the sequence header, matching mkvtoolnix's pre-frame metadata retention. After the first sequence header has supplied `operating_point_idc[0]`, non-sequence/non-temporal-delimiter OBUs with extension headers are dropped when their temporal or spatial id is outside the first operating point, so AV1C and Dolby Vision metadata retention mirrors `parser_c::parse_obu` (PARSER-378/PARSER-379). The OBU walker also requires every OBU to carry `obu_has_size_field`: an OBU without a size field stops the walk (and rejects the stream), mirroring `parse_obu()`'s `obu_without_size_unsupported_x` throw, so size-less raw OBU data that mkvmerge rejects is not claimed.

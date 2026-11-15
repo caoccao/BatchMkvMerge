@@ -8,8 +8,8 @@ The FLV parser recognises Flash Video files, reads tag headers, extracts script 
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/flv/reader.rs`
-- Related modules: `src-tauri/src/media_metadata/flv/header.rs`, `tag.rs`, `script_data.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/flv/reader.rs`
+- Related modules: `crates/bmm-core/src/media_metadata/flv/header.rs`, `tag.rs`, `script_data.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_flv.cpp`, `../mkvtoolnix/src/input/r_flv.h`, upstream AMF helpers
 
 The parser validates the FLV header, starts tag scanning at the fixed 9-byte header boundary like mkvtoolnix, walks actual tags in a bounded region independent of stale header type flags, skips encrypted tags, decodes AMF0 `onMetaData` values for width, height, and frame rate, and parses AAC, MP3, H.264, H.265, Sorenson H.263, VP6, and VP6-alpha metadata. Clear tag types are classified by exact flag byte (`0x08`, `0x09`, `0x12`) so reserved high bits do not masquerade as audio/video/script tags. FLV sound format 14 only selects the MP3 codec family; the reported sample rate still comes from the normal FLV rate-index table (`5512`, `11025`, `22050`, `44100`), matching `process_audio_tag` (PARSER-394). The SoundSize flag is logged upstream but not surfaced as `m_a_bits_per_sample`, so the Rust metadata leaves audio bit depth unset for supported FLV audio (PARSER-395).

@@ -8,7 +8,7 @@ The DTS parser recognises DTS core streams and DTS-HD chunked files. It reports 
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/audio/dts.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/audio/dts.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_dts.cpp`, `../mkvtoolnix/src/input/r_dts.h`, `../mkvtoolnix/src/common/dts.cpp`, `../mkvtoolnix/src/common/dts.h`, `../mkvtoolnix/src/common/dts_parser.cpp`, `../mkvtoolnix/src/common/dts_parser.h`
 
 The Rust implementation detects 16-bit big-endian, 16-bit little-endian, 14-bit big-endian, and 14-bit little-endian sync forms. It can transform 14-bit and swapped data into a normal frame view before parsing. DTS-HD `DTSHDHDR` chunks are walked until EOF to find the first usable `STRMDATA` payload, and files with a DTS-HD header but no stream-data chunk are rejected instead of falling back to byte zero. The dispatcher runs a strict DTS phase before MPEG-TS/MPEG-PS/OBU: that phase requires a five-header run to start at payload byte zero and deliberately skips the loose `detect()` transform path. The default DTS probe keeps the full `detect()` / any-offset five-header behavior for the later loose DTS retry after the 64-frame MP3/AC-3/AAC loop, matching `dts_reader_c::probe_file`'s `require_headers_at_start` branch and mkvtoolnix's ambiguous-reader order (PARSER-386, PARSER-388). Shared ID3v2 trimming rejects invalid version/synchsafe header bytes and clamps bounded probe payload ranges before slicing, matching mkvtoolnix's malformed-tag behavior (PARSER-359). Extension substreams are inspected for XLL, LBR, X96, XCH, channel masks, and source PCM resolution (PARSER-357).

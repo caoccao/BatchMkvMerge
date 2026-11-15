@@ -8,7 +8,7 @@ The MicroDVD parser recognises frame-based MicroDVD subtitle text and marks it a
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/microdvd.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/microdvd.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_microdvd.cpp`, `../mkvtoolnix/src/input/r_microdvd.h`, `../mkvtoolnix/src/merge/reader_detection_and_creation.cpp`
 
 The parser looks for `{start}{end}text` line shapes, sets `ContainerFormat::MicroDvd`, marks the container unsupported, and emits no tracks. Mirroring `microdvd_reader_c::probe_file`, only the **first non-empty line** — found by up to 20 bounded `getline2(line, 50)`-style decoded-character reads — is tested against the grammar, so ordinary prose with an incidental `{n}{m}...` line further down is not claimed. Overlong blank physical lines are split into multiple probe attempts just like mkvtoolnix (PARSER-399).

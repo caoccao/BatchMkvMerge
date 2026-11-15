@@ -1,0 +1,22 @@
+[package]
+name = "bmm-core"
+version = "1.0.0"
+description = "UI-free core of BatchMkvMerge: media metadata parser, merge queue, config, MKVToolNix and update services."
+authors = ["Sam Cao"]
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+encoding_rs = "0.8"
+flate2 = "1"
+language-tags = "0.3"
+log.workspace = true
+quick-xml = "=0.39.2"
+serde.workspace = true
+serde_json.workspace = true
+sys-locale = "0.3.2"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+thiserror = "2"
+ureq = { version = "2", features = ["json"] }

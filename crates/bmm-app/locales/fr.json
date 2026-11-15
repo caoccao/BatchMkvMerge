@@ -1,0 +1,272 @@
+{
+  "app": {
+    "dropHere": "Déposez des fichiers médias ou un dossier ici"
+  },
+  "list": {
+    "delete": "Supprimer"
+  },
+  "merge": {
+    "childCount": "%{count} fichier(s) enfant(s) fusionné(s) dans cette sortie",
+    "copyCommand": "Copier la commande",
+    "merge": "Fusionner",
+    "cancel": "Annuler",
+    "ok": "OK",
+    "browse": "Parcourir",
+    "setOutputPath": "Définir le chemin de sortie",
+    "dragToMerge": "Glisser sur un autre fichier pour fusionner",
+    "childTable": {
+      "id": "ID",
+      "filePath": "Chemin du fichier",
+      "action": "Action"
+    },
+    "removeFromRoot": "Retirer de la fusion",
+    "outputPath": "Chemin de sortie",
+    "openInBetterMediaInfo": "Ouvrir dans BetterMediaInfo",
+    "outputPathNotWritable": "Le chemin de sortie n'est pas accessible en écriture. Choisissez un autre chemin.",
+    "outputPathDoesNotExist": "Le chemin de sortie n'existe pas. Il sera créé.",
+    "commandCopied": "Commande copiée dans le presse-papiers.",
+    "mergeComplete": "Fusion terminée.",
+    "noTracks": "Aucune piste trouvée.",
+    "chapterEntryCount": {
+      "single": "%{count} entrée",
+      "multiple": "%{count} entrées"
+    },
+    "header": {
+      "id": "ID",
+      "type": "Type",
+      "codec": "Codec",
+      "description": "Description",
+      "size": "Taille",
+      "bitRate": "Débit",
+      "trackName": "Nom de piste",
+      "language": "Langue",
+      "defaultTrack": "Piste par défaut",
+      "forcedDisplay": "Affichage forcé",
+      "selectAll": "Tout sélectionner",
+      "tracks": "Pistes"
+    },
+    "error": {
+      "mkvmergeNotAvailable": "mkvmerge n'est pas disponible. Vérifiez le chemin MKVToolNix dans Paramètres. %{detail}",
+      "mkvmergeFailed": "mkvmerge a échoué : %{detail}",
+      "outputExists": "Le fichier de sortie %{path} existe déjà.",
+      "parser": {
+        "io": "Impossible de lire le fichier : %{detail}",
+        "unexpectedEof": "Fichier tronqué : %{detail}",
+        "unrecognised": "Format de fichier non reconnu : %{detail}",
+        "timeout": "Délai d'analyse dépassé après %{budgetMs} ms à l'étape %{stage} : %{detail}",
+        "malformed": "Fichier mal formé : %{detail}",
+        "oversizedElement": "L'élément dépasse la limite de taille : %{detail}",
+        "internal": "Erreur interne de l'analyseur : %{detail}"
+      }
+    }
+  },
+  "toolbar": {
+    "setGlobalOutputPath": "Définir le chemin de sortie global",
+    "mergeAll": "Tout fusionner (F3)",
+    "cancelAll": "Tout annuler (F4)",
+    "clear": "Effacer (Ctrl + Q)",
+    "profile": "Profil (F9)",
+    "settings": "Paramètres (F10)",
+    "about": "À propos"
+  },
+  "group": {
+    "copyAllCommands": "Copier toutes les commandes",
+    "mergeAll": "Tout fusionner",
+    "clearAll": "Tout supprimer"
+  },
+  "groupMode": {
+    "title": "Groupe",
+    "none": "Aucun regroupement",
+    "trackCount": "Grouper par nombre de pistes identique par type",
+    "trackCountAndLanguage": "Grouper par nombre de pistes et langue identiques par type",
+    "byFileName": "Grouper par nom de fichier"
+  },
+  "tabs": {
+    "fileList": "Liste des fichiers",
+    "queue": "File d'attente",
+    "settings": "Paramètres",
+    "about": "À propos",
+    "close": "Fermer"
+  },
+  "queue": {
+    "defaultDrive": "File d'attente",
+    "cancelAll": "Tout annuler",
+    "resumeAll": "Tout reprendre",
+    "clearCompleted": "Effacer les terminés",
+    "systemNotification": "Notification système",
+    "systemNotificationTooltip": "Afficher une notification système à la fin.",
+    "topmostNotification": "Notification au premier plan",
+    "topmostNotificationTooltip": "Afficher une notification au premier plan à la fin.",
+    "header": {
+      "filePath": "Chemin du fichier",
+      "status": "État",
+      "start": "Début",
+      "end": "Fin",
+      "elapsed": "Écoulé",
+      "eta": "Restant"
+    },
+    "status": {
+      "waiting": "En attente",
+      "merging": "Fusion",
+      "completed": "Terminé",
+      "cancelled": "Annulé",
+      "failed": "Échec"
+    }
+  },
+  "settings": {
+    "title": "Paramètres",
+    "appearance": "Apparence",
+    "formatting": "Formatage",
+    "bitRate": "Débit",
+    "size": "Taille",
+    "precision": "Précision",
+    "unit": "Unité",
+    "mode": "Mode",
+    "autoMode": "Auto",
+    "lightMode": "Clair",
+    "darkMode": "Sombre",
+    "theme": "Thème",
+    "themeOcean": "Océan",
+    "themeAqua": "Aigue-marine",
+    "themeSky": "Ciel",
+    "themeArctic": "Arctique",
+    "themeGlacier": "Glacier",
+    "themeMist": "Brume",
+    "themeSlate": "Ardoise",
+    "themeCharcoal": "Fusain",
+    "themeMidnight": "Minuit",
+    "themeIndigo": "Indigo",
+    "themeViolet": "Violette",
+    "themeLavender": "Lavande",
+    "themeRose": "Rose",
+    "themeBlush": "Rosé",
+    "themeCoral": "Corail",
+    "themeSunset": "Coucher de soleil",
+    "themeAmber": "Ambre",
+    "themeSand": "Sable",
+    "themeForest": "Forêt",
+    "themeEmerald": "Émeraude",
+    "language": "Langue",
+    "mkv": "MKV",
+    "integration": "Intégration",
+    "mkvToolNix": "MKVToolNix",
+    "betterMediaInfo": "BetterMediaInfo",
+    "mkvToolNixPath": "Chemin MKVToolNix",
+    "betterMediaInfoPath": "Chemin BetterMediaInfo",
+    "browse": "Parcourir",
+    "detect": "Détecter",
+    "mkvToolNixFound": "mkvmerge trouvé dans le chemin MKVToolNix.",
+    "mkvToolNixNotFound": "mkvmerge introuvable dans le chemin MKVToolNix.",
+    "betterMediaInfoFound": "BetterMediaInfo trouvé",
+    "betterMediaInfoNotFound": "BetterMediaInfo n'a pas été détecté. Vérifiez le chemin et réessayez.",
+    "update": "Mise à jour",
+    "checkNewVersion": "Vérifier nouvelle version",
+    "daily": "Quotidien",
+    "weekly": "Hebdomadaire",
+    "monthly": "Mensuel",
+    "profiles": "Profils",
+    "activeProfile": "Profil actif",
+    "newProfileName": "Nom du nouveau profil",
+    "addProfile": "Ajouter",
+    "deleteProfile": "Supprimer",
+    "video": "Vidéo",
+    "audio": "Audio",
+    "subtitles": "Sous-titres",
+    "chapters": "Chapitres",
+    "attachments": "Pièces jointes",
+    "autoSelectOnDrop": "Sélectionner automatiquement à l'ajout",
+    "onlyAutoSelectOnDropForLanguages": "Sélectionner automatiquement uniquement à l'ajout pour les langues",
+    "reset": "Réinitialiser",
+    "trackSelection": "Sélection des pistes",
+    "languages": "Langues",
+    "trackNames": "Noms de piste",
+    "automation": "Automatisation",
+    "automationResetUndLanguage": "Définir automatiquement la langue und sur",
+    "automationSetTrackName": "Définir automatiquement le nom de piste par langue",
+    "automationResetDefaultTrack": "Réinitialiser automatiquement la piste par défaut",
+    "automationResetForcedDisplay": "Réinitialiser automatiquement l'affichage forcé",
+    "trackNamesHint": "Un nom de piste par ligne",
+    "filter": "Filtrer",
+    "clear": "Effacer",
+    "addAll": "Tout ajouter",
+    "removeAll": "Tout supprimer",
+    "available": "Disponible",
+    "preferred": "Préféré",
+    "languagesInstruction": "Glissez les langues entre les tables pour les ajouter ou les supprimer. Glissez dans la table de droite pour les réorganiser."
+  },
+  "about": {
+    "title": "À propos",
+    "tagline": "GUI par lots pour mkvmerge",
+    "author": "Auteur",
+    "github": "GitHub"
+  },
+  "footer": {
+    "donate": "Faire un don pour soutenir le développement",
+    "copyright": "© Copyright 2026"
+  },
+  "notification": {
+    "completedIn": "Terminé en %{elapsed}",
+    "unknownError": "Erreur inconnue",
+    "summary": "%{completed} terminé(s), %{failed} en échec, %{cancelled} annulé(s)",
+    "finishedIn": "Fini en %{elapsed}"
+  },
+  "confirm": {
+    "exitTitle": "Quitter",
+    "exitMessage": "Des fusions sont en cours. Voulez-vous vraiment quitter ?",
+    "yes": "Oui",
+    "no": "Non",
+    "deleteProfileTitle": "Supprimer le profil",
+    "deleteProfileMessage": "Supprimer le profil « %{name} » ?",
+    "resetProfileTitle": "Réinitialiser le profil",
+    "resetProfileMessage": "Réinitialiser le profil « %{name} » à ses paramètres par défaut ?"
+  },
+  "card": {
+    "summary": {
+      "toPath": "Vers : %{path}",
+      "size": "Taille : %{size}",
+      "encoded": "Encodé : %{date}",
+      "title": "Titre : %{title}"
+    }
+  },
+  "update": {
+    "newVersionAvailable": "Une nouvelle version %{version} est disponible.",
+    "skipThisVersion": "Ignorer cette version"
+  },
+  "welcome": {
+    "title": "Bienvenue dans BatchMkvMerge",
+    "subtitle": "Une interface par lots pour mkvmerge de MKVToolNix.",
+    "intro": "Traitez vos fichiers médias par lots de manière conviviale. Une interface graphique au-dessus de mkvmerge de MKVToolNix.",
+    "introBetterMediaInfo": "Inspectez n'importe quel fichier multimédia avec une interface rapide et moderne. Consultez les flux, propriétés et métadonnées des pistes vidéo, audio, image et sous-titres en un coup d'œil.",
+    "introBatchMkvExtract": "Extrayez des pistes, chapitres et pièces jointes de nombreux fichiers .mkv à la fois. Une interface par lots au-dessus de mkvextract de MKVToolNix.",
+    "introBDMaster": "Inspectez les disques Blu-ray avec une interface moderne. Parcourez disques, listes de lecture, flux, pistes et graphiques de débit en un coup d'œil.",
+    "addFiles": "Ajouter des fichiers",
+    "addFolder": "Ajouter un dossier",
+    "emptyHint": "Astuce : vous pouvez aussi glisser-déposer des fichiers médias ou des dossiers dans cette fenêtre.",
+    "viewOnGithub": "Voir sur GitHub"
+  },
+  "gpui_component": {
+    "Settings": {
+      "search_placeholder": "Rechercher...",
+      "no_results": "Aucun paramètre correspondant",
+      "no_results_description": "Essayez un autre mot-clé.",
+      "Reset All": "Tout réinitialiser"
+    },
+    "Select": {
+      "placeholder": "Veuillez choisir"
+    },
+    "List": {
+      "search_placeholder": "Rechercher..."
+    },
+    "Input": {
+      "Cut": "Couper",
+      "Copy": "Copier",
+      "Paste": "Coller",
+      "Select All": "Tout sélectionner",
+      "Clear": "Effacer"
+    },
+    "Dialog": {
+      "ok": "OK",
+      "cancel": "Annuler"
+    }
+  }
+}

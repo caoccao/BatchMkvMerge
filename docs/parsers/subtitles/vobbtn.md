@@ -8,7 +8,7 @@ The VobButton parser recognises DVD button streams and reports a button track wi
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/vobbtn.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/vobbtn.rs`
 - Upstream basis: `../mkvtoolnix/src/input/r_vobbtn.cpp`, `../mkvtoolnix/src/input/r_vobbtn.h`
 
 The reader performs the same structural check as upstream: `butonDVD` magic, PES private-stream marker, and expected header layout. Its late ambiguous dispatcher slot follows the 64-frame MP3/AC-3/AAC loop, alongside TrueHD and loose DTS, so raw audio wins first when mkvtoolnix would choose it (PARSER-388). It emits a `TrackType::Buttons` track with `B_VOBBTN`.

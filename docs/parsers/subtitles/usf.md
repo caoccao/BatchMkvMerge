@@ -8,8 +8,8 @@ The USF parser recognises Universal Subtitle Format XML files and reports one te
 
 ## Implementation
 
-- Primary implementation: `src-tauri/src/media_metadata/subtitles/usf.rs`
-- Encoding helper: `src-tauri/src/media_metadata/subtitles/encoding.rs`
+- Primary implementation: `crates/bmm-core/src/media_metadata/subtitles/usf.rs`
+- Encoding helper: `crates/bmm-core/src/media_metadata/subtitles/encoding.rs`
 - XML engine: `quick-xml` (`=0.39.2`), the event-based stand-in for upstream's pugixml
 - Upstream basis: `../mkvtoolnix/src/input/r_usf.cpp`, `../mkvtoolnix/src/input/r_usf.h`
 
