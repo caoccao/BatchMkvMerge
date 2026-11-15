@@ -833,6 +833,24 @@ fn the_output_dialog_sets_and_clears_a_cards_output_path(cx: &mut TestAppContext
 fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut TestAppContext) {
   let (shell, movie, dir) = movie_shell(cx, "cards-output-checks");
   click_in(&shell, cx, 0, "card-output");
+  let tip = tr!("merge.outputPathHint");
+  let warning = tr!("merge.outputPathDoesNotExist");
+  let error = tr!("merge.outputPathNotWritable");
+  let messages = [tip.as_ref(), warning.as_ref(), error.as_ref()];
+  let snapshot = |cx: &mut TestAppContext| {
+    shell.window(cx, |window, cx| {
+      window.render_frame(cx);
+      let bounds = window.find("surface").bounds();
+      let shown: Vec<_> = gpui_kit::base::test_support::texts(window)
+        .into_iter()
+        .filter_map(|text| messages.iter().copied().find(|message| *message == text.text()))
+        .collect();
+      (bounds, shown)
+    })
+  };
+  let (bounds, shown) = snapshot(cx);
+  assert_eq!(shown, [tip.as_ref()]);
+
   let missing = dir.path().join("new").join("Movie.mkv").to_string_lossy().into_owned();
   shell.window(cx, |window, cx| {
     window.press(SELECT_ALL, cx);
@@ -840,22 +858,12 @@ fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut T
   });
   cx.executor().advance_clock(Duration::from_millis(400));
   cx.run_until_parked();
-  let shown: Vec<String> = shell.window(cx, |window, cx| {
-    window.render_frame(cx);
-    window.try_find("output-dialog").map(|_| ()).expect("the dialog");
-    gpui_kit::base::test_support::texts(window)
-      .into_iter()
-      .map(|text| text.text().to_string())
-      .collect()
-  });
-  assert!(
-    shown.iter().any(|text| text.contains("doesn't exist")),
-    "the warning in {shown:?}"
-  );
+  assert_eq!(snapshot(cx), (bounds, vec![warning.as_ref()]));
   // Below a file nothing can be written: the dialog stays with an error.
   let blocked = format!("{}/x.mkv", movie);
   type_and_confirm(&shell, cx, &blocked);
   assert!(has_dialog(&shell, cx));
+  assert_eq!(snapshot(cx), (bounds, vec![error.as_ref()]));
   assert_eq!(
     shell
       .stores
@@ -863,6 +871,12 @@ fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut T
       .read_with(cx, |files, _| files.output_path(&movie).map(str::to_string)),
     None
   );
+  shell.window(cx, |window, cx| {
+    window.press(SELECT_ALL, cx);
+    window.press("backspace", cx);
+  });
+  cx.run_until_parked();
+  assert_eq!(snapshot(cx), (bounds, vec![tip.as_ref()]));
   shell.press(cx, "escape");
   assert!(!has_dialog(&shell, cx), "Escape cancels");
 }
@@ -918,6 +932,11 @@ fn a_group_cards_output_directory_goes_to_every_root(cx: &mut TestAppContext) {
 fn the_toolbar_sets_the_global_output_directory(cx: &mut TestAppContext) {
   let (shell, _movie, dir) = movie_shell(cx, "cards-global-output");
   shell.click(cx, "toolbar-global-output");
+  shell.window(cx, |window, _| {
+    let cancel = window.find("output-cancel").bounds();
+    let ok = window.find("output-ok").bounds();
+    assert_eq!(cancel.size.width, ok.size.width);
+  });
   assert_eq!(dialog_value(&shell, cx).as_deref(), Some(""));
   let out = dir.path().to_string_lossy().into_owned();
   type_and_confirm(&shell, cx, &out);

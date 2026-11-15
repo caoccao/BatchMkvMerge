@@ -22,6 +22,7 @@
     "removeFromRoot": "Aus der Zusammenführung entfernen",
     "outputPath": "Ausgabepfad",
     "openInBetterMediaInfo": "In BetterMediaInfo öffnen",
+    "outputPathHint": "Leer lassen, um den Standard-Ausgabepfad zu verwenden.",
     "outputPathNotWritable": "Der Ausgabepfad ist nicht beschreibbar. Bitte wähle einen anderen Pfad.",
     "outputPathDoesNotExist": "Der Ausgabepfad existiert nicht. Er wird erstellt.",
     "commandCopied": "Befehl in die Zwischenablage kopiert.",

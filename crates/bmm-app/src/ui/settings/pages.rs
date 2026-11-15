@@ -24,7 +24,7 @@ use bmm_core::config::{
   UpdateCheckInterval,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonGroup};
+use gpui_kit::component::button::ButtonGroup;
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, h_flex, v_flex};
@@ -33,6 +33,7 @@ use gpui_kit::*;
 use super::{StreamKind, dropdown};
 use crate::state::{ConfigStore, Stores};
 use crate::theme::THEMES;
+use crate::ui::text_button;
 use crate::ui::toolbar::{GROUP_MODES, group_mode_label_key};
 
 /// The nine languages with their config codes and own names.
@@ -174,7 +175,7 @@ fn mode_toggle(store: &Entity<ConfigStore>, cx: &App) -> impl IntoElement + use<
     .outline()
     .small()
     .children(modes.iter().map(|(mode, icon, key, name)| {
-      Button::new(SharedString::from(format!("settings-mode-{name}")))
+      text_button(SharedString::from(format!("settings-mode-{name}")))
         .icon(Icon::new(*icon))
         .label(tr!(*key))
         .selected(*mode == current)

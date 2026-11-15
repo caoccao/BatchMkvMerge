@@ -43,6 +43,7 @@ use crate::state::Stores;
 use crate::state::files::FileEvent;
 use crate::state::queue::QueueEvent;
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
+use crate::ui::text_button;
 use crate::ui::track_table::TrackTable;
 
 /// The root list's starting width and its limits: at least 160 px, and at
@@ -425,7 +426,7 @@ impl Render for GroupCard {
         })),
       )
       .child(
-        Button::new("group-merge")
+        text_button("group-merge")
           .outline()
           .small()
           .icon(IconName::Combine)

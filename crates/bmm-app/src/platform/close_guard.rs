@@ -19,9 +19,11 @@
 //! running asks first.
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::{App, ParentElement, Window};
+
+use crate::ui::{confirm_button, text_button};
 
 /// Decides a close request. Without active merges the window closes. With
 /// them, a dialog asks and the request is refused for now: No keeps the
@@ -50,13 +52,13 @@ pub fn should_close(
         .footer(
           DialogFooter::new()
             .child(
-              Button::new("exit-no")
-                .success()
+              text_button("exit-no")
+                .outline()
                 .label(tr!("confirm.no"))
                 .on_click(|_, window, cx| window.close_dialog(cx)),
             )
             .child(
-              Button::new("exit-yes")
+              confirm_button("exit-yes")
                 .danger()
                 .label(tr!("confirm.yes"))
                 .on_click(move |_, window, cx| {

@@ -22,6 +22,7 @@
     "removeFromRoot": "Retirer de la fusion",
     "outputPath": "Chemin de sortie",
     "openInBetterMediaInfo": "Ouvrir dans BetterMediaInfo",
+    "outputPathHint": "Laissez ce champ vide pour utiliser le chemin de sortie par défaut.",
     "outputPathNotWritable": "Le chemin de sortie n'est pas accessible en écriture. Choisissez un autre chemin.",
     "outputPathDoesNotExist": "Le chemin de sortie n'existe pas. Il sera créé.",
     "commandCopied": "Commande copiée dans le presse-papiers.",

@@ -41,7 +41,18 @@ pub mod word_navigation;
 #[cfg(test)]
 mod tests;
 
-use gpui_kit::{Hsla, Pixels, Rgba, px};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::{ElementId, Hsla, Pixels, Rgba, Styled, px};
+
+/// The standard minimum width for a button with a visible text label.
+pub(crate) fn text_button(id: impl Into<ElementId>) -> Button {
+  Button::new(id).min_w(px(88.0))
+}
+
+/// The wider primary action in a confirmation or dialog.
+pub(crate) fn confirm_button(id: impl Into<ElementId>) -> Button {
+  text_button(id).primary().min_w(px(112.0))
+}
 
 /// `n` spacing units (8 px each).
 pub fn space(n: f32) -> Pixels {

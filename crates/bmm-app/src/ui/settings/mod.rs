@@ -42,7 +42,6 @@ use std::rc::Rc;
 use bmm_core::config::ConfigProfile;
 use bmm_core::media_track::MediaTrackType;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::setting::Settings;
 use gpui_kit::component::{Selectable, Sizable, h_flex};
@@ -52,6 +51,7 @@ use self::integration::ToolPathRow;
 use self::language_picker::LanguagePicker;
 use self::profiles::ProfileEditor;
 use self::track_names::TrackNamesEditor;
+use super::text_button;
 use crate::domain::format::track_type_emoji;
 use crate::state::Stores;
 use crate::tools::Tool;
@@ -170,7 +170,7 @@ pub fn kind_toggle(
   let on_change = Rc::new(on_change);
   h_flex().id(id).children(StreamKind::ALL.map(|kind| {
     let on_change = on_change.clone();
-    Button::new(SharedString::from(format!("{id}-{}", kind.name())))
+    text_button(SharedString::from(format!("{id}-{}", kind.name())))
       .outline()
       .small()
       .selected(kind == current)
@@ -195,7 +195,7 @@ pub fn dropdown(
     .find(|(option, _)| *option == value)
     .map(|(_, label)| label.clone())
     .unwrap_or_else(|| value.clone());
-  Button::new(id)
+  text_button(id)
     .accessibility_label(format!("{title}: {label}"))
     .label(label)
     .dropdown_caret(true)

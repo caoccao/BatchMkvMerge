@@ -30,13 +30,16 @@ use std::time::Duration;
 
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::alert::Alert;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::dialog::{DialogEntrance, DialogFooter};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+use crate::assets::{OUTPUT_DIRECTORY_ICON_NAME, toolbar_icon};
+
+use super::{confirm_button, hex, space, text, text_button};
 
 /// How long the field must rest before the existence check runs.
 const EXISTS_CHECK_DELAY: Duration = Duration::from_millis(300);
@@ -122,14 +125,38 @@ pub struct OutputPathDialog {
 impl OutputPathDialog {
   /// Opens the dialog for `request` with the field focused and selected.
   pub fn open(request: OutputDialogRequest, window: &mut Window, cx: &mut App) {
+    let mode = request.mode;
     let view = cx.new(|cx| Self::new(request, window, cx));
     let title = view.read(cx).request.title.clone();
     let focus = view.read(cx).input.read(cx).focus_handle(cx);
-    window.open_dialog(cx, move |dialog, window, _| {
-      let (enter, ok, cancel) = (view.clone(), view.clone(), view.clone());
+    window.open_dialog(cx, move |dialog, window, cx| {
+      let (enter, ok) = (view.clone(), view.clone());
+      let theme = cx.theme();
+      let icon = match mode {
+        OutputMode::Directory => toolbar_icon(OUTPUT_DIRECTORY_ICON_NAME).with_size(space(4.0)),
+        OutputMode::File => Icon::new(IconName::FileText),
+      };
       dialog
-        .title(title.clone())
-        .w(window.viewport_size().width * 0.6)
+        .w((window.viewport_size().width * 0.6).max(px(480.0)))
+        .centered()
+        .entrance(DialogEntrance::None)
+        .px(space(2.5))
+        .title(
+          h_flex()
+            .gap(space(1.5))
+            .pr(space(3.0))
+            .pb(space(1.0))
+            .child(
+              h_flex()
+                .size(space(4.0))
+                .flex_shrink_0()
+                .justify_center()
+                .rounded(theme.radius)
+                .bg(theme.primary.opacity(0.12))
+                .child(icon.text_color(theme.primary)),
+            )
+            .child(div().text_size(text::h6()).child(title.clone())),
+        )
         // The dialog's Enter: the same as OK, which closes the dialog itself
         // once the path is accepted.
         .on_ok(move |_, window, cx| {
@@ -140,21 +167,25 @@ impl OutputPathDialog {
         .child(view.clone())
         .footer(
           DialogFooter::new()
-            .justify_center()
+            .border_t_1()
+            .border_color(theme.border)
+            .pt(space(1.5))
             .child(
-              Button::new("output-ok")
-                .primary()
-                .label(tr!("merge.ok"))
-                .on_click(move |_, window, cx| ok.update(cx, |this, cx| this.confirm(window, cx))),
-            )
-            .child(
-              Button::new("output-cancel")
-                .ghost()
-                .label(tr!("merge.cancel"))
-                .on_click(move |_, window, cx| {
-                  cancel.update(cx, |_, cx| cx.notify());
-                  window.close_dialog(cx);
-                }),
+              div()
+                .grid()
+                .grid_cols(2)
+                .gap(space(1.0))
+                .child(
+                  text_button("output-cancel")
+                    .outline()
+                    .label(tr!("merge.cancel"))
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+                )
+                .child(
+                  confirm_button("output-ok")
+                    .label(tr!("merge.ok"))
+                    .on_click(move |_, window, cx| ok.update(cx, |this, cx| this.confirm(window, cx))),
+                ),
             ),
         )
     });
@@ -202,14 +233,17 @@ impl OutputPathDialog {
     cx: &mut Context<Self>,
   ) {
     match event {
-      InputEvent::Focus => input.update(cx, |state, cx| state.select_all(window, cx)),
+      InputEvent::Focus => {
+        input.update(cx, |state, cx| state.select_all(window, cx));
+        cx.notify();
+      }
+      InputEvent::Blur => cx.notify(),
       InputEvent::Change => {
         self.error = None;
         self.schedule_check(cx);
         cx.notify();
       }
       InputEvent::PressEnter { .. } => self.confirm(window, cx),
-      _ => {}
     }
   }
 
@@ -321,44 +355,60 @@ impl OutputPathDialog {
 }
 
 impl Render for OutputPathDialog {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let danger = cx.theme().danger;
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme();
+    let (message, color) = match (&self.error, self.missing) {
+      (Some(error), _) => (error.clone(), theme.danger),
+      (None, true) => (tr!("merge.outputPathDoesNotExist"), theme.danger),
+      (None, false) => {
+        let gray = if theme.is_dark() { hex(0xa6a6a6) } else { hex(0x6e6e6e) };
+        (tr!("merge.outputPathHint"), gray)
+      }
+    };
+    let ring = theme.ring;
+    let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
     v_flex()
       .id("output-dialog")
       .test_support()
-      .gap(super::space(1.0))
+      .gap(space(1.0))
       .child(
         h_flex()
-          .gap(super::space(1.0))
+          .gap(space(1.0))
           .child(
-            div()
-              .flex_1()
-              .min_w_0()
-              .child(Input::new(&self.input).id("output-path").small().cleanable(true)),
+            div().flex_1().min_w_0().child(
+              Input::new(&self.input)
+                .id("output-path")
+                .aria_label(tr!("merge.outputPath"))
+                .cleanable(true)
+                .focus_bordered(false)
+                .when(focused, |input| input.border_color(ring)),
+            ),
           )
           .child(
-            Button::new("output-browse")
+            text_button("output-browse")
               .outline()
-              .small()
+              .flex_shrink_0()
               .label(tr!("merge.browse"))
               .on_click(cx.listener(|this, _, window, cx| this.browse(window, cx))),
           ),
       )
-      .when(self.missing, |content| {
-        let warning = tr!("merge.outputPathDoesNotExist");
-        content.child(
-          div()
-            .text_size(super::text::body2())
-            .text_color(danger)
-            .child(warning.clone())
-            .test_text(warning),
-        )
-      })
-      .children(
-        self
-          .error
-          .clone()
-          .map(|error| Alert::error("output-error", error).into_any_element()),
+      .child(
+        div()
+          .id("output-status")
+          .w_full()
+          .h(space(2.0))
+          .flex_shrink_0()
+          .line_height(space(2.0))
+          .text_size(text::body2())
+          .text_color(color)
+          .truncate()
+          .when(self.error.is_some(), |row| row.role(Role::Alert))
+          .child(message.clone())
+          .when(self.error.is_some() || self.missing, |row| {
+            let message = message.clone();
+            row.tooltip(move |window, cx| Tooltip::new(message.clone()).max_w(px(400.0)).build(window, cx))
+          })
+          .test_text(message),
       )
   }
 }

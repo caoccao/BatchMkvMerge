@@ -22,6 +22,7 @@
     "removeFromRoot": "從合併中移除",
     "outputPath": "輸出路徑",
     "openInBetterMediaInfo": "喺 BetterMediaInfo 開啟",
+    "outputPathHint": "留空以使用預設輸出路徑。",
     "outputPathNotWritable": "輸出路徑無法寫入。請選擇其他路徑。",
     "outputPathDoesNotExist": "輸出路徑不存在。將會建立。",
     "commandCopied": "指令已複製到剪貼簿。",

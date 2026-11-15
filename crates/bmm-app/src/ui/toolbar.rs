@@ -26,15 +26,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use bmm_core::config::GroupMode;
-use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, h_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Side, Sizable, h_flex};
 use gpui_kit::*;
 
 use crate::actions;
+use crate::assets::{OUTPUT_DIRECTORY_ICON_NAME, toolbar_icon};
 use crate::state::ui::ToolbarMenu;
 use crate::state::{Stores, TabType};
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
@@ -48,6 +48,14 @@ pub fn group_mode_label_key(mode: &GroupMode) -> &'static str {
     GroupMode::None => "groupMode.none",
     GroupMode::TrackCount => "groupMode.trackCount",
     GroupMode::TrackCountAndLanguage => "groupMode.trackCountAndLanguage",
+  }
+}
+
+fn group_mode_icon(mode: &GroupMode) -> &'static str {
+  match mode {
+    GroupMode::None => "group-none",
+    GroupMode::TrackCount => "group-track-count",
+    GroupMode::TrackCountAndLanguage => "group-track-count-language",
   }
 }
 
@@ -91,7 +99,7 @@ fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut 
   let config = stores.config.read(cx).config().clone();
   let store = stores.config.clone();
   PopupMenu::build(window, cx, move |popup, _, _| match menu {
-    ToolbarMenu::GroupMode => GROUP_MODES.iter().fold(popup, |popup, mode| {
+    ToolbarMenu::GroupMode => GROUP_MODES.iter().fold(popup.check_side(Side::Left), |popup, mode| {
       let (mode, store) = (mode.clone(), store.clone());
       popup.item(
         PopupMenuItem::new(tr!(group_mode_label_key(&mode)))
@@ -154,16 +162,19 @@ fn menu_popover(stores: &Stores, menus: &Menus, menu: ToolbarMenu, trigger: Butt
     })
 }
 
-/// A 28 px ghost icon button (gpui-kit's default size at the 14 px base font);
-/// `color` tints the icon while it is enabled.
-fn icon_button(id: &'static str, icon: IconName, color: Option<Hsla>, tooltip: SharedString, enabled: bool) -> Button {
+/// A 32 px glyph in a 40 px ghost button. Disabled icons inherit the
+/// button's disabled foreground color.
+fn icon_button(id: &'static str, name: &str, color: Option<Hsla>, tooltip: SharedString, enabled: bool) -> Button {
+  let icon = toolbar_icon(name).with_size(px(32.0));
   let icon = match color.filter(|_| enabled) {
-    Some(color) => Icon::new(icon).text_color(color),
-    None => Icon::new(icon),
+    Some(color) => icon.text_color(color),
+    None => icon,
   };
   Button::new(id)
     .ghost()
-    .icon(icon)
+    .size(px(40.0))
+    .px_0()
+    .child(icon)
     .accessibility_label(tooltip.clone())
     .tooltip(tooltip)
     .disabled(!enabled)
@@ -217,7 +228,7 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-global-output",
-            IconName::FolderCog,
+            OUTPUT_DIRECTORY_ICON_NAME,
             Some(if has_global_output { primary } else { muted }),
             tr!("toolbar.setGlobalOutputPath"),
             true,
@@ -227,7 +238,7 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-merge-all",
-            IconName::Combine,
+            "merge-all",
             None,
             tr!("toolbar.mergeAll"),
             can_merge_all,
@@ -238,7 +249,7 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-cancel-all",
-            IconName::CircleX,
+            "cancel-all",
             Some(danger),
             tr!("toolbar.cancelAll"),
             has_active_jobs,
@@ -246,7 +257,7 @@ impl Render for Toolbar {
           .on_click(cx.listener(|this, _, _, cx| actions::cancel_all(&this.stores, cx))),
         )
         .child(
-          icon_button("toolbar-clear", IconName::Trash, None, tr!("toolbar.clear"), can_clear)
+          icon_button("toolbar-clear", "clear-list", None, tr!("toolbar.clear"), can_clear)
             .on_click(cx.listener(|this, _, _, cx| actions::clear_files(&this.stores, cx))),
         )
         .child(divider(cx))
@@ -256,7 +267,7 @@ impl Render for Toolbar {
           ToolbarMenu::GroupMode,
           icon_button(
             "toolbar-group-mode",
-            IconName::Images,
+            group_mode_icon(&group_mode),
             Some(group_color),
             tr!(group_mode_label_key(&group_mode)),
             true,
@@ -266,7 +277,7 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-group-by-file-name",
-            IconName::Files,
+            "group-by-filename",
             highlight(group_by_file_name),
             tr!("groupMode.byFileName"),
             true,
@@ -281,19 +292,13 @@ impl Render for Toolbar {
           &self.stores,
           &self.menus,
           ToolbarMenu::Profile,
-          icon_button(
-            "toolbar-profile",
-            IconName::User,
-            None,
-            tr!("toolbar.profile"),
-            has_profiles,
-          ),
+          icon_button("toolbar-profile", "profile", None, tr!("toolbar.profile"), has_profiles),
           cx,
         ))
         .child(
           icon_button(
             "toolbar-settings",
-            IconName::Settings,
+            "settings",
             highlight(active_tab == TabType::Settings),
             tr!("toolbar.settings"),
             true,
@@ -304,7 +309,7 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-about",
-            IconName::Info,
+            "about",
             highlight(active_tab == TabType::About),
             tr!("toolbar.about"),
             true,

@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build rules
 
 - **Always build and run the release profile. Never build a debug build.**
+  Run a release build to validate changes before handing them off.
   Every cargo invocation in this repo, in docs and in CI carries `--release`
   (or `-r`): `cargo build --release`, `cargo run --release`,
   `cargo test --release`, `cargo check --release`, `cargo llvm-cov --release`.

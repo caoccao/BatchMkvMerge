@@ -39,7 +39,7 @@ System requirements:
 
 ### Upgrading from 0.1.0
 
-Install 1.0.0 over 0.1.0 with the same kind of installer (NSIS over NSIS, MSI over MSI, the package over the package, the app over the app in Applications): it replaces 0.1.0 in place, and your settings stay where they are and load unchanged. 1.0.0 no longer needs WebView2 on Windows or WebKitGTK on Linux. Systems below the requirements above stay on 0.1.0. See the [release notes](docs/release_notes.md) for what changed.
+Install 1.0.0 snapshot over 0.1.0 with the same kind of installer (NSIS over NSIS, MSI over MSI, the package over the package, the app over the app in Applications): it replaces 0.1.0 in place, and your settings stay where they are and load unchanged. 1.0.0 no longer needs WebView2 on Windows or WebKitGTK on Linux. Systems below the requirements above stay on 0.1.0. See the [release notes](docs/release_notes.md) for what changed.
 
 ## Documentation
 

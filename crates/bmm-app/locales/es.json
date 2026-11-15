@@ -22,6 +22,7 @@
     "removeFromRoot": "Quitar de la combinación",
     "outputPath": "Ruta de salida",
     "openInBetterMediaInfo": "Abrir en BetterMediaInfo",
+    "outputPathHint": "Deja el campo vacío para usar la ruta de salida predeterminada.",
     "outputPathNotWritable": "La ruta de salida no se puede escribir. Elige otra ruta.",
     "outputPathDoesNotExist": "La ruta de salida no existe. Se creará.",
     "commandCopied": "Comando copiado al portapapeles.",

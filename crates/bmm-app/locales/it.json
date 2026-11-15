@@ -22,6 +22,7 @@
     "removeFromRoot": "Rimuovi dall'unione",
     "outputPath": "Cartella destinazione",
     "openInBetterMediaInfo": "Apri in BetterMediaInfo",
+    "outputPathHint": "Lascia vuoto per usare il percorso di destinazione predefinito.",
     "outputPathNotWritable": "Il percorso destinazione non è scrivibile. Scegli un altro percorso.",
     "outputPathDoesNotExist": "Il percorso destinazione non esiste. Verrà creato.",
     "commandCopied": "Comando copiato negli appunti.",

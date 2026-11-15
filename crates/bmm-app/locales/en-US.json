@@ -22,6 +22,7 @@
     "removeFromRoot": "Remove from merge",
     "outputPath": "Output Path",
     "openInBetterMediaInfo": "Open in BetterMediaInfo",
+    "outputPathHint": "Leave blank to use the default output path.",
     "outputPathNotWritable": "The output path is not writable. Please choose another path.",
     "outputPathDoesNotExist": "The output path doesn't exist. It will be created.",
     "commandCopied": "Command copied to clipboard.",

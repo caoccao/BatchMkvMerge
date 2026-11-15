@@ -44,6 +44,7 @@ use crate::state::Stores;
 use crate::state::files::FileEvent;
 use crate::state::queue::QueueEvent;
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
+use crate::ui::text_button;
 use crate::ui::track_table::TrackTable;
 
 /// Rows the child list shows before it scrolls, and their height.
@@ -415,7 +416,7 @@ impl Render for FileCard {
         .on_click(cx.listener(|this, _, _, cx| this.copy_command(cx))),
       )
       .child(
-        Button::new("card-merge")
+        text_button("card-merge")
           .outline()
           .small()
           .icon(IconName::Combine)

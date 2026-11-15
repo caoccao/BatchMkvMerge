@@ -8,6 +8,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64",
  "bmm-core",
  "bmm-platform",
  "chrono",

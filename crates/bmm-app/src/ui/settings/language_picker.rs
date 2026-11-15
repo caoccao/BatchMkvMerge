@@ -29,7 +29,6 @@ use std::collections::HashSet;
 
 use bmm_core::languages::{MKV_LANGUAGES, MkvLanguage};
 use gpui_kit::base::{TestSupportExt, TestTextExt};
-use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -41,6 +40,7 @@ use super::{StreamKind, kind_toggle, parse_language_codes};
 use crate::state::Stores;
 use crate::state::config::active_profile;
 use crate::ui::checkbox::{select_all_state, tri_state_checkbox};
+use crate::ui::text_button;
 
 /// The height of a pane row.
 pub const ROW_HEIGHT: f32 = 30.0;
@@ -543,7 +543,7 @@ impl Render for LanguagePicker {
               .child(Input::new(&self.filter).small().cleanable(true).w_full()),
           )
           .child(
-            Button::new("language-add-all")
+            text_button("language-add-all")
               .outline()
               .small()
               .label(tr!("settings.addAll"))
@@ -551,7 +551,7 @@ impl Render for LanguagePicker {
               .on_click(cx.listener(|this, _, _, cx| this.add_all(cx))),
           )
           .child(
-            Button::new("language-remove-all")
+            text_button("language-remove-all")
               .outline()
               .small()
               .label(tr!("settings.removeAll"))

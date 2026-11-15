@@ -41,9 +41,10 @@ unicode-segmentation = "1"
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 serde_json.workspace = true
 
-# Embeds the exe icon and version info on Windows. GPUI embeds its own
-# application manifest, so this resource must not carry one.
 [build-dependencies]
+# Wrap the generated toolbar PNGs for GPUI's theme-tinted icon renderer.
+base64 = "0.22"
+# GPUI embeds its own Windows manifest, so this resource must not carry one.
 winresource = "0.1"
 
 # Installers: `cargo packager --profile dist -p BatchMkvMerge -f <formats>`

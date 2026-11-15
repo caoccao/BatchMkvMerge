@@ -22,6 +22,7 @@
     "removeFromRoot": "結合から削除",
     "outputPath": "出力先",
     "openInBetterMediaInfo": "BetterMediaInfo で開く",
+    "outputPathHint": "空欄のままにすると、既定の出力先が使われます。",
     "outputPathNotWritable": "出力先に書き込めません。別のパスを選択してください。",
     "outputPathDoesNotExist": "出力先が存在しません。作成されます。",
     "commandCopied": "コマンドをクリップボードにコピーしました。",

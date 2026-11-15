@@ -28,11 +28,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 
 use crate::state::ui::CompletionNotice;
+use crate::ui::confirm_button;
 
 pub const KEY_CONTEXT: &str = "TopmostNotification";
 /// The window's size.
@@ -128,10 +128,8 @@ impl Render for TopmostNotification {
       .child(div().flex_1())
       .child(
         h_flex().justify_end().child(
-          Button::new("topmost-close")
-            .primary()
+          confirm_button("topmost-close")
             .small()
-            .min_w(px(88.0))
             .label(tr!("tabs.close"))
             .on_click(|_, window, _| window.remove_window()),
         ),

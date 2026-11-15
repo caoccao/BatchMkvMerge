@@ -24,11 +24,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_kit::component::button::{ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 
-use super::{hex, rgba, space, text};
+use super::{hex, rgba, space, text, text_button};
 use crate::assets::{APP_ICON, BATCH_MKV_EXTRACT_ICON, BD_MASTER_ICON, BETTER_MEDIA_INFO_ICON};
 use crate::platform::dialogs;
 use crate::state::Stores;
@@ -179,7 +179,7 @@ fn app_card(card: AppCard, palette: &Palette, cx: &App) -> impl IntoElement {
     .child(div().flex_1())
     .child(
       h_flex().child(
-        Button::new(SharedString::from(format!("{id}-github")))
+        text_button(SharedString::from(format!("{id}-github")))
           .custom(github)
           .small()
           .icon(IconName::Github)
@@ -329,7 +329,7 @@ impl RenderOnce for Welcome {
               .flex_wrap()
               .gap(space(1.5))
               .child(
-                Button::new("welcome-add-files")
+                text_button("welcome-add-files")
                   .custom(add_files)
                   // gpui-kit draws a custom variant at 20 % strength; this one
                   // is solid.
@@ -340,7 +340,7 @@ impl RenderOnce for Welcome {
                   .on_click(move |_, _, cx| dialogs::add_files(&files_stores, cx)),
               )
               .child(
-                Button::new("welcome-add-folder")
+                text_button("welcome-add-folder")
                   .custom(add_folder)
                   .border_1()
                   .border_color(palette.folder_border)

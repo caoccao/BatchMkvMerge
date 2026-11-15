@@ -26,7 +26,7 @@ use std::rc::Rc;
 use bmm_core::config::ConfigProfile;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -41,6 +41,7 @@ use super::track_names::TrackNamesEditor;
 use super::{FIELD_MIN_WIDTH, StreamKind};
 use crate::state::config::active_profile;
 use crate::state::{ConfigStore, Stores};
+use crate::ui::{confirm_button, text_button};
 
 /// What the page last put into its fields, to follow changes made
 /// elsewhere (another profile, Reset) without overwriting typing.
@@ -211,7 +212,7 @@ impl ProfileEditor {
       .flex_none()
       .gap(px(8.0))
       .child(
-        Button::new("settings-profile-add")
+        text_button("settings-profile-add")
           .outline()
           .small()
           .label(tr!("settings.addProfile"))
@@ -219,7 +220,7 @@ impl ProfileEditor {
           .on_click(cx.listener(|this, _, window, cx| this.add(window, cx))),
       )
       .child(
-        Button::new("settings-profile-delete")
+        text_button("settings-profile-delete")
           .outline()
           .danger()
           .small()
@@ -241,7 +242,7 @@ impl ProfileEditor {
           }),
       )
       .child(
-        Button::new("settings-profile-reset")
+        text_button("settings-profile-reset")
           .outline()
           .small()
           .label(tr!("settings.reset"))
@@ -347,13 +348,13 @@ fn confirm(
       .footer(
         DialogFooter::new()
           .child(
-            Button::new(SharedString::from(format!("{id}-no")))
-              .success()
+            text_button(SharedString::from(format!("{id}-no")))
+              .outline()
               .label(tr!("confirm.no"))
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
           .child(
-            Button::new(SharedString::from(format!("{id}-yes")))
+            confirm_button(SharedString::from(format!("{id}-yes")))
               .danger()
               .label(tr!("confirm.yes"))
               .on_click(move |_, window, cx| {

@@ -26,7 +26,6 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{TestSupportExt, TestTextExt};
-use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
@@ -35,6 +34,7 @@ use gpui_kit::*;
 use super::FIELD_MIN_WIDTH;
 use crate::state::Stores;
 use crate::tools::{Tool, ToolStatus};
+use crate::ui::text_button;
 
 /// How long the text must stay unchanged before it is checked.
 pub const DETECT_DELAY: Duration = Duration::from_millis(250);
@@ -271,18 +271,16 @@ impl Render for ToolPathRow {
               .flex_none()
               .gap(px(8.0))
               .child(
-                Button::new(SharedString::from(format!("settings-{name}-browse")))
+                text_button(SharedString::from(format!("settings-{name}-browse")))
                   .outline()
                   .small()
-                  .min_w(px(90.0))
                   .label(tr!("settings.browse"))
                   .on_click(cx.listener(|this, _, _, cx| this.browse(cx))),
               )
               .child(
-                Button::new(SharedString::from(format!("settings-{name}-detect")))
+                text_button(SharedString::from(format!("settings-{name}-detect")))
                   .outline()
                   .small()
-                  .min_w(px(90.0))
                   .label(tr!("settings.detect"))
                   .on_click(cx.listener(|this, _, _, cx| this.detect_now(cx))),
               ),
