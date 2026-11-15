@@ -15,7 +15,7 @@
 *   limitations under the License.
 */
 
-//! The window content: update banner, toolbar, tabs and footer, plus what
+//! The window content: update banner, toolbar, tabs and status bar, plus what
 //! belongs to the whole window: OS file drop, toasts, geometry persistence,
 //! the title with the queue count and the taskbar progress, the OS
 //! notification and the topmost window of a drained queue, live language and
@@ -29,8 +29,8 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt, v_flex};
 use gpui_kit::*;
 
-use super::footer::Footer;
 use super::main_content::MainContent;
+use super::status_bar::AppStatusBar;
 use super::toolbar::Toolbar;
 use super::topmost::TopmostWindow;
 use super::update_banner::UpdateBanner;
@@ -208,7 +208,6 @@ impl Render for AppView {
       .id("app-root")
       .test_support()
       .size_full()
-      .px(super::space(1.0))
       .bg(cx.theme().background)
       .text_color(cx.theme().foreground)
       .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
@@ -219,9 +218,15 @@ impl Render for AppView {
           .collect();
         files::add_paths(&this.stores.files, paths, cx);
       }))
-      .child(self.banner.clone())
-      .child(self.toolbar.clone())
-      .child(div().flex_1().min_h_0().child(self.main.clone()))
-      .child(Footer)
+      .child(
+        v_flex()
+          .flex_1()
+          .min_h_0()
+          .px(super::space(1.0))
+          .child(self.banner.clone())
+          .child(self.toolbar.clone())
+          .child(div().flex_1().min_h_0().child(self.main.clone())),
+      )
+      .child(AppStatusBar)
   }
 }

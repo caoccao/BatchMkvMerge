@@ -241,10 +241,18 @@ fn the_shell_mounts_with_the_welcome_page_while_empty(cx: &mut TestAppContext) {
       "welcome",
       "welcome-add-files",
       "welcome-add-folder",
-      "footer",
+      "status-bar",
     ] {
       window.find(id);
     }
+    let root = window.find("app-root").bounds();
+    let bar = window.find("status-bar").bounds();
+    let links = window.find("status-bar-links").bounds();
+    assert_eq!(
+      (bar.left(), bar.right(), bar.bottom()),
+      (root.left(), root.right(), root.bottom())
+    );
+    assert!((links.center().x - bar.center().x).abs() <= px(0.5));
     assert!(window.try_find("file-list").is_none());
   });
   shell.add_files(cx, &["/media/a.mkv", "/media/b.mkv"]);
