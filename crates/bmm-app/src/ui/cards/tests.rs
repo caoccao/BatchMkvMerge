@@ -146,6 +146,107 @@ fn progress(file: &str, percent: u32) -> MergeEvent {
   }
 }
 
+#[gpui_kit::test]
+fn the_file_list_scrollbar_overlays_full_width_cards(cx: &mut TestAppContext) {
+  let (_dir, a, b, parsed) = two_movies("cards-scrollbar");
+  let shell = shell(cx, config(GroupMode::None, false), parsed, &[&a, &b]);
+  cx.simulate_window_scale_factor_change(shell.handle, 1.5);
+  let resize = |cx: &mut TestAppContext, height| {
+    shell.resize(cx, 1200.0, height);
+    shell.window(cx, |window, cx| {
+      window.simulate_next_frame(cx);
+      window.render_frame(cx);
+      let viewport = window.find("file-list").bounds();
+      let first = window.find(FileCard::element_id(&a)).bounds();
+      (viewport, first)
+    })
+  };
+  let (viewport, first) = resize(cx, 1000.0);
+  assert_eq!(first.right(), viewport.right());
+  let (viewport, first) = resize(cx, 450.0);
+  assert_eq!(first.right(), viewport.right());
+  shell.window(cx, |window, cx| {
+    let width = gpui_kit::component::scroll::Scrollbar::width();
+    let scale = window.scale_factor();
+    let clip = viewport.scale(scale);
+    let track = Bounds::new(
+      point(viewport.right() - width, viewport.top()),
+      size(width, viewport.size.height),
+    )
+    .scale(scale);
+    let thumb_is_painted = |window: &Window| {
+      window.painted_quads().iter().any(|quad| {
+        quad.content_mask.bounds == clip
+          && quad.bounds.left() >= track.left()
+          && quad.bounds.right() <= track.right()
+          && quad.bounds.size.width < track.size.width
+          && quad.bounds.size.height > quad.bounds.size.width
+          && quad.background.as_solid().is_some_and(|color| color.a > 0.0)
+      })
+    };
+    assert!(!thumb_is_painted(window), "the scrollbar starts hidden");
+    window.scroll("file-list", ScrollDelta::Lines(point(0.0, -200.0)), cx);
+    window.simulate_next_frame(cx);
+    window.render_frame(cx);
+    let viewport = window.find("file-list").bounds();
+    let last = window.find(FileCard::element_id(&b)).bounds();
+    assert_eq!(last.right(), first.right());
+    assert!(viewport.bottom() <= window.find("status-bar").bounds().top());
+    let bottom_gap = viewport.bottom() - last.bottom();
+    assert!(
+      bottom_gap > px(0.0) && (bottom_gap - crate::ui::SHELL_MARGIN).abs() < px(1.0),
+      "the last card ends inside the scroll viewport: {bottom_gap:?}, {last:?}, {viewport:?}"
+    );
+    let bounds = last.scale(scale);
+    let quads = window.painted_quads();
+    assert!(
+      quads.iter().any(|quad| {
+        (quad.bounds.bottom().0 - bounds.bottom().0).abs() <= 1.0
+          && (quad.bounds.right().0 - bounds.right().0).abs() <= 1.0
+          && quad.border_widths.bottom.0 > 0.0
+          && quad.border_widths.right.0 > 0.0
+          && quad.content_mask.bounds.bottom() >= quad.bounds.bottom()
+          && quad.content_mask.bounds.right() >= quad.bounds.right()
+          && quad.content_mask.bounds.top().0 <= quad.bounds.bottom().0 - quad.border_widths.bottom.0
+      }),
+      "the last card's bottom-right border is painted inside the clip"
+    );
+    assert!(
+      thumb_is_painted(window),
+      "scrolling reveals the thumb over the card edge"
+    );
+  });
+  let (viewport, first) = resize(cx, 1000.0);
+  assert_eq!(first.right(), viewport.right());
+}
+
+#[gpui_kit::test]
+fn the_file_card_path_can_be_selected_and_copied_without_editing(cx: &mut TestAppContext) {
+  let (shell, movie, _dir) = movie_shell(cx, "cards-copy-path");
+  shell.resize(cx, 1300.0, 800.0);
+  let path = card(&shell, cx, &movie)
+    .file()
+    .unwrap()
+    .read_with(cx, |card, _| card.path_state().clone());
+  shell.window(cx, |window, cx| {
+    let summary = window.find("card-summary").bounds();
+    let text = path.read(cx).text_bounds().expect("path text was laid out");
+    assert_eq!(text.left(), summary.left());
+  });
+  shell.click(cx, "card-path");
+  shell.press(cx, SELECT_ALL);
+  shell.window(cx, |window, cx| {
+    assert!(path.read(cx).focus_handle(cx).is_focused(window));
+    assert_eq!(path.read(cx).selected_range(), 0..movie.len());
+  });
+  let copy = if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-c" };
+  shell.press(cx, copy);
+  assert_eq!(clipboard(cx).as_deref(), Some(movie.as_str()));
+  shell.window(cx, |window, cx| window.input("edited", cx));
+  shell.press(cx, "backspace");
+  assert_eq!(path.read_with(cx, |path, _| path.value()).as_ref(), movie);
+}
+
 /// Draws a frame without a refresh, as the app does: cached views that
 /// were not notified are reused.
 fn draw(shell: &Shell, cx: &mut TestAppContext) {

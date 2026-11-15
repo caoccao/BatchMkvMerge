@@ -29,7 +29,7 @@ use std::time::SystemTime;
 use bmm_core::media_track::media_track_counts;
 use bmm_core::merge_args::{file_name, parent_dir};
 use gpui_kit::assets::IconName;
-use gpui_kit::base::TestSupportExt as _;
+use gpui_kit::base::{SelectableText, TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -65,6 +65,7 @@ pub struct GroupCard {
   stores: Stores,
   units: Vec<Vec<String>>,
   table: Entity<TrackTable>,
+  path_focus: FocusHandle,
   root_list_width: Pixels,
   resizing: bool,
   /// The split pane's bounds from the last frame.
@@ -108,6 +109,7 @@ impl GroupCard {
       stores,
       units,
       table,
+      path_focus: cx.focus_handle(),
       root_list_width: px(ROOT_LIST_WIDTH),
       resizing: false,
       split: Rc::default(),
@@ -363,6 +365,7 @@ impl Render for GroupCard {
       theme.background
     };
     let output_color = if output_dir.is_some() { primary } else { muted };
+    let directory = SharedString::from(parent_dir(&id).to_string());
 
     let header = h_flex()
       .items_center()
@@ -375,10 +378,17 @@ impl Render for GroupCard {
           .ml(crate::ui::space(2.0))
           .gap(px(2.0))
           .child(
-            super::text(parent_dir(&id).to_string())
+            div()
               .id("group-dir")
               .test_support()
-              .text_color(muted),
+              .text_color(muted)
+              .track_focus(&self.path_focus)
+              .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| window.focus(&this.path_focus, cx)),
+              )
+              .child(SelectableText::new("group-dir-text", directory.clone()))
+              .test_text(directory),
           )
           .children(summary.map(|summary| {
             super::text(summary)
@@ -499,7 +509,7 @@ impl Render for GroupCard {
           .size_full(),
       );
 
-    v_flex()
+    let frame = v_flex()
       .id(Self::element_id(&id))
       .test_support()
       .relative()
@@ -515,7 +525,7 @@ impl Render for GroupCard {
       .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_resize(cx)))
       .child(header)
       .child(body)
-      .children(self.render_resize_listeners(cx))
-      .child(self.height.probe())
+      .children(self.render_resize_listeners(cx));
+    self.height.measure(frame)
   }
 }

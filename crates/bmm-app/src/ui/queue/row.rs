@@ -153,7 +153,7 @@ impl Render for QueueRow {
       ),
       QueueItemStatus::Completed => None,
     };
-    h_flex()
+    let row = h_flex()
       .id(Self::element_id(&self.file))
       .test_support()
       .relative()
@@ -178,8 +178,7 @@ impl Render for QueueRow {
           .w(px(ACTION_WIDTH))
           .justify_center()
           .children(action),
-      )
-      .child(self.height.probe())
-      .into_any_element()
+      );
+    self.height.measure(row).into_any_element()
   }
 }

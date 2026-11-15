@@ -89,6 +89,60 @@ pub(crate) fn movie_shell(cx: &mut TestAppContext, name: &str) -> (Shell, String
   (shell, movie, dir)
 }
 
+#[gpui_kit::test]
+fn columns_fit_their_values_and_track_name_uses_the_remaining_width(cx: &mut TestAppContext) {
+  let (shell, movie, _dir) = movie_shell(cx, "table-widths");
+  let widths =
+    |cx: &mut TestAppContext| {
+      shell.window(cx, |window, cx| {
+        window.render_frame(cx);
+        let language = window
+          .find("language-0:audio:1-input")
+          .bounds()
+          .scale(window.scale_factor());
+        assert!(window.painted_quads().iter().any(|quad| {
+          quad.bounds == language && quad.border_widths.top.0 > 0.0 && quad.border_widths.right.0 > 0.0
+        }));
+        std::array::from_fn::<_, { Column::Forced as usize + 1 }, _>(|index| {
+          let heading = window.within("track-head").find(("head", index + 1)).bounds();
+          let cell = window.within(("track-row", 0usize)).find(("cell", index + 1)).bounds();
+          assert_eq!(heading.origin.x, cell.origin.x);
+          assert_eq!(heading.size.width, cell.size.width);
+          heading.size.width
+        })
+      })
+    };
+  shell.resize(cx, 1100.0, 800.0);
+  let narrow = widths(cx);
+  shell.resize(cx, 1340.0, 800.0);
+  let wide = widths(cx);
+  for (index, (narrow, wide)) in narrow.into_iter().zip(wide).enumerate() {
+    assert_eq!(
+      wide - narrow,
+      if index == Column::Name as usize {
+        px(240.0)
+      } else {
+        px(0.0)
+      }
+    );
+  }
+
+  let scope = table(&shell, cx, &movie).read_with(cx, |table, _| table.scope().clone());
+  shell.stores.files.update(cx, |files, cx| {
+    files.set_rows_language(
+      &scope,
+      &["0:audio:1".to_owned()],
+      "A custom language tag longer than the column heading",
+      cx,
+    );
+  });
+  cx.run_until_parked();
+  let edited = widths(cx);
+  let growth = edited[Column::Language as usize] - wide[Column::Language as usize];
+  assert!(growth > px(0.0));
+  assert_eq!(wide[Column::Name as usize] - edited[Column::Name as usize], growth);
+}
+
 pub(crate) fn table(shell: &Shell, cx: &mut TestAppContext, id: &str) -> Entity<TrackTable> {
   cx.read(|cx| {
     shell
@@ -400,6 +454,39 @@ fn an_edit_of_a_selected_row_applies_to_every_selected_row(cx: &mut TestAppConte
   });
   assert!(!selected_ids(&shell, cx, &movie).contains(&"video:0".to_string()));
   assert!(!selected_ids(&shell, cx, &movie).contains(&"audio:1".to_string()));
+}
+
+#[gpui_kit::test]
+fn selected_track_rows_follow_the_active_theme(cx: &mut TestAppContext) {
+  use bmm_core::config::{DisplayMode, Theme as ThemeName};
+
+  let (shell, movie, _dir) = movie_shell(cx, "table-selection-color");
+  click_row(&shell, cx, &movie, 1);
+  click_row(&shell, cx, &movie, 2);
+  for (theme, display_mode) in [
+    (ThemeName::Ocean, DisplayMode::Light),
+    (ThemeName::Rose, DisplayMode::Dark),
+  ] {
+    shell.stores.config.update(cx, |store, cx| {
+      store.update(cx, |config| {
+        config.theme = theme;
+        config.display_mode = display_mode;
+      });
+    });
+    cx.run_until_parked();
+    shell.window(cx, |window, cx| {
+      window.render_frame(cx);
+      let selection = crate::theme::selection_highlight(cx.theme());
+      let quads = window.painted_quads();
+      for (index, selected) in [(0usize, false), (1, true), (2, true)] {
+        let bounds = window.find(("track-row", index)).bounds().scale(window.scale_factor());
+        let has_highlight = quads
+          .iter()
+          .any(|quad| quad.bounds == bounds && quad.background.as_solid() == Some(selection));
+        assert_eq!(has_highlight, selected, "row {index}, {theme:?} in {display_mode:?}");
+      }
+    });
+  }
 }
 
 #[gpui_kit::test]

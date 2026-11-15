@@ -253,7 +253,7 @@ impl FileListView {
   /// current units and drops those of entries that are gone. A card that
   /// changes kind (a unit joining a group) is made again around the same
   /// table.
-  fn sync_cards(&mut self, scopes: &[TableScope], cx: &mut Context<Self>) {
+  fn sync_cards(&mut self, scopes: &[TableScope], window: &mut Window, cx: &mut Context<Self>) {
     let mut live = HashSet::new();
     for scope in scopes {
       let id = scope.id().to_string();
@@ -288,7 +288,7 @@ impl FileListView {
             CardView::Group(cx.new(|cx| GroupCard::new(stores, units, table, cx)))
           } else {
             let members = scope.members().to_vec();
-            CardView::File(cx.new(|cx| FileCard::new(stores, members, table, cx)))
+            CardView::File(cx.new(|cx| FileCard::new(stores, members, table, window, cx)))
           };
           self.cards.insert(id, card);
         }
@@ -352,6 +352,7 @@ impl Render for FileListView {
     let drop_zone = v_flex()
       .id("file-drop-zone")
       .test_support()
+      .relative()
       .size_full()
       .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_2().border_dashed().border_color(primary));
 
@@ -363,7 +364,7 @@ impl Render for FileListView {
       return drop_zone.child(Welcome::new(self.stores.clone())).into_any_element();
     }
     let scopes: Vec<TableScope> = files.entries().iter().map(TableScope::from_entry).collect();
-    self.sync_cards(&scopes, cx);
+    self.sync_cards(&scopes, window, cx);
     // A screen reader sees cached cards only on the frames that render them.
     let cache = !window.is_a11y_active();
 
@@ -403,12 +404,14 @@ impl Render for FileListView {
           .on_drop(cx.listener(|this, drag: &CardDrag, _, cx| this.dropped(drag, cx)))
           .child(
             v_flex()
+              .w_full()
+              .pb(super::SHELL_MARGIN)
               .gap(super::space(1.0))
               .on_children_prepainted(move |bounds, _, _| *card_bounds.borrow_mut() = bounds)
               .children(entries),
-          )
-          .vertical_scrollbar(&self.scroll),
+          ),
       )
+      .vertical_scrollbar(&self.scroll)
       .into_any_element()
   }
 }

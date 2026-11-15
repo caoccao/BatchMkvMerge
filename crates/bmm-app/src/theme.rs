@@ -27,8 +27,8 @@
 //! them and rewrites them when `BMM_WRITE_THEMES=1` is set.
 
 use bmm_core::config::{Config, DisplayMode, Theme as ThemeName};
-use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};
-use gpui_kit::{App, WindowAppearance};
+use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry, scroll::ScrollbarMode};
+use gpui_kit::{App, Hsla, WindowAppearance};
 
 /// One configured theme: its registry names, its main colour and its embedded
 /// theme set.
@@ -88,8 +88,10 @@ pub fn spec(theme: ThemeName) -> &'static ThemeSpec {
     .expect("every configured theme has a table entry")
 }
 
-/// Registers every embedded theme set. Call once after `gpui_kit::init`.
+/// Installs the app's scrollbar policy and registers its embedded theme sets.
+/// Call once after `gpui_kit::init`.
 pub fn install(cx: &mut App) {
+  Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx);
   let registry = ThemeRegistry::global_mut(cx);
   for spec in &THEMES {
     if let Err(error) = registry.load_themes_from_str(spec.set) {
@@ -115,6 +117,16 @@ pub fn resolve_mode(display_mode: DisplayMode, appearance: WindowAppearance) -> 
       WindowAppearance::Light | WindowAppearance::VibrantLight => ThemeMode::Light,
     },
   }
+}
+
+/// Tint selections with the active theme's color at the input selection opacity.
+pub(crate) fn selection_highlight(theme: &Theme) -> Hsla {
+  let color = if theme.is_dark() {
+    theme.link_hover
+  } else {
+    theme.primary
+  };
+  color.opacity(theme.selection.a)
 }
 
 /// Applies the configured theme and mode; `appearance` is the system's (the

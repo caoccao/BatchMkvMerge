@@ -37,7 +37,7 @@ use bmm_core::languages::{
 };
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
-use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::component::{ActiveTheme, Sizable, ThemeStyled};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -442,6 +442,7 @@ impl AutocompleteCell {
           .test_support()
           .w_full()
           .h(px(OPTION_ROW_HEIGHT))
+          .rounded(theme.radius)
           .px(px(OPTION_PADDING_X))
           .flex()
           .items_center()
@@ -467,17 +468,8 @@ impl AutocompleteCell {
 }
 
 impl Render for AutocompleteCell {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let entity = cx.entity();
-    let focused = self.is_focused(window, cx);
-    let theme = cx.theme();
-    let underline = if self.disabled {
-      theme.border
-    } else if focused {
-      theme.primary
-    } else {
-      theme.muted_foreground.opacity(0.6)
-    };
     let dropdown = self.open.then(|| {
       let rows = self.options.len().min(OPTION_VISIBLE_ROWS);
       let (anchor, position) = match self.placement {
@@ -495,13 +487,8 @@ impl Render for AutocompleteCell {
               .test_support()
               .occlude()
               .w(self.list_width)
-              .py(px(4.0))
-              .bg(theme.popover)
-              .text_color(theme.popover_foreground)
-              .border_1()
-              .border_color(theme.border)
-              .rounded_md()
-              .shadow_md()
+              .p(px(4.0))
+              .popover_style(cx)
               .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close(cx)))
               .child(
                 uniform_list(
@@ -551,18 +538,8 @@ impl Render for AutocompleteCell {
       .child(
         Input::new(&self.input)
           .id(SharedString::from(format!("{}-input", self.id)))
-          .appearance(false)
           .small()
           .disabled(self.disabled),
-      )
-      .child(
-        div()
-          .absolute()
-          .left_0()
-          .right_0()
-          .bottom_0()
-          .h(px(if focused { 2.0 } else { 1.0 }))
-          .bg(underline),
       )
       .child(
         canvas(

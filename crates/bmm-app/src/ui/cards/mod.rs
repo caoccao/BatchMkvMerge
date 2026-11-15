@@ -117,23 +117,19 @@ impl CardHeight {
     self.0.get()
   }
 
-  /// An invisible element covering the card that records its height while
-  /// the card prepaints.
-  pub fn probe(&self) -> impl IntoElement {
+  /// Measure the outer bounds of the framed card or row used in the list.
+  pub fn measure(&self, content: impl IntoElement) -> Div {
     let height = self.0.clone();
-    canvas(
-      move |bounds, window, _| {
-        if height.get() != Some(bounds.size.height) {
-          height.set(Some(bounds.size.height));
+    div()
+      .w_full()
+      .on_children_prepainted(move |bounds, window, _| {
+        let measured = bounds[0].size.height;
+        if height.get() != Some(measured) {
+          height.set(Some(measured));
           window.request_animation_frame();
         }
-      },
-      |_, _, _, _| {},
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
+      })
+      .child(content)
   }
 
   /// `view` as a cached view at this height, or uncached before it has

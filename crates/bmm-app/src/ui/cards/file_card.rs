@@ -27,8 +27,10 @@ use std::time::SystemTime;
 use bmm_core::media_track::media_track_counts;
 use bmm_core::merge_args::file_name;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::input::{Copy, InputAccessibility, InputEditorStyle, SelectAll, Textarea, TextareaState};
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
@@ -56,6 +58,7 @@ pub struct FileCard {
   /// The unit, root first.
   members: Vec<String>,
   table: Entity<TrackTable>,
+  path: Entity<TextareaState>,
   children_open: bool,
   height: CardHeight,
   renders: usize,
@@ -63,7 +66,31 @@ pub struct FileCard {
 }
 
 impl FileCard {
-  pub fn new(stores: Stores, members: Vec<String>, table: Entity<TrackTable>, cx: &mut Context<Self>) -> Self {
+  pub fn new(
+    stores: Stores,
+    members: Vec<String>,
+    table: Entity<TrackTable>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let path = cx.new(|cx| {
+      let mut path = TextareaState::new(window, cx)
+        .rows(1)
+        .soft_wrap(false)
+        .default_value(members[0].clone());
+      path.set_readonly(true, cx);
+      path.on_context_menu(Rc::new(|_, capabilities, position, window, cx| {
+        NativeMenu::new()
+          .menu_with_disabled(
+            tr!("gpui_component.Input.Copy"),
+            !capabilities.is_copyable(),
+            Box::new(Copy),
+          )
+          .menu(tr!("gpui_component.Input.Select All"), Box::new(SelectAll))
+          .show(position, window, cx);
+      }));
+      path
+    });
     let subscriptions = vec![
       // Structural changes: parsed files, BetterMediaInfo found.
       cx.observe(&stores.files, |_, _, cx| cx.notify()),
@@ -94,6 +121,7 @@ impl FileCard {
       stores,
       members,
       table,
+      path,
       children_open: false,
       height: CardHeight::default(),
       renders: 0,
@@ -111,6 +139,11 @@ impl FileCard {
 
   pub fn table(&self) -> &Entity<TrackTable> {
     &self.table
+  }
+
+  #[cfg(test)]
+  pub(super) fn path_state(&self) -> &Entity<TextareaState> {
+    &self.path
   }
 
   pub fn height(&self) -> &CardHeight {
@@ -342,7 +375,27 @@ impl Render for FileCard {
       theme.background
     };
 
-    let path = super::text(root.clone()).id("card-path").test_support().min_w_0();
+    let selection = crate::theme::selection_highlight(theme);
+    self.path.update(cx, |path, _| {
+      path.set_editor_style(InputEditorStyle {
+        selection,
+        ..Default::default()
+      });
+      path.set_accessibility(
+        InputAccessibility::new(Some(Role::MultilineTextInput)).with_label(Some(tr!("merge.childTable.filePath"))),
+      );
+    });
+    let path = div()
+      .id("card-path")
+      .test_support()
+      .flex_1()
+      .min_w_0()
+      .ml_0()
+      .pl_0()
+      .h(crate::ui::text::body2() * 1.25)
+      .line_height(relative(1.25))
+      .child(Textarea::new(&self.path))
+      .test_text(SharedString::from(root.clone()));
     let title_row = h_flex()
       .items_center()
       .gap(crate::ui::space(0.5))
@@ -473,7 +526,7 @@ impl Render for FileCard {
         )
     });
 
-    v_flex()
+    let frame = v_flex()
       .id(Self::element_id(&root))
       .test_support()
       .relative()
@@ -525,8 +578,8 @@ impl Render for FileCard {
             .border_dashed()
             .border_color(primary),
         )
-      })
-      .child(self.height.probe())
+      });
+    self.height.measure(frame)
   }
 }
 

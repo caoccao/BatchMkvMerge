@@ -53,7 +53,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, Size as ComponentSize, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -69,6 +69,7 @@ use crate::state::queue::QueueEvent;
 /// Pointer travel that turns a press into a drag.
 pub const ACTIVATION_DISTANCE: f32 = 5.0;
 const ROW_HEIGHT: f32 = 34.0;
+const CELL_PADDING: Pixels = px(6.0);
 const AUTOSCROLL_EDGE: f32 = 28.0;
 const AUTOSCROLL_STEP: f32 = 12.0;
 
@@ -136,21 +137,16 @@ enum Column {
 }
 
 impl Column {
-  /// A fixed width, or the minimum width of a column that shares the rest.
-  fn width(self) -> (bool, f32) {
-    match self {
-      Self::Check => (true, 40.0),
-      Self::Id => (true, 56.0),
-      Self::Type => (true, 44.0),
-      Self::Codec => (false, 110.0),
-      Self::Description => (false, 120.0),
-      Self::Size => (true, 84.0),
-      Self::BitRate => (true, 96.0),
-      Self::Language => (false, 110.0),
-      Self::Name => (false, 140.0),
-      Self::Default | Self::Forced => (true, 40.0),
-    }
-  }
+  const TEXT_HEADERS: [(Self, &'static str); 8] = [
+    (Self::Id, "merge.header.id"),
+    (Self::Type, "merge.header.type"),
+    (Self::Codec, "merge.header.codec"),
+    (Self::Description, "merge.header.description"),
+    (Self::Size, "merge.header.size"),
+    (Self::BitRate, "merge.header.bitRate"),
+    (Self::Language, "merge.header.language"),
+    (Self::Name, "merge.header.trackName"),
+  ];
 
   fn centered(self) -> bool {
     matches!(self, Self::Check | Self::Default | Self::Forced)
@@ -161,13 +157,17 @@ impl Column {
     self as usize + 1
   }
 
-  fn style<E: Styled>(self, element: E) -> E {
-    let (fixed, width) = self.width();
-    let element = element.flex().items_center().px(px(6.0)).overflow_hidden();
-    let element = if fixed {
-      element.flex_none().w(px(width))
+  fn style<E: Styled>(self, element: E, width: Pixels) -> E {
+    let element = element
+      .flex()
+      .items_center()
+      .px(CELL_PADDING)
+      .whitespace_nowrap()
+      .overflow_hidden();
+    let element = if self == Self::Name {
+      element.flex_1().min_w(width)
     } else {
-      element.flex_1().min_w(px(width))
+      element.flex_none().w(width)
     };
     if self.centered() {
       element.justify_center()
@@ -177,27 +177,74 @@ impl Column {
   }
 }
 
-/// The narrowest the table gets; a narrower card scrolls it sideways.
-fn min_table_width() -> Pixels {
-  use Column::*;
-  px(
-    [
-      Check,
-      Id,
-      Type,
-      Codec,
-      Description,
-      Size,
-      BitRate,
-      Language,
-      Name,
-      Default,
-      Forced,
-    ]
-    .iter()
-    .map(|column| column.width().1)
-    .sum(),
-  )
+/// The widest displayed value or heading sets each column's width. Track
+/// Name uses a minimum that leaves room to type and takes the remaining width.
+struct TrackColumns {
+  headers: [(Column, SharedString); Column::TEXT_HEADERS.len()],
+  widths: [Pixels; Column::Forced as usize + 1],
+}
+
+impl TrackColumns {
+  fn measure(rows: &[RowTexts], window: &Window) -> Self {
+    let mut body = window.text_style();
+    body.font_size = super::text::body2().into();
+    let heading = TextStyle {
+      font_weight: FontWeight::MEDIUM,
+      ..body.clone()
+    };
+    let input = TextStyle {
+      font_size: rems(0.875).into(),
+      ..body.clone()
+    };
+    let rem_size = window.rem_size();
+    let measure = |text: &str, style: &TextStyle| {
+      text
+        .lines()
+        .map(|line| {
+          let run = style.to_run(line.len());
+          window
+            .text_system()
+            .layout_line(line, style.font_size.to_pixels(rem_size), &[run], None)
+            .width
+        })
+        .max()
+        .unwrap_or_default()
+    };
+
+    let headers = Column::TEXT_HEADERS.map(|(column, key)| (column, tr!(key)));
+    let mut widths = [px(0.0); Column::Forced as usize + 1];
+    for (column, label) in &headers {
+      widths[*column as usize] = measure(label, &heading);
+    }
+    widths[Column::Check as usize] = rems(0.875).to_pixels(rem_size);
+    widths[Column::Default as usize] = rems(1.25).to_pixels(rem_size);
+    widths[Column::Forced as usize] = widths[Column::Default as usize];
+    for row in rows {
+      for (column, text) in [
+        (Column::Id, row.id.as_str()),
+        (Column::Type, row.emoji),
+        (Column::Codec, row.codec.as_str()),
+        (Column::Description, row.description.as_str()),
+        (Column::Size, row.size.as_str()),
+        (Column::BitRate, row.bit_rate.as_str()),
+      ] {
+        widths[column as usize] = widths[column as usize].max(measure(text, &body));
+      }
+      let language = measure(&row.language, &input) + (ComponentSize::Small.input_px() + px(1.0)) * 2.0;
+      widths[Column::Language as usize] = widths[Column::Language as usize].max(language);
+    }
+    let mut widths = widths.map(|width| width.ceil() + CELL_PADDING * 2.0);
+    widths[Column::Name as usize] = widths[Column::Name as usize].max(px(140.0));
+    Self { headers, widths }
+  }
+
+  fn style<E: Styled>(&self, column: Column, element: E) -> E {
+    column.style(element, self.widths[column as usize])
+  }
+
+  fn min_width(&self) -> Pixels {
+    self.widths.iter().copied().sum()
+  }
 }
 
 /// The text of a row's cells as the table shows them (the language and
@@ -624,9 +671,20 @@ impl TrackTable {
     self.cells.retain(|key, _| live.contains(key));
   }
 
-  fn render_header(&self, all: CheckboxState, disabled: bool, cx: &Context<Self>) -> impl IntoElement {
+  fn render_header(
+    &self,
+    columns: &TrackColumns,
+    all: CheckboxState,
+    disabled: bool,
+    cx: &Context<Self>,
+  ) -> impl IntoElement {
     let theme = cx.theme();
-    let head = |column: Column| column.style(kit_base::TableHead::new(("head", column.index()), column.index()));
+    let head = |column: Column| {
+      columns.style(
+        column,
+        kit_base::TableHead::new(("head", column.index()), column.index()),
+      )
+    };
     let reset_button = |id: &'static str, icon: IconName, label: SharedString, default: bool, cx: &Context<Self>| {
       Button::new(id)
         .ghost()
@@ -648,14 +706,12 @@ impl TrackTable {
         .font_weight(FontWeight::MEDIUM)
         .text_color(theme.table_head_foreground)
         .child(head(Column::Check).child(select_all_checkbox(all, disabled, cx)))
-        .child(head(Column::Id).child(tr!("merge.header.id")))
-        .child(head(Column::Type).child(tr!("merge.header.type")))
-        .child(head(Column::Codec).child(tr!("merge.header.codec")))
-        .child(head(Column::Description).child(tr!("merge.header.description")))
-        .child(head(Column::Size).child(tr!("merge.header.size")))
-        .child(head(Column::BitRate).child(tr!("merge.header.bitRate")))
-        .child(head(Column::Language).child(tr!("merge.header.language")))
-        .child(head(Column::Name).child(tr!("merge.header.trackName")))
+        .children(
+          columns
+            .headers
+            .iter()
+            .map(|(column, label)| head(*column).child(label.clone())),
+        )
         .child(head(Column::Default).child(reset_button(
           "track-reset-default",
           IconName::Film,
@@ -676,10 +732,10 @@ impl TrackTable {
   fn render_row(
     &self,
     index: usize,
-    row: &CombinedTrack,
+    (row, texts): (&CombinedTrack, RowTexts),
     checked: bool,
     disabled: bool,
-    row_count: usize,
+    columns: &TrackColumns,
     cx: &Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme();
@@ -692,14 +748,17 @@ impl TrackTable {
       DragState::Dragging { row, insert_at, .. } => (
         row == index,
         insert_at == index,
-        insert_at == row_count && index + 1 == row_count,
+        insert_at == self.rows.len() && index + 1 == self.rows.len(),
       ),
       _ => (false, false, false),
     };
     let draggable = self.scope.can_reorder() && !disabled;
-    let formatting = self.stores.config.read(cx).config().formatting.clone();
-    let texts = row_texts(row, self.scope.qualified_ids(), &formatting);
-    let cell = |column: Column| column.style(kit_base::TableCell::new(("cell", column.index()), column.index()));
+    let cell = |column: Column| {
+      columns.style(
+        column,
+        kit_base::TableCell::new(("cell", column.index()), column.index()),
+      )
+    };
     // Controls take their own clicks: no row selection, no drag.
     let control = |column: Column| cell(column).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
@@ -753,7 +812,7 @@ impl TrackTable {
       .min_h(px(ROW_HEIGHT))
       .border_t_1()
       .border_color(theme.table_row_border)
-      .when(selected, |row| row.bg(theme.table_active))
+      .when(selected, |row| row.bg(crate::theme::selection_highlight(theme)))
       .when(!selected && self.drag == DragState::Idle, |row| {
         let hover = theme.table_hover;
         row.hover(move |style| style.bg(hover))
@@ -963,17 +1022,23 @@ impl Render for TrackTable {
       count if count == rows.len() => CheckboxState::Checked,
       _ => CheckboxState::Indeterminate,
     };
-    let row_count = rows.len();
+    let formatting = &self.stores.config.read(cx).config().formatting;
+    let texts: Vec<RowTexts> = rows
+      .iter()
+      .map(|row| row_texts(row, self.scope.qualified_ids(), formatting))
+      .collect();
+    let columns = TrackColumns::measure(&texts, window);
     let row_elements: Vec<AnyElement> = rows
       .iter()
+      .zip(texts)
       .enumerate()
-      .map(|(index, row)| {
+      .map(|(index, (row, texts))| {
         let is_checked = checked.contains(&row.row_key());
-        self.render_row(index, row, is_checked, disabled, row_count, cx)
+        self.render_row(index, (row, texts), is_checked, disabled, &columns, cx)
       })
       .collect();
     let row_bounds = self.row_bounds.clone();
-    let header = self.render_header(all, disabled, cx);
+    let header = self.render_header(&columns, all, disabled, cx);
     let theme = cx.theme();
 
     div()
@@ -1002,7 +1067,7 @@ impl Render for TrackTable {
         kit_base::Table::new("track-table")
           .accessibility_label(tr!("merge.header.tracks"))
           .w_full()
-          .min_w(min_table_width())
+          .min_w(columns.min_width())
           .bg(theme.table)
           .child(header)
           .child(
