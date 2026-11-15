@@ -75,6 +75,8 @@ pub fn run() {
     theme::install(cx);
     theme::apply(&config, cx.window_appearance(), cx);
     let (merge_sink, merge_events) = merge_events::channel();
+    let (detected_sink, detected_paths) = tools::auto_detected_channel();
+    bmm_core::mkvtoolnix::init_auto_detected(detected_sink);
     let services = state::Services {
       persistence: state::Persistence::disk(),
       metadata: state::MetadataSource::parser(),
@@ -84,6 +86,7 @@ pub fn run() {
     };
     let stores = state::Stores::new(config, services, cx);
     merge_events::start(&stores, merge_events, cx);
+    tools::store_auto_detected(&stores.config, detected_paths, cx);
     ui::actions::bind_keys(cx);
     ui::actions::install(&stores, cx);
     platform::menus::install(cx);

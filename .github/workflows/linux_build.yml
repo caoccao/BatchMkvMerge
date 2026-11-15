@@ -18,7 +18,7 @@ on:
       - "docs/**"
 
 env:
-  BATCH_MKV_MERGE_VERSION: 0.2.0
+  BATCH_MKV_MERGE_VERSION: 1.0.0
 
 jobs:
   build_package:
@@ -56,10 +56,8 @@ jobs:
         # it is added to the pinned toolchain.
         components: llvm-tools-preview
         # The action sets RUSTFLAGS=-D warnings by default, which turns every
-        # rustc warning into a CI failure. Phased delivery of the
-        # media_metadata parser intentionally lands public fns before their
-        # consumers (next phase fills them in), so transient "never used"
-        # warnings are expected. Clearing the flag lets warnings stay warnings.
+        # rustc warning into a CI failure. Clearing the flag lets warnings stay
+        # warnings; CI fails on errors and failing checks only.
         rustflags: ""
 
     - name: Run Rust tests

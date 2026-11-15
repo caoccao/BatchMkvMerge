@@ -1,6 +1,6 @@
 [package]
 name = "bmm-platform"
-version = "0.2.0"
+version = "1.0.0"
 description = "Per-OS integrations of BatchMkvMerge that GPUI does not provide: taskbar and dock progress."
 authors = ["Sam Cao"]
 edition = "2024"

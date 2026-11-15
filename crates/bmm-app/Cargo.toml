@@ -1,6 +1,6 @@
 [package]
 name = "BatchMkvMerge"
-version = "0.2.0"
+version = "1.0.0"
 description = "A tool to batch merge media files to MKV files using mkvmerge."
 authors = ["Sam Cao"]
 edition = "2024"
@@ -71,7 +71,9 @@ publisher = "caoccao"
 category = "Video"
 homepage = "https://github.com/caoccao/BatchMkvMerge"
 copyright = "Copyright (c) 2026. caoccao.com Sam Cao"
-license-file = "../../LICENSE"
+# No `license-file`: it would make the .dmg ask to agree to the license
+# before it opens and add a license page to the NSIS and MSI installers;
+# 0.1.0 had neither.
 icons = [
   "packaging/icons/32x32.png",
   "packaging/icons/128x128.png",
@@ -84,6 +86,9 @@ out-dir = "../../target/packager"
 [package.metadata.packager.macos]
 # GPUI's Metal shaders are compiled for macOS 12.
 minimum-system-version = "12.0"
+# Merged over the generated Info.plist: CFBundleVersion is the version, as in
+# 0.1.0, instead of cargo-packager's build timestamp.
+info-plist-path = "packaging/macos/Info.plist"
 
 [package.metadata.packager.nsis]
 # Per-user, like 0.1.0: %LOCALAPPDATA%\BatchMkvMerge and
@@ -102,19 +107,23 @@ template = "packaging/wix/main.wxs"
 # cargo-packager derives "batch-mkv-merge" from the product name, which is
 # 0.1.0's package name; set explicitly so a rename cannot break upgrades.
 package-name = "batch-mkv-merge"
-# Provisional; the final list is derived with dpkg-shlibdeps on the built
-# binary before 1.0.0 (GPUI dlopens Vulkan and fontconfig).
 depends = [
-  "libc6",
-  "libgcc-s1",
-  "libxcb1",
-  "libxkbcommon0",
-  "libxkbcommon-x11-0",
-  "libwayland-client0",
+  # dpkg-shlibdeps on the ubuntu-22.04 dist binary: the libraries it links.
+  "libc6 (>= 2.35)",
+  "libgcc-s1 (>= 4.2)",
+  "libxcb1 (>= 1.12)",
+  "libxkbcommon0 (>= 0.5.0)",
+  "libxkbcommon-x11-0 (>= 0.5.0)",
+  # Loaded at run time, so dpkg-shlibdeps cannot see them: the Vulkan loader
+  # and the Wayland client (GPUI), EGL and wayland-egl for wgpu's GL fallback.
   "libvulkan1",
-  "libfontconfig1",
-  "libfreetype6",
-  # GPUI draws colour emoji (the track-type icons) only from Noto Color Emoji.
+  "libwayland-client0",
+  "libegl1",
+  "libwayland-egl1",
+  # GPUI finds fonts through /etc/fonts/fonts.conf (a pure-Rust reader, no
+  # libfontconfig), and draws colour emoji (the track-type icons) only from
+  # Noto Color Emoji.
+  "fontconfig-config",
   "fonts-noto-color-emoji",
 ]
 desktop-template = "packaging/BatchMkvMerge.desktop"
@@ -137,11 +146,18 @@ assets = [
   { source = "packaging/icons/128x128@2x.png", dest = "/usr/share/icons/hicolor/256x256/apps/BatchMkvMerge.png", mode = "644" },
 ]
 
+# rpm adds the linked libraries itself (`libc.so.6(GLIBC_2.34)(64bit)`, …);
+# these are the ones the deb lists by hand, as capabilities rather than
+# package names so that they resolve on Fedora and openSUSE alike.
 [package.metadata.generate-rpm.requires]
-vulkan-loader = "*"
+# Loaded at run time: the Vulkan loader and the Wayland client (GPUI), EGL
+# and wayland-egl for wgpu's GL fallback.
+"libvulkan.so.1()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+"libEGL.so.1()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+# GPUI finds fonts through /etc/fonts/fonts.conf, and draws colour emoji (the
+# track-type icons) only from Noto Color Emoji; Fedora's and openSUSE's
+# packages of it both provide this font capability.
 fontconfig = "*"
-libxkbcommon-x11 = "*"
-libwayland-client = "*"
-# GPUI draws colour emoji (the track-type icons) only from Noto Color Emoji;
-# Fedora's and openSUSE's packages of it both provide this font capability.
 "font(notocoloremoji)" = "*"

@@ -18,11 +18,17 @@
 //! The two external tools of the Integration settings (`isMkvtoolnixFound`,
 //! `detectBetterMediaInfo`): where MKVToolNix and BetterMediaInfo are.
 //! Detection never writes the config; the caller stores a found path through
-//! the config store, as `useToolPathDetection` did.
+//! the config store, as `useToolPathDetection` did. The same holds for the
+//! MKVToolNix directory a merge finds by itself ([`auto_detected_channel`]).
 
 use std::sync::Arc;
 
+use async_channel::Receiver;
 use bmm_core::config::{Config, ConfigExternalTools};
+use bmm_core::mkvtoolnix::AutoDetectedSink;
+use gpui_kit::{App, Entity};
+
+use crate::state::ConfigStore;
 
 /// An external tool with a path in `config.externalTools`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -120,10 +126,43 @@ impl ToolDetector {
   }
 }
 
+/// A sink for the MKVToolNix directories merges find by themselves
+/// (`bmm_core::mkvtoolnix::init_auto_detected` in the app) and the receiver
+/// [`store_auto_detected`] reads them from.
+pub fn auto_detected_channel() -> (AutoDetectedSink, Receiver<String>) {
+  let (sender, receiver) = async_channel::unbounded();
+  let sink: AutoDetectedSink = Box::new(move |path| {
+    // Fails only once the receiver is gone, when the app is quitting.
+    let _ = sender.try_send(path);
+  });
+  (sink, receiver)
+}
+
+/// Stores every directory from `paths` as the MKVToolNix path through the
+/// config store, on the foreground, so the Integration settings show it and
+/// no other write drops it. The React app's core wrote it to the file itself,
+/// and its next settings write lost it again.
+pub fn store_auto_detected(config: &Entity<ConfigStore>, paths: Receiver<String>, cx: &mut App) {
+  let config = config.clone();
+  cx.spawn(async move |cx| {
+    while let Ok(path) = paths.recv().await {
+      config.update(cx, |store, cx| {
+        if Tool::MkvToolNix.path(store.config()) != path {
+          store.update(cx, |config| Tool::MkvToolNix.set_path(config, path));
+        }
+      });
+    }
+  })
+  .detach();
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::state::Persistence;
   use core::prelude::v1::test;
+  use gpui_kit::{AppContext, TestAppContext};
+  use std::sync::Mutex;
 
   #[test]
   fn each_tool_reads_and_writes_its_own_path() {
@@ -147,5 +186,35 @@ mod tests {
     let status = ToolDetector::system().detect(Tool::MkvToolNix, &path, false);
     assert!(!status.found);
     std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[gpui_kit::test]
+  fn a_directory_a_merge_auto_detects_is_stored_through_the_config_store(cx: &mut TestAppContext) {
+    let written = Arc::new(Mutex::new(Vec::<Config>::new()));
+    let recorder = written.clone();
+    let persistence = Persistence::new(move |config| recorder.lock().unwrap().push(config));
+    let store = cx.new(|cx| ConfigStore::new(Config::default(), persistence, cx));
+    let (sink, paths) = auto_detected_channel();
+    cx.update(|cx| store_auto_detected(&store, paths, cx));
+    let detected = "/Applications/MKVToolNix-98.0.app/Contents/MacOS";
+    // Sent on the test thread: GPUI's test scheduler panics when another
+    // thread wakes a foreground task.
+    sink(detected.to_string());
+    cx.run_until_parked();
+    let configured = store.read_with(cx, |store, _| Tool::MkvToolNix.path(store.config()).to_string());
+    assert_eq!(configured, detected);
+    assert_eq!(
+      written
+        .lock()
+        .unwrap()
+        .last()
+        .map(|c| Tool::MkvToolNix.path(c).to_string())
+        .as_deref(),
+      Some(detected)
+    );
+    // The same directory again changes nothing.
+    sink(detected.to_string());
+    cx.run_until_parked();
+    assert_eq!(written.lock().unwrap().len(), 1);
   }
 }

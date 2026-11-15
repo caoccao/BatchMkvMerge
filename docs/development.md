@@ -73,6 +73,8 @@ cargo generate-rpm --profile dist -p crates/bmm-app          # .rpm on Linux
 
 Installers land in `target/packager/` (`target/generate-rpm/` for the `.rpm`).
 
+The Linux dependencies in `crates/bmm-app/Cargo.toml` come from two sources. `dpkg-shlibdeps` on the `ubuntu-22.04` `dist` binary gives the libraries it links (`libc6 (>= 2.35)`, `libgcc-s1`, `libxcb1`, `libxkbcommon0`, `libxkbcommon-x11-0`; rpm adds the same ones by soname). The rest are what GPUI loads at run time, so no tool sees them: the Vulkan loader, the Wayland client, EGL and wayland-egl (wgpu's GL fallback), fontconfig's `/etc/fonts/fonts.conf` (read by a pure-Rust parser) and Noto Color Emoji. The `.rpm` names them as capabilities (`libvulkan.so.1()(64bit)`, …), so they resolve on Fedora and openSUSE alike. Re-derive the list after a gpui-kit bump: list the binary's `NEEDED` entries and the `lib*.so*` names in it, and run `dpkg-shlibdeps -O` in an `ubuntu:22.04` container.
+
 The screenshots example draws the app from synthetic files (nothing is parsed or merged, the config stays in memory) and overwrites the four pictures of `docs/screenshots/`; `-- --out <dir>` writes them elsewhere, and `-- --review <dir>` renders the visual-review set instead: every locale through every tab, menu, dialog and settings page at the 600 × 450 minimum window size, and every theme in light and dark. It renders offscreen through GPUI's `render_to_image`, which only macOS implements.
 
 The twenty colour themes in `crates/bmm-app/themes/` are derived from the React palette's main colours in `crates/bmm-app/src/theme.rs` (`THEMES`); the test `every_theme_file_is_derived_from_its_main_colour` fails when a file differs. After changing a colour, rewrite the files with:
@@ -87,13 +89,14 @@ In every text field, Ctrl+Left/Right (Option on macOS), with Shift, and the word
 
 To try the app by hand on macOS or Linux without touching your settings, start it with a scratch home, because the config directory follows `$HOME` (on Linux only while `XDG_CONFIG_HOME` is unset): `HOME=/tmp/bmm-home cargo run --release -p BatchMkvMerge`.
 
-To bump the version across the three `crates/*/Cargo.toml` and the three workflow files, edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
+To bump the version across the three `crates/*/Cargo.toml`, the three workflow files and the macOS `CFBundleVersion` (`crates/bmm-app/packaging/macos/Info.plist`), edit both arguments at the bottom of `scripts/ts/change-version.ts` and run:
 
 ```bash
 cd scripts/ts
 deno task change-version
-cd ../.. && cargo update -w   # record the new workspace versions in Cargo.lock
 ```
+
+The script then runs `cargo update -w`, so `Cargo.lock` records the new workspace versions, and warns when `docs/release_notes.md` has no section for the new version yet.
 
 ## Configuration storage
 

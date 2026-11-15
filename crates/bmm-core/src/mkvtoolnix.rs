@@ -22,9 +22,28 @@ use std::cmp::Ordering;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::config;
 use crate::protocol::MkvToolNixStatus;
+
+/// Receives the MKVToolNix directory a merge found by itself (on macOS, the
+/// newest `MKVToolNix-<version>.app` when the default path has no
+/// `mkvmerge`). Called from a merge worker thread; it must not panic and
+/// should return quickly, e.g. by sending into a channel.
+pub type AutoDetectedSink = Box<dyn Fn(String) + Send + Sync>;
+
+static AUTO_DETECTED_SINK: OnceLock<AutoDetectedSink> = OnceLock::new();
+
+/// Install the sink for auto-detected MKVToolNix directories. The core never
+/// writes the config itself: the application stores the path through its own
+/// config store, so a later settings write keeps it. Only the first call
+/// counts; without a sink the directory is found again at every merge.
+pub fn init_auto_detected(sink: AutoDetectedSink) {
+  if AUTO_DETECTED_SINK.set(sink).is_err() {
+    log::warn!("mkvtoolnix::init_auto_detected called more than once; keeping the first sink");
+  }
+}
 
 pub(crate) fn parse_mkvmerge_progress(line: &str) -> Option<u32> {
   let trimmed = line.trim();
@@ -86,15 +105,20 @@ fn get_tool_path(path: &Path, tool: &str) -> PathBuf {
   path.join(tool)
 }
 
-fn resolve_mkvtoolnix_tool_path(tool: &str) -> Result<PathBuf> {
+fn resolve_mkvtoolnix_tool_path(tool: &str) -> PathBuf {
   let cfg = config::get_config();
-  let resolution = resolve_mkvtoolnix(&cfg.external_tools.mkv_toolnix_path, tool);
-  persist_mkvtoolnix_path_if_auto_detected(&resolution)?;
-  Ok(get_tool_path(&resolution.path, tool))
+  let configured = &cfg.external_tools.mkv_toolnix_path;
+  let resolution = resolve_mkvtoolnix(configured, tool);
+  report_auto_detected(&resolution, configured, |path| {
+    if let Some(sink) = AUTO_DETECTED_SINK.get() {
+      sink(path);
+    }
+  });
+  get_tool_path(&resolution.path, tool)
 }
 
-fn create_mkvtoolnix_command(tool: &str) -> Result<(PathBuf, std::process::Command)> {
-  let tool_path = resolve_mkvtoolnix_tool_path(tool)?;
+fn create_mkvtoolnix_command(tool: &str) -> (PathBuf, std::process::Command) {
+  let tool_path = resolve_mkvtoolnix_tool_path(tool);
   #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
   let mut cmd = std::process::Command::new(&tool_path);
   #[cfg(target_os = "windows")]
@@ -102,7 +126,7 @@ fn create_mkvtoolnix_command(tool: &str) -> Result<(PathBuf, std::process::Comma
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
   }
-  Ok((tool_path, cmd))
+  (tool_path, cmd)
 }
 
 fn validate_path_as_file(path: &Path) -> anyhow::Result<()> {
@@ -230,24 +254,22 @@ fn resolve_mkvtoolnix(path: &str, tool: &str) -> MkvToolNixResolution {
   }
 }
 
-fn persist_mkvtoolnix_path_if_auto_detected(resolution: &MkvToolNixResolution) -> Result<()> {
+/// Hands an auto-detected directory that differs from the configured path
+/// to `report`.
+fn report_auto_detected(resolution: &MkvToolNixResolution, configured: &str, report: impl FnOnce(String)) {
   if !resolution.auto_detected {
-    return Ok(());
+    return;
   }
   let path = resolution.path.to_string_lossy().to_string();
-  let mut cfg = config::get_config();
-  if cfg.external_tools.mkv_toolnix_path == path {
-    return Ok(());
+  if path != configured {
+    report(path);
   }
-  cfg.external_tools.mkv_toolnix_path = path;
-  config::set_config(cfg)?;
-  Ok(())
 }
 
 pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<std::process::Child> {
   let path = Path::new(file);
   validate_path_as_file(path)?;
-  let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command("mkvmerge")?;
+  let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command("mkvmerge");
   // `args` already carry the full mkvmerge merge invocation, including `-o
   // <output>`, the per-file options and the source file in the correct
   // position (per-file options must precede the input file).  `file` was only
@@ -317,6 +339,25 @@ mod tests {
     fn drop(&mut self) {
       let _ = std::fs::remove_dir_all(&self.0);
     }
+  }
+
+  fn reported(auto_detected: bool, path: &str, configured: &str) -> Option<String> {
+    let resolution = MkvToolNixResolution {
+      path: PathBuf::from(path),
+      auto_detected,
+    };
+    let mut reported = None;
+    report_auto_detected(&resolution, configured, |path| reported = Some(path));
+    reported
+  }
+
+  #[test]
+  fn only_an_auto_detected_directory_other_than_the_configured_one_is_reported() {
+    let detected = "/Applications/MKVToolNix-98.0.app/Contents/MacOS";
+    let default = "/Applications/MKVToolNix.app/Contents/MacOS";
+    assert_eq!(reported(true, detected, default).as_deref(), Some(detected));
+    assert_eq!(reported(true, detected, detected), None, "already configured");
+    assert_eq!(reported(false, default, default), None, "the configured path itself");
   }
 
   #[test]

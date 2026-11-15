@@ -1,6 +1,6 @@
 [package]
 name = "bmm-core"
-version = "0.2.0"
+version = "1.0.0"
 description = "UI-free core of BatchMkvMerge: media metadata parser, merge queue, config, MKVToolNix and update services."
 authors = ["Sam Cao"]
 edition = "2024"
