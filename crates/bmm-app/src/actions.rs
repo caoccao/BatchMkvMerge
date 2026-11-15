@@ -18,29 +18,29 @@
 //! What spans stores: enqueue, cancel, clear and remove, which touch both the
 //! files and the queue.
 //!
-//! A merge is enqueued in three steps: a [`MergeRequest`] is read from the
-//! stores on the foreground, and every root that is not waiting or merging is
-//! listed as waiting at once; the output path is resolved and reserved and
-//! the `mkvmerge` arguments built on the background executor (resolving
-//! checks the file system); then, on the foreground again, every root that is
-//! still listed is handed to the merge queue. Requests keep their order, so a
-//! drive's queue follows the file list. The app never creates the output
+//! An enqueue lists every root that is not waiting or merging as waiting and
+//! hands it to the merge queue at once, in order, so a drive's queue follows
+//! the file list. The output is chosen when the merge starts
+//! ([`resolve_merge_output_for`]): a merge may wait for its drive, and only
+//! then is it known which files exist. The app never creates the output
 //! directory: mkvmerge creates missing directories.
 
 use bmm_core::media_track::MediaTrack;
+use bmm_core::merge::MergeArgs;
 use bmm_core::merge_args::{
   MergeInput, OrderedTrackRef, build_command_string, build_command_string_multi, build_merge_args,
   build_merge_args_multi, resolve_output_dir,
 };
-use bmm_core::services::{resolve_merge_output_path_avoiding, resolve_overridden_output_path};
+use bmm_core::services::{override_directory, resolve_merge_output_path_avoiding, resolve_named_output_path_avoiding};
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::rc::Rc;
 
 use gpui_kit::{App, AppContext, ClipboardItem, Task};
 
 use crate::domain::file_tree::combine_unit_tracks;
 use crate::domain::status::QueueItemStatus;
-use crate::state::outputs::{Resolution, TakenOutputs};
+use crate::state::outputs::{RunningOutputs, TakenOutputs};
 use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
 use crate::tools::Tool;
@@ -64,24 +64,42 @@ impl OutputTarget {
       global_dir: files.global_output_dir().map(str::to_string),
     }
   }
+}
 
-  /// Whether the app names the output: no full-path override is set.
-  pub fn is_automatic(&self) -> bool {
-    self.path.as_deref().is_none_or(str::is_empty)
+/// The output a merge keyed by `file` writes, chosen as the merge starts
+/// (and, to show it, by Copy Command and the output dialog). A name the app
+/// picks, `<dir>/<stem>.mkv` or the input's file name in a directory the
+/// card's path names, gets " (1)", " (2)", … while that file exists or is
+/// `taken` by a running merge. A file path the user set is used as is; `Err`
+/// names it when a file is there or a running merge writes it, as a merge
+/// replaces no file. Checks the file system.
+pub fn resolve_merge_output_for(target: &OutputTarget, file: &str, taken: &TakenOutputs) -> Result<String, String> {
+  let is_taken = |path: &str| taken.contains(path);
+  let Some(path) = target.path.as_deref().filter(|path| !path.is_empty()) else {
+    let dir = resolve_output_dir(file, target.dir.as_deref(), target.global_dir.as_deref());
+    return Ok(resolve_merge_output_path_avoiding(dir, file.to_string(), is_taken));
+  };
+  if let Some(dir) = override_directory(path) {
+    let name = Path::new(file)
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or("output.mkv");
+    return Ok(resolve_named_output_path_avoiding(
+      dir.to_string(),
+      name.to_string(),
+      is_taken,
+    ));
+  }
+  if Path::new(path).exists() || is_taken(path) {
+    Err(path.to_string())
+  } else {
+    Ok(path.to_string())
   }
 }
 
-/// The output file of a merge keyed by `file`. A full-path override naming a
-/// file is used as is (the save dialog already confirmed an overwrite); one
-/// naming a directory gets the input's file name with no " (1)" suffix.
-/// Otherwise `<dir>/<stem>.mkv`, with " (1)", " (2)", … while that exists or
-/// is `taken` by a merge that has not written it yet. Checks the file system.
-pub fn resolve_merge_output_for(target: &OutputTarget, file: &str, taken: &TakenOutputs) -> String {
-  if let Some(path) = target.path.as_deref().filter(|path| !path.is_empty()) {
-    return resolve_overridden_output_path(path.to_string(), file.to_string());
-  }
-  let dir = resolve_output_dir(file, target.dir.as_deref(), target.global_dir.as_deref());
-  resolve_merge_output_path_avoiding(dir, file.to_string(), |path| taken.contains(path))
+/// What a merge whose set output path is taken tells the user.
+pub fn output_exists_message(path: &str) -> String {
+  tr!("merge.error.outputExists", path = path).to_string()
 }
 
 /// One merge, read from the stores: the queue key (a unit root, the output's
@@ -177,9 +195,9 @@ impl MergeRequest {
     Self::unit(files, root, inputs, None)
   }
 
-  /// The output file the merge writes, passing over the `taken` outputs.
-  /// Checks the file system.
-  pub fn output_path(&self, taken: &TakenOutputs) -> String {
+  /// The output file the merge writes, passing over the `taken` outputs;
+  /// `Err` names a set path that is taken. Checks the file system.
+  pub fn output_path(&self, taken: &TakenOutputs) -> Result<String, String> {
     resolve_merge_output_for(&self.output, &self.root, taken)
   }
 
@@ -203,57 +221,37 @@ impl MergeRequest {
   }
 }
 
-/// Lists the roots of `requests` that are not waiting or merging as waiting,
-/// resolves and reserves their outputs on the background executor, then hands
-/// them to the merge queue in order. A root removed or cancelled meanwhile is
-/// not handed over.
-///
-/// The returned task must run to its end (detach it): the roots it listed
-/// wait for it.
-pub fn enqueue(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
-  let queue = stores.queue.clone();
+/// The arguments of `request`'s merge, built as its worker starts it: the
+/// output is chosen then ([`resolve_merge_output_for`]) and claimed in
+/// `outputs` until the merge finishes. A set path that is taken fails the
+/// merge.
+fn launch_args(request: MergeRequest, outputs: RunningOutputs) -> MergeArgs {
+  MergeArgs::AtLaunch(Box::new(move || {
+    let output = outputs.claim(&request.root, |taken| {
+      request.output_path(taken).map_err(|path| output_exists_message(&path))
+    })?;
+    Ok(request.args(&output))
+  }))
+}
+
+/// Lists the roots of `requests` that are not waiting or merging as waiting
+/// and hands them to the merge queue, in order; each chooses its output when
+/// it starts ([`launch_args`]).
+pub fn enqueue(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) {
   let backend = stores.merges.clone();
-  let (prepared, reservations) = queue.update(cx, |queue, cx| {
-    let prepared: Vec<(MergeRequest, u64)> = requests
-      .into_iter()
-      .filter_map(|request| queue.prepare(&request.root, cx).map(|ticket| (request, ticket)))
-      .collect();
-    (prepared, queue.reservations().clone())
-  });
-  if prepared.is_empty() {
-    return Task::ready(());
-  }
-  cx.spawn(async move |cx| {
-    let resolved: Vec<(String, u64, Vec<String>)> = cx
-      .background_spawn(async move {
-        prepared
-          .into_iter()
-          .map(|(request, ticket)| {
-            let args = reservations.reserve(ticket, |taken| {
-              let output = request.output_path(taken);
-              Resolution {
-                value: request.args(&output),
-                automatic: request.output.is_automatic(),
-                output,
-              }
-            });
-            (request.root, ticket, args)
-          })
-          .collect()
-      })
-      .await;
-    queue.update(cx, |queue, cx| {
-      for (root, ticket, args) in resolved {
-        if !queue.submit(&root, ticket, cx) {
-          continue;
-        }
-        if let Err(error) = backend.enqueue(root.clone(), args) {
-          log::error!("Failed to enqueue {root}: {error}");
-          queue.abandon(&root, cx);
-        }
+  stores.queue.update(cx, |queue, cx| {
+    for request in requests {
+      let root = request.root.clone();
+      if !queue.add_to_queue(&root, cx) {
+        continue;
       }
-    });
-  })
+      let args = launch_args(request, queue.outputs().clone());
+      if let Err(error) = backend.enqueue(root.clone(), args) {
+        log::error!("Failed to enqueue {root}: {error}");
+        queue.abandon(&root, cx);
+      }
+    }
+  });
 }
 
 /// Whether Merge All (toolbar, F3) is available: a listed file has selected
@@ -264,7 +262,7 @@ pub fn can_merge_all(stores: &Stores, cx: &App) -> bool {
 
 /// Merge All: one merge per card unit, not per file, so a multi-member card
 /// is one queue task as with its own Merge button.
-pub fn merge_all(stores: &Stores, cx: &mut App) -> Task<()> {
+pub fn merge_all(stores: &Stores, cx: &mut App) {
   let files = stores.files.read(cx);
   let requests = files
     .units()
@@ -314,7 +312,7 @@ pub fn cancel_drive(stores: &Stores, drive: &str, cx: &mut App) {
 /// the drive. A root merges its whole card unit with the current selection, as
 /// its card would; a listed file that is no longer a unit root merges alone; a
 /// file no longer listed is skipped.
-pub fn resume_drive(stores: &Stores, drive: &str, cx: &mut App) -> Task<()> {
+pub fn resume_drive(stores: &Stores, drive: &str, cx: &mut App) {
   let roots: Vec<String> = stores
     .queue
     .read(cx)
@@ -406,15 +404,15 @@ pub fn clear_units(stores: &Stores, units: &[Vec<String>], cx: &mut App) {
 }
 
 /// Copies the commands of `requests`, one per line, to the clipboard and says
-/// so. Output paths are resolved on the background executor as Merge would
-/// resolve them now: past the outputs of the waiting and merging merges, and
-/// past each other's.
+/// so. Outputs are chosen on the background executor as Merge would choose
+/// them now: past the outputs of the running merges, and past each other's.
+/// A set path that is taken copies nothing and says so.
 pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) -> Task<()> {
   if requests.is_empty() {
     return Task::ready(());
   }
   let toolnix = stores.config.read(cx).config().external_tools.mkv_toolnix_path.clone();
-  let mut taken = stores.queue.read(cx).reservations().taken();
+  let mut taken = stores.queue.read(cx).outputs().taken();
   let ui = stores.ui.clone();
   cx.spawn(async move |cx| {
     let commands = cx
@@ -422,19 +420,25 @@ pub fn copy_commands(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App)
         requests
           .iter()
           .map(|request| {
-            let output = request.output_path(&taken);
+            let output = request.output_path(&taken)?;
             taken.insert(&output);
-            request.command(&output, &toolnix)
+            Ok(request.command(&output, &toolnix))
           })
-          .collect::<Vec<_>>()
-          .join("\n")
+          .collect::<Result<Vec<_>, String>>()
       })
       .await;
-    cx.update(|cx| {
-      cx.write_to_clipboard(ClipboardItem::new_string(commands));
-      ui.update(cx, |ui, cx| {
-        ui.show_snackbar(NotificationKind::Success, tr!("merge.commandCopied").to_string(), cx)
-      });
+    cx.update(|cx| match commands {
+      Ok(commands) => {
+        cx.write_to_clipboard(ClipboardItem::new_string(commands.join("\n")));
+        ui.update(cx, |ui, cx| {
+          ui.show_snackbar(NotificationKind::Success, tr!("merge.commandCopied").to_string(), cx)
+        });
+      }
+      Err(path) => {
+        ui.update(cx, |ui, cx| {
+          ui.show_snackbar(NotificationKind::Error, output_exists_message(&path), cx)
+        });
+      }
     });
   })
 }

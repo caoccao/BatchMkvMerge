@@ -172,7 +172,7 @@ impl QueueView {
           tr!("queue.resumeAll"),
           has_resumable,
         )
-        .on_click(cx.listener(move |this, _, _, cx| crate::actions::resume_drive(&this.stores, &drive, cx).detach()))
+        .on_click(cx.listener(move |this, _, _, cx| crate::actions::resume_drive(&this.stores, &drive, cx)))
       })
       .child({
         let drive = drive.to_string();

@@ -48,6 +48,7 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge ist nicht verfügbar. Bitte MKVToolNix-Pfad in den Einstellungen prüfen. %{detail}",
       "mkvmergeFailed": "mkvmerge fehlgeschlagen: %{detail}",
+      "outputExists": "Die Ausgabedatei %{path} existiert bereits.",
       "parser": {
         "io": "Datei konnte nicht gelesen werden: %{detail}",
         "unexpectedEof": "Datei ist abgeschnitten: %{detail}",

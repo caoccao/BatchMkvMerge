@@ -48,6 +48,7 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge is not available. Please check the MKVToolNix path in Settings. %{detail}",
       "mkvmergeFailed": "mkvmerge failed: %{detail}",
+      "outputExists": "The output file %{path} already exists.",
       "parser": {
         "io": "Could not read file: %{detail}",
         "unexpectedEof": "File is truncated: %{detail}",

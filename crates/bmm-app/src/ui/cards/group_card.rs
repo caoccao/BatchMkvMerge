@@ -434,7 +434,7 @@ impl Render for GroupCard {
           .disabled(!has_selection || any_active)
           .on_click(cx.listener(|this, _, _, cx| {
             let requests = this.requests(cx);
-            actions::enqueue(&this.stores, requests, cx).detach();
+            actions::enqueue(&this.stores, requests, cx);
           })),
       )
       .child(

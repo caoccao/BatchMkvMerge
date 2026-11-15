@@ -29,22 +29,18 @@
 //! end is emitted once as [`QueueEvent::Drained`], which sends the completion
 //! notifications once per batch, not per finished file.
 //!
-//! An enqueue lists its files as waiting before it resolves their outputs on
-//! the background executor ([`QueueStore::prepare`]), so Clear, Delete, Cancel
-//! All and the close guard see them from the first moment; it hands each to
-//! the merge queue only if it is still listed then ([`QueueStore::submit`]).
 //! A file removed while the merge queue still has it stays, hidden, until its
 //! `Finished` arrives, which then drops it: the item counts as active until
 //! the merge really ended, and the late `Cancelled` lists nothing again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use bmm_core::merge::{MergeEvent, MergeOutcome};
 use gpui_kit::{Context, EventEmitter, Task};
 
 use crate::domain::status::{QueueItem, QueueItemStatus, can_enqueue};
-use crate::state::outputs::OutputReservations;
+use crate::state::outputs::RunningOutputs;
 
 /// How often the elapsed and ETA labels move on while a merge runs: the
 /// one-second resolution of `format_hms`.
@@ -155,26 +151,15 @@ impl QueueSummary {
   }
 }
 
-/// A merge the store listed as waiting until it ends.
-#[derive(Clone, Copy, Debug)]
-struct Job {
-  /// The enqueue that listed it, and the key of its output reservation.
-  ticket: u64,
-  /// The merge queue has it, so a `Finished` will come.
-  submitted: bool,
-  /// Its file was removed while the merge queue had it: hidden, and dropped
-  /// by its `Finished`.
-  discarded: bool,
-}
-
 #[derive(Default)]
 pub struct QueueStore {
   items: HashMap<String, QueueItem>,
   order: Vec<String>,
-  /// The waiting and merging items' merges.
-  jobs: HashMap<String, Job>,
-  last_ticket: u64,
-  reservations: OutputReservations,
+  /// Files removed while the merge queue had their merge: hidden, and
+  /// dropped by its `Finished`.
+  discarded: HashSet<String>,
+  /// The outputs of the running merges, freed by their `Finished`.
+  outputs: RunningOutputs,
   /// Runs while an item is merging and emits [`QueueEvent::Tick`].
   ticker: Option<Task<()>>,
   /// The batch running while an item is waiting or merging.
@@ -229,13 +214,13 @@ impl QueueStore {
     QueueSummary::of(self.items())
   }
 
-  /// The outputs of the merges being prepared, waiting or merging.
-  pub fn reservations(&self) -> &OutputReservations {
-    &self.reservations
+  /// The outputs of the running merges.
+  pub fn outputs(&self) -> &RunningOutputs {
+    &self.outputs
   }
 
   fn shown(&self, file: &str) -> bool {
-    !self.jobs.get(file).is_some_and(|job| job.discarded)
+    !self.discarded.contains(file)
   }
 
   /// The drives with their files, each in queue order; the drives in the order
@@ -256,72 +241,23 @@ impl QueueStore {
     self.items().filter(move |item| item.drive == drive)
   }
 
-  /// Lists `file` as waiting while its enqueue resolves the output, and
-  /// returns the enqueue's ticket for [`Self::submit`] and the output
-  /// reservation. A file that is waiting or merging already is left alone
-  /// (`None`); a finished one starts over in its old position.
-  pub fn prepare(&mut self, file: &str, cx: &mut Context<Self>) -> Option<u64> {
+  /// Lists `file` as waiting, as it is handed to the merge queue. A file that
+  /// is waiting or merging already is left alone (returns `false`); a
+  /// finished one starts over in its old position.
+  pub fn add_to_queue(&mut self, file: &str, cx: &mut Context<Self>) -> bool {
     if !self.can_enqueue(file) {
-      return None;
+      return false;
     }
     if self.items.insert(file.to_string(), QueueItem::waiting(file)).is_none() {
       self.order.push(file.to_string());
     }
-    self.last_ticket += 1;
-    let ticket = self.last_ticket;
-    self.jobs.insert(
-      file.to_string(),
-      Job {
-        ticket,
-        submitted: false,
-        discarded: false,
-      },
-    );
     self.changed(file, true, cx);
-    Some(ticket)
-  }
-
-  /// Whether the enqueue `ticket` hands `file` to the merge queue now. Not
-  /// when the file was removed or listed by a newer enqueue meanwhile (the
-  /// ticket's reservation is freed), nor when a cancel was requested: it ends
-  /// cancelled here, as a waiting merge does in the merge queue.
-  pub fn submit(&mut self, file: &str, ticket: u64, cx: &mut Context<Self>) -> bool {
-    let Some(job) = self.jobs.get_mut(file).filter(|job| job.ticket == ticket) else {
-      self.reservations.release(ticket);
-      return false;
-    };
-    if job.submitted {
-      return false;
-    }
-    if self.items.get(file).is_some_and(|item| item.cancel_requested) {
-      let now = SystemTime::now();
-      let cancelled = MergeEvent::Finished {
-        file: file.to_string(),
-        outcome: MergeOutcome::Cancelled,
-        error: None,
-        at: now,
-      };
-      self.apply_event(&cancelled, now, cx);
-      return false;
-    }
-    job.submitted = true;
     true
   }
 
   /// Takes `file` off the queue after the merge queue refused it.
   pub fn abandon(&mut self, file: &str, cx: &mut Context<Self>) {
-    self.end_job(file);
     self.drop_item(file, cx);
-  }
-
-  /// Lists `file` as waiting in the merge queue, as an enqueue does once it
-  /// resolved the output (`false` while it is waiting or merging).
-  #[cfg(test)]
-  pub(crate) fn add_to_queue(&mut self, file: &str, cx: &mut Context<Self>) -> bool {
-    let Some(ticket) = self.prepare(file, cx) else {
-      return false;
-    };
-    self.submit(file, ticket, cx)
   }
 
   /// Drops the item of `file`. While the merge queue still has its merge, the
@@ -331,31 +267,18 @@ impl QueueStore {
     let Some(item) = self.items.get(file) else {
       return;
     };
-    let active = item.status.is_active();
-    if let Some(job) = self.jobs.get_mut(file).filter(|job| job.submitted && active) {
-      if !job.discarded {
-        job.discarded = true;
-        self.changed(file, true, cx);
-      }
-      return;
-    }
-    // A merge still being prepared goes now; its submit finds it gone and
-    // frees the reservation.
-    self.jobs.remove(file);
-    self.drop_item(file, cx);
-  }
-
-  fn drop_item(&mut self, file: &str, cx: &mut Context<Self>) {
-    if self.items.remove(file).is_some() {
-      self.order.retain(|listed| listed != file);
+    if !item.status.is_active() {
+      self.drop_item(file, cx);
+    } else if self.discarded.insert(file.to_string()) {
       self.changed(file, true, cx);
     }
   }
 
-  /// The merge of `file` ended: its output is written or given up.
-  fn end_job(&mut self, file: &str) {
-    if let Some(job) = self.jobs.remove(file) {
-      self.reservations.release(job.ticket);
+  fn drop_item(&mut self, file: &str, cx: &mut Context<Self>) {
+    self.discarded.remove(file);
+    if self.items.remove(file).is_some() {
+      self.order.retain(|listed| listed != file);
+      self.changed(file, true, cx);
     }
   }
 
@@ -372,16 +295,15 @@ impl QueueStore {
   pub fn apply_event(&mut self, event: &MergeEvent, now: SystemTime, cx: &mut Context<Self>) {
     let file = event.file();
     let finished = matches!(event, MergeEvent::Finished { .. });
+    if finished {
+      self.outputs.release(file);
+    }
     if !self.shown(file) {
       // A removed file: its merge's end drops it.
       if finished {
-        self.end_job(file);
         self.drop_item(file, cx);
       }
       return;
-    }
-    if finished {
-      self.end_job(file);
     }
     let structural = match self.items.get_mut(file) {
       Some(item) => {
@@ -701,52 +623,33 @@ mod tests {
   }
 
   #[gpui_kit::test]
-  fn a_prepared_merge_is_submitted_only_while_it_is_still_listed(cx: &mut TestAppContext) {
+  fn a_merges_end_frees_its_output(cx: &mut TestAppContext) {
     let harness = Harness::new(cx);
-    let reserve = |queue: &QueueStore, ticket: u64, output: &str| {
+    let claim = |queue: &QueueStore, file: &str, output: &str| {
       queue
-        .reservations()
-        .reserve(ticket, |_| crate::state::outputs::Resolution {
-          output: output.to_string(),
-          automatic: true,
-          value: (),
-        });
+        .outputs()
+        .claim(file, |_| Ok::<_, ()>(output.to_string()))
+        .unwrap();
     };
     harness.queue.update(cx, |queue, cx| {
-      let first = queue.prepare(A, cx).expect("listed");
-      assert_eq!(queue.prepare(A, cx), None, "already waiting");
-      assert_eq!(queue.item(A).unwrap().status, QueueItemStatus::Waiting);
-      assert!(queue.has_active());
-      reserve(queue, first, "/out/a.mkv");
-      // Removed while its output was resolved, then listed again.
-      queue.remove_from_queue(A, cx);
-      assert!(queue.item(A).is_none());
-      let second = queue.prepare(A, cx).expect("listed again");
-      reserve(queue, second, "/out/a (1).mkv");
-      assert!(!queue.submit(A, first, cx), "an older enqueue");
-      assert!(!queue.reservations().taken().contains("/out/a.mkv"));
-      assert!(queue.submit(A, second, cx));
-      assert!(!queue.submit(A, second, cx), "submitted once");
-      assert!(queue.reservations().taken().contains("/out/a (1).mkv"));
-      // Cancelled before it reached the merge queue.
-      let ticket = queue.prepare(B, cx).expect("listed");
-      reserve(queue, ticket, "/out/b.mkv");
-      queue.mark_cancel_requested(B, cx);
-      assert!(!queue.submit(B, ticket, cx));
-      assert_eq!(queue.item(B).unwrap().status, QueueItemStatus::Cancelled);
-      assert!(!queue.reservations().taken().contains("/out/b.mkv"));
+      queue.add_to_queue(A, cx);
+      queue.add_to_queue(B, cx);
+      claim(queue, A, "/out/a.mkv");
       // Refused by the merge queue.
-      queue.abandon(A, cx);
-      assert!(queue.item(A).is_none());
-      assert!(!queue.reservations().taken().contains("/out/a (1).mkv"));
+      queue.abandon(B, cx);
+      assert!(queue.item(B).is_none());
+    });
+    harness.apply(cx, started(A, 0));
+    assert!(
+      harness
+        .queue
+        .read_with(cx, |queue, _| queue.outputs().taken().contains("/out/a.mkv"))
+    );
+    harness.apply(cx, finished(A, MergeOutcome::Completed, 3));
+    harness.queue.read_with(cx, |queue, _| {
+      assert!(!queue.outputs().taken().contains("/out/a.mkv"));
       assert!(!queue.has_active());
     });
-    assert!(harness.take_events().contains(&QueueEvent::Finished {
-      file: B.to_string(),
-      outcome: MergeOutcome::Cancelled,
-      error: None,
-      elapsed: Duration::ZERO,
-    }));
   }
 
   #[gpui_kit::test]

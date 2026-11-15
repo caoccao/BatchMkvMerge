@@ -34,7 +34,10 @@
 //! position alone cannot always tell the displays apart, so the geometry is
 //! saved with the display's UUID, and the window reopens on the display it
 //! names; only an older config, or a display that is gone, falls back to the
-//! display under the position.
+//! display under the position. A window whose centre or origin is on a
+//! display reopens where it was, partly off the screen too; one whose centre
+//! is off its display moves just far enough for the centre to be on it, as
+//! GPUI otherwise drops the saved bounds.
 
 use bmm_core::config::{ConfigWindow, ConfigWindowPosition, ConfigWindowSize};
 use gpui_kit::{
@@ -60,11 +63,10 @@ pub fn is_persistable_size(width: u32, height: u32) -> bool {
   width >= MIN_WINDOW_SIZE.0 && height >= MIN_WINDOW_SIZE.1
 }
 
-/// Where the window opens: the saved position when there is one (the default
-/// `-1, -1` means never saved) and it lies on one of `displays`; `None`
-/// centres it. A position may be negative on a display left of or above the
-/// primary one.
-pub fn initial_bounds(saved: &ConfigWindow, displays: &[Bounds<Pixels>]) -> Option<Bounds<Pixels>> {
+/// The saved window's bounds, its size raised to the minimum; `None` when it
+/// was never saved (the default `-1, -1` position). A position may be
+/// negative on a display left of or above the primary one.
+pub fn saved_bounds(saved: &ConfigWindow) -> Option<Bounds<Pixels>> {
   let (width, height) = sanitize_size(&saved.size);
   let position = &saved.position;
   let never_saved = ConfigWindowPosition::default();
@@ -72,9 +74,6 @@ pub fn initial_bounds(saved: &ConfigWindow, displays: &[Bounds<Pixels>]) -> Opti
     return None;
   }
   let origin = point(px(position.x as f32), px(position.y as f32));
-  if !displays.iter().any(|display| display.contains(&origin)) {
-    return None;
-  }
   Some(Bounds::new(origin, size(px(width as f32), px(height as f32))))
 }
 
@@ -95,28 +94,46 @@ pub fn placement_display(
   under(bounds.center()).or_else(|| under(bounds.origin))
 }
 
-/// The saved geometry's bounds and the display it opens on, as an index into
-/// `displays` (each with its UUID, if the platform names one): the display
-/// the config names when it is connected and holds the window's centre (what
-/// GPUI checks) or its origin, so a window straddling two displays keeps its
-/// own; else [`placement_display`]. `None` centres the window
-/// ([`initial_bounds`]).
+/// `bounds` moved as little as needed for its centre to lie on `display`, at
+/// least 1 px inside. GPUI's Windows backend keeps the bounds a window opens
+/// with only when their centre is on the display it opens for, and otherwise
+/// opens it centred at a default size.
+pub fn with_centre_on(bounds: Bounds<Pixels>, display: &Bounds<Pixels>) -> Bounds<Pixels> {
+  let clamp = |value: f32, low: f32, high: f32| value.min(high - 1.0).max(low + 1.0);
+  let centre = bounds.center();
+  let (x, y) = (f32::from(centre.x), f32::from(centre.y));
+  let dx = clamp(x, f32::from(display.left()), f32::from(display.right())) - x;
+  let dy = clamp(y, f32::from(display.top()), f32::from(display.bottom())) - y;
+  if dx == 0.0 && dy == 0.0 {
+    return bounds;
+  }
+  let origin = point(bounds.origin.x + px(dx), bounds.origin.y + px(dy));
+  Bounds::new(origin, bounds.size)
+}
+
+/// Where the saved window reopens: its bounds and the display it opens on,
+/// as an index into `displays` (each with its UUID, if the platform names
+/// one). The display the config names wins when it is connected and holds
+/// the window's centre or its origin, so a window that straddles two
+/// displays or hangs off one keeps its own; else [`placement_display`]. A
+/// window whose centre is off that display moves just onto it
+/// ([`with_centre_on`]), keeping its size. `None` centres the window: it was
+/// never saved, or neither its centre nor its origin is on a connected
+/// display.
 pub fn initial_placement(
   saved: &ConfigWindow,
   displays: &[(Bounds<Pixels>, Option<String>)],
   primary: Option<usize>,
-) -> Option<(Bounds<Pixels>, Option<usize>)> {
+) -> Option<(Bounds<Pixels>, usize)> {
+  let bounds = saved_bounds(saved)?;
   let display_bounds: Vec<Bounds<Pixels>> = displays.iter().map(|(bounds, _)| *bounds).collect();
-  let bounds = initial_bounds(saved, &display_bounds)?;
-  let named = displays
-    .iter()
-    .position(|(display, uuid)| {
-      !saved.display.is_empty()
-        && uuid.as_deref() == Some(saved.display.as_str())
-        && (display.contains(&bounds.center()) || display.contains(&bounds.origin))
-    })
-    .or_else(|| placement_display(&bounds, &display_bounds, primary));
-  Some((bounds, named))
+  let named = displays.iter().position(|(display, uuid)| {
+    !saved.display.is_empty()
+      && uuid.as_deref() == Some(saved.display.as_str())
+      && (display.contains(&bounds.center()) || display.contains(&bounds.origin))
+  });
+  let display = named.or_else(|| placement_display(&bounds, &display_bounds, primary))?;
+  Some((with_centre_on(bounds, &display_bounds[display]), display))
 }
 
 /// The geometry to save for a window in `bounds` showing `content` on
@@ -163,9 +180,7 @@ pub fn main_window_options(saved: &ConfigWindow, cx: &App) -> WindowOptions {
     .primary_display()
     .and_then(|primary| displays.iter().position(|display| display.id() == primary.id()));
   let placement = initial_placement(saved, &described, primary);
-  let display_id = placement
-    .and_then(|(_, display)| display)
-    .map(|index| displays[index].id());
+  let display_id = placement.map(|(_, index)| displays[index].id());
   let bounds = placement.map(|(bounds, _)| bounds).unwrap_or_else(|| {
     let (width, height) = sanitize_size(&saved.size);
     Bounds::centered(None, size(px(width as f32), px(height as f32)), cx)
@@ -286,41 +301,51 @@ mod tests {
     assert_eq!(title(&finished), base);
   }
 
+  /// Displays without UUIDs, as on Wayland.
+  fn anonymous(displays: &[Bounds<Pixels>]) -> Vec<(Bounds<Pixels>, Option<String>)> {
+    displays.iter().map(|bounds| (*bounds, None)).collect()
+  }
+
   #[test]
   fn the_default_config_opens_centred_at_its_size() {
     let config = ConfigWindow::default();
-    assert_eq!(initial_bounds(&config, &[display(0.0, 0.0, 1920.0, 1080.0)]), None);
+    assert_eq!(saved_bounds(&config), None);
+    let displays = anonymous(&[display(0.0, 0.0, 1920.0, 1080.0)]);
+    assert_eq!(initial_placement(&config, &displays, Some(0)), None);
     assert_eq!(sanitize_size(&config.size), (1200, 900));
   }
 
   #[test]
   fn a_saved_position_on_a_display_is_restored() {
-    let displays = [display(0.0, 0.0, 1920.0, 1080.0), display(1920.0, 0.0, 1280.0, 1024.0)];
-    let bounds = initial_bounds(&saved(2000, 100, 800, 600), &displays).expect("restored");
+    let displays = anonymous(&[display(0.0, 0.0, 1920.0, 1080.0), display(1920.0, 0.0, 1280.0, 1024.0)]);
+    let (bounds, index) = initial_placement(&saved(2000, 100, 800, 600), &displays, Some(0)).expect("restored");
     assert_eq!(bounds.origin, point(px(2000.0), px(100.0)));
     assert_eq!(bounds.size, size(px(800.0), px(600.0)));
+    assert_eq!(index, 1);
     // Too small a saved size is raised to the minimum.
-    let bounds = initial_bounds(&saved(10, 10, 100, 100), &displays).expect("restored");
+    let bounds = saved_bounds(&saved(10, 10, 100, 100)).expect("saved");
     assert_eq!(bounds.size, size(px(600.0), px(450.0)));
   }
 
   #[test]
-  fn a_position_off_every_display_centres_the_window() {
-    let displays = [display(0.0, 0.0, 1920.0, 1080.0)];
-    assert_eq!(initial_bounds(&saved(5000, 100, 800, 600), &displays), None);
-    assert_eq!(initial_bounds(&saved(-1, 100, 800, 600), &displays), None);
+  fn a_window_partly_on_a_display_is_restored_and_one_off_every_display_centred() {
+    let displays = anonymous(&[display(0.0, 0.0, 1920.0, 1080.0)]);
+    assert_eq!(initial_placement(&saved(5000, 100, 800, 600), &displays, Some(0)), None);
+    // Hanging off the left edge: the origin is off the display, the centre on it.
+    let (bounds, index) = initial_placement(&saved(-100, 100, 800, 600), &displays, Some(0)).expect("restored");
+    assert_eq!((bounds.origin, index), (point(px(-100.0), px(100.0)), 0));
   }
 
   #[test]
   fn a_position_on_a_display_left_of_the_primary_one_is_restored() {
-    let displays = [
+    let displays = anonymous(&[
       display(0.0, 0.0, 1920.0, 1080.0),
       display(-1280.0, -200.0, 1280.0, 1024.0),
-    ];
-    let bounds = initial_bounds(&saved(-1000, -100, 800, 600), &displays).expect("restored");
-    assert_eq!(bounds.origin, point(px(-1000.0), px(-100.0)));
+    ]);
+    let (bounds, index) = initial_placement(&saved(-1000, -100, 800, 600), &displays, Some(0)).expect("restored");
+    assert_eq!((bounds.origin, index), (point(px(-1000.0), px(-100.0)), 1));
     // The default position still means "never saved", even with a display there.
-    assert_eq!(initial_bounds(&ConfigWindow::default(), &displays), None);
+    assert_eq!(initial_placement(&ConfigWindow::default(), &displays, Some(0)), None);
   }
 
   #[test]
@@ -376,20 +401,42 @@ mod tests {
     // whose centre lies on both displays.
     let (bounds, display) = initial_placement(&on("scaled", 1050, 100), &displays, Some(0)).expect("restored");
     assert_eq!(bounds.origin, point(px(1050.0), px(100.0)));
-    assert_eq!(display, Some(1));
+    assert_eq!(display, 1);
     let placed = |saved: &ConfigWindow| initial_placement(saved, &displays, Some(0)).map(|(_, display)| display);
-    assert_eq!(placed(&on("primary", 1050, 100)), Some(Some(0)));
+    assert_eq!(placed(&on("primary", 1050, 100)), Some(0));
     // An older config, or a display that is gone: the display under the position.
-    assert_eq!(placed(&on("", 1050, 100)), Some(Some(0)));
-    assert_eq!(placed(&on("unplugged", 1050, 100)), Some(Some(0)));
+    assert_eq!(placed(&on("", 1050, 100)), Some(0));
+    assert_eq!(placed(&on("unplugged", 1050, 100)), Some(0));
     // Straddling both: the origin on the primary display only, the centre on
     // both. Windows put it on the scaled display, which holds the centre.
-    assert_eq!(placed(&on("scaled", 900, 100)), Some(Some(1)));
+    assert_eq!(placed(&on("scaled", 900, 100)), Some(1));
+    // Partly above both: the origin on no display, the centre on both.
+    assert_eq!(placed(&on("scaled", 1500, -100)), Some(1));
+    assert_eq!(placed(&on("", 1500, -100)), Some(0));
     // The named display no longer holds the window.
-    assert_eq!(placed(&on("scaled", 100, 100)), Some(Some(0)));
+    assert_eq!(placed(&on("scaled", 100, 100)), Some(0));
     // Never saved, or off every display: centred.
     assert_eq!(placed(&ConfigWindow::default()), None);
     assert_eq!(placed(&on("scaled", 9000, 100)), None);
+  }
+
+  #[test]
+  fn a_window_with_its_centre_off_its_display_moves_onto_it() {
+    let displays = mixed_scales();
+    // Only the origin is on the scaled display (960–2880): the centre is at
+    // 3100, off every display.
+    let (bounds, index) = initial_placement(&on("scaled", 2700, 100), &displays, Some(0)).expect("restored");
+    assert_eq!(index, 1);
+    assert_eq!(bounds.origin, point(px(2479.0), px(100.0)));
+    assert_eq!(bounds.size, size(px(800.0), px(600.0)));
+    assert!(displays[1].0.contains(&bounds.center()));
+    // Below the primary display, found by its origin.
+    let (bounds, index) = initial_placement(&on("", 300, 900), &displays, Some(0)).expect("restored");
+    assert_eq!((bounds.origin, index), (point(px(300.0), px(779.0)), 0));
+    assert!(displays[0].0.contains(&bounds.center()));
+    // A window whose centre is on its display stays where it was.
+    let inside = display(100.0, 100.0, 800.0, 600.0);
+    assert_eq!(with_centre_on(inside, &displays[0].0), inside);
   }
 
   #[test]
@@ -400,10 +447,10 @@ mod tests {
       (display(0.0, 0.0, 1920.0, 1080.0), Some("external".to_string())),
     ];
     let on_external = on("external", 100, 100);
-    assert_eq!(initial_placement(&on_external, &displays, Some(0)).unwrap().1, Some(1));
+    assert_eq!(initial_placement(&on_external, &displays, Some(0)).unwrap().1, 1);
     // Without UUIDs (Wayland): the primary display.
-    let anonymous = displays.map(|(bounds, _)| (bounds, None));
-    assert_eq!(initial_placement(&on_external, &anonymous, Some(0)).unwrap().1, Some(0));
+    let unnamed = anonymous(&displays.map(|(bounds, _)| bounds));
+    assert_eq!(initial_placement(&on_external, &unnamed, Some(0)).unwrap().1, 0);
   }
 
   #[test]

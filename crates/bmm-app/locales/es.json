@@ -48,6 +48,7 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge no está disponible. Verifique la ruta de MKVToolNix en Ajustes. %{detail}",
       "mkvmergeFailed": "mkvmerge falló: %{detail}",
+      "outputExists": "El archivo de salida %{path} ya existe.",
       "parser": {
         "io": "No se pudo leer el archivo: %{detail}",
         "unexpectedEof": "El archivo está truncado: %{detail}",

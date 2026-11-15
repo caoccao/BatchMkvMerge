@@ -126,7 +126,7 @@ pub fn install(stores: &Stores, cx: &mut App) {
     let stores = stores.clone();
     move |_: &MergeAll, cx| {
       if crate::actions::can_merge_all(&stores, cx) {
-        crate::actions::merge_all(&stores, cx).detach();
+        crate::actions::merge_all(&stores, cx);
       }
     }
   });

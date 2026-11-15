@@ -75,6 +75,15 @@ pub fn checked_dir(value: &str, mode: OutputMode) -> String {
   }
 }
 
+/// Whether a merge can write to `value` in `mode`: in directory mode a
+/// directory (an existing file is not one), in file mode a file too.
+fn writable(value: String, mode: OutputMode) -> anyhow::Result<bool> {
+  match mode {
+    OutputMode::Directory => bmm_core::services::check_output_dir_writable(value),
+    OutputMode::File => bmm_core::services::check_output_file_writable(value),
+  }
+}
+
 /// The save dialog's starting directory and suggested name in file mode:
 /// from the field when it holds a path, else the default name.
 fn save_prompt(value: &str, default_file_name: &str) -> (std::path::PathBuf, Option<String>) {
@@ -291,11 +300,9 @@ impl OutputPathDialog {
       window.close_dialog(cx);
       return;
     }
-    let checked = value.clone();
+    let (checked, mode) = (value.clone(), self.request.mode);
     self.confirming = Some(cx.spawn_in(window, async move |this, cx| {
-      let writable = cx
-        .background_spawn(async move { bmm_core::services::check_output_path_writable(checked) })
-        .await;
+      let writable = cx.background_spawn(async move { writable(checked, mode) }).await;
       let _ = this.update_in(cx, |this, window, cx| {
         this.confirming = None;
         match writable {

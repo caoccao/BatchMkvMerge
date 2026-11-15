@@ -48,6 +48,7 @@
     "error": {
       "mkvmergeNotAvailable": "mkvmerge 無法使用。請在設定中檢查 MKVToolNix 路徑。%{detail}",
       "mkvmergeFailed": "mkvmerge 失敗:%{detail}",
+      "outputExists": "輸出檔案 %{path} 已存在。",
       "parser": {
         "io": "無法讀取檔案:%{detail}",
         "unexpectedEof": "檔案被截斷:%{detail}",

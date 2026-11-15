@@ -118,6 +118,36 @@ pub trait MergeProcessControl: Send {
 /// list (output, per-file options and inputs).
 pub type MergeLauncher = Box<dyn Fn(&str, &[String]) -> Result<MergeProcess> + Send + Sync>;
 
+/// Builds a merge's argument list just before its worker launches `mkvmerge`,
+/// outside the queue lock. `Err(message)` finishes the merge as
+/// [`MergeOutcome::Failed`] with that message, and nothing is launched.
+pub type BuildArgs = Box<dyn FnOnce() -> std::result::Result<Vec<String>, String> + Send>;
+
+/// The complete `mkvmerge` argument list of a queued merge (output,
+/// per-file options and inputs).
+pub enum MergeArgs {
+  Fixed(Vec<String>),
+  /// Built when the merge starts: a merge waits for its drive, and what the
+  /// arguments depend on (which output file is free) is known only then.
+  AtLaunch(BuildArgs),
+}
+
+impl MergeArgs {
+  /// The argument list, building it now if it is built at launch.
+  pub fn build(self) -> std::result::Result<Vec<String>, String> {
+    match self {
+      Self::Fixed(args) => Ok(args),
+      Self::AtLaunch(build) => build(),
+    }
+  }
+}
+
+impl From<Vec<String>> for MergeArgs {
+  fn from(args: Vec<String>) -> Self {
+    Self::Fixed(args)
+  }
+}
+
 type SharedControl = Arc<Mutex<Box<dyn MergeProcessControl>>>;
 
 enum WorkerOutcome {
@@ -134,7 +164,8 @@ enum TaskStatus {
 struct TaskState {
   status: TaskStatus,
   progress: u32,
-  args: Vec<String>,
+  /// Taken by the worker when it starts.
+  args: Option<MergeArgs>,
   cancel_requested: bool,
 }
 
@@ -167,10 +198,11 @@ impl MergeQueue {
     })
   }
 
-  /// Queue `file` for merging with the complete `mkvmerge` argument list.
-  /// It starts at once when its drive is idle. A file that is already queued
-  /// or merging is ignored.
-  pub fn enqueue(self: &Arc<Self>, file: String, args: Vec<String>) -> Result<()> {
+  /// Queue `file` for merging with its `mkvmerge` arguments. It starts at
+  /// once when its drive is idle. A file that is already queued or merging is
+  /// ignored.
+  pub fn enqueue(self: &Arc<Self>, file: String, args: impl Into<MergeArgs>) -> Result<()> {
+    let args = args.into();
     let drive_key = get_drive_key(&file);
     let should_start;
     {
@@ -183,7 +215,7 @@ impl MergeQueue {
         TaskState {
           status: TaskStatus::Queued,
           progress: 0,
-          args,
+          args: Some(args),
           cancel_requested: false,
         },
       );
@@ -273,9 +305,13 @@ impl MergeQueue {
   /// `Started` and `Finished` happens here, so [`Self::run_worker`] can turn a
   /// panic into `Failed` without losing the `Finished` event.
   fn execute(&self, file: &str) -> WorkerOutcome {
-    let args = self.lock_state().tasks.get(file).map(|t| t.args.clone());
+    let args = self.lock_state().tasks.get_mut(file).and_then(|t| t.args.take());
     let Some(args) = args else {
       return WorkerOutcome::Failed(ERROR_TASK_MISSING.to_owned());
+    };
+    let args = match args.build() {
+      Ok(args) => args,
+      Err(message) => return WorkerOutcome::Failed(message),
     };
     let MergeProcess { output, control } = match (self.launcher)(file, &args) {
       Ok(process) => process,
@@ -482,7 +518,7 @@ pub fn init(sink: MergeEventSink) {
 }
 
 /// [`MergeQueue::enqueue`] on the process-wide queue, which runs `mkvmerge`.
-pub fn enqueue(file: String, args: Vec<String>) -> Result<()> {
+pub fn enqueue(file: String, args: MergeArgs) -> Result<()> {
   global().enqueue(file, args)
 }
 
@@ -824,6 +860,41 @@ mod tests {
       [started(A), finished(A, MergeOutcome::Completed, None), started(A), done]
     );
     assert_eq!(*launches.lock().unwrap(), [args_for(A), vec!["retry".to_owned()]]);
+  }
+
+  /// The drive was busy: arguments built at launch are built when the merge
+  /// starts, not when it was enqueued; a failure launches nothing.
+  #[test]
+  fn arguments_built_at_launch_are_built_when_the_merge_starts() {
+    let h = Harness::new(|_| Launch::Run);
+    h.enqueue(A);
+    let built = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&built);
+    let failing: BuildArgs = Box::new(move || {
+      seen.store(true, Ordering::SeqCst);
+      Err("the output is taken".to_owned())
+    });
+    h.queue.enqueue(B.to_owned(), MergeArgs::AtLaunch(failing)).unwrap();
+    let building: BuildArgs = Box::new(|| Ok(args_for(C)));
+    h.queue.enqueue(C.to_owned(), MergeArgs::AtLaunch(building)).unwrap();
+    assert_eq!(h.next(), started(A));
+    let a = h.launch();
+    assert!(!built.load(Ordering::SeqCst), "not while B waits");
+    a.exit(0);
+    assert_eq!(h.next(), finished(A, MergeOutcome::Completed, None));
+    assert_eq!(h.next(), started(B));
+    assert_eq!(h.next(), finished(B, MergeOutcome::Failed, Some("the output is taken")));
+    assert!(built.load(Ordering::SeqCst));
+    assert_eq!(h.next(), started(C));
+    let c = h.launch();
+    assert_eq!(
+      (c.file.as_str(), c.args.clone()),
+      (C, args_for(C)),
+      "B launched nothing"
+    );
+    c.exit(0);
+    assert_eq!(h.next(), finished(C, MergeOutcome::Completed, None));
+    h.wait_until_idle();
   }
 
   #[test]

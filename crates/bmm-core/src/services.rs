@@ -33,7 +33,22 @@ fn better_media_info_exe_name() -> &'static str {
   }
 }
 
-pub fn check_output_path_writable(path: String) -> Result<bool> {
+/// Whether a merge can write the output file `path`: an existing file that
+/// can be opened for writing (a merge replaces it), or a path
+/// [`check_output_dir_writable`] accepts. Nothing is changed.
+pub fn check_output_file_writable(path: String) -> Result<bool> {
+  let requested = Path::new(&path);
+  if requested.is_file() {
+    return Ok(std::fs::OpenOptions::new().write(true).open(requested).is_ok());
+  }
+  check_output_dir_writable(path)
+}
+
+/// Whether a merge can write into the output directory `path`: its nearest
+/// existing ancestor (the path itself, if it exists) is a directory a file
+/// can be created in; mkvmerge creates the missing directories. An existing
+/// file is not a directory. Nothing is changed.
+pub fn check_output_dir_writable(path: String) -> Result<bool> {
   let mut current = PathBuf::from(&path);
   loop {
     if current.exists() {
@@ -298,24 +313,42 @@ pub fn resolve_merge_output_path(output_dir: String, source_file: String) -> Str
 }
 
 /// [`resolve_merge_output_path`] that also passes over every candidate
-/// `taken` claims: the outputs of merges that are queued but not written yet,
-/// which the file system does not show.
+/// `taken` claims: the outputs of merges that are running but may not have
+/// written them yet, which the file system does not show.
 pub fn resolve_merge_output_path_avoiding(
   output_dir: String,
   source_file: String,
   taken: impl Fn(&str) -> bool,
 ) -> String {
-  let dir = std::path::Path::new(&output_dir);
-  let stem = std::path::Path::new(&source_file)
+  let stem = Path::new(&source_file)
     .file_stem()
     .and_then(|s| s.to_str())
     .unwrap_or("output");
+  resolve_named_output_path_avoiding(output_dir, format!("{stem}.mkv"), taken)
+}
+
+/// A free path for `file_name` in `output_dir`: the name itself, else with
+/// " (1)", " (2)", … before its extension, passing over existing files and
+/// every path `taken` claims.
+pub fn resolve_named_output_path_avoiding(
+  output_dir: String,
+  file_name: String,
+  taken: impl Fn(&str) -> bool,
+) -> String {
+  let dir = Path::new(&output_dir);
+  let name = Path::new(&file_name);
+  let stem = name.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+  let extension = name
+    .extension()
+    .and_then(|s| s.to_str())
+    .map(|extension| format!(".{extension}"))
+    .unwrap_or_default();
   let mut counter: u32 = 0;
   loop {
     let name = if counter == 0 {
-      format!("{stem}.mkv")
+      format!("{stem}{extension}")
     } else {
-      format!("{stem} ({counter}).mkv")
+      format!("{stem} ({counter}){extension}")
     };
     let candidate = dir.join(&name);
     let path = candidate.to_string_lossy().into_owned();
@@ -326,23 +359,12 @@ pub fn resolve_merge_output_path_avoiding(
   }
 }
 
-/// Resolve a user-set output-path override for a single-root card. When the
-/// override points at a directory (it exists as one, or ends with a path
-/// separator), the input file's original name is appended verbatim —
-/// `<override_dir>/<source file name>`, with NO " (1)" dedup, so the original
-/// name is preferred. Otherwise the override already names a file and is used
-/// as-is.
-pub fn resolve_overridden_output_path(output_path: String, source_file: String) -> String {
-  let path = std::path::Path::new(&output_path);
-  let looks_like_dir = path.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
-  if !looks_like_dir {
-    return output_path;
-  }
-  let name = std::path::Path::new(&source_file)
-    .file_name()
-    .and_then(|s| s.to_str())
-    .unwrap_or("output.mkv");
-  path.join(name).to_string_lossy().into_owned()
+/// The directory a user-set output path names, if it names one (it exists as
+/// a directory, or ends with a path separator): the merge writes the input's
+/// file name there. `None` when the path names the output file itself.
+pub fn override_directory(output_path: &str) -> Option<&str> {
+  let names_dir = Path::new(output_path).is_dir() || output_path.ends_with('/') || output_path.ends_with('\\');
+  names_dir.then_some(output_path)
 }
 
 #[cfg(test)]
@@ -359,6 +381,33 @@ mod tests {
   /// `BMM_PARSER_BUDGET_MS` env var so they cannot race each other under
   /// cargo's parallel test runner. Poison from a panicking test is tolerated.
   static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+  #[test]
+  fn an_output_file_or_directory_is_writable_where_a_merge_can_write_it() {
+    let dir = std::env::temp_dir().join("bmm_output_writable");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    for check in [check_output_file_writable, check_output_dir_writable] {
+      assert!(check(path("")).unwrap(), "the directory");
+      assert!(check(path("new/sub/Movie.mkv")).unwrap(), "created");
+    }
+    std::fs::write(dir.join("Movie.mkv"), b"merged").unwrap();
+    assert!(check_output_file_writable(path("Movie.mkv")).unwrap(), "replaced");
+    assert_eq!(
+      std::fs::read(dir.join("Movie.mkv")).unwrap(),
+      b"merged",
+      "left as it was"
+    );
+    assert!(
+      !check_output_dir_writable(path("Movie.mkv")).unwrap(),
+      "a file is no directory"
+    );
+    for check in [check_output_file_writable, check_output_dir_writable] {
+      assert!(!check(path("Movie.mkv/inside.mkv")).unwrap(), "under a file");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+  }
 
   #[test]
   fn a_merge_output_passes_over_existing_and_taken_names() {
@@ -384,33 +433,33 @@ mod tests {
   }
 
   #[test]
-  fn overridden_output_path_appends_source_name_for_existing_dir() {
-    let dir = std::env::temp_dir();
-    let out = resolve_overridden_output_path(dir.to_string_lossy().into_owned(), "/inputs/movie.mkv".to_owned());
-    // Original name appended verbatim — no " (1)" dedup.
-    let expected = dir.join("movie.mkv").to_string_lossy().into_owned();
-    assert_eq!(out, expected);
-  }
-
-  #[test]
-  fn overridden_output_path_appends_source_name_for_trailing_separator() {
-    // A non-existent path ending with a separator is treated as a directory.
+  fn an_override_names_a_directory_when_it_is_one_or_ends_with_a_separator() {
+    let dir = std::env::temp_dir().to_string_lossy().into_owned();
+    assert_eq!(override_directory(&dir), Some(dir.as_str()));
+    // A path that does not exist names a directory only with a separator.
     let base = std::env::temp_dir().join("bmm_override_does_not_exist");
     let with_sep = format!("{}{}", base.to_string_lossy(), std::path::MAIN_SEPARATOR);
-    let out = resolve_overridden_output_path(with_sep, "/inputs/movie.mkv".to_owned());
-    let expected = base.join("movie.mkv").to_string_lossy().into_owned();
-    assert_eq!(out, expected);
+    assert_eq!(override_directory(&with_sep), Some(with_sep.as_str()));
+    assert_eq!(override_directory("/nonexistent_dir_bmm/custom.mkv"), None);
   }
 
   #[test]
-  fn overridden_output_path_keeps_explicit_file_name() {
-    // A path that names a file (not an existing dir, no trailing separator)
-    // is used verbatim.
-    let out = resolve_overridden_output_path(
-      "/nonexistent_dir_bmm/custom.mkv".to_owned(),
-      "/inputs/movie.mkv".to_owned(),
-    );
-    assert_eq!(out, "/nonexistent_dir_bmm/custom.mkv");
+  fn a_named_output_is_numbered_before_its_extension_while_taken() {
+    let dir = std::env::temp_dir().join("bmm_output_named");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.to_string_lossy().into_owned();
+    let name = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let resolve = |taken: &str| {
+      let taken = taken.to_string();
+      resolve_named_output_path_avoiding(out.clone(), "Movie.en.srt".to_owned(), move |path| path == taken)
+    };
+    assert_eq!(resolve(""), name("Movie.en.srt"));
+    std::fs::write(dir.join("Movie.en.srt"), b"").unwrap();
+    assert_eq!(resolve(&name("Movie.en (1).srt")), name("Movie.en (2).srt"));
+    let bare = resolve_named_output_path_avoiding(out, "README".to_owned(), |_| false);
+    assert_eq!(bare, name("README"));
+    let _ = std::fs::remove_dir_all(&dir);
   }
 
   #[test]

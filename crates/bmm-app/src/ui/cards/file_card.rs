@@ -147,7 +147,7 @@ impl FileCard {
 
   fn merge(&mut self, cx: &mut Context<Self>) {
     if let Some(request) = self.request(cx) {
-      actions::enqueue(&self.stores, vec![request], cx).detach();
+      actions::enqueue(&self.stores, vec![request], cx);
     }
   }
 
@@ -163,15 +163,17 @@ impl FileCard {
     let files = self.stores.files.read(cx);
     let current = files.output_path(&root).map(str::to_string);
     let target = OutputTarget::of(files, &root);
-    let taken = self.stores.queue.read(cx).reservations().taken();
+    let taken = self.stores.queue.read(cx).outputs().taken();
     let store = self.stores.files.clone();
     cx.spawn_in(window, async move |_, cx| {
       let initial = match current {
         Some(path) => path,
         None => {
           let root = root.clone();
+          // The automatic name: no path of the card's own is set here.
           cx.background_spawn(async move { resolve_merge_output_for(&target, &root, &taken) })
             .await
+            .unwrap_or_else(|path| path)
         }
       };
       let on_confirm = {

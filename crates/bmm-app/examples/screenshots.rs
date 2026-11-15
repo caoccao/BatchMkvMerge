@@ -327,8 +327,7 @@ async fn add_files(stores: &Stores, cx: &mut AsyncApp) {
 
 /// Merge All, then the first file merging for 55 s at 17 % (the others wait).
 async fn start_merges(stores: &Stores, cx: &mut AsyncApp) {
-  let task = cx.update(|cx| batch_mkvmerge::actions::merge_all(stores, cx));
-  task.await;
+  cx.update(|cx| batch_mkvmerge::actions::merge_all(stores, cx));
   pause(cx, 200).await;
   let file = media("test.01.mkv");
   let now = SystemTime::now();

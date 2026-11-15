@@ -232,7 +232,7 @@ impl Render for Toolbar {
             tr!("toolbar.mergeAll"),
             can_merge_all,
           )
-          .on_click(cx.listener(|this, _, _, cx| actions::merge_all(&this.stores, cx).detach())),
+          .on_click(cx.listener(|this, _, _, cx| actions::merge_all(&this.stores, cx))),
         )
         .child(divider(cx))
         .child(

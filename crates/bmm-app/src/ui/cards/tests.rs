@@ -867,6 +867,24 @@ fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut T
   assert!(!has_dialog(&shell, cx), "Escape cancels");
 }
 
+/// A folder dialog takes no file: a merge would treat it as the folder.
+#[gpui_kit::test]
+fn a_group_cards_output_directory_is_no_file(cx: &mut TestAppContext) {
+  let (_dir, a, b, parsed) = two_movies("cards-group-output-file");
+  let shell = shell(cx, config(GroupMode::TrackCount, false), parsed, &[&a, &b]);
+  shell.resize(cx, 1400.0, 760.0);
+  click_in(&shell, cx, 0, "group-output");
+  type_and_confirm(&shell, cx, &a);
+  assert!(has_dialog(&shell, cx), "refused");
+  assert_eq!(
+    shell
+      .stores
+      .files
+      .read_with(cx, |files, _| files.output_dir(&a).map(str::to_string)),
+    None
+  );
+}
+
 #[gpui_kit::test]
 fn a_group_cards_output_directory_goes_to_every_root(cx: &mut TestAppContext) {
   let (dir, a, b, parsed) = two_movies("cards-group-output");

@@ -105,7 +105,9 @@ impl Shell {
     let merges = Arc::new(Mutex::new(MergeCalls::default()));
     let (enqueue_calls, cancel_calls) = (merges.clone(), merges.clone());
     let backend = MergeBackend::new(
-      move |file, args| {
+      // The merge starts at once: its arguments are built now.
+      move |file, args: bmm_core::merge::MergeArgs| {
+        let args = args.build().unwrap_or_default();
         enqueue_calls.lock().unwrap().enqueued.push((file, args));
         Ok(())
       },

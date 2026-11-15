@@ -27,7 +27,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use async_channel::Receiver;
-use bmm_core::merge::{MergeEvent, MergeEventSink, MergeQueue};
+use bmm_core::merge::{MergeArgs, MergeEvent, MergeEventSink, MergeQueue};
 use gpui_kit::App;
 
 use crate::state::Stores;
@@ -42,7 +42,7 @@ pub fn channel() -> (MergeEventSink, Receiver<MergeEvent>) {
   (sink, receiver)
 }
 
-type EnqueueFn = dyn Fn(String, Vec<String>) -> Result<()> + Send + Sync;
+type EnqueueFn = dyn Fn(String, MergeArgs) -> Result<()> + Send + Sync;
 type CancelFn = dyn Fn(&str) -> Result<()> + Send + Sync;
 
 /// Enqueues and cancels merges: the process-wide `mkvmerge` queue in the app,
@@ -55,7 +55,7 @@ pub struct MergeBackend {
 
 impl MergeBackend {
   pub fn new(
-    enqueue: impl Fn(String, Vec<String>) -> Result<()> + Send + Sync + 'static,
+    enqueue: impl Fn(String, MergeArgs) -> Result<()> + Send + Sync + 'static,
     cancel: impl Fn(&str) -> Result<()> + Send + Sync + 'static,
   ) -> Self {
     Self {
@@ -82,8 +82,8 @@ impl MergeBackend {
     )
   }
 
-  /// Queues `file` with its complete `mkvmerge` arguments.
-  pub fn enqueue(&self, file: String, args: Vec<String>) -> Result<()> {
+  /// Queues `file` with its `mkvmerge` arguments.
+  pub fn enqueue(&self, file: String, args: MergeArgs) -> Result<()> {
     (self.enqueue)(file, args)
   }
 

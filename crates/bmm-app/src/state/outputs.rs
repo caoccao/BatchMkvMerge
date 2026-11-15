@@ -15,14 +15,14 @@
 *   limitations under the License.
 */
 
-//! The output files of merges that are not written yet.
+//! The output files of running merges.
 //!
-//! An automatic output name is `<stem>.mkv`, numbered while that file exists,
-//! and mkvmerge overwrites a target that exists. Two merges resolved before
-//! either writes (two `Episode.srt` of one Merge All into one directory, or a
-//! second Merge while the first still waits) would pick the same name, so
-//! every enqueue reserves its output until its merge ends, and an automatic
-//! name passes over the reserved ones too.
+//! A merge chooses its output just before `mkvmerge` starts, not when it is
+//! enqueued: it may wait for its drive, and only then is it known which files
+//! exist. mkvmerge overwrites a target that exists, and a merge that has just
+//! started may not have created its output yet, so the outputs of running
+//! merges are claimed until they finish, and merges on different drives
+//! choose one at a time.
 //!
 //! Paths are compared by the file they name ([`output_key`]): `out` and
 //! `out\..\out`, a link and its target, or two spellings of one directory
@@ -71,7 +71,7 @@ pub fn output_key(path: &str) -> String {
   }
 }
 
-/// Output paths an automatic name must not take.
+/// Output paths a new output must not take.
 #[derive(Clone, Debug, Default)]
 pub struct TakenOutputs(HashSet<String>);
 
@@ -87,60 +87,43 @@ impl TakenOutputs {
   }
 }
 
-/// What an enqueue resolved: its output, whether the app chose that name
-/// (and so may choose another), and what it built for it.
-pub struct Resolution<T> {
-  pub output: String,
-  pub automatic: bool,
-  pub value: T,
+/// The outputs claimed by running merges, by the root file of each merge.
+/// Shared with the merge workers, which choose outputs. Choosing reads the
+/// file system and takes one lock for its whole length, so that two workers
+/// never pick the same file; the foreground takes only the other, short one.
+#[derive(Clone, Default)]
+pub struct RunningOutputs {
+  choosing: Arc<Mutex<()>>,
+  claimed: Arc<Mutex<HashMap<String, String>>>,
 }
 
-/// The reserved outputs, by the ticket of the enqueue that chose each. Shared
-/// with the background executor, where outputs are resolved. The lock is
-/// held only to read or change the map, never while the file system is read:
-/// the foreground takes it too, and an output may be on a slow share.
-#[derive(Clone, Default)]
-pub struct OutputReservations(Arc<Mutex<HashMap<u64, String>>>);
-
-impl OutputReservations {
-  /// Runs `resolve` with the outputs reserved now and reserves the output it
-  /// returns for `ticket`; returns what `resolve` built. An automatic output
-  /// that another enqueue reserved meanwhile is resolved again past it, so
-  /// two enqueues resolving at once still pick different names. An output
-  /// the user named is reserved as it is.
-  pub fn reserve<T>(&self, ticket: u64, mut resolve: impl FnMut(&TakenOutputs) -> Resolution<T>) -> T {
-    let mut taken = self.taken();
-    loop {
-      let Resolution {
-        output,
-        automatic,
-        value,
-      } = resolve(&taken);
-      let key = output_key(&output);
-      let mut reserved = self.lock();
-      if !automatic || !reserved.values().any(|other| *other == key) {
-        reserved.insert(ticket, key);
-        return value;
-      }
-      taken = TakenOutputs(reserved.values().cloned().collect());
-    }
+impl RunningOutputs {
+  /// Runs `choose` with the outputs of the running merges and claims the
+  /// output it returns for the merge of `root`, one worker at a time. An
+  /// `Err` from `choose` claims nothing.
+  pub fn claim<E>(&self, root: &str, choose: impl FnOnce(&TakenOutputs) -> Result<String, E>) -> Result<String, E> {
+    let _choosing = self.choosing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let output = choose(&self.taken())?;
+    let key = output_key(&output);
+    self.claimed().insert(root.to_string(), key);
+    Ok(output)
   }
 
-  /// The outputs reserved now, for an output that is shown but not merged:
+  /// The outputs claimed now, for an output that is shown but not merged:
   /// Copy Command and the output dialog show what Merge would write.
   pub fn taken(&self) -> TakenOutputs {
-    TakenOutputs(self.lock().values().cloned().collect())
+    TakenOutputs(self.claimed().values().cloned().collect())
   }
 
-  /// Frees the output of `ticket`, if it reserved one.
-  pub fn release(&self, ticket: u64) {
-    self.lock().remove(&ticket);
+  /// Frees the output of the merge of `root`, which ended.
+  pub fn release(&self, root: &str) {
+    self.claimed().remove(root);
   }
 
-  /// A reservation is a map insert or removal, so a poisoned lock still holds
-  /// a consistent map.
-  fn lock(&self) -> MutexGuard<'_, HashMap<u64, String>> {
-    self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+  /// A claim is a map insert or removal, so a poisoned lock still holds a
+  /// consistent map.
+  fn claimed(&self) -> MutexGuard<'_, HashMap<String, String>> {
+    self.claimed.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
   }
 }
 
@@ -149,64 +132,54 @@ mod tests {
   use super::*;
   use crate::state::files::tests::TempDir;
 
-  fn automatic(output: &str) -> Resolution<()> {
-    Resolution {
-      output: output.to_string(),
-      automatic: true,
-      value: (),
-    }
-  }
-
   #[test]
-  fn a_reserved_output_is_taken_until_it_is_released() {
-    let reservations = OutputReservations::default();
-    let first = reservations.reserve(1, |taken| {
+  fn a_claimed_output_is_taken_until_its_merge_ends() {
+    let outputs = RunningOutputs::default();
+    let first = outputs.claim("/in/a.srt", |taken| {
       assert!(!taken.contains("/out/Episode.mkv"));
-      Resolution {
-        output: "/out/Episode.mkv".to_string(),
-        automatic: true,
-        value: 'a',
-      }
+      Ok::<_, ()>("/out/Episode.mkv".to_string())
     });
-    assert_eq!(first, 'a');
-    reservations.reserve(2, |taken| {
-      assert!(taken.contains("/out/Episode.mkv"));
-      automatic("/out/Episode (1).mkv")
-    });
-    let taken = reservations.taken();
-    assert!(taken.contains("/out/Episode.mkv") && taken.contains("/out/Episode (1).mkv"));
-    reservations.release(1);
-    reservations.release(7);
-    let taken = reservations.taken();
+    assert_eq!(first, Ok("/out/Episode.mkv".to_string()));
+    outputs
+      .claim("/in/b.srt", |taken| {
+        assert!(taken.contains("/out/Episode.mkv"));
+        Ok::<_, ()>("/out/Episode (1).mkv".to_string())
+      })
+      .unwrap();
+    assert_eq!(outputs.claim("/in/c.srt", |_| Err("taken")), Err("taken"));
+    outputs.release("/in/a.srt");
+    outputs.release("/in/unknown.srt");
+    let taken = outputs.taken();
     assert!(!taken.contains("/out/Episode.mkv") && taken.contains("/out/Episode (1).mkv"));
   }
 
+  /// Workers on different drives choosing at once still pick different files.
   #[test]
-  fn an_automatic_output_reserved_meanwhile_is_resolved_again() {
-    let reservations = OutputReservations::default();
-    let mut attempts = Vec::new();
-    reservations.reserve(1, |taken| {
-      if attempts.is_empty() {
-        // Another enqueue reserves the name while this one resolves.
-        reservations.reserve(2, |_| automatic("/out/Episode.mkv"));
-      }
-      let output = if taken.contains("/out/Episode.mkv") {
-        "/out/Episode (1).mkv"
-      } else {
-        "/out/Episode.mkv"
-      };
-      attempts.push(output);
-      automatic(output)
+  fn workers_choose_one_at_a_time() {
+    let dir = TempDir::new("outputs-at-once");
+    let out = dir.path().to_string_lossy().into_owned();
+    let outputs = RunningOutputs::default();
+    let chosen: Vec<String> = std::thread::scope(|scope| {
+      let workers: Vec<_> = (0..8)
+        .map(|index| {
+          let (outputs, out) = (outputs.clone(), out.clone());
+          scope.spawn(move || {
+            outputs
+              .claim(&format!("/in/{index}/Episode.srt"), |taken| {
+                Ok::<_, ()>(bmm_core::services::resolve_merge_output_path_avoiding(
+                  out,
+                  "Episode.srt".to_string(),
+                  |path| taken.contains(path),
+                ))
+              })
+              .unwrap()
+          })
+        })
+        .collect();
+      workers.into_iter().map(|worker| worker.join().unwrap()).collect()
     });
-    assert_eq!(attempts, ["/out/Episode.mkv", "/out/Episode (1).mkv"]);
-    // A name the user chose is kept as it is.
-    reservations.reserve(3, |_| Resolution {
-      output: "/out/Episode.mkv".to_string(),
-      automatic: false,
-      value: (),
-    });
-    reservations.release(2);
-    assert!(reservations.taken().contains("/out/Episode.mkv"), "still reserved by 3");
+    let distinct: HashSet<&String> = chosen.iter().collect();
+    assert_eq!(distinct.len(), 8, "{chosen:?}");
   }
 
   #[test]
