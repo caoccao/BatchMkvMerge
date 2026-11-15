@@ -67,7 +67,8 @@
     "cancelAll": "すべてキャンセル (F4)",
     "clear": "クリア (Ctrl + Q)",
     "profile": "プロファイル (F9)",
-    "settings": "設定 (F10)",
+    "settings": "設定 (Ctrl + ,)",
+    "settingsMac": "設定 (Cmd + ,)",
     "about": "情報"
   },
   "group": {
@@ -157,7 +158,7 @@
     "betterMediaInfoPath": "BetterMediaInfo のパス",
     "browse": "参照",
     "detect": "検出",
-    "mkvToolNixFound": "MKVToolNix のパスに mkvmerge が見つかりました。",
+    "mkvToolNixFound": "MKVToolNix が見つかりました",
     "mkvToolNixNotFound": "MKVToolNix のパスに mkvmerge が見つかりません。",
     "betterMediaInfoFound": "BetterMediaInfo が見つかりました",
     "betterMediaInfoNotFound": "BetterMediaInfo が検出されませんでした。パスを確認してもう一度お試しください。",

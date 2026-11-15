@@ -15,7 +15,7 @@
 *   limitations under the License.
 */
 
-//! The Settings tab on gpui-kit's `Settings` component: a searchable,
+//! The Settings dialog on gpui-kit's `Settings` component: a searchable,
 //! resizable sidebar of six pages (Appearance, Formatting, Group, Integration,
 //! Profiles, Update) whose groups are listed under their page. Every control
 //! writes its config field at once (the config store persists in the
@@ -23,7 +23,7 @@
 //! Reset All, back to `Config::default()`; Profiles has a Reset of the active
 //! profile instead.
 //!
-//! The view lives while the tab is open; its children keep the editing state
+//! The view lives while the dialog is open. Its children keep the editing state
 //! (the text fields, the picker's selection, the track name language).
 
 pub mod integration;
@@ -42,9 +42,13 @@ use std::rc::Rc;
 use bmm_core::config::ConfigProfile;
 use bmm_core::media_track::MediaTrackType;
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::dialog::DialogEntrance;
+use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::setting::Settings;
-use gpui_kit::component::{Selectable, Sizable, h_flex};
+use gpui_kit::component::setting::{SettingItem, Settings};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex};
 use gpui_kit::*;
 
 use self::integration::ToolPathRow;
@@ -52,9 +56,47 @@ use self::language_picker::LanguagePicker;
 use self::profiles::ProfileEditor;
 use self::track_names::TrackNamesEditor;
 use super::text_button;
+use crate::assets::{SETTINGS_ICON_NAME, toolbar_icon};
 use crate::domain::format::track_type_emoji;
 use crate::state::Stores;
 use crate::tools::Tool;
+
+const DIALOG_WIDTH: Pixels = px(880.0);
+const BUTTON_GROUP_GAP: Pixels = px(2.0);
+
+/// A setting whose label is part of the checkbox, with the indicator first.
+fn checkbox_item(
+  id: &'static str,
+  label: SharedString,
+  description: Option<SharedString>,
+  get: impl Fn(&App) -> bool + 'static,
+  set: impl Fn(bool, &mut App) + 'static,
+) -> SettingItem {
+  let keywords = std::iter::once(label.clone()).chain(description.clone());
+  let set = Rc::new(set);
+  SettingItem::render(move |options, _, cx| {
+    let set = set.clone();
+    Checkbox::new(id)
+      .with_size(options.size())
+      .disabled(options.is_disabled())
+      .checked(get(cx))
+      .label(label.clone())
+      .children(
+        description
+          .clone()
+          .map(|description| checkbox_description(description, cx)),
+      )
+      .on_change(move |checked, _, cx| set(*checked, cx))
+  })
+  .keywords(keywords)
+}
+
+fn checkbox_description(description: SharedString, cx: &App) -> Div {
+  div()
+    .text_sm()
+    .text_color(cx.theme().muted_foreground)
+    .child(description)
+}
 
 /// The stream kinds with languages of their own (the Languages and Track Names
 /// groups, and the Formatting page).
@@ -160,23 +202,26 @@ pub fn parse_language_codes(list: &str) -> Vec<String> {
     .collect()
 }
 
-/// The Video / Audio / Subtitles toggle: `id` names the group, each button is
-/// `{id}-{kind}`.
-pub fn kind_toggle(
+/// The Video, Audio, and Subtitles tabs shared by the profile editors.
+fn stream_kind_tabs(
   id: &'static str,
   current: StreamKind,
+  cx: &App,
   on_change: impl Fn(StreamKind, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-  let on_change = Rc::new(on_change);
-  h_flex().id(id).children(StreamKind::ALL.map(|kind| {
-    let on_change = on_change.clone();
-    text_button(SharedString::from(format!("{id}-{}", kind.name())))
-      .outline()
-      .small()
-      .selected(kind == current)
-      .label(format!("{} {}", kind.emoji(), kind.label()))
-      .on_click(move |_, window, cx| on_change(kind, window, cx))
-  }))
+) -> TabBar {
+  let selected = StreamKind::ALL.iter().position(|&kind| kind == current).unwrap();
+  let theme = cx.theme();
+  TabBar::new(id)
+    .w_full()
+    .border_t_1()
+    .border_color(theme.border)
+    .bg(theme.tokens.muted)
+    .selected_index(selected)
+    .children(StreamKind::ALL.map(|kind| {
+      let label = kind.label();
+      Tab::new().label(format!("{} {label}", kind.emoji())).aria_label(label)
+    }))
+    .on_click(move |&index, window, cx| on_change(StreamKind::ALL[index], window, cx))
 }
 
 /// A choice of `options` (value, label) as gpui-kit's settings dropdown
@@ -224,7 +269,45 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-  pub fn new(stores: Stores, window: &mut Window, cx: &mut Context<Self>) -> Self {
+  pub(crate) fn open(stores: &Stores, window: &mut Window, cx: &mut App) -> Option<Entity<Self>> {
+    if window.has_active_dialog(cx) {
+      return None;
+    }
+    let view = cx.new(|cx| Self::new(stores.clone(), window, cx));
+    let settings = view.clone();
+    window.open_dialog(cx, move |dialog, window, cx| {
+      let theme = cx.theme();
+      let border = theme.border;
+      let header = h_flex()
+        .pl(super::space(2.0))
+        .pr(super::space(5.0))
+        .gap(super::space(1.0))
+        .child(toolbar_icon(SETTINGS_ICON_NAME).with_size(px(24.0)))
+        .child(tr!("settings.title"));
+      let settings = settings.clone();
+      dialog
+        .w(DIALOG_WIDTH)
+        .h(window.viewport_size().height * 0.9)
+        .centered()
+        .entrance(DialogEntrance::None)
+        .overlay_closable(false)
+        .on_ok(|_, _, _| false)
+        .px_0()
+        .pb_0()
+        .title(header)
+        .content(move |content, _, _| {
+          content
+            .min_h_0()
+            .overflow_hidden()
+            .border_t_1()
+            .border_color(border)
+            .child(settings.clone())
+        })
+    });
+    Some(view)
+  }
+
+  fn new(stores: Stores, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let profile = cx.new(|cx| ProfileEditor::new(stores.clone(), window, cx));
     // The profile editor's parts are drawn inside the settings, not as a view.
     let subscriptions = vec![
@@ -266,14 +349,17 @@ impl Render for SettingsView {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let stores = &self.stores;
     div().id("settings").test_support().size_full().child(
-      Settings::new("settings-pages").sidebar_width(px(200.0)).pages([
-        pages::appearance(stores, cx),
-        pages::formatting(stores),
-        pages::group(stores),
-        integration::page(stores, &self.mkvtoolnix, &self.better_media_info),
-        profiles::page(stores, &self.profile, &self.picker, &self.track_names, cx),
-        pages::update(stores),
-      ]),
+      Settings::new("settings-pages")
+        .sidebar_width(px(200.0))
+        .with_group_variant(GroupBoxVariant::Outline)
+        .pages([
+          pages::appearance(stores, cx),
+          pages::formatting(stores),
+          pages::group(stores),
+          integration::page(stores, &self.mkvtoolnix, &self.better_media_info),
+          profiles::page(stores, &self.profile, &self.picker, &self.track_names, cx),
+          pages::update(stores),
+        ]),
     )
   }
 }

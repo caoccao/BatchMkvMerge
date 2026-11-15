@@ -67,7 +67,8 @@
     "cancelAll": "全部取消 (F4)",
     "clear": "清空 (Ctrl + Q)",
     "profile": "設定檔 (F9)",
-    "settings": "設定 (F10)",
+    "settings": "設定 (Ctrl + ,)",
+    "settingsMac": "設定 (Cmd + ,)",
     "about": "關於"
   },
   "group": {
@@ -157,7 +158,7 @@
     "betterMediaInfoPath": "BetterMediaInfo 路徑",
     "browse": "瀏覽",
     "detect": "偵測",
-    "mkvToolNixFound": "已在 MKVToolNix 路徑下找到 mkvmerge。",
+    "mkvToolNixFound": "已找到 MKVToolNix",
     "mkvToolNixNotFound": "在 MKVToolNix 路徑下未找到 mkvmerge。",
     "betterMediaInfoFound": "已找到 BetterMediaInfo",
     "betterMediaInfoNotFound": "未偵測到 BetterMediaInfo。請檢查路徑並再試一次。",

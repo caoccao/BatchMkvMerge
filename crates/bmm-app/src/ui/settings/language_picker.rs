@@ -15,7 +15,7 @@
 *   limitations under the License.
 */
 
-//! The Languages group: the Video / Audio / Subtitles toggle, a filter with
+//! The Languages group: the Video / Audio / Subtitles tabs, a filter with
 //! Add All and Remove All, and two panes: Available (every MKV language,
 //! filtered, the preferred ones in the success colour) and Preferred (the
 //! profile's ordered list). A row, or every checked row of its pane when it is
@@ -36,7 +36,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{StreamKind, kind_toggle, parse_language_codes};
+use super::{BUTTON_GROUP_GAP, StreamKind, parse_language_codes, stream_kind_tabs};
 use crate::state::Stores;
 use crate::state::config::active_profile;
 use crate::ui::checkbox::{select_all_state, tri_state_checkbox};
@@ -208,7 +208,7 @@ impl LanguagePicker {
     ];
     Self {
       stores,
-      kind: StreamKind::Audio,
+      kind: StreamKind::Video,
       filter,
       preferred_checked: HashSet::new(),
       available_checked: HashSet::new(),
@@ -528,7 +528,7 @@ impl Render for LanguagePicker {
       .test_support()
       .w_full()
       .gap(px(8.0))
-      .child(kind_toggle("language-kind", self.kind, {
+      .child(stream_kind_tabs("language-kind", self.kind, cx, {
         let picker = picker.clone();
         move |kind, window, cx| {
           let _ = picker.update(cx, |picker, cx| picker.set_kind(kind, window, cx));
@@ -543,20 +543,24 @@ impl Render for LanguagePicker {
               .child(Input::new(&self.filter).small().cleanable(true).w_full()),
           )
           .child(
-            text_button("language-add-all")
-              .outline()
-              .small()
-              .label(tr!("settings.addAll"))
-              .disabled(available.is_empty())
-              .on_click(cx.listener(|this, _, _, cx| this.add_all(cx))),
-          )
-          .child(
-            text_button("language-remove-all")
-              .outline()
-              .small()
-              .label(tr!("settings.removeAll"))
-              .disabled(preferred.is_empty())
-              .on_click(cx.listener(|this, _, _, cx| this.remove_all(cx))),
+            h_flex()
+              .gap(BUTTON_GROUP_GAP)
+              .child(
+                text_button("language-add-all")
+                  .outline()
+                  .small()
+                  .label(tr!("settings.addAll"))
+                  .disabled(available.is_empty())
+                  .on_click(cx.listener(|this, _, _, cx| this.add_all(cx))),
+              )
+              .child(
+                text_button("language-remove-all")
+                  .outline()
+                  .small()
+                  .label(tr!("settings.removeAll"))
+                  .disabled(preferred.is_empty())
+                  .on_click(cx.listener(|this, _, _, cx| this.remove_all(cx))),
+              ),
           ),
       )
       .child(

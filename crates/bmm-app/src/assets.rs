@@ -32,6 +32,7 @@ pub const BATCH_MKV_EXTRACT_ICON: &str = "images/batchmkvextract.png";
 pub const BD_MASTER_ICON: &str = "images/bdmaster.png";
 
 pub const OUTPUT_DIRECTORY_ICON_NAME: &str = "output-directory";
+pub const SETTINGS_ICON_NAME: &str = "settings";
 
 pub fn toolbar_icon(name: &str) -> Icon {
   Icon::default().path(format!("icons/toolbar/{name}.svg"))
@@ -83,13 +84,15 @@ icon_assets!(
     Clapperboard,
     Clock,
     Combine,
+    Cpu,
     Files,
     Film,
     FolderCog,
     GripVertical,
     Images,
+    ListFilter,
     RotateCcw,
-    SlidersHorizontal,
+    Settings2,
     SunMoon,
     Tornado,
     Trash,

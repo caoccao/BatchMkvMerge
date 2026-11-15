@@ -27,11 +27,15 @@ pub fn install(cx: &mut App) {
   use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
   use gpui_kit::{KeyBinding, Menu, MenuItem, OsAction};
 
-  use crate::ui::actions::Quit;
+  use crate::ui::actions::{OpenSettings, Quit};
 
   cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
   cx.set_menus([
-    Menu::new(crate::APP_NAME).items([MenuItem::action(format!("Quit {}", crate::APP_NAME), Quit)]),
+    Menu::new(crate::APP_NAME).items([
+      MenuItem::action(tr!("settings.title"), OpenSettings),
+      MenuItem::separator(),
+      MenuItem::action(format!("Quit {}", crate::APP_NAME), Quit),
+    ]),
     Menu::new("Edit").items([
       MenuItem::os_action("Undo", Undo, OsAction::Undo),
       MenuItem::os_action("Redo", Redo, OsAction::Redo),

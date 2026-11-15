@@ -16,7 +16,7 @@
 */
 
 //! The Track Names group of the Profiles page: the Video / Audio / Subtitles
-//! toggle, a filterable language list (the kind's preferred languages first, a
+//! tabs, a filterable language list (the kind's preferred languages first, a
 //! divider, then the rest; a language with names in the success colour; ↑ / ↓
 //! move through it once it has the focus) and the names of the chosen
 //! language, one per line. Every keystroke stores the names; an empty text
@@ -29,7 +29,7 @@ use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{StreamKind, kind_toggle, parse_language_codes};
+use super::{StreamKind, parse_language_codes, stream_kind_tabs};
 use crate::state::Stores;
 use crate::state::config::active_profile;
 
@@ -101,16 +101,17 @@ impl TrackNamesEditor {
       cx.observe_in(&stores.config, window, |this, _, window, cx| this.sync(window, cx)),
     ];
     let profile = active_profile(stores.config.read(cx).config()).map(|profile| profile.name.clone());
+    let kind = StreamKind::Video;
     Self {
       stores,
       window: window.window_handle(),
-      kind: StreamKind::Audio,
+      kind,
       filter,
       selected: None,
       names,
       list_focus: cx.focus_handle(),
       scroll: UniformListScrollHandle::new(),
-      synced: (StreamKind::Audio, profile.unwrap_or_default(), None, String::new()),
+      synced: (kind, profile.unwrap_or_default(), None, String::new()),
       _subscriptions: subscriptions,
     }
   }
@@ -308,9 +309,14 @@ impl Render for TrackNamesEditor {
       .test_support()
       .w_full()
       .gap(px(8.0))
-      .child(kind_toggle("track-names-kind", self.kind, move |kind, _, cx| {
-        let _ = editor.update(cx, |editor, cx| editor.set_kind(kind, cx));
-      }))
+      .child(stream_kind_tabs(
+        "track-names-kind",
+        self.kind,
+        cx,
+        move |kind, _, cx| {
+          let _ = editor.update(cx, |editor, cx| editor.set_kind(kind, cx));
+        },
+      ))
       // The filter above the list only, so the list and the names start on the
       // same line.
       .child(

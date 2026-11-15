@@ -24,17 +24,18 @@ use bmm_core::config::{
   UpdateCheckInterval,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::ButtonGroup;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
-use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{StreamKind, dropdown};
+use super::{BUTTON_GROUP_GAP, StreamKind, checkbox_item, dropdown};
 use crate::state::{ConfigStore, Stores};
 use crate::theme::THEMES;
-use crate::ui::text_button;
 use crate::ui::toolbar::{GROUP_MODES, group_mode_label_key};
+use crate::ui::{hex, text_button};
 
 /// The nine languages with their config codes and own names.
 pub const LANGUAGES: [(Language, &str, &str); 9] = [
@@ -104,13 +105,12 @@ pub fn appearance(stores: &Stores, cx: &App) -> SettingPage {
   let store = stores.config.clone();
   let mode_store = store.clone();
   let reset_store = store.clone();
-  let (theme_get, theme_set) = (store.clone(), store.clone());
+  let (theme_store, theme_get, theme_reset) = (store.clone(), store.clone(), store.clone());
   let (language_get, language_set) = (store.clone(), store);
   let default_language = SharedString::from(language_code(Config::default().language));
-  let palette_icon = Icon::new(IconName::Palette);
   let _ = cx;
   SettingPage::new(tr!("settings.appearance"))
-    .icon(palette_icon)
+    .icon(Icon::new(IconName::Settings2))
     .group(SettingGroup::new().items(vec![
       SettingItem::new(
         tr!("settings.mode"),
@@ -124,23 +124,10 @@ pub fn appearance(stores: &Stores, cx: &App) -> SettingPage {
       ),
       SettingItem::new(
         tr!("settings.theme"),
-        SettingField::scrollable_dropdown(
-          THEMES
-            .iter()
-            .map(|spec| {
-              let name = wire_name(&spec.theme);
-              let key = format!("settings.theme{name}");
-              (name, tr!(&key))
-            })
-            .collect(),
-          move |cx| read(&theme_get, cx, |config| wire_name(&config.theme)),
-          move |name, cx| {
-            if let Some(theme) = from_wire_name(THEMES.iter().map(|spec| spec.theme), &name) {
-              write(&theme_set, cx, |config| config.theme = theme);
-            }
-          },
-        )
-        .default_value(wire_name(&Theme::default())),
+        SettingField::render(move |options, _, cx| theme_palette(&theme_store, options.is_disabled(), cx)).on_reset(
+          move |cx| read(&theme_get, cx, |config| config.theme != Theme::default()),
+          move |_, cx| write(&theme_reset, cx, |config| config.theme = Theme::default()),
+        ),
       ),
       SettingItem::new(
         tr!("settings.language"),
@@ -162,6 +149,51 @@ pub fn appearance(stores: &Stores, cx: &App) -> SettingPage {
     ]))
 }
 
+fn theme_label(name: &str) -> SharedString {
+  let key = format!("settings.theme{name}");
+  tr!(&key)
+}
+
+fn theme_palette(store: &Entity<ConfigStore>, disabled: bool, cx: &App) -> impl IntoElement + use<> {
+  let current = read(store, cx, |config| config.theme);
+  let theme = cx.theme();
+  v_flex().gap(BUTTON_GROUP_GAP).children(THEMES.chunks(5).map(|row| {
+    h_flex().gap(BUTTON_GROUP_GAP).children(row.iter().map(|spec| {
+      let store = store.clone();
+      let label = theme_label(spec.name);
+      let choice = spec.theme;
+      let selected = choice == current;
+      let swatch = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size_full()
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(hex(spec.main))
+        .when(selected, |swatch| {
+          swatch.child(
+            Icon::new(IconName::Check)
+              .with_size(px(16.0))
+              .text_color(theme.primary_foreground),
+          )
+        });
+      Button::new(SharedString::from(format!("settings-theme-option-{}", spec.name)))
+        .ghost()
+        .size(px(32.0))
+        .p_0()
+        .selected(selected)
+        .toggled(selected)
+        .accessibility_label(label.clone())
+        .tooltip(label)
+        .child(swatch)
+        .disabled(disabled)
+        .on_click(move |_, _, cx| write(&store, cx, |config| config.theme = choice))
+    }))
+  }))
+}
+
 /// The mode toggle group (Auto, Light, Dark with their icons).
 fn mode_toggle(store: &Entity<ConfigStore>, cx: &App) -> impl IntoElement + use<> {
   let current = read(store, cx, |config| config.display_mode);
@@ -171,21 +203,21 @@ fn mode_toggle(store: &Entity<ConfigStore>, cx: &App) -> impl IntoElement + use<
     (DisplayMode::Dark, IconName::Moon, "settings.darkMode", "dark"),
   ];
   let store = store.clone();
-  ButtonGroup::new("settings-mode")
-    .outline()
-    .small()
-    .children(modes.iter().map(|(mode, icon, key, name)| {
+  h_flex()
+    .id("settings-mode")
+    .gap(BUTTON_GROUP_GAP)
+    .children(modes.map(|(mode, icon, key, name)| {
+      let store = store.clone();
+      let selected = mode == current;
       text_button(SharedString::from(format!("settings-mode-{name}")))
-        .icon(Icon::new(*icon))
-        .label(tr!(*key))
-        .selected(*mode == current)
+        .outline()
+        .small()
+        .icon(Icon::new(icon))
+        .label(tr!(key))
+        .selected(selected)
+        .toggled(selected)
+        .on_click(move |_, _, cx| write(&store, cx, |config| config.display_mode = mode))
     }))
-    .on_click(move |clicks: &Vec<usize>, _, cx| {
-      if let Some((mode, ..)) = clicks.first().and_then(|index| modes.get(*index)) {
-        let mode = *mode;
-        write(&store, cx, |config| config.display_mode = mode);
-      }
-    })
 }
 
 /// The formatting of one stream kind.
@@ -320,7 +352,7 @@ fn format_item(store: &Entity<ConfigStore>, kind: StreamKind, target: FormatTarg
 
 pub fn formatting(stores: &Stores) -> SettingPage {
   SettingPage::new(tr!("settings.formatting"))
-    .icon(Icon::new(IconName::SlidersHorizontal))
+    .icon(Icon::new(IconName::ListFilter))
     .groups(StreamKind::ALL.map(|kind| {
       SettingGroup::new()
         .title(format!("{} {}", kind.emoji(), kind.label()))
@@ -334,7 +366,8 @@ pub fn formatting(stores: &Stores) -> SettingPage {
 pub fn group(stores: &Stores) -> SettingPage {
   let store = stores.config.clone();
   let (radio_store, dirty_store, reset_store) = (store.clone(), store.clone(), store.clone());
-  let (by_name_get, by_name_set) = (store.clone(), store);
+  let (by_name_get, by_name_set) = (store.clone(), store.clone());
+  let by_name_dirty = store.clone();
   SettingPage::new(tr!("groupMode.title"))
     .icon(Icon::new(IconName::Images))
     .group(SettingGroup::new().items(vec![
@@ -356,13 +389,16 @@ pub fn group(stores: &Stores) -> SettingPage {
         move |cx| read(&dirty_store, cx, |config| config.group_mode != GroupMode::default()),
         move |_, cx| write(&reset_store, cx, |config| config.group_mode = GroupMode::default()),
       ),
-      SettingItem::new(
+      checkbox_item(
+        "settings-group-by-file-name",
         tr!("groupMode.byFileName"),
-        SettingField::checkbox(
-          move |cx| read(&by_name_get, cx, |config| config.group_by_file_name),
-          move |checked, cx| write(&by_name_set, cx, |config| config.group_by_file_name = checked),
-        )
-        .default_value(true),
+        None,
+        move |cx| read(&by_name_get, cx, |config| config.group_by_file_name),
+        move |checked, cx| write(&by_name_set, cx, |config| config.group_by_file_name = checked),
+      )
+      .on_reset(
+        move |cx| !read(&by_name_dirty, cx, |config| config.group_by_file_name),
+        move |_, cx| write(&store, cx, |config| config.group_by_file_name = true),
       ),
     ]))
 }
@@ -370,7 +406,7 @@ pub fn group(stores: &Stores) -> SettingPage {
 pub fn update(stores: &Stores) -> SettingPage {
   let (get, set) = (stores.config.clone(), stores.config.clone());
   SettingPage::new(tr!("settings.update"))
-    .icon(Icon::new(IconName::RefreshCw))
+    .icon(Icon::new(IconName::Cpu))
     .group(
       SettingGroup::new().item(SettingItem::new(
         tr!("settings.checkNewVersion"),

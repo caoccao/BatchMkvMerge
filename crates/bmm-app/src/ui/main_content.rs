@@ -15,12 +15,7 @@
 *   limitations under the License.
 */
 
-//! The tabs: File List and Queue, plus the Settings and About tabs the toolbar
-//! opens, each with a close button. Every panel's view is kept alive while
-//! hidden. The Settings view is made when its tab opens and dropped when it
-//! closes; while another tab shows, it is still laid out, hidden, so
-//! gpui-kit's settings keep their page and search (their state lives only as
-//! long as they are rendered).
+//! The File List and Queue tabs, plus the closable About tab.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -32,15 +27,12 @@ use gpui_kit::*;
 use super::about::About;
 use super::file_list::FileListView;
 use super::queue::QueueView;
-use super::settings::SettingsView;
 use crate::state::{Stores, TabType};
 
 pub struct MainContent {
   stores: Stores,
   file_list: Entity<FileListView>,
   queue: Entity<QueueView>,
-  /// While the Settings tab is open.
-  settings: Option<Entity<SettingsView>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -50,7 +42,6 @@ impl MainContent {
     Self {
       file_list: cx.new(|cx| FileListView::new(stores.clone(), cx)),
       queue: cx.new(|cx| QueueView::new(stores.clone(), cx)),
-      settings: None,
       stores,
       _subscriptions: subscriptions,
     }
@@ -62,11 +53,6 @@ impl MainContent {
 
   pub fn queue(&self) -> &Entity<QueueView> {
     &self.queue
-  }
-
-  /// The Settings view while its tab is open.
-  pub fn settings(&self) -> Option<&Entity<SettingsView>> {
-    self.settings.as_ref()
   }
 
   fn tab(&self, tab: TabType, cx: &mut Context<Self>) -> Tab {
@@ -91,27 +77,15 @@ impl MainContent {
 }
 
 impl Render for MainContent {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let ui = self.stores.ui.read(cx);
     let (tabs, active, index) = (ui.tabs(), ui.active_tab(), ui.active_index());
-    if !tabs.contains(&TabType::Settings) {
-      self.settings = None;
-    } else if self.settings.is_none() {
-      let stores = self.stores.clone();
-      self.settings = Some(cx.new(|cx| SettingsView::new(stores, window, cx)));
-    }
     let tab_elements: Vec<Tab> = tabs.iter().map(|tab| self.tab(*tab, cx)).collect();
-    let settings = self.settings.clone();
-    let content = match (active, settings.clone()) {
-      (TabType::FileList, _) => self.file_list.clone().into_any_element(),
-      (TabType::Queue, _) => self.queue.clone().into_any_element(),
-      (TabType::About, _) => About.into_any_element(),
-      (TabType::Settings, Some(settings)) => settings.into_any_element(),
-      (TabType::Settings, None) => div().into_any_element(),
+    let content = match active {
+      TabType::FileList => self.file_list.clone().into_any_element(),
+      TabType::Queue => self.queue.clone().into_any_element(),
+      TabType::About => About.into_any_element(),
     };
-    // Hidden under the same element path as when shown, so its state is the
-    // same.
-    let hidden_settings = settings.filter(|_| active != TabType::Settings);
     let theme = cx.theme();
     v_flex()
       .id("main-content")
@@ -143,11 +117,5 @@ impl Render for MainContent {
           .overflow_y_scroll()
           .child(content),
       )
-      .children(hidden_settings.map(|settings| {
-        v_flex()
-          .id(SharedString::from("panel-settings"))
-          .hidden()
-          .child(settings)
-      }))
   }
 }

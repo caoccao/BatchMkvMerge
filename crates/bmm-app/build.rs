@@ -24,6 +24,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 fn main() {
   println!("cargo:rerun-if-changed=build.rs");
   println!("cargo:rerun-if-changed=assets/toolbar");
+  println!("cargo:rerun-if-changed=locales");
   println!("cargo:rerun-if-changed=packaging/icons/icon.ico");
   if let Err(error) = wrap_toolbar_icons() {
     panic!("failed to embed the toolbar icons: {error}");

@@ -22,7 +22,9 @@
 use gpui_kit::{App, KeyBinding, actions};
 
 use crate::state::Stores;
-use crate::state::ui::ToolbarMenu;
+use crate::state::ui::{ToolbarMenu, UiEvent};
+
+pub(crate) const SETTINGS_SHORTCUT: &str = if cfg!(target_os = "macos") { "cmd-," } else { "ctrl-," };
 
 actions!(
   batch_mkvmerge,
@@ -39,7 +41,7 @@ actions!(
     OpenGroupModeMenu,
     /// F9: the profile menu.
     OpenProfileMenu,
-    /// F10.
+    /// Ctrl+Comma (Cmd+Comma on macOS) or F10.
     OpenSettings,
     /// Ctrl+Q: remove every file unless a merge is active.
     ClearFiles,
@@ -70,6 +72,7 @@ pub fn bind_keys(cx: &mut App) {
     KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     KeyBinding::new("ctrl-w", CloseTab, None),
     KeyBinding::new("f10", OpenSettings, None),
+    KeyBinding::new(SETTINGS_SHORTCUT, OpenSettings, None),
     KeyBinding::new("ctrl-q", ClearFiles, None),
     KeyBinding::new("ctrl-1", SelectTab1, None),
     KeyBinding::new("ctrl-2", SelectTab2, None),
@@ -99,7 +102,7 @@ pub fn install(stores: &Stores, cx: &mut App) {
   });
   cx.on_action({
     let ui = ui.clone();
-    move |_: &CloseTab, cx| ui.update(cx, |ui, cx| ui.close_active_tab(cx))
+    move |_: &CloseTab, cx| ui.update(cx, |_, cx| cx.emit(UiEvent::CloseActiveTab))
   });
   cx.on_action({
     let ui = ui.clone();

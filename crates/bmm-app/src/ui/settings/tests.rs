@@ -15,7 +15,7 @@
 *   limitations under the License.
 */
 
-//! Headless tests of the Settings tab in the application shell: every page
+//! Headless tests of the Settings dialog in the application shell: every page
 //! mounts, every control writes its config field (checked against the
 //! serialised config), Reset All, the profile editors, the tool path rows with
 //! a stand-in detector, and typing that never reverts.
@@ -73,25 +73,20 @@ fn detector() -> (ToolDetector, Calls) {
   (tools, calls)
 }
 
-/// The shell on the Settings tab, tall enough to lay out every group.
-fn open_with(cx: &mut TestAppContext, config: Config, tools: ToolDetector) -> Shell {
+/// The shell with the Settings dialog, tall enough to lay out every group.
+fn open_with(cx: &mut TestAppContext, config: Config, tools: ToolDetector) -> (Shell, Entity<SettingsView>) {
   let shell = Shell::with_tools(cx, config, HashMap::new(), tools);
   shell.resize(cx, 1200.0, 3200.0);
   shell.window(cx, |window, _| window.activate_window());
-  shell.press(cx, "f10");
+  let view = shell.window(cx, |window, cx| {
+    SettingsView::open(&shell.stores, window, cx).expect("open Settings")
+  });
   draw(&shell, cx);
-  shell
+  (shell, view)
 }
 
-fn open(cx: &mut TestAppContext) -> Shell {
+fn open(cx: &mut TestAppContext) -> (Shell, Entity<SettingsView>) {
   open_with(cx, config(), detector().0)
-}
-
-fn settings(shell: &Shell, cx: &mut TestAppContext) -> Entity<SettingsView> {
-  shell
-    .view
-    .read_with(cx, |view, cx| view.main().read(cx).settings().cloned())
-    .expect("the settings view")
 }
 
 fn draw(shell: &Shell, cx: &mut TestAppContext) {
@@ -135,8 +130,31 @@ fn click_id(shell: &Shell, cx: &mut TestAppContext, id: impl Into<ElementId>) {
   draw(shell, cx);
 }
 
+fn click_stream_tab(shell: &Shell, cx: &mut TestAppContext, bar: &'static str, label: &str) {
+  draw(shell, cx);
+  let center = shell.window(cx, |window, _| {
+    let tab = window.within(bar).find_by_label(label);
+    assert_eq!(tab.role(), Some(Role::Tab));
+    tab.bounds().center()
+  });
+  click_at(shell, cx, center);
+  shell.window(cx, |window, _| {
+    assert_eq!(window.within(bar).find_by_label(label).selected(), Some(true));
+  });
+}
+
 /// The pages in sidebar order.
 const PAGES: [&str; 6] = ["Appearance", "Formatting", "Group", "Integration", "Profiles", "Update"];
+
+fn assert_button_gaps(shell: &Shell, cx: &mut TestAppContext, ids: &[&'static str]) {
+  shell.window(cx, |window, _| {
+    for pair in ids.windows(2) {
+      let left = window.find(pair[0]).bounds();
+      let right = window.find(pair[1]).bounds();
+      assert_eq!(right.left() - left.right(), px(2.0), "{} and {}", pair[0], pair[1]);
+    }
+  });
+}
 
 /// Shows a page: its entry in the sidebar (gpui-kit names the entries by
 /// their index).
@@ -246,7 +264,7 @@ fn profile(shell: &Shell, cx: &mut TestAppContext) -> ConfigProfile {
 
 #[gpui_kit::test]
 fn every_page_and_group_mounts(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, _) = open(cx);
   let pages: [(&str, &[&str]); 6] = [
     (
       "Appearance",
@@ -306,8 +324,13 @@ fn every_page_and_group_mounts(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn appearance_formatting_group_and_update_controls_write_their_fields(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, _) = open(cx);
   page(&shell, cx, "Appearance");
+  assert_button_gaps(
+    &shell,
+    cx,
+    &["settings-mode-auto", "settings-mode-light", "settings-mode-dark"],
+  );
   assert_writes(
     &shell,
     cx,
@@ -315,16 +338,41 @@ fn appearance_formatting_group_and_update_controls_write_their_fields(cx: &mut T
     |shell, cx| click_id(shell, cx, "settings-mode-dark"),
     &[("/displayMode", json!("Dark"))],
   );
+  shell.window(cx, |window, _| {
+    let origin = window.find("settings-theme-option-Ocean").bounds().origin;
+    let step = px(32.0) + BUTTON_GROUP_GAP;
+    let quads = window.painted_quads();
+    for (index, spec) in crate::theme::THEMES.iter().enumerate() {
+      let id = SharedString::from(format!("settings-theme-option-{}", spec.name));
+      let swatch = window.find(id);
+      let bounds = swatch.bounds();
+      assert_eq!(
+        bounds.origin,
+        origin + point(step * (index % 5) as f32, step * (index / 5) as f32)
+      );
+      assert_eq!(bounds.size, size(px(32.0), px(32.0)));
+      assert_eq!(swatch.checked(), Some(index == 0));
+      assert!(
+        quads.iter().any(|quad| {
+          quad.bounds == bounds.scale(window.scale_factor())
+            && quad.background.as_solid() == Some(crate::ui::hex(spec.main))
+        }),
+        "swatch for {}",
+        spec.name
+      );
+    }
+  });
   assert_writes(
     &shell,
     cx,
     "theme",
-    |shell, cx| {
-      click_label(shell, cx, "Theme: Ocean");
-      click_menu_item(shell, cx, "Aqua");
-    },
+    |shell, cx| click_id(shell, cx, "settings-theme-option-Aqua"),
     &[("/theme", json!("Aqua"))],
   );
+  shell.window(cx, |window, _| {
+    assert_eq!(window.find("settings-theme-option-Ocean").checked(), Some(false));
+    assert_eq!(window.find("settings-theme-option-Aqua").checked(), Some(true));
+  });
   page(&shell, cx, "Formatting");
   assert_writes(
     &shell,
@@ -347,6 +395,15 @@ fn appearance_formatting_group_and_update_controls_write_their_fields(cx: &mut T
     &[("/formatting/subtitle/size/unit", json!("KMi"))],
   );
   page(&shell, cx, "Group");
+  shell.window(cx, |window, _| {
+    let settings = window.within("settings");
+    let checkbox = settings.find_by_label("Group by file name");
+    assert_eq!(checkbox.role(), Some(Role::CheckBox));
+    assert_eq!(
+      checkbox.bounds().left(),
+      settings.find_by_label("No grouping").bounds().left()
+    );
+  });
   assert_writes(
     &shell,
     cx,
@@ -360,6 +417,16 @@ fn appearance_formatting_group_and_update_controls_write_their_fields(cx: &mut T
     "group by file name",
     |shell, cx| click_label(shell, cx, "Group by file name"),
     &[("/groupByFileName", json!(false))],
+  );
+  assert_writes(
+    &shell,
+    cx,
+    "reset grouping",
+    |shell, cx| click_id(shell, cx, "reset"),
+    &[
+      ("/groupMode", json!(bmm_core::config::GroupMode::default())),
+      ("/groupByFileName", json!(true)),
+    ],
   );
   page(&shell, cx, "Update");
   assert_writes(
@@ -389,7 +456,7 @@ fn appearance_formatting_group_and_update_controls_write_their_fields(cx: &mut T
 
 #[gpui_kit::test]
 fn reset_all_puts_a_page_back_to_its_defaults(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, _) = open(cx);
   page(&shell, cx, "Formatting");
   // Nothing differs yet: no Reset All.
   assert!(shell.window(cx, |window, _| window.within("settings").try_find("reset").is_none()));
@@ -414,12 +481,13 @@ fn reset_all_puts_a_page_back_to_its_defaults(cx: &mut TestAppContext) {
   // Appearance: mode and theme.
   page(&shell, cx, "Appearance");
   click_id(&shell, cx, "settings-mode-light");
+  click_id(&shell, cx, "settings-theme-option-Aqua");
   assert_writes(
     &shell,
     cx,
     "reset appearance",
     |shell, cx| click_id(shell, cx, "reset"),
-    &[("/displayMode", json!("Auto"))],
+    &[("/displayMode", json!("Auto")), ("/theme", json!("Ocean"))],
   );
   // Profiles have their own Reset only.
   page(&shell, cx, "Profiles");
@@ -429,9 +497,17 @@ fn reset_all_puts_a_page_back_to_its_defaults(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn profiles_are_added_switched_deleted_and_reset_after_asking(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, view) = open(cx);
   page(&shell, cx, "Profiles");
-  let view = settings(&shell, cx);
+  assert_button_gaps(
+    &shell,
+    cx,
+    &[
+      "settings-profile-add",
+      "settings-profile-delete",
+      "settings-profile-reset",
+    ],
+  );
   let new_name = view.read_with(cx, |view, cx| view.profile().read(cx).new_name().clone());
   type_into(&shell, cx, &new_name, " Anime ");
   assert_writes(
@@ -479,7 +555,6 @@ fn profiles_are_added_switched_deleted_and_reset_after_asking(cx: &mut TestAppCo
   draw(&shell, cx);
   // Delete asks; No keeps the profile.
   click_id(&shell, cx, "settings-profile-delete");
-  assert!(shell.window(cx, gpui_kit::component::WindowExt::has_active_dialog));
   click_id(&shell, cx, "settings-profile-delete-no");
   assert_eq!(profile(&shell, cx).name, "Anime");
   assert_writes(
@@ -493,7 +568,7 @@ fn profiles_are_added_switched_deleted_and_reset_after_asking(cx: &mut TestAppCo
     &[("/activeProfile", json!("Default")), ("/profiles/1", Value::Null)],
   );
   // Reset asks and puts the active profile back to its template.
-  click_label(&shell, cx, "Video");
+  click_id(&shell, cx, "settings-select-video");
   assert!(profile(&shell, cx).select_video);
   click_id(&shell, cx, "settings-profile-reset");
   shell.press(cx, "escape");
@@ -512,9 +587,8 @@ fn profiles_are_added_switched_deleted_and_reset_after_asking(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn track_selection_and_automation_write_the_active_profile(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, view) = open(cx);
   page(&shell, cx, "Profiles");
-  let view = settings(&shell, cx);
   let video_filter = view.read_with(cx, |view, cx| view.profile().read(cx).filter(StreamKind::Video).clone());
   let checkboxes = [
     ("Video", "/profiles/0/selectVideo", true),
@@ -544,11 +618,21 @@ fn track_selection_and_automation_write_the_active_profile(cx: &mut TestAppConte
     ),
   ];
   for (label, path, value) in checkboxes {
+    let center = shell.window(cx, |window, _| {
+      let checkbox = window
+        .within("settings")
+        .find_all_by_label(label)
+        .into_iter()
+        .find(|element| element.role() == Some(Role::CheckBox))
+        .unwrap_or_else(|| panic!("missing checkbox {label:?}"));
+      assert!(checkbox.bounds().size.width > px(0.0), "{label}");
+      checkbox.bounds().center()
+    });
     assert_writes(
       &shell,
       cx,
       label,
-      |shell, cx| click_label(shell, cx, label),
+      |shell, cx| click_at(shell, cx, center),
       &[(path, json!(value))],
     );
   }
@@ -577,9 +661,8 @@ fn track_selection_and_automation_write_the_active_profile(cx: &mut TestAppConte
 
 #[gpui_kit::test]
 fn rapid_typing_never_reverts_while_writes_are_pending(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, view) = open(cx);
   page(&shell, cx, "Profiles");
-  let view = settings(&shell, cx);
   let input = view.read_with(cx, |view, cx| view.profile().read(cx).filter(StreamKind::Audio).clone());
   type_into(&shell, cx, &input, "");
   let writes_before = shell.written.lock().unwrap().len();
@@ -609,10 +692,12 @@ fn rapid_typing_never_reverts_while_writes_are_pending(cx: &mut TestAppContext) 
 
 #[gpui_kit::test]
 fn the_language_picker_adds_removes_and_reorders(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, view) = open(cx);
   page(&shell, cx, "Profiles");
-  let view = settings(&shell, cx);
   let picker = view.read_with(cx, |view, _| view.picker().clone());
+  assert_eq!(picker.read_with(cx, |picker, _| picker.kind()), StreamKind::Video);
+  assert_button_gaps(&shell, cx, &["language-add-all", "language-remove-all"]);
+  click_stream_tab(&shell, cx, "language-kind", "Audio");
   let filter = picker.read_with(cx, |picker, _| picker.filter().clone());
   let preferred = |cx: &mut TestAppContext| json_of(&shell, cx)["profiles"][0]["preferredAudioLanguages"].clone();
   assert_eq!(preferred(cx), json!("eng, chi, spa, ger, fre, jpn"));
@@ -704,7 +789,7 @@ fn the_language_picker_adds_removes_and_reorders(cx: &mut TestAppContext) {
     &[("/profiles/0/preferredAudioLanguages", json!(""))],
   );
   // The toggle shows the subtitle list, with a fresh filter.
-  click_id(&shell, cx, "language-kind-subtitles");
+  click_stream_tab(&shell, cx, "language-kind", "Subtitles");
   assert_eq!(picker.read_with(cx, |picker, _| picker.kind()), StreamKind::Subtitles);
   assert_eq!(filter.read_with(cx, |input, _| input.value().to_string()), "");
   draw(&shell, cx);
@@ -760,10 +845,11 @@ fn drops_insert_remove_and_reorder_languages() {
 
 #[gpui_kit::test]
 fn track_names_are_edited_per_language_and_kind(cx: &mut TestAppContext) {
-  let shell = open(cx);
+  let (shell, view) = open(cx);
   page(&shell, cx, "Profiles");
-  let view = settings(&shell, cx);
   let editor = view.read_with(cx, |view, _| view.track_names().clone());
+  assert_eq!(editor.read_with(cx, |editor, _| editor.kind()), StreamKind::Video);
+  click_stream_tab(&shell, cx, "track-names-kind", "Audio");
   let names = editor.read_with(cx, |editor, _| editor.names().clone());
   // The preferred languages come first; English has names.
   click_id(&shell, cx, "track-names-eng");
@@ -820,7 +906,7 @@ fn track_names_are_edited_per_language_and_kind(cx: &mut TestAppContext) {
     &[("/profiles/0/trackNamesAudio/eng", Value::Null)],
   );
   // The toggle shows the subtitle presets.
-  click_id(&shell, cx, "track-names-kind-subtitles");
+  click_stream_tab(&shell, cx, "track-names-kind", "Subtitles");
   click_id(&shell, cx, "track-names-chi");
   assert_eq!(
     names.read_with(cx, |names, _| names.value().to_string()),
@@ -838,11 +924,20 @@ fn track_names_are_edited_per_language_and_kind(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn tool_paths_are_detected_after_typing_stored_on_blur_and_found_elsewhere(cx: &mut TestAppContext) {
   let (tools, calls) = detector();
-  let shell = open_with(cx, config(), tools);
+  let (shell, view) = open_with(cx, config(), tools);
   page(&shell, cx, "Integration");
+  assert_button_gaps(
+    &shell,
+    cx,
+    &["settings-mkvtoolnix-browse", "settings-mkvtoolnix-detect"],
+  );
+  assert_button_gaps(
+    &shell,
+    cx,
+    &["settings-better-media-info-browse", "settings-better-media-info-detect"],
+  );
   cx.executor().advance_clock(Duration::from_millis(300));
   draw(&shell, cx);
-  let view = settings(&shell, cx);
   let row = view.read_with(cx, |view, _| view.tool_row(Tool::MkvToolNix).clone());
   let input = row.read_with(cx, |row, _| row.input().clone());
   // The stored default path was checked once it showed.
@@ -865,11 +960,7 @@ fn tool_paths_are_detected_after_typing_stored_on_blur_and_found_elsewhere(cx: &
     [(Tool::MkvToolNix, "/opt/mkvtoolnix".to_string(), false)]
   );
   assert_eq!(row.read_with(cx, |row, _| row.found()), Some(true));
-  assert!(
-    texts(&shell, cx)
-      .iter()
-      .any(|text| text == "mkvmerge found under MKVToolNix path.")
-  );
+  assert!(texts(&shell, cx).iter().any(|text| text == "MKVToolNix found"));
   assert_eq!(
     json_of(&shell, cx)["externalTools"]["mkvToolNixPath"],
     json!(Tool::MkvToolNix.default_path())
@@ -952,28 +1043,35 @@ fn tool_paths_are_detected_after_typing_stored_on_blur_and_found_elsewhere(cx: &
 }
 
 #[gpui_kit::test]
-fn the_settings_keep_their_page_while_hidden_and_start_over_when_reopened(cx: &mut TestAppContext) {
-  let shell = open(cx);
+fn the_settings_shortcut_opens_one_fixed_width_dialog_over_the_current_tab(cx: &mut TestAppContext) {
+  use crate::ui::actions::SETTINGS_SHORTCUT;
+
+  let shell = Shell::with_config(cx, config(), HashMap::new());
+  shell.resize(cx, 1200.0, 800.0);
+  shell.press(cx, "ctrl-2");
+  shell.press(cx, SETTINGS_SHORTCUT);
+  let dialog_width = |cx: &mut TestAppContext| {
+    draw(&shell, cx);
+    shell.window(cx, |window, _| window.find("surface").bounds().size.width)
+  };
+  assert_eq!(dialog_width(cx), DIALOG_WIDTH);
+  shell.resize(cx, 1040.0, 760.0);
+  assert_eq!(dialog_width(cx), DIALOG_WIDTH);
+  shell.resize(cx, 600.0, 450.0);
+  assert!(dialog_width(cx) < px(600.0));
   page(&shell, cx, "Update");
   assert!(shell.shows(cx, "Check New Version: Weekly"));
-  shell.press(cx, "ctrl-1");
+  shell.press(cx, SETTINGS_SHORTCUT);
+  assert!(shell.shows(cx, "Check New Version: Weekly"));
+  shell.press(cx, "escape");
+  assert!(!shell.window(cx, gpui_kit::component::WindowExt::has_active_dialog));
+  assert_eq!(shell.active_tab(cx), crate::state::TabType::Queue);
+  shell.press(cx, "f10");
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window.within("settings").find("settings-mode-auto");
+  });
   assert!(!shell.shows(cx, "Check New Version: Weekly"));
-  shell.press(cx, "f10");
-  assert!(
-    shell.shows(cx, "Check New Version: Weekly"),
-    "the page survived the tab switch"
-  );
-  shell.press(cx, "ctrl-w");
-  assert!(
-    shell
-      .view
-      .read_with(cx, |view, cx| view.main().read(cx).settings().is_none())
-  );
-  shell.press(cx, "f10");
-  assert!(
-    !shell.shows(cx, "Check New Version: Weekly"),
-    "a reopened tab starts on Appearance"
-  );
 }
 
 /// How far below the top of `row` the element `id` starts.
@@ -986,7 +1084,7 @@ fn offset_in_row(shell: &Shell, cx: &mut TestAppContext, row: &'static str, id: 
 
 #[gpui_kit::test]
 fn rows_with_buttons_wrap_them_below_the_field_when_narrow(cx: &mut TestAppContext) {
-  let shell = open_with(
+  let (shell, _) = open_with(
     cx,
     Config {
       language: Language::De,

@@ -31,14 +31,15 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
+use gpui_kit::component::setting::{RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::component::{Disableable, Icon, Sizable, WindowExt, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::language_picker::LanguagePicker;
 use super::language_select::LanguageChoices;
 use super::track_names::TrackNamesEditor;
-use super::{FIELD_MIN_WIDTH, StreamKind};
+use super::{BUTTON_GROUP_GAP, FIELD_MIN_WIDTH, StreamKind, checkbox_description, checkbox_item};
 use crate::state::config::active_profile;
 use crate::state::{ConfigStore, Stores};
 use crate::ui::{confirm_button, text_button};
@@ -210,7 +211,7 @@ impl ProfileEditor {
     // FIELD_MIN_WIDTH.
     let buttons = h_flex()
       .flex_none()
-      .gap(px(8.0))
+      .gap(BUTTON_GROUP_GAP)
       .child(
         text_button("settings-profile-add")
           .outline()
@@ -273,55 +274,66 @@ impl ProfileEditor {
       .child(buttons)
   }
 
-  /// A Track Selection row with a language filter: the auto-select box and
-  /// the filter field.
-  fn selection_row(&self, kind: StreamKind, cx: &App) -> impl IntoElement + use<> {
+  /// A Track Selection row with an auto-select checkbox and a language filter.
+  fn selection_row(&self, kind: StreamKind, options: &RenderOptions, cx: &App) -> impl IntoElement + use<> {
     let store = self.stores.config.clone();
     let checked = read_profile(&store, cx, |profile| selects(profile, kind));
-    h_flex()
-      .gap(px(8.0))
-      .child(
-        Checkbox::new(SharedString::from(format!("settings-select-{}", kind.name())))
-          .accessibility_label(kind.label())
-          .checked(checked)
-          .on_click(move |checked: &bool, _, cx| {
-            let checked = *checked;
-            edit_profile(&store, cx, |profile| set_selects(profile, kind, checked));
-          }),
-      )
-      .child(
-        Input::new(&self.filters[kind as usize])
-          .small()
-          .cleanable(true)
-          .w(px(220.0)),
-      )
+    checkbox_field(
+      options.layout(),
+      px(220.0),
+      Checkbox::new(SharedString::from(format!("settings-select-{}", kind.name())))
+        .with_size(options.size())
+        .disabled(options.is_disabled())
+        .label(kind.label())
+        .child(checkbox_description(
+          tr!("settings.onlyAutoSelectOnDropForLanguages"),
+          cx,
+        ))
+        .checked(checked)
+        .on_change(move |checked, _, cx| edit_profile(&store, cx, |profile| set_selects(profile, kind, *checked))),
+      Input::new(&self.filters[kind as usize])
+        .small()
+        .disabled(options.is_disabled())
+        .cleanable(true)
+        .w_full(),
+    )
   }
 
   /// The und-language row: the box and the language.
-  fn und_row(&self, cx: &App) -> impl IntoElement + use<> {
+  fn und_row(&self, options: &RenderOptions, cx: &App) -> impl IntoElement + use<> {
     let store = self.stores.config.clone();
     let enabled = read_profile(&store, cx, |profile| profile.automation.reset_und_language.enabled);
-    h_flex()
-      .gap(px(8.0))
-      .child(
-        Checkbox::new("settings-automation-und")
-          .accessibility_label(tr!("settings.automationResetUndLanguage"))
-          .checked(enabled)
-          .on_click(move |checked: &bool, _, cx| {
-            let enabled = *checked;
-            edit_profile(&store, cx, |profile| {
-              profile.automation.reset_und_language.enabled = enabled
-            });
-          }),
-      )
-      .child(
-        Select::new(&self.und_language)
-          .id("settings-automation-und-language")
-          .small()
-          .menu_width(px(320.0))
-          .w(px(260.0)),
-      )
+    checkbox_field(
+      options.layout(),
+      px(260.0),
+      Checkbox::new("settings-automation-und")
+        .with_size(options.size())
+        .disabled(options.is_disabled())
+        .label(tr!("settings.automationResetUndLanguage"))
+        .checked(enabled)
+        .on_change(move |checked, _, cx| {
+          edit_profile(&store, cx, |profile| {
+            profile.automation.reset_und_language.enabled = *checked
+          });
+        }),
+      Select::new(&self.und_language)
+        .id("settings-automation-und-language")
+        .small()
+        .disabled(options.is_disabled())
+        .menu_width(px(320.0))
+        .w_full(),
+    )
   }
+}
+
+fn checkbox_field(layout: Axis, field_width: Pixels, checkbox: Checkbox, field: impl IntoElement) -> impl IntoElement {
+  let stacked = layout == Axis::Vertical;
+  h_flex()
+    .w_full()
+    .gap_3()
+    .when(stacked, |row| row.flex_col().items_start())
+    .child(checkbox.when(!stacked, |checkbox| checkbox.flex_1().min_w_0()))
+    .child(div().flex_none().w(field_width).max_w_full().child(field))
 }
 
 /// A Yes / No question before `on_yes`; Enter and Escape answer No, as in
@@ -334,9 +346,6 @@ fn confirm(
   message: SharedString,
   on_yes: impl Fn(&mut App) + 'static,
 ) {
-  if window.has_active_dialog(cx) {
-    return;
-  }
   let on_yes = Rc::new(on_yes);
   window.open_alert_dialog(cx, move |dialog, _, _| {
     let on_yes = on_yes.clone();
@@ -386,17 +395,19 @@ fn set_selects(profile: &mut ConfigProfile, kind: StreamKind, value: bool) {
 /// A plain checkbox item of the active profile.
 fn profile_checkbox(
   store: &Entity<ConfigStore>,
+  id: &'static str,
   title: SharedString,
+  description: Option<SharedString>,
   get: fn(&ConfigProfile) -> bool,
   set: fn(&mut ConfigProfile, bool),
 ) -> SettingItem {
   let (get_store, set_store) = (store.clone(), store.clone());
-  SettingItem::new(
+  checkbox_item(
+    id,
     title,
-    SettingField::checkbox(
-      move |cx| read_profile(&get_store, cx, get),
-      move |checked, cx| edit_profile(&set_store, cx, |profile| set(profile, checked)),
-    ),
+    description,
+    move |cx| read_profile(&get_store, cx, get),
+    move |checked, cx| edit_profile(&set_store, cx, |profile| set(profile, checked)),
   )
 }
 
@@ -420,31 +431,26 @@ pub fn page(
     .iter()
     .map(|&kind| {
       let editor = editor.clone();
-      SettingItem::new(
-        kind.label(),
-        SettingField::render(move |_, _, cx| editor.update(cx, |editor, cx| editor.selection_row(kind, cx))),
-      )
-      .description(tr!("settings.onlyAutoSelectOnDropForLanguages"))
+      SettingItem::render(move |options, _, cx| editor.update(cx, |editor, cx| editor.selection_row(kind, options, cx)))
+        .keywords([kind.label(), tr!("settings.onlyAutoSelectOnDropForLanguages")])
     })
     .collect();
-  selection.push(
-    profile_checkbox(
-      &store,
-      tr!("settings.chapters"),
-      |profile| profile.select_chapters,
-      |profile, value| profile.select_chapters = value,
-    )
-    .description(tr!("settings.autoSelectOnDrop")),
-  );
-  selection.push(
-    profile_checkbox(
-      &store,
-      tr!("settings.attachments"),
-      |profile| profile.select_attachments,
-      |profile, value| profile.select_attachments = value,
-    )
-    .description(tr!("settings.autoSelectOnDrop")),
-  );
+  selection.push(profile_checkbox(
+    &store,
+    "settings-select-chapters",
+    tr!("settings.chapters"),
+    Some(tr!("settings.autoSelectOnDrop")),
+    |profile| profile.select_chapters,
+    |profile, value| profile.select_chapters = value,
+  ));
+  selection.push(profile_checkbox(
+    &store,
+    "settings-select-attachments",
+    tr!("settings.attachments"),
+    Some(tr!("settings.autoSelectOnDrop")),
+    |profile| profile.select_attachments,
+    |profile, value| profile.select_attachments = value,
+  ));
   let und_editor = editor.clone();
   let (picker, track_names) = (picker.clone(), track_names.clone());
   SettingPage::new(tr!("settings.profiles"))
@@ -480,25 +486,29 @@ pub fn page(
         .title(tr!("settings.trackNames"))
         .item(SettingItem::render(move |_, _, _| track_names.clone()).keywords([tr!("settings.trackNames")])),
       SettingGroup::new().title(tr!("settings.automation")).items(vec![
-        SettingItem::new(
-          tr!("settings.automationResetUndLanguage"),
-          SettingField::render(move |_, _, cx| und_editor.update(cx, |editor, cx| editor.und_row(cx))),
-        ),
+        SettingItem::render(move |options, _, cx| und_editor.update(cx, |editor, cx| editor.und_row(options, cx)))
+          .keywords([tr!("settings.automationResetUndLanguage")]),
         profile_checkbox(
           &store,
+          "settings-automation-track-name",
           tr!("settings.automationSetTrackName"),
+          None,
           |profile| profile.automation.set_track_name.enabled,
           |profile, value| profile.automation.set_track_name.enabled = value,
         ),
         profile_checkbox(
           &store,
+          "settings-automation-default-track",
           tr!("settings.automationResetDefaultTrack"),
+          None,
           |profile| profile.automation.reset_default_track.enabled,
           |profile, value| profile.automation.reset_default_track.enabled = value,
         ),
         profile_checkbox(
           &store,
+          "settings-automation-forced-display",
           tr!("settings.automationResetForcedDisplay"),
+          None,
           |profile| profile.automation.reset_forced_display.enabled,
           |profile, value| profile.automation.reset_forced_display.enabled = value,
         ),

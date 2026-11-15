@@ -284,10 +284,18 @@ fn the_welcome_page_fills_the_tab_in_a_tall_window(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn settings_and_about_open_from_the_toolbar_and_close_to_the_left(cx: &mut TestAppContext) {
+fn the_toolbar_opens_settings_as_a_dialog_and_about_as_a_tab(cx: &mut TestAppContext) {
   let shell = Shell::open(cx);
   shell.click(cx, "toolbar-settings");
-  assert_eq!(shell.active_tab(cx), TabType::Settings);
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    window.find("settings");
+    assert!(window.has_active_dialog(cx));
+    assert!(window.try_find("tab-close-settings").is_none());
+  });
+  assert_eq!(shell.active_tab(cx), TabType::FileList);
+  shell.press(cx, "escape");
+  assert!(!shell.window(cx, |window, cx| window.has_active_dialog(cx)));
   shell.click(cx, "toolbar-about");
   assert_eq!(shell.active_tab(cx), TabType::About);
   shell.window(cx, |window, cx| {
@@ -296,8 +304,6 @@ fn settings_and_about_open_from_the_toolbar_and_close_to_the_left(cx: &mut TestA
     window.find("about-github");
   });
   shell.click(cx, "tab-close-about");
-  assert_eq!(shell.active_tab(cx), TabType::Settings);
-  shell.click(cx, "tab-close-settings");
   assert_eq!(shell.active_tab(cx), TabType::Queue);
   assert_eq!(
     shell.stores.ui.read_with(cx, |ui, _| ui.tabs()),
@@ -308,12 +314,12 @@ fn settings_and_about_open_from_the_toolbar_and_close_to_the_left(cx: &mut TestA
 #[gpui_kit::test]
 fn tab_shortcuts_cycle_select_and_close(cx: &mut TestAppContext) {
   let shell = Shell::open(cx);
-  shell.press(cx, "f10");
-  assert_eq!(shell.active_tab(cx), TabType::Settings);
+  shell.click(cx, "toolbar-about");
+  assert_eq!(shell.active_tab(cx), TabType::About);
   shell.press(cx, "ctrl-tab");
   assert_eq!(shell.active_tab(cx), TabType::FileList);
   shell.press(cx, "ctrl-shift-tab");
-  assert_eq!(shell.active_tab(cx), TabType::Settings);
+  assert_eq!(shell.active_tab(cx), TabType::About);
   shell.press(cx, "ctrl-2");
   assert_eq!(shell.active_tab(cx), TabType::Queue);
   shell.press(cx, "ctrl-9");
@@ -321,7 +327,7 @@ fn tab_shortcuts_cycle_select_and_close(cx: &mut TestAppContext) {
   shell.press(cx, "ctrl-w");
   assert_eq!(shell.active_tab(cx), TabType::Queue, "Queue cannot be closed");
   shell.press(cx, "ctrl-3");
-  assert_eq!(shell.active_tab(cx), TabType::Settings);
+  assert_eq!(shell.active_tab(cx), TabType::About);
   shell.press(cx, "ctrl-w");
   assert_eq!(shell.active_tab(cx), TabType::Queue);
   assert_eq!(shell.stores.ui.read_with(cx, |ui, _| ui.tabs().len()), 2);
@@ -396,12 +402,19 @@ fn switching_the_language_changes_the_ui_text(cx: &mut TestAppContext) {
     shell.shows(cx, "Clear (Ctrl + Q)"),
     "icon buttons are named by their tooltip"
   );
+  let (settings_en, settings_de) = if cfg!(target_os = "macos") {
+    ("Settings (Cmd + ,)", "Einstellungen (Cmd + ,)")
+  } else {
+    ("Settings (Ctrl + ,)", "Einstellungen (Strg + ,)")
+  };
+  assert!(shell.shows(cx, settings_en));
   shell.stores.config.update(cx, |config, cx| {
     config.update(cx, |config| config.language = Language::De)
   });
   cx.run_until_parked();
   assert!(shell.shows(cx, "Dateiliste"));
   assert!(shell.shows(cx, "Dateien hinzufügen"));
+  assert!(shell.shows(cx, settings_de));
   assert!(!shell.shows(cx, "File List"));
   shell.stores.config.update(cx, |config, cx| {
     config.update(cx, |config| config.language = Language::EnUS)

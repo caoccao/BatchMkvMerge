@@ -226,6 +226,11 @@ impl Render for Toolbar {
       GroupMode::TrackCount => primary,
     };
     let highlight = |on: bool| on.then_some(primary);
+    let settings_tooltip = if cfg!(target_os = "macos") {
+      tr!("toolbar.settingsMac")
+    } else {
+      tr!("toolbar.settings")
+    };
 
     h_flex().id("toolbar").test_support().gap(super::space(1.0)).child(
       h_flex()
@@ -351,9 +356,9 @@ impl Render for Toolbar {
         .child(
           icon_button(
             "toolbar-settings",
-            "settings",
-            highlight(active_tab == TabType::Settings),
-            tr!("toolbar.settings"),
+            crate::assets::SETTINGS_ICON_NAME,
+            None,
+            settings_tooltip,
             true,
           )
           .on_click(cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.open_settings(cx)))),

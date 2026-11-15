@@ -34,9 +34,7 @@ log.workspace = true
 rust-i18n = "4.2"
 unicode-segmentation = "1"
 
-# Tests and the screenshots example. `test-support` (headless test windows,
-# `Window::render_to_image`) only reaches targets built with
-# dev-dependencies, never the shipped binary.
+# Headless test windows use gpui-kit's `test-support` feature.
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 serde_json.workspace = true

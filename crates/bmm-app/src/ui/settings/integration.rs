@@ -31,7 +31,7 @@ use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, Sett
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 
-use super::FIELD_MIN_WIDTH;
+use super::{BUTTON_GROUP_GAP, FIELD_MIN_WIDTH};
 use crate::state::Stores;
 use crate::tools::{Tool, ToolStatus};
 use crate::ui::text_button;
@@ -269,7 +269,7 @@ impl Render for ToolPathRow {
           .child(
             h_flex()
               .flex_none()
-              .gap(px(8.0))
+              .gap(BUTTON_GROUP_GAP)
               .child(
                 text_button(SharedString::from(format!("settings-{name}-browse")))
                   .outline()

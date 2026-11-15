@@ -26,7 +26,6 @@ use gpui_kit::{Context, EventEmitter};
 pub enum TabType {
   FileList,
   Queue,
-  Settings,
   About,
 }
 
@@ -36,14 +35,13 @@ impl TabType {
     match self {
       Self::FileList => "tabs.fileList",
       Self::Queue => "tabs.queue",
-      Self::Settings => "tabs.settings",
       Self::About => "tabs.about",
     }
   }
 
-  /// Settings and About are opened from the toolbar and can be closed.
+  /// About is opened from the toolbar and can be closed.
   pub fn is_closable(self) -> bool {
-    matches!(self, Self::Settings | Self::About)
+    self == Self::About
   }
 
   /// A stable name for element ids.
@@ -51,7 +49,6 @@ impl TabType {
     match self {
       Self::FileList => "file-list",
       Self::Queue => "queue",
-      Self::Settings => "settings",
       Self::About => "about",
     }
   }
@@ -121,6 +118,10 @@ pub struct Completion {
 /// Events for the window that shows the state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiEvent {
+  /// Open Settings in the main window.
+  OpenSettings,
+  /// Close the current tab when the window is not showing a dialog.
+  CloseActiveTab,
   /// Show a toast in the main window.
   Toast(Toast),
   /// Show a card's message at the bottom of the main window.
@@ -131,7 +132,6 @@ pub enum UiEvent {
 
 pub struct UiState {
   active_tab: TabType,
-  show_settings: bool,
   show_about: bool,
   /// The queue's two notification toggles; off at every start.
   system_notification: bool,
@@ -155,7 +155,6 @@ impl UiState {
   pub fn new() -> Self {
     Self {
       active_tab: TabType::FileList,
-      show_settings: false,
       show_about: false,
       system_notification: false,
       topmost_notification: false,
@@ -169,12 +168,9 @@ impl UiState {
     self.active_tab
   }
 
-  /// The open tabs: File List and Queue always, then Settings and About.
+  /// The open tabs: File List and Queue always, then About when open.
   pub fn tabs(&self) -> Vec<TabType> {
     let mut tabs = vec![TabType::FileList, TabType::Queue];
-    if self.show_settings {
-      tabs.push(TabType::Settings);
-    }
     if self.show_about {
       tabs.push(TabType::About);
     }
@@ -193,11 +189,9 @@ impl UiState {
     }
   }
 
-  /// Opens (or reselects) the Settings tab.
+  /// Requests the Settings dialog in the main window.
   pub fn open_settings(&mut self, cx: &mut Context<Self>) {
-    self.show_settings = true;
-    self.active_tab = TabType::Settings;
-    cx.notify();
+    cx.emit(UiEvent::OpenSettings);
   }
 
   /// Opens (or reselects) the About tab.
@@ -220,11 +214,7 @@ impl UiState {
     if self.active_tab == tab {
       self.active_tab = tabs[index.saturating_sub(1)];
     }
-    match tab {
-      TabType::Settings => self.show_settings = false,
-      TabType::About => self.show_about = false,
-      TabType::FileList | TabType::Queue => {}
-    }
+    self.show_about = false;
     cx.notify();
   }
 
@@ -351,17 +341,13 @@ mod tests {
   }
 
   #[gpui_kit::test]
-  fn settings_and_about_open_after_the_fixed_tabs(cx: &mut TestAppContext) {
+  fn about_opens_after_the_fixed_tabs(cx: &mut TestAppContext) {
     let ui = state(cx);
     ui.update(cx, |ui, cx| {
       assert_eq!(ui.tabs(), [TabType::FileList, TabType::Queue]);
       ui.open_about(cx);
-      ui.open_settings(cx);
-      assert_eq!(
-        ui.tabs(),
-        [TabType::FileList, TabType::Queue, TabType::Settings, TabType::About]
-      );
-      assert_eq!(ui.active_tab(), TabType::Settings);
+      assert_eq!(ui.tabs(), [TabType::FileList, TabType::Queue, TabType::About]);
+      assert_eq!(ui.active_tab(), TabType::About);
       assert_eq!(ui.active_index(), 2);
     });
   }
@@ -370,11 +356,8 @@ mod tests {
   fn closing_the_active_tab_selects_its_left_neighbour(cx: &mut TestAppContext) {
     let ui = state(cx);
     ui.update(cx, |ui, cx| {
-      ui.open_settings(cx);
       ui.open_about(cx);
       ui.close_tab(TabType::About, cx);
-      assert_eq!(ui.active_tab(), TabType::Settings);
-      ui.close_tab(TabType::Settings, cx);
       assert_eq!(ui.active_tab(), TabType::Queue);
     });
   }
@@ -383,11 +366,11 @@ mod tests {
   fn closing_an_inactive_tab_keeps_the_selection(cx: &mut TestAppContext) {
     let ui = state(cx);
     ui.update(cx, |ui, cx| {
-      ui.open_settings(cx);
       ui.open_about(cx);
-      ui.close_tab(TabType::Settings, cx);
-      assert_eq!(ui.active_tab(), TabType::About);
-      assert_eq!(ui.tabs(), [TabType::FileList, TabType::Queue, TabType::About]);
+      ui.set_active_tab(TabType::FileList, cx);
+      ui.close_tab(TabType::About, cx);
+      assert_eq!(ui.active_tab(), TabType::FileList);
+      assert_eq!(ui.tabs(), [TabType::FileList, TabType::Queue]);
     });
   }
 

@@ -67,7 +67,8 @@
     "cancelAll": "Alle abbrechen (F4)",
     "clear": "Leeren (Strg + Q)",
     "profile": "Profil (F9)",
-    "settings": "Einstellungen (F10)",
+    "settings": "Einstellungen (Strg + ,)",
+    "settingsMac": "Einstellungen (Cmd + ,)",
     "about": "Info"
   },
   "group": {
@@ -157,7 +158,7 @@
     "betterMediaInfoPath": "BetterMediaInfo-Pfad",
     "browse": "Durchsuchen",
     "detect": "Erkennen",
-    "mkvToolNixFound": "mkvmerge im MKVToolNix-Pfad gefunden.",
+    "mkvToolNixFound": "MKVToolNix gefunden",
     "mkvToolNixNotFound": "mkvmerge im MKVToolNix-Pfad nicht gefunden.",
     "betterMediaInfoFound": "BetterMediaInfo gefunden",
     "betterMediaInfoNotFound": "BetterMediaInfo wurde nicht erkannt. Bitte prüfe den Pfad und versuche es erneut.",
