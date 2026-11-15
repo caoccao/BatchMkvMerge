@@ -16,15 +16,13 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 use super::duration::DurationValue;
 use super::playlist::PlaylistInfo;
 
 /// Container-level metadata.  Mirrors `mkvmerge -J`'s container object as a
 /// floor but adds typed fields the v20 schema omits.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Container {
   /// Did at least one reader's `probe()` claim this file?
@@ -50,7 +48,7 @@ impl Default for Container {
 /// One variant per reader we ship.  Listed in roughly the same order the
 /// probe cascade tries them.  Add new variants here when adding a new
 /// format reader.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerFormat {
   Matroska,
@@ -98,7 +96,7 @@ pub enum ContainerFormat {
   Unknown,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerProperties {
   pub title: Option<String>,
@@ -114,14 +112,12 @@ pub struct ContainerProperties {
   pub date_local: Option<String>,
   pub is_fragmented: Option<bool>,
   /// Matroska TimestampScale (ns per timestamp unit, default 1_000_000 = ms).
-  #[specta(type = Option<Number>)]
   pub timestamp_scale: Option<u64>,
   /// MP4 movie timescale (units per second, default 600).
   pub movie_timescale: Option<u32>,
   pub major_brand: Option<String>,
   pub compatible_brands: Vec<String>,
   /// Average bitrate when the container declares one (FLV, MP4 mdhd).
-  #[specta(type = Option<Number>)]
   pub bitrate_bps: Option<u64>,
   pub programs: Vec<super::program::Program>,
   /// Sibling files demuxed alongside the primary input (VobSub `.sub`,

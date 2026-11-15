@@ -84,9 +84,6 @@ class ChangeVersion {
   }
 
   change() {
-    this._change("package.json", [
-      /^  "version":\s*"(?<version>\d+\.\d+\.\d+)"/gim,
-    ]);
     this._change(".github/workflows/linux_build.yml", [
       /^\s*BATCH_MKV_MERGE_VERSION:\s*(?<version>\d+\.\d+\.\d+)/gim,
     ]);
@@ -104,12 +101,6 @@ class ChangeVersion {
     ]);
     this._change("crates/bmm-platform/Cargo.toml", [
       /^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"/gim,
-    ]);
-    this._change("src-tauri/Cargo.toml", [
-      /^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"/gim,
-    ]);
-    this._change("src-tauri/tauri.conf.json", [
-      /^  "version":\s*"(?<version>\d+\.\d+\.\d+)"/gim,
     ]);
   }
 }

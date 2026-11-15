@@ -25,7 +25,8 @@
 //! items changes ([`FileEvent`](crate::state::files::FileEvent),
 //! [`QueueEvent`](crate::state::queue::QueueEvent)); the file list draws it
 //! as a cached view at its measured height ([`CardHeight`]), so a progress
-//! tick re-renders one card, not the list.
+//! tick re-renders one card, not the list. While assistive technology is
+//! connected the cards are drawn uncached ([`CardHeight::view`]).
 
 pub mod file_card;
 pub mod group_card;
@@ -134,6 +135,22 @@ impl CardHeight {
     .top_0()
     .left_0()
     .size_full()
+  }
+
+  /// `view` as a cached view at this height, or uncached before it has
+  /// measured itself or when `cache` is false. GPUI does not replay a reused
+  /// view's accessibility nodes, so a cached view drops out of the
+  /// accessibility tree on every frame that reuses it; callers pass
+  /// `!window.is_a11y_active()`, so a screen reader always sees every card
+  /// and queue row, at the cost of rendering them all on every frame.
+  pub fn view<V: Render>(&self, view: &Entity<V>, cache: bool) -> AnyElement {
+    match self.get() {
+      Some(height) if cache => view
+        .clone()
+        .cached(StyleRefinement::default().w_full().h(height))
+        .into_any_element(),
+      _ => view.clone().into_any_element(),
+    }
   }
 }
 

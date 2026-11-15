@@ -120,18 +120,12 @@ impl QueueView {
     }
   }
 
-  fn row_element(&self, file: &str, cx: &App) -> Option<AnyElement> {
+  fn row_element(&self, file: &str, cache: bool, cx: &App) -> Option<AnyElement> {
     let row = self.rows.get(file)?;
-    Some(match row.read(cx).height().get() {
-      Some(height) => row
-        .clone()
-        .cached(StyleRefinement::default().w_full().h(height))
-        .into_any_element(),
-      None => row.clone().into_any_element(),
-    })
+    Some(row.read(cx).height().view(row, cache))
   }
 
-  fn drive_card(&self, drive: &str, files: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+  fn drive_card(&self, drive: &str, files: &[String], cache: bool, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme();
     let (primary, success, danger, border) = (theme.primary, theme.success, theme.danger, theme.border);
     let queue = self.stores.queue.read(cx);
@@ -229,7 +223,10 @@ impl QueueView {
       .child(fixed("queue.header.elapsed", TIME_WIDTH))
       .child(fixed("queue.header.eta", TIME_WIDTH))
       .child(div().flex_none().w(px(ACTION_WIDTH)));
-    let rows: Vec<AnyElement> = files.iter().filter_map(|file| self.row_element(file, cx)).collect();
+    let rows: Vec<AnyElement> = files
+      .iter()
+      .filter_map(|file| self.row_element(file, cache, cx))
+      .collect();
     let scroll = self.scrolls.get(drive).cloned().unwrap_or_default();
     v_flex()
       .id(id("queue-drive"))
@@ -274,7 +271,7 @@ impl QueueView {
 }
 
 impl Render for QueueView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let mut drives = self.stores.queue.read(cx).drives();
     if drives.is_empty() {
       drives.push((String::new(), Vec::new()));
@@ -285,9 +282,11 @@ impl Render for QueueView {
     for (drive, _) in &drives {
       self.scrolls.entry(drive.clone()).or_default();
     }
+    // A screen reader sees cached rows only on the frames that render them.
+    let cache = !window.is_a11y_active();
     let cards: Vec<AnyElement> = drives
       .iter()
-      .map(|(drive, files)| self.drive_card(drive, files, cx).into_any_element())
+      .map(|(drive, files)| self.drive_card(drive, files, cache, cx).into_any_element())
       .collect();
     v_flex()
       .id("queue")

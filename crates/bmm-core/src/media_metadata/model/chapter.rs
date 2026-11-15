@@ -16,11 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// Identification-time summary of the chapter editions in a file.  We do not
 /// extract individual chapter titles / timecodes at identification time.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterSummary {
   /// Total entries summed across all editions.

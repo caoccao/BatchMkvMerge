@@ -16,11 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// Subtitle-track-only properties.  Populated only on tracks whose `trackType`
 /// is `Subtitles`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleTrackProperties {
   /// `true` for text-based codecs (SRT, ASS, WebVTT, USF, MicroDVD).

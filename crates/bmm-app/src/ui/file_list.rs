@@ -134,21 +134,12 @@ impl CardView {
     }
   }
 
-  /// The card as a cached view at its measured height; uncached until it
-  /// has measured itself.
-  fn element(&self, cx: &App) -> AnyElement {
-    fn cached<V: Render>(card: &Entity<V>, height: Option<Pixels>) -> AnyElement {
-      match height {
-        Some(height) => card
-          .clone()
-          .cached(StyleRefinement::default().w_full().h(height))
-          .into_any_element(),
-        None => card.clone().into_any_element(),
-      }
-    }
+  /// The card as a cached view at its measured height
+  /// ([`CardHeight::view`](super::cards::CardHeight::view)).
+  fn element(&self, cache: bool, cx: &App) -> AnyElement {
     match self {
-      Self::File(card) => cached(card, card.read(cx).height().get()),
-      Self::Group(card) => cached(card, card.read(cx).height().get()),
+      Self::File(card) => card.read(cx).height().view(card, cache),
+      Self::Group(card) => card.read(cx).height().view(card, cache),
     }
   }
 }
@@ -377,6 +368,8 @@ impl Render for FileListView {
     }
     let scopes: Vec<TableScope> = files.entries().iter().map(TableScope::from_entry).collect();
     self.sync_cards(&scopes, cx);
+    // A screen reader sees cached cards only on the frames that render them.
+    let cache = !window.is_a11y_active();
 
     let entries: Vec<AnyElement> = scopes
       .iter()
@@ -394,7 +387,7 @@ impl Render for FileListView {
               .files
               .update(cx, |files, cx| files.set_active_card(Some(card), cx));
           }))
-          .child(self.cards[scope.id()].element(cx))
+          .child(self.cards[scope.id()].element(cache, cx))
           .into_any_element()
       })
       .collect();

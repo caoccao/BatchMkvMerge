@@ -16,16 +16,13 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// A duration carried as both nanoseconds and a pre-formatted string so the
 /// frontend never has to format integers itself.  The formatted form is
 /// `HH:MM:SS.fffffffff` (always nine fractional digits, no rounding).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DurationValue {
-  #[specta(type = Number)]
   pub ns: u64,
   pub formatted: String,
 }

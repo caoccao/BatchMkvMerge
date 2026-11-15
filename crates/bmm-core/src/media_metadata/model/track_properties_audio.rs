@@ -16,12 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// Audio-track-only properties.  Populated only on tracks whose `trackType` is
 /// `Audio`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioTrackProperties {
   pub sampling_frequency: Option<f64>,
@@ -31,14 +29,13 @@ pub struct AudioTrackProperties {
   pub bit_depth: Option<u32>,
   pub emphasis: Option<AudioEmphasis>,
   /// Nominal per-frame duration in nanoseconds (Matroska `DefaultDuration`).
-  #[specta(type = Option<Number>)]
   pub default_duration_ns: Option<u64>,
   pub codec_config: Option<AudioCodecConfig>,
 }
 
 /// Best-effort channel layout description.  `channels` is the count; `kind`
 /// is the canonical layout name when known.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelLayout {
   pub channels: u32,
@@ -48,7 +45,7 @@ pub struct ChannelLayout {
   pub raw_mask_hex: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChannelLayoutKind {
   Mono,
@@ -66,7 +63,7 @@ pub enum ChannelLayoutKind {
   Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioEmphasis {
   None,
@@ -86,7 +83,7 @@ pub enum AudioEmphasis {
 
 /// Decoded audio codec-private blob.  See [`super::track_properties_video::VideoCodecConfig`]
 /// for the rationale on the shared opt-in struct shape.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioCodecConfig {
   pub profile_name: Option<String>,
@@ -99,7 +96,6 @@ pub struct AudioCodecConfig {
   pub flac_max_block_size: Option<u32>,
   pub flac_min_frame_size: Option<u32>,
   pub flac_max_frame_size: Option<u32>,
-  #[specta(type = Option<Number>)]
   pub flac_total_samples: Option<u64>,
   /// MD5 of the unencoded audio data (FLAC STREAMINFO last 16 bytes).
   pub flac_md5_hex: Option<String>,

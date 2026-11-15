@@ -16,12 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// Video-track-only properties.  Populated only on tracks whose `trackType` is
 /// `Video`.  All sub-domains stay nested — see [[feedback-protocol-shape]].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoTrackProperties {
   /// Encoded pixel dimensions (the raster).
@@ -42,7 +40,6 @@ pub struct VideoTrackProperties {
   pub interlace: Option<InterlaceFlag>,
   /// Frame duration in nanoseconds.  When known we expose it as a typed u64;
   /// frontend derives the implied frame rate.
-  #[specta(type = Option<Number>)]
   pub default_duration_ns: Option<u64>,
   pub codec_config: Option<VideoCodecConfig>,
   /// Display rotation, in degrees (0/90/180/270).  Derived from the MP4
@@ -69,7 +66,7 @@ pub struct VideoTrackProperties {
 /// are carried alongside `id_type`/`data_hex`, mirroring the full
 /// `block_addition_mapping_t` mkvtoolnix keeps — mappings that rely on the
 /// value or a descriptive name no longer lose that information.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockAdditionMapping {
   pub id_type: String,
@@ -77,18 +74,17 @@ pub struct BlockAdditionMapping {
   /// `BlockAddIDName`, when present.
   pub id_name: Option<String>,
   /// `BlockAddIDValue`, when present.
-  #[specta(type = Option<Number>)]
   pub id_value: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dimensions2D {
   pub width: u32,
   pub height: u32,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRect {
   pub left: u32,
@@ -97,7 +93,7 @@ pub struct CropRect {
   pub bottom: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DisplayUnit {
   Pixels,
@@ -109,7 +105,7 @@ pub enum DisplayUnit {
 
 /// Decoded `Colour` element (Matroska) / `colr` box (MP4) / colr-related H.273
 /// signalling — typed sub-fields, never flattened into the parent.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorMetadata {
   pub matrix_coefficients: Option<u32>,
@@ -128,7 +124,7 @@ pub struct ColorMetadata {
   pub master: Option<MasterMetadata>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ColorRange {
   Unspecified,
@@ -137,14 +133,14 @@ pub enum ColorRange {
   MatrixDerived,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChromaSubsampling {
   pub horizontal: u32,
   pub vertical: u32,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChromaSiting {
   pub horizontal: u32,
@@ -152,7 +148,7 @@ pub struct ChromaSiting {
 }
 
 /// CIE 1931 (x,y) chromaticity coordinate.  Range [0, 1].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chromaticity {
   pub x: f64,
@@ -160,7 +156,7 @@ pub struct Chromaticity {
 }
 
 /// SMPTE ST 2086 mastering display metadata.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MasterMetadata {
   pub primary_r: Option<Chromaticity>,
@@ -172,7 +168,7 @@ pub struct MasterMetadata {
   pub luminance_min: Option<f64>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectionMetadata {
   pub kind: Option<ProjectionType>,
@@ -184,7 +180,7 @@ pub struct ProjectionMetadata {
   pub private_hex: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProjectionType {
   Rectangular,
@@ -193,7 +189,7 @@ pub enum ProjectionType {
   Mesh,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectionPose {
   pub yaw: f64,
@@ -201,7 +197,7 @@ pub struct ProjectionPose {
   pub roll: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StereoMode {
   Mono,
@@ -217,14 +213,14 @@ pub enum StereoMode {
   Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlphaMode {
   None,
   Present,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FieldOrder {
   Progressive,
@@ -233,7 +229,7 @@ pub enum FieldOrder {
   Undetermined,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InterlaceFlag {
   Progressive,
@@ -244,7 +240,7 @@ pub enum InterlaceFlag {
 /// Decoded codec-private blob for video tracks.  Fields are optional because
 /// not every codec populates every slot; the protocol shape is stable as we
 /// add codec-specific work in later phases.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoCodecConfig {
   pub profile_name: Option<String>,
@@ -266,14 +262,14 @@ pub struct VideoCodecConfig {
   pub is_elementary_stream: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HevcTier {
   Main,
   High,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChromaFormat {
   Monochrome,
@@ -283,7 +279,7 @@ pub enum ChromaFormat {
   Other,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SampleAspectRatio {
   pub num: u32,

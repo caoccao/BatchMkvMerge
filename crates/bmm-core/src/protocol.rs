@@ -15,32 +15,25 @@
 *   limitations under the License.
 */
 
-use serde::{Deserialize, Serialize};
+//! Results the core hands to the application: the tool detection status, the
+//! reason a file could not be parsed, and the outcome of an update check.
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct About {
-  #[serde(rename = "appVersion")]
-  pub app_version: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct MkvToolNixStatus {
   pub found: bool,
-  #[serde(rename = "mkvToolNixPath")]
   pub mkv_toolnix_path: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct BetterMediaInfoStatus {
   pub found: bool,
   pub path: String,
 }
 
-/// Wire payload returned when `get_media_metadata` fails. The frontend
-/// switches on `kind` to pick an i18n message; `detail` is a one-line
+/// Why a file could not be parsed. The application keeps it per file and
+/// picks the message from the variant; `detail` is a one-line
 /// human-readable summary.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub enum MediaMetadataErrorPayload {
   Io {
     detail: String,
@@ -52,7 +45,6 @@ pub enum MediaMetadataErrorPayload {
     detail: String,
   },
   Timeout {
-    #[serde(rename = "budgetMs")]
     budget_ms: u64,
     stage: String,
     detail: String,
@@ -91,31 +83,8 @@ impl MediaMetadataErrorPayload {
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MergeEntry {
-  pub file: String,
-  pub status: String,
-  pub progress: u32,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MergeSnapshot {
-  pub entries: Vec<MergeEntry>,
-}
-
-/// Payload of the Tauri shell's `merge-finished` event, built from
-/// [`crate::merge::MergeEvent::Finished`].
-#[derive(Debug, Clone, Serialize)]
-pub struct MergeFinishedEvent {
-  pub file: String,
-  pub outcome: String,
-  pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateCheckResult {
-  #[serde(rename = "hasUpdate")]
   pub has_update: bool,
-  #[serde(rename = "latestVersion")]
   pub latest_version: Option<String>,
 }

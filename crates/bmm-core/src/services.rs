@@ -209,22 +209,6 @@ pub fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
   Ok(result)
 }
 
-/// Parse `file` with the native parser, using the per-file options from the
-/// persisted config. Blocking: callers on a UI or async thread run it on a
-/// background thread.
-pub fn get_media_metadata(file: String) -> Result<MediaMetadata, ParseError> {
-  read_media_metadata(file, parser_options_from_config(&config::get_config()))
-}
-
-pub fn launch_better_media_info(paths: Vec<String>) -> Result<()> {
-  let cfg = config::get_config();
-  let configured = cfg.external_tools.better_media_info_path.trim().to_owned();
-  if configured.is_empty() {
-    anyhow::bail!("BetterMediaInfo path is not set");
-  }
-  launch_better_media_info_from(&configured, paths)
-}
-
 /// Opens `paths` in the BetterMediaInfo installed in `dir` (the directory
 /// [`detect_better_media_info`] reports).
 pub fn launch_better_media_info_from(dir: &str, paths: Vec<String>) -> Result<()> {

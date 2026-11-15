@@ -16,8 +16,6 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 use super::attachment::Attachment;
 use super::chapter::ChapterSummary;
@@ -33,12 +31,11 @@ pub const PARSER_PROTOCOL_VERSION: u32 = 1;
 /// Root struct returned by [`crate::media_metadata::parse`] on success.  The
 /// nested hierarchy is preserved across the wire — never flattened.  See
 /// [[feedback-protocol-shape]].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaMetadata {
   pub protocol_version: u32,
   pub file_name: String,
-  #[specta(type = Number)]
   pub file_size: u64,
   pub container: Container,
   pub tracks: Vec<Track>,

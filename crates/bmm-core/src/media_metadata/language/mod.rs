@@ -27,10 +27,9 @@ pub mod bcp47;
 pub mod iso_639;
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// A track's resolved language pair.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Language {
   /// Canonical ISO 639-2 alpha-3 code (terminologic when a B/T pair exists).

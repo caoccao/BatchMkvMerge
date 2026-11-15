@@ -22,7 +22,7 @@
 
 use anyhow::Result;
 
-use crate::config::{self, Config, ConfigUpdate, UpdateCheckInterval};
+use crate::config::{Config, ConfigUpdate, UpdateCheckInterval};
 use crate::constants::APP_NAME;
 use crate::protocol::UpdateCheckResult;
 
@@ -32,7 +32,8 @@ const RELEASES_URL: &str = "https://api.github.com/repos/caoccao/BatchMkvMerge/r
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartupUpdateCheck {
   /// No check yet, or the last one is older than the configured interval:
-  /// run [`run_check`] on a background thread.
+  /// run [`check_for_updates`] on a background thread and record the result
+  /// with [`record_check`].
   CheckNow,
   /// A recent check exists; its cached answer is the result.
   Cached(UpdateCheckResult),
@@ -101,28 +102,6 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
   false
 }
 
-/// Run one check and record it in the config (`lastChecked`, `lastVersion`).
-/// Never fails: a network error or a panic yields "no update". A found update
-/// the user chose to skip is reported as "no update". Blocking network call.
-pub fn run_check(app_version: &str) -> UpdateCheckResult {
-  let check_result = std::panic::catch_unwind(|| check_for_updates(app_version)).unwrap_or_else(|_| {
-    log::error!("Update check panicked");
-    Err(anyhow::anyhow!("Update check panicked"))
-  });
-  match check_result {
-    Ok(update_result) => {
-      let mut updated_config = config::get_config();
-      let result = record_check(&mut updated_config.update, update_result, current_timestamp());
-      let _ = config::set_config(updated_config);
-      result
-    }
-    Err(error) => {
-      log::warn!("Update check failed: {}", error);
-      no_update()
-    }
-  }
-}
-
 /// Records a finished check in `update` (`lastChecked` = `now`, and
 /// `lastVersion` when a newer release was found) and returns what to show:
 /// the update, unless it is the version the user skipped.
@@ -132,13 +111,6 @@ pub fn record_check(update: &mut ConfigUpdate, result: UpdateCheckResult, now: i
     update.last_version = version.clone();
   }
   without_ignored_version(result, &update.ignore_version)
-}
-
-/// Remember `version` as the one the user does not want to be told about.
-pub fn skip_version(version: String) -> Result<()> {
-  let mut config = config::get_config();
-  config.update.ignore_version = version;
-  config::set_config(config)
 }
 
 /// Startup policy: check now when the interval has elapsed, otherwise reuse

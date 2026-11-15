@@ -16,8 +16,6 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 use super::tag::TagEntry;
 use super::track_properties_audio::AudioTrackProperties;
@@ -29,19 +27,18 @@ use super::track_properties_video::VideoTrackProperties;
 /// shape is camelCase with the domain sub-trees (`video / audio / subtitle`)
 /// stored as `Option<_>` so the frontend can ignore the irrelevant ones — see
 /// [[feedback-protocol-shape]].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
   /// 0-based parser-assigned identifier — stable for a single parse
   /// invocation, mirrors `mkvmerge -J` ordering.
-  #[specta(type = Number)]
   pub id: i64,
   pub track_type: TrackType,
   pub codec: CodecInfo,
   pub properties: TrackProperties,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackType {
   Video,
@@ -55,7 +52,7 @@ pub enum TrackType {
 /// string for Matroska, FOURCC for AVI/MP4, stream_type byte for MPEG-TS);
 /// `name` is the catalogue lookup; `codecPrivate` carries the codec-private
 /// blob (typed properties live on the per-track domain sub-tree).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodecInfo {
   pub id: String,
@@ -65,10 +62,9 @@ pub struct CodecInfo {
 
 /// Codec-private blob.  We expose both the byte length and a hex dump so the
 /// frontend can show a length without having to copy the whole hex string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodecPrivate {
-  #[specta(type = Number)]
   pub length: u64,
   pub hex: String,
 }
@@ -85,7 +81,7 @@ impl CodecPrivate {
 /// Per-track properties.  `common` is always present; the domain sub-trees
 /// (`video / audio / subtitle`) are populated based on `track.trackType` and
 /// never share fields.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackProperties {
   pub common: CommonTrackProperties,

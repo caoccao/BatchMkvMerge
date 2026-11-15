@@ -16,19 +16,16 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 use crate::media_metadata::language::Language;
 
 /// Track-level properties shared across all track kinds.  Domain-specific
 /// fields live on `TrackProperties.video / audio / subtitle` — see
 /// [[feedback-protocol-shape]].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonTrackProperties {
   /// Container-assigned 1-based number (Matroska TrackNumber, MP4 trackID).
-  #[specta(type = Option<Number>)]
   pub number: Option<u64>,
   /// Stable unique id (Matroska TrackUID).  Hex-encoded because 64-bit
   /// values can exceed JavaScript's safe-integer range.
@@ -46,13 +43,10 @@ pub struct CommonTrackProperties {
   pub text_descriptions: Option<bool>,
   pub original: Option<bool>,
   pub commentary: Option<bool>,
-  #[specta(type = Option<Number>)]
   pub seek_pre_roll_ns: Option<u64>,
-  #[specta(type = Option<Number>)]
   pub codec_delay_ns: Option<u64>,
   /// Maximum payload size advertised by the container (Matroska
   /// MaxBlockAdditionID descriptor, MP4 nalLengthSize, ...).  Optional.
-  #[specta(type = Option<Number>)]
   pub max_block_addition_id: Option<u64>,
   /// Container compression / encryption descriptors applied to the track
   /// (Matroska ContentEncodings).  Human-readable algorithm names, e.g.
@@ -70,23 +64,20 @@ pub struct CommonTrackProperties {
   pub teletext_page: Option<u32>,
   /// Other tracks sharing this packetized substream (MPEG-TS PES
   /// multiplex with DVB-Sub subtitles, ...).  Holds Track.id values.
-  #[specta(type = Vec<Number>)]
   pub multiplexed_with: Vec<i64>,
   /// Lowest cluster / segment-start timestamp seen during header walk.
   /// Matroska-specific; `None` for all other containers.  Signed because
   /// CodecDelay / negative cue offsets can push the first block's global
   /// timestamp below zero (PARSER-138).
-  #[specta(type = Option<Number>)]
   pub minimum_timestamp_ns: Option<i64>,
   /// Number of Matroska Cue entries pointing at this track.
-  #[specta(type = Option<Number>)]
   pub num_index_entries: Option<u64>,
 }
 
 /// A presence-aware tri-state for `FlagEnabled` / `FlagDefault` / `FlagForced`.
 /// We distinguish "absent" from "explicitly false" so the frontend can fall
 /// back to the spec default rather than guess.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackFlag {
   /// Field not present in the source container; spec default applies.

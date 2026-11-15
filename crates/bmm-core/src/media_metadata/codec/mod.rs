@@ -27,7 +27,7 @@ use crate::media_metadata::model::TrackType;
 /// Coarse track classification used by the codec catalogues.  Maps to the
 /// wire-format [`crate::media_metadata::model::TrackType`] enum via
 /// [`TrackKind::to_track_type`].  We use a separate enum here so the codec
-/// catalogues don't depend on serde / specta and can stay zero-cost.
+/// catalogues don't depend on serde and can stay zero-cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackKind {
   Video,

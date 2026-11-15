@@ -23,12 +23,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "Inflector"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
-
-[[package]]
 name = "accesskit"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -729,8 +723,6 @@ dependencies = [
  "quick-xml 0.39.2",
  "serde",
  "serde_json",
- "specta",
- "specta-typescript",
  "sys-locale",
  "sysinfo 0.32.1",
  "thiserror 2.0.18",
@@ -6734,37 +6726,6 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "specta"
-version = "2.0.0-rc.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38f9a30cbcbb7011f1da7d73483983bf838af123883e45f2b36ed76328df9c50"
-dependencies = [
- "rustc_version",
- "specta-macros",
-]
-
-[[package]]
-name = "specta-macros"
-version = "2.0.0-rc.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ce14957ecc2897f1f848b8255b6531d13ddf49cbcf506b7c2c9fb1d005593bb"
-dependencies = [
- "Inflector",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "specta-typescript"
-version = "0.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "639404ee95557f2f8b7e4cb773ffefd45304c7ab8ba21ac83b69051595e083c0"
-dependencies = [
- "specta",
 ]
 
 [[package]]

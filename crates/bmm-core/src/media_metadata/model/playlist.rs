@@ -16,15 +16,13 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 use super::duration::DurationValue;
 
 /// Which STN group an MPLS playlist stream came from.  Mirrors the three
 /// stream vectors retained on mkvtoolnix's `stn_t`
 /// (`mkvtoolnix/src/common/bluray/mpls.h:103-108`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PlaylistStreamKind {
   #[default]
@@ -38,7 +36,7 @@ pub enum PlaylistStreamKind {
 /// `mkvtoolnix/src/common/bluray/mpls.cpp:391-447`.  Surfaced so that the STN
 /// coding type, format/rate, character code, and sub-path/sub-clip linkage are
 /// no longer thrown away after parsing.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistStream {
   /// Which STN group the stream belongs to (video / audio / PG).
@@ -68,7 +66,7 @@ pub struct PlaylistStream {
 /// `playlist*` identification fields (sourced from
 /// `mm_mpls_multi_file_io.cpp`).  Populated only when the input is a
 /// `.mpls` playlist that demultiplexes to several `.m2ts` segment files.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistInfo {
   /// Total duration across all segment files in the playlist.
@@ -76,7 +74,6 @@ pub struct PlaylistInfo {
   /// Number of chapter entries declared by the playlist.
   pub chapters: u32,
   /// Sum of segment-file sizes (bytes).
-  #[specta(type = Number)]
   pub total_size: u64,
   /// File-system paths of the segment files in playback order.
   pub files: Vec<String>,

@@ -16,23 +16,20 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// Non-fatal observations made during parse.  Fatal errors are returned as
 /// `Err(ParseError)` and never appear here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Warning {
   pub category: WarningCategory,
   pub message: String,
   /// Byte offset within the source file where the situation was detected,
   /// or `None` for category-wide warnings that don't tie to a single byte.
-  #[specta(type = Option<Number>)]
   pub offset: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WarningCategory {
   /// Best-effort interpretation of a forward-compat field (e.g. EBML version

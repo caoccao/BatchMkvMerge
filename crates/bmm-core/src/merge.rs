@@ -30,7 +30,7 @@
 //! order, and `Finished` of a file is sent before `Started` of the next file
 //! on the same drive; events of different drives interleave.
 //!
-//! The process-wide queue behind [`enqueue`], [`cancel`] and [`snapshot`]
+//! The process-wide queue behind [`enqueue`] and [`cancel`]
 //! launches the real `mkvmerge` and forwards its events to the sink installed
 //! by [`init`]. Tests build their own [`MergeQueue`] with a fake launcher.
 
@@ -42,10 +42,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::SystemTime;
 
 use crate::mkvtoolnix;
-use crate::protocol::{MergeEntry, MergeSnapshot};
 
-const STATUS_WAITING: &str = "Waiting";
-const STATUS_MERGING: &str = "Merging";
 const ERROR_TASK_MISSING: &str = "task missing";
 const ERROR_WORKER_PANICKED: &str = "merge worker panicked";
 
@@ -238,22 +235,20 @@ impl MergeQueue {
     Ok(())
   }
 
-  /// Files that are waiting or merging, with their last progress.
-  pub fn snapshot(&self) -> MergeSnapshot {
+  /// `(file, status, progress)` of the files that are waiting or merging.
+  #[cfg(test)]
+  fn entries(&self) -> Vec<(String, String, u32)> {
     let st = self.lock_state();
-    let entries: Vec<MergeEntry> = st
-      .tasks
+    st.tasks
       .iter()
-      .map(|(file, task)| MergeEntry {
-        file: file.clone(),
-        status: match task.status {
-          TaskStatus::Queued => STATUS_WAITING.to_owned(),
-          TaskStatus::Merging => STATUS_MERGING.to_owned(),
-        },
-        progress: task.progress,
+      .map(|(file, task)| {
+        let status = match task.status {
+          TaskStatus::Queued => "Waiting",
+          TaskStatus::Merging => "Merging",
+        };
+        (file.clone(), status.to_owned(), task.progress)
       })
-      .collect();
-    MergeSnapshot { entries }
+      .collect()
   }
 
   fn emit(&self, event: MergeEvent) {
@@ -489,11 +484,6 @@ pub fn cancel(file: String) -> Result<()> {
   global().cancel(&file)
 }
 
-/// [`MergeQueue::snapshot`] of the process-wide queue.
-pub fn snapshot() -> MergeSnapshot {
-  global().snapshot()
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -676,13 +666,7 @@ mod tests {
 
     /// `(file, status, progress)` sorted by file.
     fn entries(&self) -> Vec<(String, String, u32)> {
-      let mut entries: Vec<_> = self
-        .queue
-        .snapshot()
-        .entries
-        .into_iter()
-        .map(|e| (e.file, e.status, e.progress))
-        .collect();
+      let mut entries = self.queue.entries();
       entries.sort();
       entries
     }
@@ -690,7 +674,7 @@ mod tests {
     /// `Finished` is sent before the task is dropped, so wait for the drop.
     fn wait_until_idle(&self) {
       let deadline = Instant::now() + TIMEOUT;
-      while !self.queue.snapshot().entries.is_empty() {
+      while !self.queue.entries().is_empty() {
         assert!(Instant::now() < deadline, "queue never became idle");
         std::thread::sleep(Duration::from_millis(5));
       }
@@ -725,7 +709,7 @@ mod tests {
   }
 
   #[test]
-  fn snapshot_lists_merging_and_waiting_files_with_progress() {
+  fn the_queue_lists_merging_and_waiting_files_with_progress() {
     let h = Harness::new(|_| Launch::Run);
     h.enqueue(A);
     h.enqueue(B);

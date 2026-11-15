@@ -16,13 +16,11 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// One MPEG-TS / MPEG-PS program (a logical sub-mux).  Most files have
 /// exactly one program; multi-program TS files (broadcast captures) report
 /// every program here so the frontend can filter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Program {
   pub program_number: u32,
@@ -31,7 +29,6 @@ pub struct Program {
   pub service_provider: Option<String>,
   /// Track IDs (matching [`super::track::Track::id`]) carried by this
   /// program.
-  #[specta(type = Vec<Number>)]
   pub track_ids: Vec<i64>,
 }
 

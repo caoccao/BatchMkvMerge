@@ -269,68 +269,32 @@ fn mkvtoolnix_gui_process_name() -> &'static str {
   }
 }
 
-/// Where MKVToolNix was found, and whether the config should keep that path
-/// (a running GUI's directory, or a versioned macOS bundle found from the
-/// default path).
-struct Located {
-  status: MkvToolNixStatus,
-  remember: bool,
-}
-
-fn locate_mkvtoolnix(path: &str, check_running: bool) -> Located {
+/// Finds MKVToolNix without touching the config: with `check_running`, the
+/// directory of a running `mkvtoolnix-gui` first, then `path` (on macOS the
+/// default path also finds the newest `MKVToolNix-<version>.app`). The
+/// application stores the returned path through its own config store.
+pub fn detect_mkvtoolnix(path: &str, check_running: bool) -> MkvToolNixStatus {
   if check_running
     && let Some(dir) = crate::services::find_running_process_dir(mkvtoolnix_gui_process_name())
     && has_mkvtoolnix(&dir)
   {
-    return Located {
-      status: MkvToolNixStatus {
-        found: true,
-        mkv_toolnix_path: dir.to_string_lossy().to_string(),
-      },
-      remember: true,
+    return MkvToolNixStatus {
+      found: true,
+      mkv_toolnix_path: dir.to_string_lossy().to_string(),
     };
   }
   let trimmed_path = path.trim();
   if trimmed_path.is_empty() {
-    return Located {
-      status: MkvToolNixStatus {
-        found: false,
-        mkv_toolnix_path: String::new(),
-      },
-      remember: false,
+    return MkvToolNixStatus {
+      found: false,
+      mkv_toolnix_path: String::new(),
     };
   }
   let resolution = resolve_mkvtoolnix(trimmed_path, MKVTOOLNIX_TOOLS[0]);
-  let found = has_mkvtoolnix(&resolution.path);
-  Located {
-    status: MkvToolNixStatus {
-      found,
-      mkv_toolnix_path: resolution.path.to_string_lossy().to_string(),
-    },
-    remember: found && resolution.auto_detected,
+  MkvToolNixStatus {
+    found: has_mkvtoolnix(&resolution.path),
+    mkv_toolnix_path: resolution.path.to_string_lossy().to_string(),
   }
-}
-
-/// Finds MKVToolNix without touching the config: with `check_running`, the
-/// directory of a running `mkvtoolnix-gui` first, then `path` (on macOS the
-/// default path also finds the newest `MKVToolNix-<version>.app`). A shell
-/// that keeps its own copy of the config stores the returned path itself.
-pub fn detect_mkvtoolnix(path: &str, check_running: bool) -> MkvToolNixStatus {
-  locate_mkvtoolnix(path, check_running).status
-}
-
-/// [`detect_mkvtoolnix`], also writing a running GUI's directory or an
-/// auto-detected bundle into the config file.
-pub fn is_mkvtoolnix_found(path: String, check_running: bool) -> Result<MkvToolNixStatus> {
-  let located = locate_mkvtoolnix(&path, check_running);
-  if located.remember {
-    let mut cfg = config::get_config();
-    if cfg.external_tools.mkv_toolnix_path != located.status.mkv_toolnix_path {
-      cfg.external_tools.mkv_toolnix_path = located.status.mkv_toolnix_path.clone();
-      config::set_config(cfg)?;
-    }
-  }
-  Ok(located.status)
 }
 
 #[cfg(test)]

@@ -16,11 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 /// A single name/value tag pair sourced from container metadata
 /// (Matroska SimpleTag, MP4 iTunes ilst, ID3v2 frame, VorbisComment, ...).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagEntry {
   pub name: String,
@@ -31,7 +30,7 @@ pub struct TagEntry {
 
 /// All container-level tags bucketed by reach.  Per-track tags live on each
 /// [`super::track::Track`] via `properties.tags`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagsBundle {
   /// Tags that apply to the whole file (Matroska tags with no TrackUID, MP4

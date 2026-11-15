@@ -18,7 +18,9 @@
 //! Headless tests of the cards in the application shell, with the golden
 //! fixtures of the merge-argument test parsed by the native parser.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use bmm_core::config::{Config, GroupMode};
@@ -337,6 +339,58 @@ fn only_the_merging_card_repaints(cx: &mut TestAppContext) {
     let (a_after, b_after) = counts(cx);
     assert!(b_after > b_before, "the merging card repaints");
     assert_eq!(a_after, a_before, "the other card does not");
+  }
+}
+
+/// A view that counts its renders, drawn by [`MeasuredHost`].
+struct Counted(Rc<Cell<usize>>);
+
+impl Render for Counted {
+  fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    self.0.set(self.0.get() + 1);
+    div().h(px(20.0))
+  }
+}
+
+struct MeasuredHost {
+  child: Entity<Counted>,
+  height: CardHeight,
+  cache: bool,
+}
+
+impl Render for MeasuredHost {
+  fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    div().size_full().child(self.height.view(&self.child, self.cache))
+  }
+}
+
+#[gpui_kit::test]
+fn cards_are_drawn_uncached_for_assistive_technology(cx: &mut TestAppContext) {
+  // GPUI does not replay a cached view's accessibility nodes, so the list
+  // draws its cards uncached while a screen reader is connected.
+  for cache in [true, false] {
+    let renders = Rc::new(Cell::new(0));
+    let window = cx.add_window(|_, cx| MeasuredHost {
+      child: cx.new(|_| Counted(renders.clone())),
+      height: CardHeight(Rc::new(Cell::new(Some(px(20.0))))),
+      cache,
+    });
+    // The host renders again (notified), the child only when not cached.
+    let draw = |cx: &mut TestAppContext| {
+      window.update(cx, |_, _, cx| cx.notify()).unwrap();
+      cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+        .unwrap()
+    };
+    draw(cx);
+    let before = renders.get();
+    draw(cx);
+    draw(cx);
+    let renders = renders.get() - before;
+    if cache {
+      assert_eq!(renders, 0, "a cached view is reused");
+    } else {
+      assert!(renders >= 2, "an uncached view renders every frame: {renders}");
+    }
   }
 }
 

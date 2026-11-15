@@ -16,8 +16,6 @@ log.workspace = true
 quick-xml = "=0.39.2"
 serde.workspace = true
 serde_json.workspace = true
-specta.workspace = true
-specta-typescript.workspace = true
 sys-locale = "0.3.2"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 thiserror = "2"

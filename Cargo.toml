@@ -1,9 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/bmm-core", "crates/bmm-platform", "crates/bmm-app"]
-# The Tauri shell is no longer built. It stays in the tree, unbuilt, as the
-# porting reference for the gpui-kit app and is deleted with `src/` later.
-exclude = ["src-tauri"]
 
 # Dependencies shared by more than one member.
 [workspace.dependencies]
@@ -11,8 +8,6 @@ anyhow = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
-specta-typescript = "0.0.12"
 
 # `[profile.release]` stays at Cargo's defaults so the release edit-test loop is
 # fast. Every build is a release build; see "Build rules" in docs/development.md.

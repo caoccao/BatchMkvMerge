@@ -16,12 +16,10 @@
 */
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
-use specta_typescript::Number;
 
 /// One attached file (Matroska Attachments, MP4 mdat-by-handler, ...).  The
 /// payload itself is **not** read at identification time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
   /// 1-based sequence number in the file (matches `mkvmerge -J` ordering).
@@ -30,7 +28,6 @@ pub struct Attachment {
   pub mime_type: Option<String>,
   pub description: Option<String>,
   /// Bytes of the payload.  We seek past, not read.
-  #[specta(type = Number)]
   pub size: u64,
   /// Hex-encoded UID when the source format provides one (Matroska FileUID).
   pub uid_hex: Option<String>,
