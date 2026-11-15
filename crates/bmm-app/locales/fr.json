@@ -91,7 +91,6 @@
     "close": "Fermer"
   },
   "queue": {
-    "defaultDrive": "File d'attente",
     "cancelAll": "Tout annuler",
     "resume": "Reprendre",
     "resumeAll": "Tout reprendre",

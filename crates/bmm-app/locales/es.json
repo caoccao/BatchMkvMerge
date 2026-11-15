@@ -91,7 +91,6 @@
     "close": "Cerrar"
   },
   "queue": {
-    "defaultDrive": "Cola",
     "cancelAll": "Cancelar todo",
     "resume": "Reanudar",
     "resumeAll": "Reanudar todo",

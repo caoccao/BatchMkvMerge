@@ -91,7 +91,6 @@
     "close": "Chiudi"
   },
   "queue": {
-    "defaultDrive": "Coda",
     "cancelAll": "Interrompi tutto",
     "resume": "Riprendi",
     "resumeAll": "Riprendi tutto",

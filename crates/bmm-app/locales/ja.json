@@ -91,7 +91,6 @@
     "close": "閉じる"
   },
   "queue": {
-    "defaultDrive": "キュー",
     "cancelAll": "すべてキャンセル",
     "resume": "再開",
     "resumeAll": "すべて再開",

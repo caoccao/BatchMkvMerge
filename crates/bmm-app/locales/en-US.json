@@ -91,7 +91,6 @@
     "close": "Close"
   },
   "queue": {
-    "defaultDrive": "Queue",
     "cancelAll": "Cancel All",
     "resume": "Resume",
     "resumeAll": "Resume All",

@@ -91,7 +91,6 @@
     "close": "關閉"
   },
   "queue": {
-    "defaultDrive": "佇列",
     "cancelAll": "全部取消",
     "resume": "恢復",
     "resumeAll": "全部恢復",

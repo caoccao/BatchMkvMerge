@@ -132,17 +132,28 @@ fn topmost_texts(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<Vec
 }
 
 #[gpui_kit::test]
-fn an_empty_queue_shows_one_card_and_the_toolbar_has_the_queue_actions(cx: &mut TestAppContext) {
+fn an_empty_queue_shows_just_the_table_headers_and_the_toolbar_has_the_queue_actions(cx: &mut TestAppContext) {
   let shell = Shell::with_files(cx, movies(&[]));
   shell
     .stores
     .ui
     .update(cx, |ui, cx| ui.set_active_tab(TabType::Queue, cx));
   cx.run_until_parked();
-  let shown = texts(&shell, cx, "queue");
-  for expected in ["Queue", "File Path", "Status", "Start", "End", "Elapsed", "ETA"] {
-    assert!(shown.iter().any(|text| text == expected), "{expected} in {shown:?}");
-  }
+  assert_eq!(
+    texts(&shell, cx, "queue"),
+    ["File Path", "Status", "Start", "End", "Elapsed", "ETA"]
+  );
+  shell.window(cx, |window, _| {
+    let table = window.find("queue-drive:").bounds();
+    assert_eq!(table, window.find("queue").bounds());
+    let bounds = table.scale(window.scale_factor());
+    assert!(
+      !window
+        .painted_quads()
+        .iter()
+        .any(|quad| { quad.bounds == bounds && (quad.border_widths.left.0 > 0.0 || quad.border_widths.right.0 > 0.0) })
+    );
+  });
   // The toggles are always available; the queue actions are not.
   for toggle in ["toolbar-system-notification", "toolbar-topmost-notification"] {
     assert_eq!(control(&shell, cx, "toolbar", toggle), Some(false), "{toggle}");
@@ -188,8 +199,7 @@ fn rows_show_each_status_with_its_label_and_times(cx: &mut TestAppContext) {
     shell.send(cx, finished(file, outcome, error));
   }
   let shown = texts(&shell, cx, id("queue-drive"));
-  let title = drive_label(&drive());
-  assert!(shown.iter().any(|text| text.as_str() == title.as_ref()), "{shown:?}");
+  assert_eq!(shown.first().map(String::as_str), Some("File Path"));
   let expected = [
     (A, "Merging 17%"),
     (B, "Completed"),
@@ -234,7 +244,7 @@ fn rows_show_each_status_with_its_label_and_times(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn one_card_per_drive(cx: &mut TestAppContext) {
+fn one_table_per_drive(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C]);
   shell.stores.queue.update(cx, |queue, cx| {
     queue.move_to_drive(B, "D:", cx);
@@ -242,11 +252,8 @@ fn one_card_per_drive(cx: &mut TestAppContext) {
   });
   cx.run_until_parked();
   let shown = texts(&shell, cx, "queue");
-  for title in [
-    drive_label(&drive()).to_string(),
-    "D:".to_string(),
-    "\\\\SERVER\\SHARE".to_string(),
-  ] {
+  assert!(!shown.iter().any(|text| text == "Queue"));
+  for title in ["D:", "\\\\SERVER\\SHARE"] {
     assert_eq!(
       shown.iter().filter(|text| **text == title).count(),
       1,
@@ -258,9 +265,9 @@ fn one_card_per_drive(cx: &mut TestAppContext) {
     ("D:".to_string(), B),
     ("\\\\SERVER\\SHARE".to_string(), C),
   ] {
-    let card = texts(&shell, cx, format!("queue-drive:{drive}"));
-    assert!(card.iter().any(|text| text == file), "{file} in {card:?}");
-    assert_eq!(card.iter().filter(|text| text.starts_with("/media/")).count(), 1);
+    let table = texts(&shell, cx, format!("queue-drive:{drive}"));
+    assert!(table.iter().any(|text| text == file), "{file} in {table:?}");
+    assert_eq!(table.iter().filter(|text| text.starts_with("/media/")).count(), 1);
   }
   click(&shell, cx, "toolbar-cancel-all");
   assert_eq!(shell.cancelled(), [A, B, C]);

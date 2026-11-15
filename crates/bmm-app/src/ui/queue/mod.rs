@@ -15,11 +15,9 @@
 *   limitations under the License.
 */
 
-//! The Queue tab: one card per drive (`C:`, `\\SERVER\SHARE` on Windows; one
-//! "Queue" card elsewhere), with a table of the drive's files: File Path, Status
-//! (with the percentage while merging, coloured by status, the error as a
-//! tooltip when failed), Start, End, Elapsed, ETA and each job's action.
-//! Without any item one empty card shows.
+//! The Queue tab shows a table per drive, with drive names for Windows drive
+//! letters and shares. Each table shows File Path, Status, Start, End,
+//! Elapsed, ETA and each job's action. An empty queue shows just the headers.
 //!
 //! Each row is a [`QueueRow`] entity drawn as a cached view at its measured
 //! height, so a progress event or a clock tick re-renders the merging row, not
@@ -55,16 +53,6 @@ pub const PATH_MIN_WIDTH: f32 = 200.0;
 /// The narrowest table: the path's minimum and the fixed columns.
 fn table_min_width() -> Pixels {
   px(PATH_MIN_WIDTH + STATUS_WIDTH + 4.0 * TIME_WIDTH + ACTION_WIDTH)
-}
-
-/// The title of a drive's card: its key on Windows, "Queue" for the single
-/// drive elsewhere (and for the empty card).
-pub fn drive_label(drive: &str) -> SharedString {
-  if drive.is_empty() || drive == "default" {
-    tr!("queue.defaultDrive")
-  } else {
-    drive.to_string().into()
-  }
 }
 
 pub struct QueueView {
@@ -116,10 +104,9 @@ impl QueueView {
     Some(row.read(cx).height().view(row, cache))
   }
 
-  fn drive_card(&self, drive: &str, files: &[String], cache: bool, cx: &App) -> impl IntoElement {
+  fn drive_table(&self, drive: &str, files: &[String], cache: bool, cx: &App) -> impl IntoElement {
     let border = cx.theme().border;
     let id = |name: &str| SharedString::from(format!("{name}:{drive}"));
-    let title = drive_label(drive);
     let header_cell = |key: &str| -> AnyElement {
       let label = tr!(key);
       // One line: a narrow column clips its header rather than breaking a
@@ -155,32 +142,27 @@ impl QueueView {
       .id(id("queue-drive"))
       .test_support()
       .w_full()
-      .border_1()
-      .rounded(px(4.0))
-      .border_color(border)
       .text_size(super::text::body2())
-      .child(
+      .children((!drive.is_empty() && drive != "default").then(|| {
+        let label = SharedString::from(drive.to_string());
         div()
-          .px(super::space(2.0))
-          .pt(super::space(1.0))
+          .px(px(8.0))
           .truncate()
           .text_size(super::text::h6())
-          .child(title.clone())
-          .test_text(title),
-      )
+          .child(label.clone())
+          .test_text(label)
+      }))
       .child(
-        div().w_full().px(super::space(2.0)).pb(super::space(2.0)).child(
-          div()
-            .id(id("queue-table"))
-            .relative()
-            .w_full()
-            .overflow_x_scroll()
-            // A vertical wheel scrolls the tab, not the table sideways.
-            .restrict_scroll_to_axis()
-            .track_scroll(&scroll)
-            .child(v_flex().w_full().min_w(table_min_width()).child(header).children(rows))
-            .horizontal_scrollbar(&scroll),
-        ),
+        div()
+          .id(id("queue-table"))
+          .relative()
+          .w_full()
+          .overflow_x_scroll()
+          // A vertical wheel scrolls the tab, not the table sideways.
+          .restrict_scroll_to_axis()
+          .track_scroll(&scroll)
+          .child(v_flex().w_full().min_w(table_min_width()).child(header).children(rows))
+          .horizontal_scrollbar(&scroll),
       )
   }
 }
@@ -199,16 +181,15 @@ impl Render for QueueView {
     }
     // A screen reader sees cached rows only on the frames that render them.
     let cache = !window.is_a11y_active();
-    let cards: Vec<AnyElement> = drives
+    let tables: Vec<AnyElement> = drives
       .iter()
-      .map(|(drive, files)| self.drive_card(drive, files, cache, cx).into_any_element())
+      .map(|(drive, files)| self.drive_table(drive, files, cache, cx).into_any_element())
       .collect();
     v_flex()
       .id("queue")
       .test_support()
       .w_full()
       .gap(super::space(2.0))
-      .p(super::space(1.0))
-      .children(cards)
+      .children(tables)
   }
 }
