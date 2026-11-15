@@ -21,11 +21,18 @@
 //! Positions are logical pixels; sizes are the content size. GPUI's macOS
 //! window reports its frame (title bar included) but opens with a content
 //! size, so the saved size comes from the viewport, not the window bounds.
+//!
+//! On Windows positions are global: a display left of or above the primary
+//! one has negative coordinates, and GPUI opens a window at the given bounds
+//! only when their centre lies on the display it is opened for (the primary
+//! one unless `display_id` names another); otherwise it falls back to a
+//! default size centred on that display. On macOS every display reports its
+//! bounds at the origin and a window its position relative to its screen.
 
 use bmm_core::config::{ConfigWindow, ConfigWindowPosition, ConfigWindowSize};
 use gpui_kit::{
-  AnyWindowHandle, App, AppContext, Bounds, Pixels, Size, TitlebarOptions, Window, WindowBounds, WindowOptions, point,
-  px, size,
+  AnyWindowHandle, App, AppContext, Bounds, Pixels, Point, Size, TitlebarOptions, Window, WindowBounds, WindowOptions,
+  point, px, size,
 };
 
 use super::close_guard;
@@ -46,12 +53,15 @@ pub fn is_persistable_size(width: u32, height: u32) -> bool {
   width >= MIN_WINDOW_SIZE.0 && height >= MIN_WINDOW_SIZE.1
 }
 
-/// Where the window opens: the saved position when it is not negative (the
-/// "never saved" value) and lies on one of `displays`; `None` centres it.
+/// Where the window opens: the saved position when there is one (the default
+/// `-1, -1` means never saved) and it lies on one of `displays`; `None`
+/// centres it. A position may be negative on a display left of or above the
+/// primary one.
 pub fn initial_bounds(saved: &ConfigWindow, displays: &[Bounds<Pixels>]) -> Option<Bounds<Pixels>> {
   let (width, height) = sanitize_size(&saved.size);
   let position = &saved.position;
-  if position.x < 0 || position.y < 0 {
+  let never_saved = ConfigWindowPosition::default();
+  if position.x == never_saved.x && position.y == never_saved.y {
     return None;
   }
   let origin = point(px(position.x as f32), px(position.y as f32));
@@ -59,6 +69,23 @@ pub fn initial_bounds(saved: &ConfigWindow, displays: &[Bounds<Pixels>]) -> Opti
     return None;
   }
   Some(Bounds::new(origin, size(px(width as f32), px(height as f32))))
+}
+
+/// The display a window in `bounds` opens on, as an index into `displays`:
+/// the one under its centre, else the one under its origin; the `primary`
+/// display wins when it qualifies, so a window that fits it opens there as
+/// it would without a display.
+pub fn placement_display(
+  bounds: &Bounds<Pixels>,
+  displays: &[Bounds<Pixels>],
+  primary: Option<usize>,
+) -> Option<usize> {
+  let under = |at: Point<Pixels>| {
+    primary
+      .filter(|&index| displays.get(index).is_some_and(|display| display.contains(&at)))
+      .or_else(|| displays.iter().position(|display| display.contains(&at)))
+  };
+  under(bounds.center()).or_else(|| under(bounds.origin))
 }
 
 /// The geometry to save for a window in `bounds` showing `content`: only a
@@ -89,16 +116,27 @@ fn same_geometry(a: &ConfigWindow, b: &ConfigWindow) -> bool {
     && a.size.height == b.size.height
 }
 
-/// Options of the main window: saved or centred geometry, the minimum size,
-/// the title, the desktop id as the Wayland app id.
+/// Options of the main window: saved geometry on the display it lies on, or
+/// centred on the primary display; the minimum size, the title, the desktop
+/// id as the Wayland app id.
 pub fn main_window_options(saved: &ConfigWindow, cx: &App) -> WindowOptions {
-  let displays: Vec<Bounds<Pixels>> = cx.displays().iter().map(|display| display.bounds()).collect();
-  let bounds = initial_bounds(saved, &displays).unwrap_or_else(|| {
+  let displays = cx.displays();
+  let display_bounds: Vec<Bounds<Pixels>> = displays.iter().map(|display| display.bounds()).collect();
+  let primary = cx
+    .primary_display()
+    .and_then(|primary| displays.iter().position(|display| display.id() == primary.id()));
+  let restored = initial_bounds(saved, &display_bounds);
+  let display_id = restored
+    .as_ref()
+    .and_then(|bounds| placement_display(bounds, &display_bounds, primary))
+    .map(|index| displays[index].id());
+  let bounds = restored.unwrap_or_else(|| {
     let (width, height) = sanitize_size(&saved.size);
     Bounds::centered(None, size(px(width as f32), px(height as f32)), cx)
   });
   WindowOptions {
     window_bounds: Some(WindowBounds::Windowed(bounds)),
+    display_id,
     titlebar: Some(TitlebarOptions {
       title: Some(crate::window_title()),
       ..Default::default()
@@ -216,6 +254,47 @@ mod tests {
     let displays = [display(0.0, 0.0, 1920.0, 1080.0)];
     assert_eq!(initial_bounds(&saved(5000, 100, 800, 600), &displays), None);
     assert_eq!(initial_bounds(&saved(-1, 100, 800, 600), &displays), None);
+  }
+
+  #[test]
+  fn a_position_on_a_display_left_of_the_primary_one_is_restored() {
+    let displays = [
+      display(0.0, 0.0, 1920.0, 1080.0),
+      display(-1280.0, -200.0, 1280.0, 1024.0),
+    ];
+    let bounds = initial_bounds(&saved(-1000, -100, 800, 600), &displays).expect("restored");
+    assert_eq!(bounds.origin, point(px(-1000.0), px(-100.0)));
+    // The default position still means "never saved", even with a display there.
+    assert_eq!(initial_bounds(&ConfigWindow::default(), &displays), None);
+  }
+
+  #[test]
+  fn the_window_opens_on_the_display_under_its_centre() {
+    let displays = [display(0.0, 0.0, 1920.0, 1080.0), display(1920.0, 0.0, 2560.0, 1440.0)];
+    let on_second = display(2000.0, 100.0, 800.0, 600.0);
+    assert_eq!(placement_display(&on_second, &displays, Some(0)), Some(1));
+    // Mostly on the second display: its centre decides, not its origin.
+    let straddling = display(1500.0, 100.0, 1200.0, 600.0);
+    assert_eq!(placement_display(&straddling, &displays, Some(0)), Some(1));
+    // Centre off every display: the display under the origin.
+    let hanging_off = display(4000.0, 100.0, 1200.0, 600.0);
+    assert_eq!(placement_display(&hanging_off, &displays, Some(0)), Some(1));
+    assert_eq!(
+      placement_display(&display(9000.0, 0.0, 800.0, 600.0), &displays, Some(0)),
+      None
+    );
+  }
+
+  #[test]
+  fn the_primary_display_wins_where_displays_overlap() {
+    // macOS reports every display at the origin.
+    let displays = [display(0.0, 0.0, 2560.0, 1440.0), display(0.0, 0.0, 1920.0, 1080.0)];
+    let fits_both = display(100.0, 100.0, 800.0, 600.0);
+    assert_eq!(placement_display(&fits_both, &displays, Some(1)), Some(1));
+    assert_eq!(placement_display(&fits_both, &displays, None), Some(0));
+    // Only the larger display holds it.
+    let fits_larger = display(1800.0, 1000.0, 800.0, 300.0);
+    assert_eq!(placement_display(&fits_larger, &displays, Some(1)), Some(0));
   }
 
   #[test]

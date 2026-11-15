@@ -348,8 +348,9 @@ impl Render for FileListView {
       cx.defer_in(window, |this, _, cx| this.set_drag_target(None, cx));
     }
     let primary = cx.theme().primary;
-    // System files dragged over the window outline the list.
-    let drop_zone = div()
+    // System files dragged over the window outline the list. A column, so
+    // the welcome page grows to the panel's height.
+    let drop_zone = v_flex()
       .id("file-drop-zone")
       .test_support()
       .size_full()

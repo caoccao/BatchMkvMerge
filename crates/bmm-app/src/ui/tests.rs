@@ -254,6 +254,28 @@ fn the_shell_mounts_with_the_welcome_page_while_empty(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_welcome_page_fills_the_tab_in_a_tall_window(cx: &mut TestAppContext) {
+  let shell = Shell::open(cx);
+  shell.resize(cx, 1400.0, 1600.0);
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    let panel = window.find("main-content").bounds();
+    let drop_zone = window.find("file-drop-zone").bounds();
+    let welcome = window.find("welcome").bounds();
+    // Below the welcome page: the drop zone's 2 px border, the panel's
+    // padding and its 1 px border.
+    assert!(
+      panel.bottom() - drop_zone.bottom() <= super::space(1.0) + px(1.0),
+      "{panel:?} {drop_zone:?}"
+    );
+    assert!(
+      drop_zone.bottom() - welcome.bottom() <= px(2.0),
+      "{drop_zone:?} {welcome:?}"
+    );
+  });
+}
+
+#[gpui_kit::test]
 fn settings_and_about_open_from_the_toolbar_and_close_to_the_left(cx: &mut TestAppContext) {
   let shell = Shell::open(cx);
   shell.click(cx, "toolbar-settings");
