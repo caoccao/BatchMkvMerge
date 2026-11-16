@@ -244,6 +244,48 @@ fn rows_show_each_status_with_its_label_and_times(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_rows_path_can_be_selected_and_copied_without_editing(cx: &mut TestAppContext) {
+  let shell = queued(cx, &[A]);
+  let header = shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    gpui_kit::base::test_support::texts(window)
+      .into_iter()
+      .find(|text| text.text() == "File Path")
+      .expect("the File Path header")
+      .bounds()
+  });
+  let path = shell
+    .view
+    .read_with(cx, |view, cx| {
+      let row = view.main().read(cx).queue().read(cx).row(A).cloned();
+      row.and_then(|row| row.read(cx).path_state().cloned())
+    })
+    .expect("the row drew its path");
+  // The text starts where the header's label does, inside the cell padding.
+  shell.window(cx, |_, cx| {
+    let text = path.read(cx).text_bounds().expect("path text was laid out");
+    assert_eq!(text.left(), header.left() + px(8.0));
+  });
+  shell.click(cx, "queue-path");
+  let select_all = if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" };
+  shell.press(cx, select_all);
+  shell.window(cx, |window, cx| {
+    assert!(path.read(cx).focus_handle(cx).is_focused(window));
+    assert_eq!(path.read(cx).selected_range(), 0..A.len());
+  });
+  let copy = if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-c" };
+  shell.press(cx, copy);
+  assert_eq!(
+    cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+      .as_deref(),
+    Some(A)
+  );
+  shell.window(cx, |window, cx| window.input("edited", cx));
+  shell.press(cx, "backspace");
+  assert_eq!(path.read_with(cx, |path, _| path.value()).as_ref(), A);
+}
+
+#[gpui_kit::test]
 fn one_table_per_drive(cx: &mut TestAppContext) {
   let shell = queued(cx, &[A, B, C]);
   shell.stores.queue.update(cx, |queue, cx| {

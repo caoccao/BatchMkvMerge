@@ -27,10 +27,9 @@ use std::time::SystemTime;
 use bmm_core::media_track::media_track_counts;
 use bmm_core::merge_args::file_name;
 use gpui_kit::assets::IconName;
-use gpui_kit::base::input::{Copy, InputAccessibility, InputEditorStyle, SelectAll, Textarea, TextareaState};
+use gpui_kit::base::input::TextareaState;
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
@@ -46,6 +45,7 @@ use crate::state::Stores;
 use crate::state::files::FileEvent;
 use crate::state::queue::QueueEvent;
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
+use crate::ui::selectable_path;
 use crate::ui::text_button;
 use crate::ui::track_table::TrackTable;
 
@@ -73,24 +73,7 @@ impl FileCard {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
-    let path = cx.new(|cx| {
-      let mut path = TextareaState::new(window, cx)
-        .rows(1)
-        .soft_wrap(false)
-        .default_value(members[0].clone());
-      path.set_readonly(true, cx);
-      path.on_context_menu(Rc::new(|_, capabilities, position, window, cx| {
-        NativeMenu::new()
-          .menu_with_disabled(
-            tr!("gpui_component.Input.Copy"),
-            !capabilities.is_copyable(),
-            Box::new(Copy),
-          )
-          .menu(tr!("gpui_component.Input.Select All"), Box::new(SelectAll))
-          .show(position, window, cx);
-      }));
-      path
-    });
+    let path = selectable_path::state(members[0].clone(), window, cx);
     let subscriptions = vec![
       // Structural changes: parsed files, BetterMediaInfo found.
       cx.observe(&stores.files, |_, _, cx| cx.notify()),
@@ -375,27 +358,13 @@ impl Render for FileCard {
       theme.background
     };
 
-    let selection = crate::theme::selection_highlight(theme);
-    self.path.update(cx, |path, _| {
-      path.set_editor_style(InputEditorStyle {
-        selection,
-        ..Default::default()
-      });
-      path.set_accessibility(
-        InputAccessibility::new(Some(Role::MultilineTextInput)).with_label(Some(tr!("merge.childTable.filePath"))),
-      );
-    });
-    let path = div()
-      .id("card-path")
-      .test_support()
-      .flex_1()
-      .min_w_0()
-      .ml_0()
-      .pl_0()
-      .h(crate::ui::text::body2() * 1.25)
-      .line_height(relative(1.25))
-      .child(Textarea::new(&self.path))
-      .test_text(SharedString::from(root.clone()));
+    let path = selectable_path::element(
+      "card-path",
+      &self.path,
+      tr!("merge.childTable.filePath"),
+      SharedString::from(root.clone()),
+      cx,
+    );
     let title_row = h_flex()
       .items_center()
       .gap(crate::ui::space(0.5))

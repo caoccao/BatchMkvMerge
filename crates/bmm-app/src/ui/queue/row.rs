@@ -16,12 +16,14 @@
 */
 
 //! One row of a drive's queue table, an entity that repaints itself when
-//! its item changes or, while it merges, when the clock ticks.
+//! its item changes or, while it merges, when the clock ticks. Its path can
+//! be selected and copied, as on a file card.
 
 use std::time::SystemTime;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt as _;
+use gpui_kit::base::input::TextareaState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -34,6 +36,7 @@ use crate::domain::status::{QueueItem, QueueItemStatus};
 use crate::state::Stores;
 use crate::state::queue::QueueEvent;
 use crate::ui::cards::{CardHeight, icon_button, text};
+use crate::ui::selectable_path;
 
 /// The Status text: the label, with the percentage while merging.
 pub fn status_text(item: &QueueItem) -> String {
@@ -62,6 +65,8 @@ pub fn status_details(item: &QueueItem) -> Option<String> {
 pub struct QueueRow {
   stores: Stores,
   file: String,
+  /// The path's field, made on the first render, which has the window.
+  path: Option<Entity<TextareaState>>,
   height: CardHeight,
   renders: usize,
   _subscriptions: Vec<Subscription>,
@@ -89,6 +94,7 @@ impl QueueRow {
     Self {
       stores,
       file,
+      path: None,
       height: CardHeight::default(),
       renders: 0,
       _subscriptions: subscriptions,
@@ -107,6 +113,11 @@ impl QueueRow {
     self.renders
   }
 
+  #[cfg(test)]
+  pub(super) fn path_state(&self) -> Option<&Entity<TextareaState>> {
+    self.path.as_ref()
+  }
+
   /// The element id of the row of `file`.
   pub fn element_id(file: &str) -> SharedString {
     format!("queue-row:{file}").into()
@@ -114,13 +125,17 @@ impl QueueRow {
 }
 
 impl Render for QueueRow {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.renders += 1;
     let theme = cx.theme();
     let (border, success, danger, foreground) = (theme.border, theme.success, theme.danger, theme.foreground);
     let Some(item) = self.stores.queue.read(cx).item(&self.file).cloned() else {
       return div().id(Self::element_id(&self.file)).into_any_element();
     };
+    let path = self
+      .path
+      .get_or_insert_with(|| selectable_path::state(self.file.clone(), window, cx))
+      .clone();
     let now = SystemTime::now();
     let color = match item.status {
       QueueItemStatus::Merging | QueueItemStatus::Completed => success,
@@ -168,6 +183,13 @@ impl Render for QueueRow {
       ),
       QueueItemStatus::Completed => None,
     };
+    let path = selectable_path::element(
+      "queue-path",
+      &path,
+      tr!("queue.header.filePath"),
+      SharedString::from(self.file.clone()),
+      cx,
+    );
     let row = h_flex()
       .id(Self::element_id(&self.file))
       .test_support()
@@ -176,12 +198,7 @@ impl Render for QueueRow {
       .items_center()
       .border_b_1()
       .border_color(border)
-      .child(
-        div()
-          .flex_1()
-          .min_w_0()
-          .child(cell(text(self.file.clone()).into_any_element())),
-      )
+      .child(div().flex_1().min_w_0().child(cell(path.into_any_element())))
       .child(status)
       .child(fixed(TIME_WIDTH, format_clock(item.merge_started_at)))
       .child(fixed(TIME_WIDTH, format_clock(item.merge_ended_at)))

@@ -29,6 +29,7 @@ pub mod main_content;
 pub mod output_dialog;
 pub mod queue;
 pub mod root;
+pub mod selectable_path;
 pub mod settings;
 pub mod status_bar;
 pub mod toolbar;
