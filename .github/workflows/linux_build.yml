@@ -38,7 +38,7 @@ jobs:
         git config --global core.eol lf
 
     - name: Checkout the code
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install system packages
       # Build dependencies of GPUI (gpui-kit's install script) plus Mesa's
@@ -126,7 +126,7 @@ jobs:
 
     steps:
     - name: Checkout the code
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Setup Rust
       uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
