@@ -22,10 +22,14 @@
 //! queue ran until nothing waited or merged), not per file, and only when a
 //! merge of the batch completed or failed.
 
-use bmm_core::merge::MergeOutcome;
+use std::time::Duration;
+
+use bmm_core::config::UnreadableConfig;
+use bmm_core::merge::{MergeError, MergeOutcome};
 use gpui_kit::App;
 
 use crate::domain::format::format_hms;
+use crate::domain::merge_error::{merge_error_message, warnings_text};
 use crate::state::Stores;
 use crate::state::queue::{QueueBatch, QueueEvent};
 use crate::state::ui::{CompletionNotice, NotificationKind};
@@ -73,21 +77,10 @@ pub fn watch(stores: &Stores, cx: &mut App) {
       file,
       outcome,
       error,
+      warnings,
       elapsed,
     } => {
-      let toast = match outcome {
-        MergeOutcome::Completed => Some((
-          NotificationKind::Success,
-          rust_i18n::t!("notification.completedIn", elapsed = format_hms(Some(*elapsed))).into_owned(),
-        )),
-        MergeOutcome::Failed => Some((
-          NotificationKind::Error,
-          error
-            .clone()
-            .unwrap_or_else(|| rust_i18n::t!("notification.unknownError").into_owned()),
-        )),
-        MergeOutcome::Cancelled => None,
-      };
+      let toast = finished_toast(*outcome, error.as_ref(), warnings, *elapsed);
       if let Some((kind, detail)) = toast {
         ui.update(cx, |ui, cx| ui.show_toast(kind, file.clone(), detail, cx));
       }
@@ -100,6 +93,81 @@ pub fn watch(stores: &Stores, cx: &mut App) {
     QueueEvent::ItemChanged { .. } | QueueEvent::Tick => {}
   })
   .detach();
+}
+
+/// At most this many warnings are shown in a finished merge's toast; the
+/// queue row's tooltip lists them all.
+const TOAST_WARNINGS: usize = 3;
+
+/// The toast of a finished merge: its time (and warnings) on success, its
+/// error on failure, nothing when it was cancelled.
+pub fn finished_toast(
+  outcome: MergeOutcome,
+  error: Option<&MergeError>,
+  warnings: &[String],
+  elapsed: Duration,
+) -> Option<(NotificationKind, String)> {
+  let elapsed = format_hms(Some(elapsed));
+  match outcome {
+    MergeOutcome::Completed if warnings.is_empty() => Some((
+      NotificationKind::Success,
+      rust_i18n::t!("notification.completedIn", elapsed = elapsed).into_owned(),
+    )),
+    MergeOutcome::Completed => Some((
+      NotificationKind::Success,
+      rust_i18n::t!(
+        "notification.completedWithWarnings",
+        elapsed = elapsed,
+        warnings = warnings_text(warnings, TOAST_WARNINGS)
+      )
+      .into_owned(),
+    )),
+    MergeOutcome::Failed => Some((
+      NotificationKind::Error,
+      error
+        .map(merge_error_message)
+        .unwrap_or_else(|| rust_i18n::t!("notification.unknownError").into_owned()),
+    )),
+    MergeOutcome::Cancelled => None,
+  }
+}
+
+/// At most this many of the paths a drop or a dialog could not use are named.
+const SKIPPED_NAMED: usize = 3;
+
+/// The snackbar for paths that could not be added: how many, and the first
+/// few of them.
+pub fn skipped_paths_message(skipped: &[String]) -> String {
+  let mut named: Vec<&str> = skipped.iter().take(SKIPPED_NAMED).map(String::as_str).collect();
+  if skipped.len() > SKIPPED_NAMED {
+    named.push("…");
+  }
+  rust_i18n::t!(
+    "notification.pathsSkipped",
+    count = skipped.len(),
+    paths = named.join(", ")
+  )
+  .into_owned()
+}
+
+/// The toast's title and text for a config file that did not load as it was.
+pub fn unreadable_config_message(problem: &UnreadableConfig) -> (String, String) {
+  let detail = match &problem.backup {
+    Some(backup) => rust_i18n::t!("notification.configReset", path = backup.display()).into_owned(),
+    None => rust_i18n::t!("notification.configResetNoBackup").into_owned(),
+  };
+  (rust_i18n::t!("notification.configResetTitle").into_owned(), detail)
+}
+
+/// Tells the user once, at startup, that the config file could not be read
+/// as it was, so settings that went back to their defaults are no surprise.
+pub fn report_unreadable_config(stores: &Stores, cx: &mut App) {
+  if let Some(problem) = bmm_core::config::unreadable_config() {
+    let (title, detail) = unreadable_config_message(problem);
+    stores
+      .ui
+      .update(cx, |ui, cx| ui.show_toast(NotificationKind::Error, title, detail, cx));
+  }
 }
 
 #[cfg(test)]
@@ -160,5 +228,64 @@ mod tests {
   fn a_batch_cancelled_entirely_sends_nothing() {
     assert_eq!(completion_notice(&batch(0, 0, 2)), None);
     assert_eq!(completion_notice(&QueueBatch::default()), None);
+  }
+
+  #[test]
+  fn an_unreadable_config_names_the_kept_file() {
+    let _locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    crate::i18n::set_language(Language::EnUS);
+    let kept = UnreadableConfig {
+      reason: "it is not valid JSON".into(),
+      backup: Some("/home/me/.config/BatchMkvMerge/BatchMkvMerge.json.bad".into()),
+    };
+    assert_eq!(
+      unreadable_config_message(&kept),
+      (
+        "Settings could not be read".to_string(),
+        "Settings that could not be read were reset to their defaults. The original file was kept as \
+         /home/me/.config/BatchMkvMerge/BatchMkvMerge.json.bad."
+          .to_string()
+      )
+    );
+    let lost = UnreadableConfig { backup: None, ..kept };
+    assert_eq!(
+      unreadable_config_message(&lost).1,
+      "Settings that could not be read were reset to their defaults."
+    );
+  }
+
+  #[test]
+  fn a_finished_merge_toasts_its_time_warnings_or_error() {
+    let _locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    crate::i18n::set_language(Language::EnUS);
+    let elapsed = Duration::from_secs(62);
+    assert_eq!(
+      finished_toast(MergeOutcome::Completed, None, &[], elapsed),
+      Some((NotificationKind::Success, "Completed in 00:01:02".to_string()))
+    );
+    let warnings: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
+    assert_eq!(
+      finished_toast(MergeOutcome::Completed, None, &warnings, elapsed),
+      Some((
+        NotificationKind::Success,
+        "Completed in 00:01:02 with warnings: one\ntwo\nthree\n…".to_string()
+      ))
+    );
+    let error = MergeError::Exited {
+      code: Some(2),
+      messages: vec!["The file 'x' could not be opened for writing.".to_string()],
+    };
+    assert_eq!(
+      finished_toast(MergeOutcome::Failed, Some(&error), &[], elapsed),
+      Some((
+        NotificationKind::Error,
+        "mkvmerge failed: The file 'x' could not be opened for writing.".to_string()
+      ))
+    );
+    assert_eq!(
+      finished_toast(MergeOutcome::Failed, None, &[], elapsed),
+      Some((NotificationKind::Error, "Unknown error".to_string()))
+    );
+    assert_eq!(finished_toast(MergeOutcome::Cancelled, None, &warnings, elapsed), None);
   }
 }

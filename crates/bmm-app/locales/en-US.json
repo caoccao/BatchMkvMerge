@@ -58,7 +58,10 @@
         "malformed": "Malformed file: %{detail}",
         "oversizedElement": "Element exceeds size limit: %{detail}",
         "internal": "Internal parser error: %{detail}"
-      }
+      },
+      "sourceMissing": "The source file %{path} cannot be found.",
+      "mkvmergeExitCode": "mkvmerge exited with code %{code}.",
+      "mkvmergeTerminated": "mkvmerge was terminated."
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "Completed",
       "cancelled": "Cancelled",
       "failed": "Failed"
-    }
+    },
+    "warnings": "Completed with warnings:"
   },
   "settings": {
     "title": "Settings",
@@ -210,7 +214,12 @@
     "completedIn": "Completed in %{elapsed}",
     "unknownError": "Unknown error",
     "summary": "%{completed} completed, %{failed} failed, %{cancelled} cancelled",
-    "finishedIn": "Finished in %{elapsed}"
+    "finishedIn": "Finished in %{elapsed}",
+    "configResetTitle": "Settings could not be read",
+    "configReset": "Settings that could not be read were reset to their defaults. The original file was kept as %{path}.",
+    "configResetNoBackup": "Settings that could not be read were reset to their defaults.",
+    "completedWithWarnings": "Completed in %{elapsed} with warnings: %{warnings}",
+    "pathsSkipped": "%{count} item(s) could not be read and were skipped: %{paths}"
   },
   "confirm": {
     "exitTitle": "Exit",

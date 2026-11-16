@@ -511,7 +511,9 @@ pub(super) fn finished(file: &str, outcome: MergeOutcome, error: Option<&str>) -
   MergeEvent::Finished {
     file: file.to_string(),
     outcome,
-    error: error.map(str::to_string),
+    error: error.map(|message| bmm_core::merge::MergeError::Other(message.to_string())),
+    warnings: Vec::new(),
+    launched: true,
     at: SystemTime::now(),
   }
 }

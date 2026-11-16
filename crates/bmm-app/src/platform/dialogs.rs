@@ -53,7 +53,7 @@ pub fn add_folder(stores: &Stores, cx: &mut App) {
 
 fn prompt(stores: &Stores, options: PathPromptOptions, cx: &mut App) {
   let chosen = cx.prompt_for_paths(options);
-  let file_store = stores.files.clone();
+  let (file_store, ui) = (stores.files.clone(), stores.ui.clone());
   cx.spawn(async move |cx| {
     let paths = match chosen.await {
       Ok(Ok(Some(paths))) => paths,
@@ -67,7 +67,7 @@ fn prompt(stores: &Stores, options: PathPromptOptions, cx: &mut App) {
       .into_iter()
       .map(|path| path.to_string_lossy().into_owned())
       .collect();
-    cx.update(|cx| files::add_paths(&file_store, paths, cx));
+    cx.update(|cx| files::add_paths(&file_store, Some(&ui), paths, cx));
   })
   .detach();
 }

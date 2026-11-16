@@ -92,6 +92,236 @@ fn the_output_follows_the_overrides() {
   assert_eq!(resolve(&target), Err(existing));
 }
 
+/// Resume writes the partial file its stopped run left again, though it is
+/// there; only a running merge that writes the file stops it. Without one,
+/// it chooses as a new merge: the next free name, or a set file path only
+/// while no file is there.
+#[test]
+fn a_resume_replaces_only_the_partial_file_of_its_stopped_run() {
+  let dir = TempDir::new("resume-output");
+  let source = dir.file("Movie.mkv");
+  let out = TempDir::new("resume-output-out");
+  let join = |name: &str| out.path().join(name).to_string_lossy().into_owned();
+  let target = OutputTarget {
+    global_dir: Some(out.path().to_string_lossy().into_owned()),
+    ..OutputTarget::default()
+  };
+  let none = TakenOutputs::default();
+  // The stopped run wrote `Movie (1).mkv`, as another `Movie.mkv` was there.
+  out.file("Movie.mkv");
+  let partial = out.file("Movie (1).mkv");
+  let resume = |target: &OutputTarget, partial: Option<&str>, taken: &TakenOutputs| {
+    resolve_resume_output_for(target, &source, partial, taken)
+  };
+  assert_eq!(resume(&target, Some(&partial), &none), Ok(partial.clone()));
+  assert_eq!(
+    resume(&target, None, &none),
+    Ok(join("Movie (2).mkv")),
+    "as a new merge"
+  );
+  let set = OutputTarget {
+    path: Some(join("Movie.mkv")),
+    ..target.clone()
+  };
+  assert_eq!(
+    resume(&set, None, &none),
+    Err(join("Movie.mkv")),
+    "a file that is not the run's own"
+  );
+  assert_eq!(resume(&set, Some(&join("Movie.mkv")), &none), Ok(join("Movie.mkv")));
+  let mut taken = TakenOutputs::default();
+  taken.insert(&partial);
+  assert_eq!(resume(&target, Some(&partial), &taken), Err(partial));
+}
+
+/// A process that has exited with its code.
+struct ExitedWith(i32);
+
+impl MergeProcessControl for ExitedWith {
+  fn kill(&mut self) -> std::io::Result<()> {
+    Ok(())
+  }
+
+  fn try_wait(&mut self) -> std::io::Result<Option<Option<i32>>> {
+    Ok(Some(Some(self.0)))
+  }
+}
+
+/// The stores over the core's merge queue, which starts a fake mkvmerge: its
+/// n-th start writes the n-th of `runs`' contents to its output (`-o`) and
+/// exits with that run's code.
+struct QueueRuns {
+  stores: Stores,
+  sink: bmm_core::merge::MergeEventSink,
+  relayed: std::sync::mpsc::Receiver<MergeEvent>,
+  launched: Arc<Mutex<Vec<String>>>,
+}
+
+impl QueueRuns {
+  fn new(cx: &mut TestAppContext, files: &[&str], runs: &'static [(&'static str, i32)]) -> Self {
+    let launched = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = launched.clone();
+    let (sink, events) = merge_events::channel();
+    let (relay, relayed) = std::sync::mpsc::channel();
+    let relay = Mutex::new(relay);
+    let queue = MergeQueue::new(
+      Box::new(move |_, args| {
+        let mut launched = recorder.lock().unwrap();
+        let (contents, code) = runs[launched.len()];
+        std::fs::write(&args[1], contents).unwrap();
+        launched.push(args[1].clone());
+        Ok(MergeProcess {
+          output: None,
+          control: Box::new(ExitedWith(code)),
+        })
+      }),
+      Box::new(move |event| {
+        let _ = relay.lock().unwrap().send(event);
+      }),
+    );
+    let fixtures = files.iter().map(|file| (file.to_string(), movie())).collect();
+    let (metadata, _) = fixture_source(fixtures);
+    let stores = cx.update(|cx| {
+      let services = Services {
+        persistence: Persistence::new(|_| {}),
+        metadata,
+        merges: MergeBackend::queue(queue),
+        taskbar: Taskbar::none(),
+        tools: crate::tools::ToolDetector::system(),
+      };
+      let stores = Stores::new(Config::default(), services, cx);
+      merge_events::start(&stores, events, cx);
+      stores
+    });
+    add(&stores, cx, files);
+    Self {
+      stores,
+      sink,
+      relayed,
+      launched,
+    }
+  }
+
+  /// Relays the queue's events, through the test thread, until `file` is
+  /// `wanted`.
+  fn run_until(&self, cx: &mut TestAppContext, file: &str, wanted: QueueItemStatus) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+      while let Ok(event) = self.relayed.try_recv() {
+        (self.sink)(event);
+      }
+      cx.run_until_parked();
+      if status(&self.stores, cx, file) == Some(wanted) {
+        break;
+      }
+      assert!(Instant::now() < deadline, "the merge did not end as {wanted:?}");
+      std::thread::sleep(Duration::from_millis(5));
+    }
+  }
+
+  /// The outputs mkvmerge was started with, in order.
+  fn launched(&self) -> Vec<String> {
+    self.launched.lock().unwrap().clone()
+  }
+}
+
+/// A merge is stopped and leaves part of its output, which plays. Resume
+/// writes the same file again, and mkvmerge replaces it: with an automatic
+/// name, the one the stopped run chose (`a (1).mkv`, as another program's
+/// `a.mkv` was there), not a new one.
+#[gpui_kit::test]
+fn resume_replaces_the_partial_file_of_the_stopped_run(cx: &mut TestAppContext) {
+  let out = TempDir::new("resume-replaces");
+  let a = "/m/a.mkv";
+  // The first run writes part of the file and fails; the resumed run writes
+  // it whole.
+  let runs = QueueRuns::new(cx, &[a], &[("partial", 2), ("merged", 0)]);
+  let stores = &runs.stores;
+  let join = |name: &str| out.path().join(name).to_string_lossy().into_owned();
+  std::fs::write(join("a.mkv"), b"another program's file").unwrap();
+  stores.files.update(cx, |files, cx| {
+    files.set_global_output_dir(out.path().to_string_lossy().into_owned(), cx);
+  });
+  cx.update(|cx| merge_all(stores, cx));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  let partial = join("a (1).mkv");
+  assert_eq!(
+    std::fs::read(&partial).unwrap(),
+    b"partial",
+    "left for the user to play"
+  );
+  cx.update(|cx| resume_merge(stores, a, cx));
+  runs.run_until(cx, a, QueueItemStatus::Completed);
+  assert_eq!(runs.launched(), [partial.clone(), partial.clone()]);
+  assert_eq!(std::fs::read(&partial).unwrap(), b"merged");
+  assert_eq!(std::fs::read(join("a.mkv")).unwrap(), b"another program's file");
+}
+
+/// A merge stops part-way at its set file path, and its job is cleared from
+/// the queue. A fresh merge to that path is a new job: it fails without
+/// starting mkvmerge, as the file is there, and its Resume fails the same way
+/// instead of replacing the earlier job's partial file.
+#[gpui_kit::test]
+fn a_fresh_merge_does_not_resume_onto_an_earlier_jobs_partial_file(cx: &mut TestAppContext) {
+  let out = TempDir::new("resume-new-job");
+  let a = "/m/a.mkv";
+  let runs = QueueRuns::new(cx, &[a], &[("partial", 2)]);
+  let stores = &runs.stores;
+  let set = out.path().join("Chosen.mkv").to_string_lossy().into_owned();
+  stores
+    .files
+    .update(cx, |files, cx| files.set_file_output_path(a, set.clone(), cx));
+  cx.update(|cx| merge_all(stores, cx));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  stores.queue.update(cx, |queue, cx| queue.clear_completed(cx));
+  assert_eq!(status(stores, cx, a), None);
+  cx.update(|cx| merge_all(stores, cx));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  cx.update(|cx| resume_merge(stores, a, cx));
+  assert_eq!(status(stores, cx, a), Some(QueueItemStatus::Waiting));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  let error = stores
+    .queue
+    .read_with(cx, |queue, _| queue.item(a).and_then(|item| item.error.clone()));
+  assert_eq!(
+    error,
+    Some(bmm_core::merge::MergeError::Other(output_exists_message(&set)))
+  );
+  assert_eq!(runs.launched(), [set.clone()], "started only for the first job");
+  assert_eq!(std::fs::read(&set).unwrap(), b"partial");
+}
+
+/// A merge whose set file path is there fails without starting mkvmerge, so
+/// the file there is not its own: Resume fails the same way and leaves it,
+/// here the output of an earlier merge that completed.
+#[gpui_kit::test]
+fn resume_does_not_replace_a_file_its_run_did_not_write(cx: &mut TestAppContext) {
+  let out = TempDir::new("resume-keeps");
+  let a = "/m/a.mkv";
+  let runs = QueueRuns::new(cx, &[a], &[("merged", 0)]);
+  let stores = &runs.stores;
+  let set = out.path().join("Chosen.mkv").to_string_lossy().into_owned();
+  stores
+    .files
+    .update(cx, |files, cx| files.set_file_output_path(a, set.clone(), cx));
+  cx.update(|cx| merge_all(stores, cx));
+  runs.run_until(cx, a, QueueItemStatus::Completed);
+  cx.update(|cx| merge_all(stores, cx));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  cx.update(|cx| resume_merge(stores, a, cx));
+  assert_eq!(status(stores, cx, a), Some(QueueItemStatus::Waiting));
+  runs.run_until(cx, a, QueueItemStatus::Failed);
+  let error = stores
+    .queue
+    .read_with(cx, |queue, _| queue.item(a).and_then(|item| item.error.clone()));
+  assert_eq!(
+    error,
+    Some(bmm_core::merge::MergeError::Other(output_exists_message(&set)))
+  );
+  assert_eq!(runs.launched(), [set.clone()], "started only for the first merge");
+  assert_eq!(std::fs::read(&set).unwrap(), b"merged");
+}
+
 #[gpui_kit::test]
 fn a_single_member_unit_merges_its_selected_rows(cx: &mut TestAppContext) {
   let store = loaded(cx, &["/m/a.mkv"], HashMap::from([("/m/a.mkv".to_string(), movie())]));
@@ -159,6 +389,7 @@ fn a_multi_member_unit_merges_in_its_combined_order(cx: &mut TestAppContext) {
     let empty = vec![bmm_core::merge_args::MergeInput {
       file: "/m/a.mkv".to_string(),
       tracks: Vec::new(),
+      sub_charset: None,
     }];
     assert!(MergeRequest::unit(files, "/m/a.mkv", empty, None).is_none());
   });
@@ -172,8 +403,8 @@ impl MergeProcessControl for FinishedProcess {
     Ok(())
   }
 
-  fn wait(&mut self) -> std::io::Result<Option<i32>> {
-    Ok(Some(0))
+  fn try_wait(&mut self) -> std::io::Result<Option<Option<i32>>> {
+    Ok(Some(Some(0)))
   }
 }
 
@@ -389,6 +620,8 @@ fn report_finished(stores: &Stores, cx: &mut TestAppContext, file: &str, outcome
     file: file.to_string(),
     outcome,
     error: None,
+    warnings: Vec::new(),
+    launched: true,
     at,
   };
   stores.queue.update(cx, |queue, cx| queue.apply_event(&event, at, cx));
@@ -645,15 +878,23 @@ fn a_waiting_merge_chooses_its_output_when_it_starts(cx: &mut TestAppContext) {
     std::thread::sleep(Duration::from_millis(5));
   }
   let launched = launched.lock().unwrap().clone();
-  let outputs: Vec<(&str, &str)> = launched
+  // `mkvmerge` is given the output chosen at the start.
+  let (output_a, output_b) = (join("a.mkv"), join("b (1).mkv"));
+  let written: Vec<(&str, &str)> = launched
     .iter()
     .map(|(file, args)| (file.as_str(), args[1].as_str()))
     .collect();
-  let (output_a, output_b) = (join("a.mkv"), join("b (1).mkv"));
-  assert_eq!(outputs, [(a, output_a.as_str()), (b, output_b.as_str())]);
+  assert_eq!(written, [(a, output_a.as_str()), (b, output_b.as_str())]);
+  let mut names: Vec<String> = std::fs::read_dir(out.path())
+    .unwrap()
+    .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+    .collect();
+  names.sort();
+  // The fake `mkvmerge` writes nothing, and the merge creates nothing.
+  assert_eq!(names, ["Chosen.mkv", "b.mkv"], "the other program's files only");
   let failed = stores.queue.read_with(cx, |queue, _| queue.item(c).cloned()).unwrap();
   assert_eq!(failed.status, QueueItemStatus::Failed);
-  assert!(failed.error.is_some_and(|error| error.contains(&chosen)));
+  assert!(failed.error.is_some_and(|error| error.to_string().contains(&chosen)));
   for path in [join("b.mkv"), chosen] {
     assert_eq!(std::fs::read(path).unwrap(), b"another program's file");
   }

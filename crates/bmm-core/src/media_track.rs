@@ -129,9 +129,13 @@ pub struct MediaTrack {
   pub bit_rate: Option<f64>,
   /// Track name; the file name for attachments; empty for the chapters row.
   pub track_name: String,
-  /// The language shown and emitted in the merge command: ISO 639-1 when one
-  /// exists, else ISO 639-2 (`und` without a language). Empty for synthetic
-  /// rows.
+  /// The track name the source file has (the parsed `track_name`), so a name
+  /// the user cleared can be cleared in the output too.
+  pub source_track_name: String,
+  /// The language shown and emitted in the merge command: the source's BCP 47
+  /// tag when it says more than the language (`pt-BR`, `zh-Hant`), else
+  /// ISO 639-1 when one exists, else ISO 639-2 (`und` without a language).
+  /// Empty for synthetic rows.
   pub language: String,
   /// Every equivalent code (terminologic, bibliographic, alpha-2), lowercased,
   /// so a filter in any form matches. Empty for synthetic rows.
@@ -195,6 +199,7 @@ pub fn metadata_to_media_tracks(meta: &MediaMetadata) -> Vec<MediaTrack> {
       size: stat_tag_number(track, "NUMBER_OF_BYTES"),
       bit_rate: stat_tag_number(track, "BPS"),
       track_name: common.track_name.clone().unwrap_or_default(),
+      source_track_name: common.track_name.clone().unwrap_or_default(),
       language: pick_track_language(track),
       language_codes: track_language_codes(track),
       default_track: common.default,
@@ -214,6 +219,7 @@ pub fn metadata_to_media_tracks(meta: &MediaMetadata) -> Vec<MediaTrack> {
       size: None,
       bit_rate: None,
       track_name: String::new(),
+      source_track_name: String::new(),
       language: String::new(),
       language_codes: Vec::new(),
       default_track: TrackFlag::Unspecified,
@@ -236,6 +242,7 @@ pub fn metadata_to_media_tracks(meta: &MediaMetadata) -> Vec<MediaTrack> {
       size: Some(attachment.size as f64),
       bit_rate: None,
       track_name: attachment.file_name.clone(),
+      source_track_name: attachment.file_name.clone(),
       language: String::new(),
       language_codes: Vec::new(),
       default_track: TrackFlag::Unspecified,
@@ -245,12 +252,17 @@ pub fn metadata_to_media_tracks(meta: &MediaMetadata) -> Vec<MediaTrack> {
   rows
 }
 
-/// ISO 639-1 when the parser resolved one, else the bibliographic, else the
-/// terminologic ISO 639-2 code, else `und`.
+/// The source's BCP 47 tag when it has subtags beyond the language (a
+/// region, a script: `pt-BR`, `zh-Hant`), as the merge command must not drop
+/// them; else ISO 639-1 when the parser resolved one, else the bibliographic,
+/// else the terminologic ISO 639-2 code, else `und`.
 fn pick_track_language(track: &Track) -> String {
   let Some(language) = &track.properties.common.language else {
     return "und".to_string();
   };
+  if let Some(tag) = language.ietf.as_deref().filter(|tag| tag.contains('-')) {
+    return tag.to_string();
+  }
   [
     language.iso639_1.as_deref(),
     language.iso639_2_bib.as_deref(),
@@ -535,6 +547,27 @@ mod tests {
     let row = one_row(empty);
     assert_eq!(row.language, "und");
     assert_eq!(row.language_codes, ["und"]);
+  }
+
+  #[test]
+  fn keeps_a_bcp_47_region_or_script_and_the_source_name() {
+    let mut brazilian = track(0, TrackType::Audio);
+    brazilian.properties.common.language = Language::from_ietf("pt-BR");
+    brazilian.properties.common.track_name = Some("Dublado".to_string());
+    let row = one_row(brazilian);
+    assert_eq!(row.language, "pt-BR");
+    assert_eq!(
+      row.language_codes,
+      ["por", "pt"],
+      "filters still match the base language"
+    );
+    assert_eq!(
+      (row.track_name.as_str(), row.source_track_name.as_str()),
+      ("Dublado", "Dublado")
+    );
+    let mut plain = track(0, TrackType::Audio);
+    plain.properties.common.language = Language::from_ietf("de");
+    assert_eq!(one_row(plain).language, "de");
   }
 
   #[test]

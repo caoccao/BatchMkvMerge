@@ -58,7 +58,10 @@
         "malformed": "Archivo mal formado: %{detail}",
         "oversizedElement": "El elemento supera el límite de tamaño: %{detail}",
         "internal": "Error interno del analizador: %{detail}"
-      }
+      },
+      "sourceMissing": "No se encuentra el archivo de origen %{path}.",
+      "mkvmergeExitCode": "mkvmerge terminó con el código %{code}.",
+      "mkvmergeTerminated": "mkvmerge se detuvo de forma inesperada."
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "Completado",
       "cancelled": "Cancelado",
       "failed": "Fallido"
-    }
+    },
+    "warnings": "Completado con advertencias:"
   },
   "settings": {
     "title": "Ajustes",
@@ -210,7 +214,12 @@
     "completedIn": "Completado en %{elapsed}",
     "unknownError": "Error desconocido",
     "summary": "%{completed} completados, %{failed} fallidos, %{cancelled} cancelados",
-    "finishedIn": "Finalizado en %{elapsed}"
+    "finishedIn": "Finalizado en %{elapsed}",
+    "configResetTitle": "No se pudo leer la configuración",
+    "configReset": "La configuración que no se pudo leer se restableció a sus valores predeterminados. El archivo original se guardó como %{path}.",
+    "configResetNoBackup": "La configuración que no se pudo leer se restableció a sus valores predeterminados.",
+    "completedWithWarnings": "Completado en %{elapsed} con advertencias: %{warnings}",
+    "pathsSkipped": "No se pudieron leer %{count} elemento(s) y se omitieron: %{paths}"
   },
   "confirm": {
     "exitTitle": "Salir",

@@ -726,6 +726,7 @@ fn copy_command_copies_the_golden_merge_tree_command(cx: &mut TestAppContext) {
       .map(|file| bmm_core::merge_args::MergeInput {
         file: file.clone(),
         tracks: files.selected_tracks(file),
+        sub_charset: files.merge_sub_charset(file),
       })
       .filter(|input| !input.tracks.is_empty())
       .collect()
@@ -742,7 +743,7 @@ fn copy_command_copies_the_golden_merge_tree_command(cx: &mut TestAppContext) {
     // out.
     for part in [
       "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 2 -s 3 --language 0:en",
-      "--track-name \"0:Director Commentary\"",
+      "--track-name '0:Director Commentary'",
     ] {
       assert!(copied.contains(part), "{part} in {copied}");
     }
@@ -980,6 +981,38 @@ fn the_output_dialog_warns_about_missing_and_refuses_unwritable_paths(cx: &mut T
   assert_eq!(snapshot(cx), (bounds, vec![tip.as_ref()]));
   shell.press(cx, "escape");
   assert!(!has_dialog(&shell, cx), "Escape cancels");
+}
+
+/// A merge replaces no file, so the dialog refuses an existing one with the
+/// message the merge would give, and keeps the dialog open.
+#[gpui_kit::test]
+fn the_output_dialog_refuses_an_existing_file(cx: &mut TestAppContext) {
+  let (shell, movie, dir) = movie_shell(cx, "cards-output-exists");
+  let existing = dir.path().join("Taken.mkv");
+  std::fs::write(&existing, b"another program's file").unwrap();
+  let existing = existing.to_string_lossy().into_owned();
+  click_in(&shell, cx, 0, "card-output");
+  type_and_confirm(&shell, cx, &existing);
+  assert!(has_dialog(&shell, cx), "refused");
+  let message = crate::actions::output_exists_message(&existing);
+  let shown = shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    gpui_kit::base::test_support::texts(window)
+      .into_iter()
+      .any(|text| text.text() == message)
+  });
+  assert!(shown, "{message}");
+  assert_eq!(
+    shell
+      .stores
+      .files
+      .read_with(cx, |files, _| files.output_path(&movie).map(str::to_string)),
+    None
+  );
+  // A directory in file mode is fine: the merge writes the input's name in it.
+  let directory = dir.path().to_string_lossy().into_owned();
+  type_and_confirm(&shell, cx, &directory);
+  assert!(!has_dialog(&shell, cx));
 }
 
 /// A folder dialog takes no file: a merge would treat it as the folder.

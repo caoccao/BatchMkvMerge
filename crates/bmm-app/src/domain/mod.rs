@@ -21,6 +21,7 @@
 pub mod file_tree;
 pub mod format;
 pub mod grouping;
+pub mod merge_error;
 pub mod metadata_error;
 pub mod status;
 pub mod word_navigation;

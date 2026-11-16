@@ -20,13 +20,19 @@
 //! The app version is passed in by the shell (`env!("CARGO_PKG_VERSION")` of
 //! the binary crate), so this crate's own version never leaks into the check.
 
+use std::cmp::Ordering;
+use std::time::Duration;
+
 use anyhow::Result;
 
 use crate::config::{Config, ConfigUpdate, UpdateCheckInterval};
 use crate::constants::APP_NAME;
 use crate::protocol::UpdateCheckResult;
 
-const RELEASES_URL: &str = "https://api.github.com/repos/caoccao/BatchMkvMerge/releases";
+/// The newest release that is neither a draft nor a prerelease.
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/caoccao/BatchMkvMerge/releases/latest";
+/// The whole request, connecting included, ends after this long.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What the shell does about updates at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,29 +45,34 @@ pub enum StartupUpdateCheck {
   Cached(UpdateCheckResult),
 }
 
-/// Ask GitHub for the newest release and compare it with `app_version`.
-/// Blocking network call.
+/// Ask GitHub for the latest stable release and compare it with
+/// `app_version`. Blocking network call, at most [`REQUEST_TIMEOUT`] long.
 pub fn check_for_updates(app_version: &str) -> Result<UpdateCheckResult> {
   log::info!("Checking for updates. Current version: {}", app_version);
-  let resp = ureq::get(RELEASES_URL)
+  let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+  let resp = agent
+    .get(LATEST_RELEASE_URL)
     .set("User-Agent", APP_NAME)
     .call()
-    .map_err(|e| anyhow::anyhow!("Failed to fetch releases: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("Failed to fetch the latest release: {}", e))?;
   let json: serde_json::Value = resp
     .into_json()
-    .map_err(|e| anyhow::anyhow!("Failed to parse releases: {}", e))?;
-  if let Some(first) = json.as_array().and_then(|arr| arr.first()) {
-    let tag = first["tag_name"].as_str().unwrap_or("");
-    log::info!("Latest release tag: {}", tag);
-    if is_newer_version(tag, app_version) {
-      let version = tag.trim_start_matches('v').to_owned();
-      return Ok(UpdateCheckResult {
-        has_update: true,
-        latest_version: Some(version),
-      });
+    .map_err(|e| anyhow::anyhow!("Failed to parse the latest release: {}", e))?;
+  Ok(update_from_release(&json, app_version))
+}
+
+/// The result for the release object `release` (GitHub's `/releases/latest`).
+fn update_from_release(release: &serde_json::Value, app_version: &str) -> UpdateCheckResult {
+  let tag = release["tag_name"].as_str().unwrap_or("");
+  log::info!("Latest release tag: {}", tag);
+  if is_newer_version(tag, app_version) {
+    UpdateCheckResult {
+      has_update: true,
+      latest_version: Some(tag.trim_start_matches(['v', 'V']).to_owned()),
     }
+  } else {
+    no_update()
   }
-  Ok(no_update())
 }
 
 /// Seconds since the Unix epoch, or 0 if the clock is before it.
@@ -81,25 +92,51 @@ pub fn interval_seconds(interval: &UpdateCheckInterval) -> i64 {
   }
 }
 
-/// Numeric dotted-version comparison; a leading `v` is ignored and missing
-/// parts count as 0.
-pub fn is_newer_version(latest: &str, current: &str) -> bool {
-  let latest = latest.trim_start_matches('v');
-  let current = current.trim_start_matches('v');
-  let latest_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-  let current_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-  let len = latest_parts.len().max(current_parts.len());
-  for i in 0..len {
-    let l = latest_parts.get(i).copied().unwrap_or(0);
-    let c = current_parts.get(i).copied().unwrap_or(0);
-    if l > c {
-      return true;
-    }
-    if l < c {
-      return false;
+/// A version as tags spell it: the numeric dotted parts, and whether a
+/// prerelease (`-rc1`) follows them.
+struct Version {
+  parts: Vec<u64>,
+  prerelease: bool,
+}
+
+impl Version {
+  /// Anything before the first digit is a prefix (`v1.2.0`,
+  /// `release-1.2.0`); the parts end at the first `-` (a prerelease) or `+`
+  /// (build metadata); a part that is not a number ends them too, so a later
+  /// number is never shifted into its place (`1.x.3` is `1`).
+  fn parse(tag: &str) -> Self {
+    let start = tag.find(|c: char| c.is_ascii_digit()).unwrap_or(tag.len());
+    let rest = &tag[start..];
+    let end = rest.find(['-', '+']).unwrap_or(rest.len());
+    let parts = rest[..end]
+      .split('.')
+      .map_while(|part| part.parse::<u64>().ok())
+      .collect();
+    Self {
+      parts,
+      prerelease: rest[end..].starts_with('-'),
     }
   }
-  false
+
+  fn cmp(&self, other: &Self) -> Ordering {
+    let len = self.parts.len().max(other.parts.len());
+    (0..len)
+      .map(|i| {
+        let part = |version: &Self| version.parts.get(i).copied().unwrap_or(0);
+        part(self).cmp(&part(other))
+      })
+      .find(|ordering| ordering.is_ne())
+      // The same numbers: a release is newer than its prereleases.
+      .unwrap_or_else(|| other.prerelease.cmp(&self.prerelease))
+  }
+}
+
+/// Whether the tag `latest` names a newer version than `current`: numeric
+/// dotted parts (missing ones count as 0) after any prefix such as `v`, and
+/// a release is newer than a prerelease of the same numbers ([`Version`]).
+pub fn is_newer_version(latest: &str, current: &str) -> bool {
+  let latest = Version::parse(latest);
+  !latest.parts.is_empty() && latest.cmp(&Version::parse(current)) == Ordering::Greater
 }
 
 /// Records a finished check in `update` (`lastChecked` = `now`, and
@@ -117,7 +154,11 @@ pub fn record_check(update: &mut ConfigUpdate, result: UpdateCheckResult, now: i
 /// the version found by the last check. `now` is [`current_timestamp`].
 pub fn startup_check(config: &Config, now: i64, app_version: &str) -> StartupUpdateCheck {
   let update = &config.update;
-  if update.last_checked == 0 || now - update.last_checked > interval_seconds(&update.check_interval) {
+  // A check "in the future" was recorded under a wrong clock: check again.
+  if update.last_checked == 0
+    || update.last_checked > now
+    || now - update.last_checked > interval_seconds(&update.check_interval)
+  {
     StartupUpdateCheck::CheckNow
   } else if !update.last_version.is_empty()
     && is_newer_version(&update.last_version, app_version)
@@ -179,6 +220,31 @@ mod tests {
     assert!(!is_newer_version("0.2", "0.2.0"));
     assert!(!is_newer_version("0.1.9", "0.2.0"));
     assert!(!is_newer_version("", "0.2.0"));
+  }
+
+  #[test]
+  fn prefixes_prereleases_and_build_metadata_do_not_shift_the_parts() {
+    assert!(is_newer_version("1.10.0-beta", "1.9.0"));
+    assert!(!is_newer_version("1.2.0-rc1", "1.2.0"));
+    assert!(is_newer_version("1.2.0", "1.2.0-rc1"));
+    assert!(!is_newer_version("1.2.0+build.7", "1.2.0"));
+    assert!(is_newer_version("release-1.2.0", "1.1.9"));
+    assert!(!is_newer_version("1.x.3", "1.2.0"), "1.x.3 is 1, not 1.3");
+    assert!(!is_newer_version("nightly", "1.0.0"));
+  }
+
+  #[test]
+  fn a_release_object_gives_its_tag_without_the_prefix() {
+    let release = serde_json::json!({ "tag_name": "v1.1.0", "prerelease": false });
+    assert_eq!(update_from_release(&release, "1.0.0"), found("1.1.0"));
+    assert_eq!(update_from_release(&release, "1.1.0"), no_update());
+    assert_eq!(update_from_release(&serde_json::json!({}), "1.0.0"), no_update());
+  }
+
+  #[test]
+  fn a_check_recorded_in_the_future_is_due_again() {
+    let config = config_checked(-3_600, "0.3.0", "");
+    assert_eq!(startup_check(&config, NOW, "0.2.0"), StartupUpdateCheck::CheckNow);
   }
 
   #[test]

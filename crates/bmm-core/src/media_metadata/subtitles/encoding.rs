@@ -43,14 +43,19 @@ pub fn set_subtitle_charset_hint(label: String) -> String {
 }
 
 fn lookup_hint() -> Option<&'static Encoding> {
-  SUBTITLE_CHARSET_HINT.with(|cell| {
-    let s = cell.borrow();
-    if s.is_empty() {
-      None
-    } else {
-      Encoding::for_label(s.as_bytes())
-    }
-  })
+  SUBTITLE_CHARSET_HINT.with(|cell| charset_hint_encoding(&cell.borrow()))
+}
+
+/// The encoding a subtitle charset hint (`parser.subtitleCharset`) names, as
+/// the WHATWG Encoding Standard resolves labels (`ISO-8859-1` and `latin1`
+/// are Windows-1252, `Shift_JIS` is Windows-31J); `None` for an empty hint
+/// or one that names no encoding, which leaves BOM-less files to UTF-8.
+pub fn charset_hint_encoding(label: &str) -> Option<&'static Encoding> {
+  if label.trim().is_empty() {
+    None
+  } else {
+    Encoding::for_label(label.as_bytes())
+  }
 }
 
 /// Detected text encoding + byte offset where the decoded payload begins

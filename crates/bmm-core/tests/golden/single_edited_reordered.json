@@ -225,6 +225,6 @@
       "--track-order",
       "0:2,0:0,0:4,0:1"
     ],
-    "command": "\"/Applications/MKVToolNix Folder/mkvmerge\" -o \"/out/My Movie (1).mkv\" -d 0 -a 2,1 -s 4 --language 0:en --track-name \"0:Director's \\\"Cut\\\"\" --default-track-flag 0:1 --language 2:de --track-name 2:Deutsch --default-track-flag 2:1 --language 1:ja --track-name \"1:Japanese 5.1\" --default-track-flag 1:0 --language 4:zh-Hant --track-name \"4:Simplified Chinese\" --forced-display-flag 4:1 --no-global-tags --attachments 2 \"/media/My Movie.mkv\" --track-order 0:2,0:0,0:4,0:1"
+    "command": "'/Applications/MKVToolNix Folder/mkvmerge' -o '/out/My Movie (1).mkv' -d 0 -a 2,1 -s 4 --language 0:en --track-name '0:Director'\\''s \"Cut\"' --default-track-flag 0:1 --language 2:de --track-name 2:Deutsch --default-track-flag 2:1 --language 1:ja --track-name '1:Japanese 5.1' --default-track-flag 1:0 --language 4:zh-Hant --track-name '4:Simplified Chinese' --forced-display-flag 4:1 --no-global-tags --attachments 2 '/media/My Movie.mkv' --track-order 0:2,0:0,0:4,0:1"
   }
 }

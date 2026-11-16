@@ -46,10 +46,44 @@ fn language_signature(tracks: &[CombinedTrack], track_type: MediaTrackType) -> S
   languages.join(",")
 }
 
+/// Each member's track keys (`"{type}:{id}"`, sorted, with `=language` when
+/// `with_languages`), members in order. A group card's table shows its first
+/// unit and sends each edit to the same key of the same member in every unit,
+/// so units group only when these match: then every edit lands on a track
+/// that exists and is the same kind of track in each of them.
+fn layout_signature(
+  members: &[String],
+  file_tracks: &HashMap<String, Vec<MediaTrack>>,
+  with_languages: bool,
+) -> String {
+  members
+    .iter()
+    .map(|file| {
+      let mut keys: Vec<String> = file_tracks
+        .get(file)
+        .into_iter()
+        .flatten()
+        .map(|track| {
+          if with_languages {
+            format!("{}={}", track.key(), track.language)
+          } else {
+            track.key()
+          }
+        })
+        .collect();
+      keys.sort();
+      keys.join(",")
+    })
+    .collect::<Vec<_>>()
+    .join(";")
+}
+
 /// The group key of a unit: its directory and member count, then per-type
 /// track counts ([`GroupMode::TrackCount`]) or per-type languages plus the
-/// chapter and attachment counts ([`GroupMode::TrackCountAndLanguage`]).
-/// `None` while a member is not parsed yet, and with [`GroupMode::None`].
+/// chapter and attachment counts ([`GroupMode::TrackCountAndLanguage`]), then
+/// the members' track layout ([`layout_signature`]; with each track's
+/// language in the language mode). `None` while a member is not parsed yet,
+/// and with [`GroupMode::None`].
 pub fn grouping_key(
   members: &[String],
   file_tracks: &HashMap<String, Vec<MediaTrack>>,
@@ -78,6 +112,11 @@ pub fn grouping_key(
       counts.video, counts.audio, counts.subtitles, counts.chapters, counts.attachments,
     ));
   }
+  let with_languages = matches!(group_mode, GroupMode::TrackCountAndLanguage);
+  key.push_str(&format!(
+    "|ids={}",
+    layout_signature(members, file_tracks, with_languages)
+  ));
   Some(key)
 }
 
@@ -148,6 +187,7 @@ mod tests {
       size: None,
       bit_rate: None,
       track_name: String::new(),
+      source_track_name: String::new(),
       language: language.to_string(),
       language_codes: Vec::new(),
       default_track: TrackFlag::Unspecified,
@@ -198,16 +238,16 @@ mod tests {
     let tracks = file_tracks();
     assert_eq!(
       grouping_key(&unit(&["/m/E01.mkv"]), &tracks, &GroupMode::TrackCount).as_deref(),
-      Some("/m|n=1|v=1|a=2|s=1|c=1|t=0")
+      Some("/m|n=1|v=1|a=2|s=1|c=1|t=0|ids=audio:1,audio:2,chapters:0,subtitles:3,video:0")
     );
     assert_eq!(
       grouping_key(&unit(&["/m/E01.mkv", "/m/E01.en.srt"]), &tracks, &GroupMode::TrackCount).as_deref(),
-      Some("/m|n=2|v=1|a=2|s=2|c=1|t=0")
+      Some("/m|n=2|v=1|a=2|s=2|c=1|t=0|ids=audio:1,audio:2,chapters:0,subtitles:3,video:0;subtitles:0")
     );
-    // Languages are sorted, so the audio order inside a file does not matter.
+    // Keys are sorted, so the order of the tracks inside a file does not matter.
     assert_eq!(
       grouping_key(&unit(&["/m/E02.mkv"]), &tracks, &GroupMode::TrackCountAndLanguage).as_deref(),
-      Some("/m|n=1|v=und|a=en,ja|s=en|c=1|t=0")
+      Some("/m|n=1|v=und|a=en,ja|s=en|c=1|t=0|ids=audio:1=ja,audio:2=en,chapters:0=,subtitles:3=en,video:0=und")
     );
     assert_eq!(grouping_key(&unit(&["/m/E01.mkv"]), &tracks, &GroupMode::None), None);
     assert_eq!(
@@ -233,7 +273,7 @@ mod tests {
       [
         single(&["/m/E04.mkv"]),
         RenderEntry::Group {
-          key: "/m|n=1|v=1|a=2|s=1|c=1|t=0".to_string(),
+          key: "/m|n=1|v=1|a=2|s=1|c=1|t=0|ids=audio:1,audio:2,chapters:0,subtitles:3,video:0".to_string(),
           units: vec![unit(&["/m/E01.mkv"]), unit(&["/m/E02.mkv"]), unit(&["/m/E03.mkv"])],
         },
         single(&["/n/E05.mkv"]),
@@ -245,7 +285,8 @@ mod tests {
     assert_eq!(
       by_language[1],
       RenderEntry::Group {
-        key: "/m|n=1|v=und|a=en,ja|s=en|c=1|t=0".to_string(),
+        key: "/m|n=1|v=und|a=en,ja|s=en|c=1|t=0|ids=audio:1=ja,audio:2=en,chapters:0=,subtitles:3=en,video:0=und"
+          .to_string(),
         units: vec![unit(&["/m/E01.mkv"]), unit(&["/m/E02.mkv"])],
       }
     );
@@ -253,5 +294,45 @@ mod tests {
     let none = build_render_entries(units.clone(), &GroupMode::None, &tracks);
     assert_eq!(none.len(), units.len());
     assert!(none.iter().all(|entry| matches!(entry, RenderEntry::Single { .. })));
+  }
+
+  /// Same counts, different track ids (another muxing order): an edit of
+  /// `subtitles:3` would miss the second file, so they get cards of their own.
+  /// Same ids with languages swapped between them group by count, not by
+  /// language.
+  #[test]
+  fn units_group_only_when_every_edit_lands_on_the_same_tracks() {
+    let mut tracks = file_tracks();
+    tracks.insert(
+      "/m/E06.mkv".to_string(),
+      vec![
+        track(MediaTrackType::Video, 0, "und"),
+        track(MediaTrackType::Subtitles, 1, "en"),
+        track(MediaTrackType::Audio, 2, "ja"),
+        track(MediaTrackType::Audio, 3, "en"),
+        track(MediaTrackType::Chapters, 0, ""),
+      ],
+    );
+    let mut swapped = english_japanese();
+    swapped[1].language = "en".to_string();
+    swapped[2].language = "ja".to_string();
+    tracks.insert("/m/E07.mkv".to_string(), swapped);
+    let units = vec![unit(&["/m/E01.mkv"]), unit(&["/m/E06.mkv"]), unit(&["/m/E07.mkv"])];
+    assert_eq!(
+      build_render_entries(units.clone(), &GroupMode::TrackCount, &tracks),
+      [
+        RenderEntry::Group {
+          key: "/m|n=1|v=1|a=2|s=1|c=1|t=0|ids=audio:1,audio:2,chapters:0,subtitles:3,video:0".to_string(),
+          units: vec![unit(&["/m/E01.mkv"]), unit(&["/m/E07.mkv"])],
+        },
+        single(&["/m/E06.mkv"]),
+      ]
+    );
+    let by_language = build_render_entries(units, &GroupMode::TrackCountAndLanguage, &tracks);
+    assert!(
+      by_language
+        .iter()
+        .all(|entry| matches!(entry, RenderEntry::Single { .. }))
+    );
   }
 }

@@ -58,7 +58,10 @@
         "malformed": "文件格式有误:%{detail}",
         "oversizedElement": "元素超过大小上限:%{detail}",
         "internal": "解析器内部错误:%{detail}"
-      }
+      },
+      "sourceMissing": "找不到源文件 %{path}。",
+      "mkvmergeExitCode": "mkvmerge 已退出，退出代码为 %{code}。",
+      "mkvmergeTerminated": "mkvmerge 被终止。"
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "已完成",
       "cancelled": "已取消",
       "failed": "失败"
-    }
+    },
+    "warnings": "已完成，有警告:"
   },
   "settings": {
     "title": "设置",
@@ -210,7 +214,12 @@
     "completedIn": "%{elapsed} 内完成",
     "unknownError": "未知错误",
     "summary": "已完成 %{completed} 个，失败 %{failed} 个，已取消 %{cancelled} 个",
-    "finishedIn": "%{elapsed} 内结束"
+    "finishedIn": "%{elapsed} 内结束",
+    "configResetTitle": "无法读取设置",
+    "configReset": "无法读取的设置已恢复为默认值。原文件已保留为 %{path}。",
+    "configResetNoBackup": "无法读取的设置已恢复为默认值。",
+    "completedWithWarnings": "%{elapsed} 内完成，有警告:%{warnings}",
+    "pathsSkipped": "%{count} 个项目无法读取，已跳过:%{paths}"
   },
   "confirm": {
     "exitTitle": "退出",

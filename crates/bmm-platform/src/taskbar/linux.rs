@@ -25,8 +25,9 @@
 //! never blocks the UI thread.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Duration;
 
 use raw_window_handle::HasWindowHandle;
 use zbus::zvariant::Value;
@@ -34,15 +35,24 @@ use zbus::zvariant::Value;
 const INTERFACE: &str = "com.canonical.Unity.LauncherEntry";
 const OBJECT_PATH: &str = "/com/canonical/unity/launcherentry/batchmkvmerge";
 
+/// How long dropping the progress waits for the D-Bus thread to send what
+/// is queued (the hide on quit) before the process may exit.
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub(super) struct Progress {
   sender: Option<Sender<Option<u8>>>,
+  /// Disconnects once the D-Bus thread has ended.
+  finished: Option<Receiver<()>>,
 }
 
 impl Progress {
   pub(super) fn new(_window: &impl HasWindowHandle, desktop_id: &str) -> Self {
     let app_uri = format!("application://{desktop_id}.desktop");
     let (sender, receiver) = mpsc::channel::<Option<u8>>();
+    let (finished_sender, finished) = mpsc::channel::<()>();
     let spawned = thread::Builder::new().name("launcher-progress".into()).spawn(move || {
+      // Dropped when the thread ends, which disconnects `finished`.
+      let _finished = finished_sender;
       let connection = match zbus::blocking::Connection::session() {
         Ok(connection) => connection,
         Err(error) => {
@@ -57,10 +67,16 @@ impl Progress {
       }
     });
     match spawned {
-      Ok(_) => Self { sender: Some(sender) },
+      Ok(_) => Self {
+        sender: Some(sender),
+        finished: Some(finished),
+      },
       Err(error) => {
         log::warn!("Failed to start the launcher progress thread: {error}");
-        Self { sender: None }
+        Self {
+          sender: None,
+          finished: None,
+        }
       }
     }
   }
@@ -72,9 +88,49 @@ impl Progress {
   }
 }
 
+impl Drop for Progress {
+  /// Closes the channel, so the thread ends once it has emitted what is
+  /// queued, including the hide `TaskbarProgress` sends when it is dropped,
+  /// and waits for that briefly: the process may exit right after (quitting
+  /// mid-merge), which would leave the launcher icon with its bar.
+  fn drop(&mut self) {
+    self.sender.take();
+    if let Some(finished) = self.finished.take() {
+      let _ = finished.recv_timeout(DRAIN_TIMEOUT);
+    }
+  }
+}
+
 fn emit_update(connection: &zbus::blocking::Connection, app_uri: &str, percent: Option<u8>) -> zbus::Result<()> {
   let mut properties: HashMap<&str, Value<'_>> = HashMap::new();
   properties.insert("progress", Value::from(f64::from(percent.unwrap_or(0)) / 100.0));
   properties.insert("progress-visible", Value::from(percent.is_some()));
   connection.emit_signal(None::<&str>, OBJECT_PATH, INTERFACE, "Update", &(app_uri, properties))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use raw_window_handle::{HandleError, WindowHandle};
+
+  /// The launcher progress does not use the window.
+  struct NoWindow;
+
+  impl HasWindowHandle for NoWindow {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+      Err(HandleError::Unavailable)
+    }
+  }
+
+  /// With or without a session bus, dropping sends what is queued and
+  /// returns, at the latest after the drain timeout.
+  #[test]
+  fn dropping_the_progress_waits_only_briefly_for_its_thread() {
+    let mut progress = Progress::new(&NoWindow, "BatchMkvMergeTest");
+    progress.set(Some(40));
+    progress.set(None);
+    let started = std::time::Instant::now();
+    drop(progress);
+    assert!(started.elapsed() < DRAIN_TIMEOUT + Duration::from_secs(2));
+  }
 }

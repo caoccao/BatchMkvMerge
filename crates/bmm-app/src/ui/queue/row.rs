@@ -29,6 +29,7 @@ use gpui_kit::*;
 
 use super::{ACTION_WIDTH, STATUS_WIDTH, TIME_WIDTH};
 use crate::domain::format::{format_clock, format_hms};
+use crate::domain::merge_error::{merge_error_message, warnings_text};
 use crate::domain::status::{QueueItem, QueueItemStatus};
 use crate::state::Stores;
 use crate::state::queue::QueueEvent;
@@ -41,6 +42,20 @@ pub fn status_text(item: &QueueItem) -> String {
     format!("{label} {}%", item.progress)
   } else {
     label.into_owned()
+  }
+}
+
+/// The status tooltip: why a failed merge failed, or what a completed one
+/// warned about; `None` when there is nothing to say.
+pub fn status_details(item: &QueueItem) -> Option<String> {
+  match item.status {
+    QueueItemStatus::Failed => item.error.as_ref().map(merge_error_message),
+    QueueItemStatus::Completed if !item.warnings.is_empty() => Some(format!(
+      "{}\n{}",
+      rust_i18n::t!("queue.warnings"),
+      warnings_text(&item.warnings, item.warnings.len())
+    )),
+    _ => None,
   }
 }
 
@@ -119,7 +134,7 @@ impl Render for QueueRow {
         .w(px(width))
         .child(cell(text(value).into_any_element()))
     };
-    let error = item.error.clone().filter(|_| item.status == QueueItemStatus::Failed);
+    let details = status_details(&item);
     let status = div()
       .id("queue-status")
       .test_support()
@@ -127,8 +142,8 @@ impl Render for QueueRow {
       .w(px(STATUS_WIDTH))
       .text_color(color)
       .child(cell(text(status_text(&item)).into_any_element()))
-      .when_some(error, |status, error| {
-        status.tooltip(move |window, cx| Tooltip::new(error.clone()).build(window, cx))
+      .when_some(details, |status, details| {
+        status.tooltip(move |window, cx| Tooltip::new(details.clone()).build(window, cx))
       });
     let action = match item.status {
       QueueItemStatus::Waiting | QueueItemStatus::Merging => Some(
@@ -180,5 +195,36 @@ impl Render for QueueRow {
           .children(action),
       );
     self.height.measure(row).into_any_element()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::i18n::tests::LOCALE_LOCK;
+  use bmm_core::config::Language;
+  use bmm_core::merge::MergeError;
+  use core::prelude::v1::test;
+
+  #[test]
+  fn the_status_tooltip_explains_a_failure_or_lists_the_warnings() {
+    let _locale = LOCALE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    crate::i18n::set_language(Language::EnUS);
+    let mut item = QueueItem::waiting("/m/a.mkv");
+    assert_eq!(status_details(&item), None);
+    item.status = QueueItemStatus::Failed;
+    item.error = Some(MergeError::Exited {
+      code: Some(2),
+      messages: Vec::new(),
+    });
+    assert_eq!(status_details(&item).as_deref(), Some("mkvmerge exited with code 2."));
+    item.status = QueueItemStatus::Completed;
+    item.error = None;
+    assert_eq!(status_details(&item), None);
+    item.warnings = vec!["one".to_string(), "two".to_string()];
+    assert_eq!(
+      status_details(&item).as_deref(),
+      Some("Completed with warnings:\none\ntwo")
+    );
   }
 }

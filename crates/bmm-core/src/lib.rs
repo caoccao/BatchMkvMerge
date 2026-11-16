@@ -34,4 +34,5 @@ pub mod merge_args;
 pub mod mkvtoolnix;
 pub mod protocol;
 pub mod services;
+mod unique_file;
 pub mod update;

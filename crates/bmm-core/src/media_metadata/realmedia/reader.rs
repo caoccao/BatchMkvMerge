@@ -102,8 +102,9 @@ impl Reader for RealMediaReader {
       }
       let payload_len = chunk.size as usize - COMMON_HEADER_LEN;
       let payload_start = src.position();
+      let cap = deadline.max_element_size();
       if chunk.id == ID_PROP {
-        let payload = read_payload(src, payload_len)?;
+        let payload = src.read_vec_capped(payload_len as u64, cap)?;
         let (parsed, consumed) = PropChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
           offset: payload_start,
@@ -112,7 +113,7 @@ impl Reader for RealMediaReader {
         prop = Some(parsed);
         src.seek_to(payload_start + consumed as u64)?;
       } else if chunk.id == ID_CONT {
-        let payload = read_payload(src, payload_len)?;
+        let payload = src.read_vec_capped(payload_len as u64, cap)?;
         let (c, consumed) = ContChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
           offset: payload_start,
@@ -121,7 +122,7 @@ impl Reader for RealMediaReader {
         apply_content_metadata(out, &c);
         src.seek_to(payload_start + consumed as u64)?;
       } else if chunk.id == ID_MDPR {
-        let payload = read_payload(src, payload_len)?;
+        let payload = src.read_vec_capped(payload_len as u64, cap)?;
         let (m, consumed) = MdprChunk::parse_with_consumed(&payload).ok_or(ParseError::Malformed {
           format: "realmedia",
           offset: payload_start,
@@ -164,12 +165,6 @@ impl Reader for RealMediaReader {
     }
     Ok(())
   }
-}
-
-fn read_payload(src: &mut FileSource, len: usize) -> Result<Vec<u8>, ParseError> {
-  let mut buf = vec![0u8; len];
-  src.read_exact(&mut buf)?;
-  Ok(buf)
 }
 
 fn read_first_data_packets(
@@ -580,6 +575,25 @@ mod tests {
     packet.extend_from_slice(&bits.to_be_bytes());
     packet.extend_from_slice(&[0u8; 12]);
     packet
+  }
+
+  /// A header chunk that claims gigabytes is refused before anything that
+  /// large is allocated.
+  #[test]
+  fn an_oversized_header_chunk_is_refused_without_allocating_it() {
+    let mut blob = build_rmf_header();
+    blob.extend_from_slice(b"PROP");
+    blob.extend_from_slice(&0xFFFF_FFF0u32.to_be_bytes());
+    blob.extend_from_slice(&0u16.to_be_bytes());
+    blob.extend_from_slice(&[0u8; 64]);
+    let mut s = FileSource::from_reader_for_test(Cursor::new(blob));
+    let mut out = MediaMetadata::new("clip.rm", 0);
+    let deadline = Deadline::new(60_000).with_max_element_size(1024 * 1024);
+    let err = RealMediaReader.read_headers(&mut s, &deadline, &mut out).unwrap_err();
+    assert!(
+      matches!(err, ParseError::OversizedElement { cap: 1_048_576, .. }),
+      "{err:?}"
+    );
   }
 
   #[test]

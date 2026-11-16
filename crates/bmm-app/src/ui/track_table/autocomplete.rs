@@ -33,7 +33,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use bmm_core::languages::{
-  first_matching_language_option_index, first_matching_title_option_index, language_label, to_short_code,
+  first_matching_language_option_index, first_matching_title_option_index, language_label, normalize_language,
+  to_short_code,
 };
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
@@ -128,6 +129,10 @@ pub struct AutocompleteCell {
   cell_bounds: Bounds<Pixels>,
   scroll: UniformListScrollHandle,
   disabled: bool,
+  /// The value when the cell got the focus, or the last value committed
+  /// since (Enter, a click on an option): what a language cell goes back to
+  /// when it loses the focus with text `mkvmerge` would reject.
+  value_on_focus: String,
   _subscription: Subscription,
 }
 
@@ -163,6 +168,7 @@ impl AutocompleteCell {
       cell_bounds: Bounds::default(),
       scroll: UniformListScrollHandle::new(),
       disabled: false,
+      value_on_focus: value.to_string(),
       _subscription: subscription,
     };
     cell.sync_matches(value);
@@ -271,6 +277,7 @@ impl AutocompleteCell {
   ) {
     match event {
       InputEvent::Focus => {
+        self.value_on_focus = input.read(cx).value().to_string();
         input.update(cx, |state, cx| state.select_all(window, cx));
       }
       InputEvent::Change => {
@@ -284,7 +291,23 @@ impl AutocompleteCell {
         cx.emit(CellEdited(value));
       }
       InputEvent::PressEnter { .. } => {}
-      InputEvent::Blur => self.close(cx),
+      InputEvent::Blur => {
+        self.close(cx);
+        if self.kind == CellKind::Language {
+          self.settle_language(window, cx);
+        }
+      }
+    }
+  }
+
+  /// A language cell leaving the focus: what was typed becomes its short
+  /// code or tag (`ger` → `de`, `pt-br` → `pt-BR`), and text `mkvmerge` would
+  /// reject (a typo, an empty cell) goes back to the value before the edit.
+  fn settle_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let typed = self.input.read(cx).value().to_string();
+    let settled = normalize_language(&typed).unwrap_or_else(|| self.value_on_focus.clone());
+    if settled != typed {
+      self.commit(settled, window, cx);
     }
   }
 
@@ -384,8 +407,9 @@ impl AutocompleteCell {
   }
 
   /// Enter: an alias of a listed language becomes its short code; otherwise
-  /// the keyboard option, else the typed text (free solo; the language cell
-  /// normalises it, the name cell keeps it as typed).
+  /// the keyboard option, else the typed text (the language cell normalises
+  /// it, or goes back to the value before the edit when `mkvmerge` would
+  /// reject it; the name cell keeps it as typed).
   fn press_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let typed = self.input.read(cx).value().to_string();
     let committed = match self.kind {
@@ -396,7 +420,7 @@ impl AutocompleteCell {
         } else if let Some(option) = self.open_option() {
           option
         } else {
-          normalized
+          normalize_language(&typed).unwrap_or_else(|| self.value_on_focus.clone())
         }
       }
       CellKind::TrackName => self.open_option().unwrap_or(typed),
@@ -413,6 +437,9 @@ impl AutocompleteCell {
   }
 
   fn commit(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
+    // A committed language stays: a typo after it goes back to it, not to
+    // the value before it.
+    self.value_on_focus.clone_from(&value);
     if self.input.read(cx).value().as_ref() != value {
       self
         .input

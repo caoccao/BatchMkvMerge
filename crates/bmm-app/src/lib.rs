@@ -31,6 +31,7 @@ pub mod actions;
 pub mod assets;
 pub mod domain;
 pub mod i18n;
+pub mod logging;
 pub mod merge_events;
 pub mod notifications;
 pub mod platform;
@@ -63,6 +64,16 @@ pub fn window_title() -> SharedString {
 
 /// Starts the application and blocks until it quits.
 pub fn run() {
+  // First, so that reading the config and everything after it is logged.
+  let log_file = logging::install(&bmm_core::config::config_dir());
+  log::info!(
+    "{APP_NAME} v{APP_VERSION} on {} {}, log {}",
+    std::env::consts::OS,
+    std::env::consts::ARCH,
+    log_file
+      .as_deref()
+      .map_or_else(|| "unavailable".into(), |path| path.display().to_string())
+  );
   // Read before the event loop starts; creates the default file on first run.
   let config = bmm_core::config::get_config();
   gpui_kit::application().with_assets(assets::AppAssets).run(move |cx| {
@@ -95,6 +106,7 @@ pub fn run() {
       return;
     };
     platform::install_quit(handle, &stores, cx);
+    notifications::report_unreadable_config(&stores, cx);
     platform::ingest_launch_args(&stores, cx);
     actions::watch_better_media_info(&stores, cx);
     updates::start(&stores, updates::UpdateSource::github(), cx);

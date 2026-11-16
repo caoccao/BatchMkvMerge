@@ -22,8 +22,12 @@
 //! hands it to the merge queue at once, in order, so a drive's queue follows
 //! the file list. The output is chosen when the merge starts
 //! ([`resolve_merge_output_for`]): a merge may wait for its drive, and only
-//! then is it known which files exist. The app never creates the output
-//! directory: mkvmerge creates missing directories.
+//! then is it known which files exist. A resumed merge writes the partial
+//! file its stopped run left again, without looking whether it exists
+//! ([`resolve_resume_output_for`]); a run that never started mkvmerge left
+//! none. The app never creates, nor removes, an output or its directory:
+//! mkvmerge creates missing directories, and a stopped or failed merge
+//! leaves its partial file, which plays.
 
 use bmm_core::media_track::MediaTrack;
 use bmm_core::merge::MergeArgs;
@@ -40,20 +44,11 @@ use gpui_kit::{App, AppContext, ClipboardItem, Task};
 
 use crate::domain::file_tree::combine_unit_tracks;
 use crate::domain::status::{QueueItem, QueueItemStatus};
+pub use crate::state::outputs::OutputTarget;
 use crate::state::outputs::{RunningOutputs, TakenOutputs};
 use crate::state::ui::NotificationKind;
 use crate::state::{FileStore, Stores};
 use crate::tools::Tool;
-
-/// Where a merge writes: a card's full output path wins, else its directory
-/// override, else the session's global directory, else the input's own
-/// directory.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct OutputTarget {
-  pub path: Option<String>,
-  pub dir: Option<String>,
-  pub global_dir: Option<String>,
-}
 
 impl OutputTarget {
   /// The target the stores hold for `root`.
@@ -97,6 +92,27 @@ pub fn resolve_merge_output_for(target: &OutputTarget, file: &str, taken: &Taken
   }
 }
 
+/// The output a resumed merge of `file` writes. With the partial file its
+/// stopped run left (`partial`, see [`RunningOutputs::claim`]: a run of the
+/// same job that started mkvmerge, with the card's output settings unchanged
+/// since), that file, without looking whether it is there: mkvmerge replaces
+/// it, and as it plays, the user may have watched it to decide on the
+/// resume. `Err` names it when a running merge writes it. Without one, as a
+/// new merge ([`resolve_merge_output_for`]): a run that never started
+/// mkvmerge wrote nothing, so a file at its output is not its own.
+pub fn resolve_resume_output_for(
+  target: &OutputTarget,
+  file: &str,
+  partial: Option<&str>,
+  taken: &TakenOutputs,
+) -> Result<String, String> {
+  match partial {
+    Some(partial) if taken.contains(partial) => Err(partial.to_string()),
+    Some(partial) => Ok(partial.to_string()),
+    None => resolve_merge_output_for(target, file, taken),
+  }
+}
+
 /// What a merge whose set output path is taken tells the user.
 pub fn output_exists_message(path: &str) -> String {
   tr!("merge.error.outputExists", path = path).to_string()
@@ -114,6 +130,9 @@ pub struct MergeRequest {
   pub order: Option<Vec<OrderedTrackRef>>,
   pub multi: bool,
   pub output: OutputTarget,
+  /// A Resume: the merge writes the partial file its stopped run left again
+  /// ([`resolve_resume_output_for`]).
+  pub resume: bool,
 }
 
 impl MergeRequest {
@@ -124,10 +143,12 @@ impl MergeRequest {
       inputs: vec![MergeInput {
         file: file.to_string(),
         tracks,
+        sub_charset: files.merge_sub_charset(file),
       }],
       order: None,
       multi: false,
       output: OutputTarget::of(files, file),
+      resume: false,
     })
   }
 
@@ -146,6 +167,7 @@ impl MergeRequest {
       order,
       multi: true,
       output: OutputTarget::of(files, root),
+      resume: false,
     })
   }
 
@@ -162,6 +184,7 @@ impl MergeRequest {
       .map(|file| MergeInput {
         file: file.clone(),
         tracks: files.selected_tracks(file),
+        sub_charset: files.merge_sub_charset(file),
       })
       .collect();
     let order: Vec<OrderedTrackRef> = combine_unit_tracks(unit, files.file_tracks(), files.combined_track_order(root))
@@ -190,6 +213,7 @@ impl MergeRequest {
       .map(|file| MergeInput {
         file: file.clone(),
         tracks: files.selected_tracks(file),
+        sub_charset: files.merge_sub_charset(file),
       })
       .collect();
     Self::unit(files, root, inputs, None)
@@ -206,7 +230,8 @@ impl MergeRequest {
     if self.multi {
       build_merge_args_multi(&self.inputs, output, self.order.as_deref())
     } else {
-      build_merge_args(&self.root, output, &self.inputs[0].tracks)
+      let input = &self.inputs[0];
+      build_merge_args(&self.root, output, &input.tracks, input.sub_charset.as_deref())
     }
   }
 
@@ -216,19 +241,33 @@ impl MergeRequest {
     if self.multi {
       build_command_string_multi(&self.inputs, output, mkv_toolnix_path, self.order.as_deref())
     } else {
-      build_command_string(&self.root, output, mkv_toolnix_path, &self.inputs[0].tracks)
+      let input = &self.inputs[0];
+      build_command_string(
+        &self.root,
+        output,
+        mkv_toolnix_path,
+        &input.tracks,
+        input.sub_charset.as_deref(),
+      )
     }
   }
 }
 
 /// The arguments of `request`'s merge, built as its worker starts it: the
-/// output is chosen then ([`resolve_merge_output_for`]) and claimed in
-/// `outputs` until the merge finishes. A set path that is taken fails the
-/// merge.
+/// output is chosen then ([`resolve_merge_output_for`], or for a Resume
+/// [`resolve_resume_output_for`]) and claimed in `outputs` until the merge
+/// finishes. A set path that is taken fails the merge, unless a Resume
+/// replaces its own partial file there; an output that a running merge
+/// writes fails either.
 fn launch_args(request: MergeRequest, outputs: RunningOutputs) -> MergeArgs {
   MergeArgs::AtLaunch(Box::new(move || {
-    let output = outputs.claim(&request.root, |taken| {
-      request.output_path(taken).map_err(|path| output_exists_message(&path))
+    let output = outputs.claim(&request.root, &request.output, |taken, partial| {
+      let output = if request.resume {
+        resolve_resume_output_for(&request.output, &request.root, partial, taken)
+      } else {
+        request.output_path(taken)
+      };
+      output.map_err(|path| output_exists_message(&path))
     })?;
     Ok(request.args(&output))
   }))
@@ -236,7 +275,9 @@ fn launch_args(request: MergeRequest, outputs: RunningOutputs) -> MergeArgs {
 
 /// Lists the roots of `requests` that are not waiting or merging as waiting
 /// and hands them to the merge queue, in order; each chooses its output when
-/// it starts ([`launch_args`]).
+/// it starts ([`launch_args`]). A request that is not a Resume starts a new
+/// job, so a Resume of it never replaces the partial file of an earlier job
+/// ([`RunningOutputs::start_job`]).
 pub fn enqueue(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) {
   let backend = stores.merges.clone();
   stores.queue.update(cx, |queue, cx| {
@@ -244,6 +285,9 @@ pub fn enqueue(stores: &Stores, requests: Vec<MergeRequest>, cx: &mut App) {
       let root = request.root.clone();
       if !queue.add_to_queue(&root, cx) {
         continue;
+      }
+      if !request.resume {
+        queue.outputs().start_job(&root);
       }
       let args = launch_args(request, queue.outputs().clone());
       if let Err(error) = backend.enqueue(root.clone(), args) {
@@ -298,13 +342,19 @@ pub fn cancel_all(stores: &Stores, cx: &mut App) {
 
 /// A root merges its whole card unit with the current selection. A listed file
 /// that is no longer a unit root merges alone, and a removed file is skipped.
+/// The merge writes the partial file its stopped run left again
+/// ([`launch_args`]).
 fn resume_request(files: &FileStore, item: &QueueItem) -> Option<MergeRequest> {
   let root = &item.file;
-  match files.units().iter().find(|unit| unit.first() == Some(root)) {
+  let request = match files.units().iter().find(|unit| unit.first() == Some(root)) {
     Some(unit) => MergeRequest::unit_selection(files, unit),
     None if files.files().contains(root) => MergeRequest::unit_selection(files, std::slice::from_ref(root)),
     None => None,
-  }
+  };
+  request.map(|request| MergeRequest {
+    resume: true,
+    ..request
+  })
 }
 
 /// Resume one cancelled or failed job from its queue row.

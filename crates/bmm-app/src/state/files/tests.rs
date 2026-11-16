@@ -257,9 +257,30 @@ fn add_paths_lists_the_media_files_of_files_and_folders(cx: &mut TestAppContext)
     ignored,
     "/does/not/exist.mkv".to_owned(),
   ];
-  cx.update(|cx| add_paths(&store, paths, cx));
+  let ui = cx.new(|_| crate::state::ui::UiState::new());
+  let snackbars = Rc::new(RefCell::new(Vec::new()));
+  let sink = snackbars.clone();
+  let _subscription = cx.update(|cx| {
+    cx.subscribe(&ui, move |_, event: &crate::state::ui::UiEvent, _| {
+      if let crate::state::ui::UiEvent::Snackbar(snackbar) = event {
+        sink.borrow_mut().push(snackbar.message.clone());
+      }
+    })
+  });
+  // The snackbar is worded once the paths are resolved, during the run.
+  let _locale = crate::i18n::tests::LOCALE_LOCK
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  crate::i18n::set_language(bmm_core::config::Language::EnUS);
+  cx.update(|cx| add_paths(&store, Some(&ui), paths, cx));
   cx.run_until_parked();
   store.read_with(cx, |store, _| assert_eq!(store.files(), [subtitle, movie, single]));
+  // A path that is not there is skipped, and the snackbar names it; a file
+  // of another type is left out without a word.
+  assert_eq!(
+    *snackbars.borrow(),
+    ["1 item(s) could not be read and were skipped: /does/not/exist.mkv"]
+  );
 }
 
 #[gpui_kit::test]
@@ -769,4 +790,189 @@ fn set_file_metadata_stores_rows_for_listed_files_only(cx: &mut TestAppContext) 
     assert!(store.tracks("/m/unlisted.mkv").is_none());
   });
   assert_eq!(harness.take_notified(), 1);
+}
+
+/// The configured subtitle charset reaches mkvmerge for a text subtitle
+/// file as the encoding the parser read it in (`ISO-8859-1` is Windows-1252
+/// to the parser, so mkvmerge gets `CP1252`), and never for a container's
+/// subtitles.
+#[gpui_kit::test]
+fn a_text_subtitle_file_merges_with_the_configured_charset(cx: &mut TestAppContext) {
+  use bmm_core::media_metadata::model::container::ContainerFormat;
+  let mut srt = metadata(&[(TrackType::Subtitles, "fre")]);
+  srt.container.format = ContainerFormat::Srt;
+  let mut mkv = metadata(&[(TrackType::Subtitles, "fre")]);
+  mkv.container.format = ContainerFormat::Matroska;
+  let mut settings = settings(default_profile());
+  settings.parse_options.subtitle_charset = "ISO-8859-1".to_string();
+  let fixtures = HashMap::from([("/m/a.srt".to_string(), srt), ("/m/b.mkv".to_string(), mkv)]);
+  let harness = Harness::loaded(cx, settings, &["/m/a.srt", "/m/b.mkv"], fixtures);
+  harness.read(cx, |store| {
+    assert_eq!(store.merge_sub_charset("/m/a.srt").as_deref(), Some("CP1252"));
+    assert_eq!(store.merge_sub_charset("/m/b.mkv"), None);
+    let request = crate::actions::MergeRequest::file(store, "/m/a.srt", store.selected_tracks("/m/a.srt")).unwrap();
+    let args = request.args("/out/a.mkv");
+    let at = args
+      .iter()
+      .position(|arg| arg == "--sub-charset")
+      .expect("--sub-charset");
+    assert_eq!(args[at + 1], "0:CP1252");
+    let request = crate::actions::MergeRequest::file(store, "/m/b.mkv", store.selected_tracks("/m/b.mkv")).unwrap();
+    assert!(!request.args("/out/b.mkv").contains(&"--sub-charset".to_string()));
+  });
+}
+
+/// A parse stuck in a read: its watchdog fails the file as timed out, and
+/// the result that comes later is dropped. A finished parse's watchdog does
+/// nothing.
+#[gpui_kit::test]
+fn a_parse_that_never_answers_times_out_and_its_late_result_is_dropped(cx: &mut TestAppContext) {
+  let (source, _) = fixture_source(HashMap::from([
+    ("/m/stuck.mkv".to_string(), movie()),
+    ("/m/fine.mkv".to_string(), movie()),
+  ]));
+  let harness = Harness::new(cx, settings(default_profile()), source);
+  let attempts = harness.update(cx, |store, cx| {
+    store.add_files(s(&["/m/stuck.mkv", "/m/fine.mkv"]), cx);
+    let attempts = (store.in_flight["/m/stuck.mkv"], store.in_flight["/m/fine.mkv"]);
+    // The watchdog fires before the parse answers.
+    store.give_up_load("/m/stuck.mkv", attempts.0, cx);
+    attempts
+  });
+  harness.read(cx, |store| {
+    assert!(matches!(
+      store.load_state("/m/stuck.mkv"),
+      LoadState::Failed(MediaMetadataErrorPayload::Timeout { stage, .. }) if stage == "read"
+    ));
+  });
+  // Both parses answer now; the stuck one's answer comes too late.
+  cx.run_until_parked();
+  harness.update(cx, |store, cx| {
+    assert!(
+      matches!(store.load_state("/m/stuck.mkv"), LoadState::Failed(_)),
+      "the late result is dropped"
+    );
+    assert!(matches!(store.load_state("/m/fine.mkv"), LoadState::Loaded));
+    store.give_up_load("/m/fine.mkv", attempts.1, cx);
+    assert!(
+      matches!(store.load_state("/m/fine.mkv"), LoadState::Loaded),
+      "a finished parse stays"
+    );
+  });
+}
+
+/// A large drop queues more parses than the background executor has
+/// threads, and a parse can wait for one longer than its budget. Here the
+/// clock jumps by twice the watchdog's limit once every watchdog has been
+/// set up, while some reads (which ones depends on the seed) have not begun.
+/// Each watchdog counts from the start of its own read, so every file loads.
+#[gpui_kit::test(iterations = 50)]
+fn a_parse_that_waited_for_a_thread_does_not_time_out(cx: &mut TestAppContext) {
+  let settings = settings(default_profile());
+  let limit = std::time::Duration::from_millis(settings.parse_options.timeout_ms) + load::WATCHDOG_MARGIN;
+  let clock = cx
+    .executor()
+    .dispatcher()
+    .as_test()
+    .expect("the test dispatcher")
+    .scheduler()
+    .clock();
+  let files: Vec<String> = (0..20).map(|n| format!("/m/{n:02}.mkv")).collect();
+  let (source, _) = fixture_source(files.iter().map(|file| (file.clone(), movie())).collect());
+  let harness = Harness::new(cx, settings, source);
+  harness.update(cx, |store, cx| {
+    store.add_files(files.clone(), cx);
+    // Foreground tasks run in order, so this one runs after every parse's
+    // tasks have started; the reads run on the background in any order.
+    cx.spawn(async move |_, _| clock.advance(limit * 2)).detach();
+  });
+  cx.run_until_parked();
+  harness.read(cx, |store| {
+    for file in &files {
+      assert!(matches!(store.load_state(file), LoadState::Loaded), "{file}");
+    }
+  });
+}
+
+/// The watchdog's timer fires while reads block every background thread.
+/// Real threads: GPUI's `ThreadedDispatcher` has a fixed pool of background
+/// threads and a timer thread, as the Linux dispatcher has.
+#[test]
+fn the_watchdog_timer_fires_while_every_background_thread_is_blocked() {
+  use gpui_kit::{BackgroundExecutor, ForegroundExecutor, ThreadedDispatcher};
+  use std::sync::Condvar;
+  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::time::{Duration, Instant};
+
+  let dispatcher = Arc::new(ThreadedDispatcher::new());
+  let background = BackgroundExecutor::new(dispatcher.clone());
+  let foreground = ForegroundExecutor::new(dispatcher.clone());
+  // One blocked "read" more than the pool has threads, so every thread is busy.
+  let gate = Arc::new((Mutex::new(false), Condvar::new()));
+  let threads = std::thread::available_parallelism().map_or(2, |count| count.get().max(2));
+  for _ in 0..=threads {
+    let gate = gate.clone();
+    background
+      .spawn(async move {
+        let (open, opened) = &*gate;
+        let mut open = open.lock().unwrap();
+        while !*open {
+          open = opened.wait(open).unwrap();
+        }
+      })
+      .detach();
+  }
+  let fired = Arc::new(AtomicBool::new(false));
+  let deadline = background.now() + Duration::from_millis(50);
+  foreground
+    .spawn({
+      let (fired, background) = (fired.clone(), background.clone());
+      async move {
+        load::sleep_until(&background, deadline).await;
+        fired.store(true, Ordering::SeqCst);
+      }
+    })
+    .detach();
+  let give_up = Instant::now() + Duration::from_secs(5);
+  while !fired.load(Ordering::SeqCst) && Instant::now() < give_up {
+    dispatcher.run_ready_main_tasks();
+    std::thread::sleep(Duration::from_millis(5));
+  }
+  let fired = fired.load(Ordering::SeqCst);
+  *gate.0.lock().unwrap() = true;
+  gate.1.notify_all();
+  assert!(fired, "the watchdog's timer did not fire while the reads blocked");
+}
+
+/// Dropped again under another spelling (`./`, a link, another letter case
+/// where the file system ignores case), a listed file is not listed twice.
+#[gpui_kit::test]
+fn the_same_file_under_another_spelling_is_listed_once(cx: &mut TestAppContext) {
+  let dir = TempDir::new("same-file");
+  let movie = dir.file("Movie.mkv");
+  let other = dir.file("Other.mkv");
+  let dotted = dir.path().join(".").join("Movie.mkv").to_string_lossy().into_owned();
+  let mut spellings = vec![dotted];
+  #[cfg(unix)]
+  {
+    let link = dir.path().join("Link.mkv");
+    std::os::unix::fs::symlink(&movie, &link).unwrap();
+    spellings.push(link.to_string_lossy().into_owned());
+  }
+  if cfg!(any(target_os = "macos", target_os = "windows")) {
+    spellings.push(dir.path().join("MOVIE.MKV").to_string_lossy().into_owned());
+  }
+  let (source, _) = fixture_source(HashMap::new());
+  let store = cx.new(|_| FileStore::with_settings(settings(default_profile()), source));
+  cx.update(|cx| add_paths(&store, None, vec![movie.clone()], cx));
+  cx.run_until_parked();
+  cx.update(|cx| add_paths(&store, None, [spellings, vec![other.clone()]].concat(), cx));
+  cx.run_until_parked();
+  store.read_with(cx, |store, _| assert_eq!(store.files(), [movie.clone(), other.clone()]));
+  // Removed, it can come back under any spelling.
+  store.update(cx, |store, cx| store.remove_file(&movie, cx));
+  let dotted = dir.path().join(".").join("Movie.mkv").to_string_lossy().into_owned();
+  cx.update(|cx| add_paths(&store, None, vec![dotted.clone()], cx));
+  cx.run_until_parked();
+  store.read_with(cx, |store, _| assert_eq!(store.files(), [other, dotted]));
 }

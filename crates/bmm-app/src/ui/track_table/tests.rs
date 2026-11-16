@@ -34,6 +34,8 @@ use super::*;
 use crate::state::files::tests::TempDir;
 use crate::ui::tests::{Shell, started};
 
+const SELECT_ALL: &str = if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" };
+
 // The synthetic files of `crates/bmm-core/tests/merge_args_golden.rs`: a
 // Matroska movie with every row type, an audio-only `.mka` and an `.srt`.
 #[allow(dead_code)]
@@ -651,6 +653,49 @@ fn a_group_cards_table_edits_every_unit(cx: &mut TestAppContext) {
   }
 }
 
+/// Leaving a language cell settles what was typed: a tag in the usual case,
+/// and text mkvmerge would reject goes back to the value before the edit.
+#[gpui_kit::test]
+fn the_language_cell_settles_or_reverts_when_it_loses_the_focus(cx: &mut TestAppContext) {
+  let (shell, movie, _dir) = movie_shell(cx, "table-language-blur");
+  let language = |cx: &mut TestAppContext| track(&shell, cx, &movie, "audio:1", |track| track.language.clone());
+  let input = "language-0:audio:1-input";
+  let elsewhere = "name-0:audio:2-input";
+  in_table(&shell, cx, &movie, |window, cx| window.click(input, cx));
+  shell.window(cx, |window, cx| window.input("pt-br", cx));
+  cx.run_until_parked();
+  assert_eq!(language(cx), "pt-br", "every keystroke reaches the row");
+  // Escape closes the list, which may cover the cell clicked next.
+  shell.press(cx, "escape");
+  in_table(&shell, cx, &movie, |window, cx| window.click(elsewhere, cx));
+  cx.run_until_parked();
+  assert_eq!(language(cx), "pt-BR");
+  in_table(&shell, cx, &movie, |window, cx| window.click(input, cx));
+  shell.window(cx, |window, cx| window.input("Englsh", cx));
+  cx.run_until_parked();
+  shell.press(cx, "escape");
+  in_table(&shell, cx, &movie, |window, cx| window.click(elsewhere, cx));
+  cx.run_until_parked();
+  assert_eq!(language(cx), "pt-BR", "a typo goes back");
+  in_table(&shell, cx, &movie, |window, cx| window.click(input, cx));
+  shell.window(cx, |window, cx| window.input("xx", cx));
+  shell.press(cx, "enter");
+  assert_eq!(language(cx), "pt-BR", "Enter does not take it either");
+  // A language taken with Enter is what a later typo in the same edit goes
+  // back to.
+  shell.press(cx, SELECT_ALL);
+  shell.window(cx, |window, cx| window.input("de", cx));
+  shell.press(cx, "enter");
+  assert_eq!(language(cx), "de");
+  shell.press(cx, SELECT_ALL);
+  shell.window(cx, |window, cx| window.input("Englsh", cx));
+  cx.run_until_parked();
+  shell.press(cx, "escape");
+  in_table(&shell, cx, &movie, |window, cx| window.click(elsewhere, cx));
+  cx.run_until_parked();
+  assert_eq!(language(cx), "de", "the typo goes back to the language taken");
+}
+
 #[gpui_kit::test]
 fn the_language_cell_lists_preferred_languages_and_normalises_on_enter(cx: &mut TestAppContext) {
   let (shell, movie, _dir) = movie_shell(cx, "table-language");
@@ -719,7 +764,7 @@ fn the_language_cell_lists_preferred_languages_and_normalises_on_enter(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn free_text_stays_as_typed_and_names_follow_the_language(cx: &mut TestAppContext) {
+fn a_language_tag_stays_and_names_follow_the_language(cx: &mut TestAppContext) {
   let dir = TempDir::new("table-names");
   let (paths, parsed) = golden_files(&dir, "");
   let mut config = Config::default();
@@ -759,8 +804,9 @@ fn free_text_stays_as_typed_and_names_follow_the_language(cx: &mut TestAppContex
     "Japanese"
   );
 
-  // A free-text language stays as typed (trimmed); the name cell then has
-  // no presets and no list.
+  // A language tag that is not listed stays (trimmed, in the usual case);
+  // the name cell then has no presets and no list. Text mkvmerge would
+  // reject goes back to the value before the edit.
   in_table(&shell, cx, &movie, |window, cx| {
     window.click("language-0:audio:1-input", cx)
   });
@@ -770,7 +816,18 @@ fn free_text_stays_as_typed_and_names_follow_the_language(cx: &mut TestAppContex
   shell.press(cx, "enter");
   assert_eq!(
     track(&shell, cx, &movie, "audio:1", |track| track.language.clone()),
-    "Klingon"
+    "ja"
+  );
+  in_table(&shell, cx, &movie, |window, cx| {
+    window.click("language-0:audio:1-input", cx)
+  });
+  shell.window(cx, |window, cx| window.input("pt-br ", cx));
+  cx.run_until_parked();
+  shell.press(cx, "escape");
+  shell.press(cx, "enter");
+  assert_eq!(
+    track(&shell, cx, &movie, "audio:1", |track| track.language.clone()),
+    "pt-BR"
   );
   cell.read_with(cx, |cell, _| assert!(cell.options().is_empty()));
   in_table(&shell, cx, &movie, |window, cx| {

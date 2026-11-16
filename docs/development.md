@@ -89,9 +89,13 @@ The script then runs `cargo update -w`, so `Cargo.lock` records the new workspac
 
 The persisted config file is named `BatchMkvMerge.json` and lives at:
 
-- **Windows** — `%APPDATA%\BatchMkvMerge\` when installed under `%LOCALAPPDATA%` / `%ProgramFiles%` / `%ProgramFiles(x86)%`; next to the `.exe` in portable mode.
+- **Windows** — `%APPDATA%\BatchMkvMerge\` when installed under `%LOCALAPPDATA%` / `%ProgramFiles%` / `%ProgramFiles(x86)%` / `%ProgramW6432%`; next to the `.exe` in portable mode.
 - **Linux** — `$XDG_CONFIG_HOME/BatchMkvMerge/`, else `$HOME/.config/BatchMkvMerge/`.
 - **macOS** — `~/Library/Application Support/BatchMkvMerge/`.
+
+Each save writes a new file of its own, `BatchMkvMerge.json.<process id>-<counter>.tmp`, and renames it over the old one, so a crash never leaves a truncated config and two running instances never write into the same file. A config file that cannot be read, or that holds a value this version does not accept, never stops the app: every value that can still be read is kept, the rest goes back to its default, the original file is kept as `BatchMkvMerge.json.bad` (or `BatchMkvMerge.json.2.bad` and so on when that name is taken, so no backup is ever replaced, also not by a second instance repairing the same file), and a toast says so at startup. Before it saves a repaired or completed config at startup, and before it moves a file it could not read, the app reads the file again: when another instance has replaced it meanwhile, it loads that newer file instead of saving over it or moving it.
+
+The same directory holds the log, `BatchMkvMerge.log` (the previous run's is `BatchMkvMerge.previous.log`). The app's own crates log from `info` up, other crates from `warn` up, and panics are logged as well; the log is also written to stderr when the app has a console.
 
 ## Concurrency
 
@@ -116,7 +120,9 @@ Three GitHub Actions workflows build the app on push/PR and upload its installer
 
 Each installs the Rust toolchain pinned in `rust-toolchain.toml` (1.100.0; the setup action gets no `toolchain:` input, so nothing overrides the pin), runs `cargo test --release --workspace --locked`, builds `BatchMkvMerge` with `--profile dist` and packages it. Linux also installs GPUI's build dependencies and Mesa's Vulkan drivers.
 
-Linux additionally enforces ≥ 90 % line coverage for the `bmm-core` crate (`cargo llvm-cov --release -p bmm-core --summary-only --fail-under-lines 90`).
+Linux additionally enforces ≥ 90 % line coverage for the `bmm-core` crate (`cargo llvm-cov --release -p bmm-core --locked --summary-only --fail-under-lines 90`); that step runs the core's tests, so the Linux test step leaves `bmm-core` out (`--exclude bmm-core`). A separate Linux job, `lint`, runs `cargo fmt --all --check` and `cargo clippy --release -p bmm-core --all-targets`; it reports and never fails the workflow (`continue-on-error`).
+
+Every workflow runs with `permissions: contents: read`, and every action is pinned to a commit SHA with its release tag in a comment; `.github/dependabot.yml` proposes updates monthly.
 
 ## Release checklist
 
@@ -142,6 +148,7 @@ In the app, on each OS:
 - [ ] Track table: the checkboxes and select-all, row drag-reorder, the language and track-name cells (↓ / ↑ / Enter / Escape, `ger` becomes `de`), the default and forced flags and their header buttons, ↑ / ↓ / Space / Ctrl+A on the active card.
 - [ ] Set Output Path, Copy Command (the command Merge runs), Open in BetterMediaInfo when it is installed.
 - [ ] Merge, Merge All (F3), Cancel on the card and in the queue, Cancel All (F4), Resume All, Clear Completed; on Windows, files on two drives merge in parallel, one at a time per drive.
+- [ ] Cancel a merge part-way: its partial output stays and plays. Resume then writes the same file again, with no ` (1)`, and the result is complete. A merge whose set output path is already there fails without starting `mkvmerge`, and its Resume fails the same way and leaves that file, also when the file is the partial output of an earlier job (Clear Completed, then Merge again).
 - [ ] While merging: the card's progress row with elapsed time and ETA, the title's `- done/total`, and the taskbar, Dock or launcher progress, which clears afterwards.
 - [ ] With both queue toggles on, a finished queue sends one system notification (the first one may ask for permission) and opens the topmost window once, above other applications; Enter or Escape closes it.
 - [ ] Closing the window (or Cmd+Q on macOS) while a merge runs asks first; Enter and Escape answer No; Yes stops the merges and quits.

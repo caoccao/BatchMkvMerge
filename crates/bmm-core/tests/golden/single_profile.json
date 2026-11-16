@@ -208,6 +208,6 @@
       "--track-order",
       "0:0,0:1,0:3,0:4"
     ],
-    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 1 -s 3,4 --language 0:en --track-name \"0:Main Feature\" --default-track-flag 0:1 --language 1:ja --track-name \"1:Japanese 5.1\" --default-track-flag 1:1 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --language 4:zh --track-name \"4:Simplified Chinese\" --no-global-tags --no-attachments /media/Movie.mkv --track-order 0:0,0:1,0:3,0:4"
+    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 1 -s 3,4 --language 0:en --track-name '0:Main Feature' --default-track-flag 0:1 --language 1:ja --track-name '1:Japanese 5.1' --default-track-flag 1:1 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --language 4:zh --track-name '4:Simplified Chinese' --no-global-tags --no-attachments /media/Movie.mkv --track-order 0:0,0:1,0:3,0:4"
   }
 }

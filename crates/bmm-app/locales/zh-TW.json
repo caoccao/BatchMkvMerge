@@ -58,7 +58,10 @@
         "malformed": "檔案格式有誤:%{detail}",
         "oversizedElement": "元素超出大小上限:%{detail}",
         "internal": "解析器內部錯誤:%{detail}"
-      }
+      },
+      "sourceMissing": "找不到來源檔案 %{path}。",
+      "mkvmergeExitCode": "mkvmerge 已結束，結束代碼為 %{code}。",
+      "mkvmergeTerminated": "mkvmerge 被終止。"
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "已完成",
       "cancelled": "已取消",
       "failed": "失敗"
-    }
+    },
+    "warnings": "已完成，有警告:"
   },
   "settings": {
     "title": "設定",
@@ -210,7 +214,12 @@
     "completedIn": "%{elapsed} 內完成",
     "unknownError": "未知錯誤",
     "summary": "已完成 %{completed} 個，失敗 %{failed} 個，已取消 %{cancelled} 個",
-    "finishedIn": "%{elapsed} 內結束"
+    "finishedIn": "%{elapsed} 內結束",
+    "configResetTitle": "無法讀取設定",
+    "configReset": "無法讀取的設定已還原為預設值。原檔案已保留為 %{path}。",
+    "configResetNoBackup": "無法讀取的設定已還原為預設值。",
+    "completedWithWarnings": "%{elapsed} 內完成，有警告:%{warnings}",
+    "pathsSkipped": "%{count} 個項目無法讀取，已略過:%{paths}"
   },
   "confirm": {
     "exitTitle": "結束",

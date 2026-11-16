@@ -19,7 +19,8 @@
 //!
 //! With *Group by file name* on, files are grouped into "merge trees": in each
 //! directory the file with the shortest stem is a root, and every other file
-//! whose stem starts with it is a direct child. Manual drag-merges fold whole
+//! whose stem continues it after a separator (`Movie` → `Movie.en`,
+//! `Movie (forced)`, `Movie-commentary`) is a direct child. Manual drag-merges fold whole
 //! units into another, and detached files are pulled back out. A unit is the
 //! list of its member files, root first.
 
@@ -93,12 +94,23 @@ fn by_stem_then_path(a: &str, b: &str, stems: &HashMap<&str, &str>) -> Ordering 
   stems[a].cmp(stems[b]).then_with(|| a.cmp(b))
 }
 
+/// Whether a file with stem `stem` belongs under a root with stem `root`:
+/// the stems are equal, or `stem` is `root` followed by a character that is
+/// neither a letter nor a digit (case-sensitive). `Movie.en`, `Movie (forced)`
+/// and `Movie_commentary` continue `Movie`; `Movies`, and `E10` after `E1`,
+/// do not, as they are other titles and other episodes.
+pub fn is_child_stem(root: &str, stem: &str) -> bool {
+  stem
+    .strip_prefix(root)
+    .is_some_and(|rest| rest.chars().next().is_none_or(|next| !next.is_alphanumeric()))
+}
+
 /// The *Group by file name* forest. Per directory, files are walked from the
 /// shortest stem up; the first unclaimed file becomes a root and claims every
-/// unclaimed file whose stem starts with its own (case-sensitive), so each
-/// file lands in exactly one tree and the shortest prefix wins. Equal stems
-/// (`Movie.mkv`, `Movie.srt`) share a tree; `The.Movie` is not a child of
-/// `Movie`. Roots keep the order of `files`.
+/// unclaimed file whose stem continues its own ([`is_child_stem`]), so each
+/// file lands in exactly one tree and the shortest root wins. Equal stems
+/// (`Movie.mkv`, `Movie.srt`) share a tree; `The.Movie` and `Movies` are not
+/// children of `Movie`. Roots keep the order of `files`.
 pub fn build_forest(files: &[String]) -> Vec<FileTree> {
   let stems: HashMap<&str, &str> = files.iter().map(|file| (file.as_str(), stem_of(file))).collect();
   let mut by_dir: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -116,20 +128,28 @@ pub fn build_forest(files: &[String]) -> Vec<FileTree> {
         .cmp(&stems[b].len())
         .then_with(|| by_stem_then_path(a, b, &stems))
     });
+    // Every stem that starts with a root's stem sits in one run of the
+    // stems in string order, from the root's own stem on, so a root looks at
+    // that run only instead of at every file of the directory.
+    let mut lexical = dir_files.clone();
+    lexical.sort_by(|a, b| by_stem_then_path(a, b, &stems));
     let mut claimed: HashSet<&str> = HashSet::new();
     for &root in &ordered {
       if !claimed.insert(root) {
         continue;
       }
       let root_stem = stems[root];
+      let start = lexical.partition_point(|file| stems[file] < root_stem);
       let mut children = Vec::new();
-      for &candidate in &ordered {
-        if !claimed.contains(candidate) && stems[candidate].starts_with(root_stem) {
+      for &candidate in lexical[start..]
+        .iter()
+        .take_while(|file| stems[*file].starts_with(root_stem))
+      {
+        if !claimed.contains(candidate) && is_child_stem(root_stem, stems[candidate]) {
           claimed.insert(candidate);
           children.push(candidate);
         }
       }
-      children.sort_by(|a, b| by_stem_then_path(a, b, &stems));
       is_root.insert(root);
       children_of.insert(root, children);
     }
@@ -416,6 +436,7 @@ mod tests {
       size: None,
       bit_rate: None,
       track_name: String::new(),
+      source_track_name: String::new(),
       language: String::new(),
       language_codes: Vec::new(),
       default_track: TrackFlag::Unspecified,
@@ -468,27 +489,108 @@ mod tests {
   }
 
   #[test]
-  fn shortest_prefix_wins_and_matching_is_case_sensitive() {
-    let files = s(&["/m/AB.mkv", "/m/A.mkv", "/m/ABC.mkv", "/m/a.srt", "/m/ABD.mkv"]);
+  fn shortest_root_wins_and_matching_is_case_sensitive() {
+    let files = s(&["/m/A.B.mkv", "/m/A.mkv", "/m/A.B.C.mkv", "/m/a.srt", "/m/A-D.mkv"]);
     let forest = build_forest(&files);
     assert_eq!(forest.len(), 2);
     assert_eq!(forest[0].root, "/m/A.mkv");
     assert_eq!(
       forest[0].members,
-      s(&["/m/A.mkv", "/m/AB.mkv", "/m/ABC.mkv", "/m/ABD.mkv"])
+      s(&["/m/A.mkv", "/m/A-D.mkv", "/m/A.B.mkv", "/m/A.B.C.mkv"])
     );
     assert_eq!(forest[1].members, s(&["/m/a.srt"]));
+  }
+
+  #[test]
+  fn a_root_claims_only_stems_that_continue_after_a_separator() {
+    let files = s(&[
+      "/m/E1.mkv",
+      "/m/E10.mkv",
+      "/m/E10.en.srt",
+      "/m/E1 (forced).sup",
+      "/m/Episode 1.mkv",
+      "/m/Episode 10.mkv",
+      "/m/Movie.mkv",
+      "/m/Movies of 2025.mkv",
+      "/m/Movie_commentary.mka",
+      "/m/\u{7535}\u{5f71}.mkv",
+      "/m/\u{7535}\u{5f71}\u{7248}.mkv",
+      "/m/\u{7535}\u{5f71}.\u{4e2d}\u{6587}.srt",
+    ]);
+    let members: Vec<Vec<String>> = build_forest(&files).into_iter().map(|tree| tree.members).collect();
+    assert_eq!(
+      members,
+      [
+        s(&["/m/E1.mkv", "/m/E1 (forced).sup"]),
+        s(&["/m/E10.mkv", "/m/E10.en.srt"]),
+        s(&["/m/Episode 1.mkv"]),
+        s(&["/m/Episode 10.mkv"]),
+        s(&["/m/Movie.mkv", "/m/Movie_commentary.mka"]),
+        s(&["/m/Movies of 2025.mkv"]),
+        s(&["/m/\u{7535}\u{5f71}.mkv", "/m/\u{7535}\u{5f71}.\u{4e2d}\u{6587}.srt"]),
+        s(&["/m/\u{7535}\u{5f71}\u{7248}.mkv"]),
+      ]
+    );
+    assert!(is_child_stem("Movie", "Movie"));
+    assert!(!is_child_stem("Movie", "The.Movie"));
+  }
+
+  /// The forest looks only at the run of stems that start with a root's
+  /// stem; it must claim exactly what a walk over every file claims.
+  #[test]
+  fn the_forest_matches_a_walk_over_every_file() {
+    fn reference(files: &[String]) -> Vec<Vec<String>> {
+      let stems: HashMap<&str, &str> = files.iter().map(|file| (file.as_str(), stem_of(file))).collect();
+      let mut ordered: Vec<&str> = files.iter().map(String::as_str).collect();
+      ordered.sort_by(|a, b| {
+        stems[a]
+          .len()
+          .cmp(&stems[b].len())
+          .then_with(|| by_stem_then_path(a, b, &stems))
+      });
+      let mut claimed: HashSet<&str> = HashSet::new();
+      let mut trees: HashMap<&str, Vec<String>> = HashMap::new();
+      for &root in &ordered {
+        if !claimed.insert(root) {
+          continue;
+        }
+        let mut children: Vec<&str> = ordered
+          .iter()
+          .copied()
+          .filter(|candidate| !claimed.contains(candidate) && is_child_stem(stems[root], stems[candidate]))
+          .collect();
+        claimed.extend(children.iter().copied());
+        children.sort_by(|a, b| by_stem_then_path(a, b, &stems));
+        let mut members = vec![root.to_string()];
+        members.extend(children.into_iter().map(str::to_string));
+        trees.insert(root, members);
+      }
+      files.iter().filter_map(|file| trees.remove(file.as_str())).collect()
+    }
+    let mut files = Vec::new();
+    for stem in ["A", "A.B", "AB", "A B", "A-B", "A.B.C", "AB.C", "B", "B (forced)", "Ba"] {
+      for extension in ["mkv", "srt"] {
+        files.push(format!("/m/{stem}.{extension}"));
+      }
+    }
+    for episode in 1..=21 {
+      files.push(format!("/m/E{episode}.mkv"));
+      files.push(format!("/m/E{episode}.en.srt"));
+    }
+    files.reverse();
+    let forest: Vec<Vec<String>> = build_forest(&files).into_iter().map(|tree| tree.members).collect();
+    assert_eq!(forest, reference(&files));
   }
 
   #[test]
   fn sorts_stems_in_string_order() {
     // Children follow Rust's string order (by code point): U+FF21 before
     // U+1F3AC.
-    let files = s(&["/m/x\u{1f3ac}.mkv", "/m/x\u{ff21}.mkv", "/m/x.mkv"]);
+    let files = s(&["/m/x.\u{1f3ac}.mkv", "/m/x.\u{ff21}.mkv", "/m/x.mkv"]);
     let forest = build_forest(&files);
     assert_eq!(
       forest[0].members,
-      s(&["/m/x.mkv", "/m/x\u{ff21}.mkv", "/m/x\u{1f3ac}.mkv"])
+      s(&["/m/x.mkv", "/m/x.\u{ff21}.mkv", "/m/x.\u{1f3ac}.mkv"])
     );
   }
 

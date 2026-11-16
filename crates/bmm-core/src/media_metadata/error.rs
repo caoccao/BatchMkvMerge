@@ -55,6 +55,11 @@ pub enum ParseError {
 
   #[error("operation exceeded {budget_ms} ms (stage: {stage})")]
   Timeout { budget_ms: u64, stage: &'static str },
+
+  /// A reader panicked; [`crate::media_metadata::parse`] turns the panic into
+  /// this error for the one file instead of letting it unwind.
+  #[error("{reason}")]
+  Internal { reason: String },
 }
 
 impl ParseError {

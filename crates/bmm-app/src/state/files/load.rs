@@ -25,19 +25,38 @@
 //! member list): again only for files without a selection, or when the unit's
 //! membership changes. Existing selections are never replaced.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use bmm_core::languages::build_track_name_options;
 use bmm_core::media_metadata::model::MediaMetadata;
 use bmm_core::media_metadata::{ParseError, ParseOptions};
 use bmm_core::merge_args::TrackSelector;
 use bmm_core::protocol::MediaMetadataErrorPayload;
-use gpui_kit::{AppContext, Context};
+use gpui_kit::{AppContext, BackgroundExecutor, Context};
 
 use super::FileStore;
 use crate::domain::file_tree::{FlagKind, apply_unit_flag_automation};
 use crate::domain::grouping::RenderEntry;
+
+/// How long past the parse budget a read may take before its watchdog fails
+/// the file: the budget is checked between reads, so a parse can overrun it
+/// a little; one that overruns by this much is stuck in a read.
+pub const WATCHDOG_MARGIN: Duration = Duration::from_secs(5);
+
+/// Waits until `deadline` on the scheduler's own timer, which fires from the
+/// dispatcher's timer thread and wakes the waiting task directly.
+/// `BackgroundExecutor::timer` runs that timer inside a background task, so
+/// it also needs a free background thread to finish, and blocked reads can
+/// hold every one of them (Linux has a fixed pool).
+pub(super) async fn sleep_until(executor: &BackgroundExecutor, deadline: Instant) {
+  let left = deadline.saturating_duration_since(executor.now());
+  if !left.is_zero() {
+    executor.scheduler_executor().timer(left).await;
+  }
+}
 
 /// Reads a file's metadata: the native parser in the app, a stand-in in
 /// tests. Called on the background executor.
@@ -100,34 +119,104 @@ impl FileStore {
   }
 
   /// Starts parsing every listed file that is not parsed, in flight or failed.
+  /// Each parse has a watchdog ([`Self::give_up_load`]): the parser's own
+  /// budget is checked between reads, so a read that blocks (a network share
+  /// that stopped answering) would otherwise keep the file loading for as
+  /// long as the OS takes. The watchdog's time runs from the moment a
+  /// background thread begins the read: a large drop queues more parses than
+  /// there are threads, and the time a parse waits for one is not the file's.
+  /// The watchdog itself needs no background thread ([`sleep_until`]), so it
+  /// fires also when blocked reads hold all of them.
   pub(super) fn load_pending(&mut self, cx: &mut Context<Self>) {
     let pending: Vec<String> = self
       .files
       .iter()
       .filter(|file| {
         !self.file_tracks.contains_key(*file)
-          && !self.in_flight.contains(*file)
+          && !self.in_flight.contains_key(*file)
           && !self.load_errors.contains_key(*file)
       })
       .cloned()
       .collect();
+    let limit = Duration::from_millis(self.settings.parse_options.timeout_ms) + WATCHDOG_MARGIN;
     for file in pending {
-      self.in_flight.insert(file.clone());
+      self.next_load_attempt += 1;
+      let attempt = self.next_load_attempt;
+      self.in_flight.insert(file.clone(), attempt);
       let (source, options) = (self.source.clone(), self.settings.parse_options.clone());
+      // The read sends the instant it begins, and sets `returned` once it
+      // has: from then on its result is on its way.
+      let (began, read_began) = async_channel::bounded(1);
+      let returned = Arc::new(AtomicBool::new(false));
+      let read_returned = Arc::clone(&returned);
+      let parsed_file = file.clone();
       cx.spawn(async move |this, cx| {
+        let executor = cx.background_executor().clone();
         let parsed = {
-          let file = file.clone();
-          cx.background_spawn(async move { source.read(&file, &options) }).await
+          let file = parsed_file.clone();
+          cx.background_spawn(async move {
+            let _ = began.try_send(executor.now());
+            let parsed = source.read(&file, &options);
+            read_returned.store(true, Ordering::Release);
+            parsed
+          })
+          .await
         };
-        let _ = this.update(cx, |store, cx| store.finish_load(file, parsed, cx));
+        let _ = this.update(cx, |store, cx| store.finish_load(parsed_file, attempt, parsed, cx));
+      })
+      .detach();
+      cx.spawn(async move |this, cx| {
+        // A parse dropped before its read began has nothing to watch.
+        let Ok(began) = read_began.recv().await else {
+          return;
+        };
+        sleep_until(cx.background_executor(), began + limit).await;
+        if returned.load(Ordering::Acquire) {
+          return;
+        }
+        let _ = this.update(cx, |store, cx| store.give_up_load(&file, attempt, cx));
       })
       .detach();
     }
   }
 
+  /// The watchdog of parse `attempt` of `file`: a read still running after
+  /// the budget and [`WATCHDOG_MARGIN`] fails the file as timed out, and its
+  /// result is ignored if it ever arrives. The read itself cannot be
+  /// interrupted; it ends when the OS gives up.
+  pub(super) fn give_up_load(&mut self, file: &str, attempt: u64, cx: &mut Context<Self>) {
+    if self.in_flight.get(file) != Some(&attempt) {
+      return;
+    }
+    self.in_flight.remove(file);
+    let budget_ms = self.settings.parse_options.timeout_ms;
+    log::warn!("Gave up parsing {file}: no result after {budget_ms} ms and the margin");
+    self.load_errors.insert(
+      file.to_string(),
+      MediaMetadataErrorPayload::Timeout {
+        budget_ms,
+        stage: "read".to_string(),
+        detail: "the file did not answer in time".to_string(),
+      },
+    );
+    self.refresh(vec![file.to_string()], true, cx);
+  }
+
   /// Stores a finished parse. A file removed meanwhile is dropped; one removed
-  /// and added again keeps this result.
-  fn finish_load(&mut self, file: String, parsed: Result<MediaMetadata, ParseError>, cx: &mut Context<Self>) {
+  /// and added again keeps this result; the result of an attempt its watchdog
+  /// gave up on is ignored. The refresh comes in a task of its own, so every
+  /// result that arrived before it runs is refreshed at once: a folder of
+  /// files is derived again once per batch of results, not once per file.
+  pub(super) fn finish_load(
+    &mut self,
+    file: String,
+    attempt: u64,
+    parsed: Result<MediaMetadata, ParseError>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.in_flight.get(&file) != Some(&attempt) {
+      return;
+    }
     self.in_flight.remove(&file);
     if !self.files.contains(&file) {
       return;
@@ -141,7 +230,24 @@ impl FileStore {
           .insert(file.clone(), MediaMetadataErrorPayload::from_parse_error(&error));
       }
     }
-    self.refresh(vec![file], true, cx);
+    self.loaded.push(file);
+    if self.loaded.len() == 1 {
+      cx.spawn(async move |this, cx| {
+        let _ = this.update(cx, |store, cx| store.refresh_loaded(cx));
+      })
+      .detach();
+    }
+  }
+
+  /// The refresh of the parses that finished since the last one.
+  fn refresh_loaded(&mut self, cx: &mut Context<Self>) {
+    let mut loaded = std::mem::take(&mut self.loaded);
+    if loaded.is_empty() {
+      return;
+    }
+    let listed: HashSet<&String> = self.files.iter().collect();
+    loaded.retain(|file| listed.contains(file));
+    self.refresh(loaded, true, cx);
   }
 
   /// Runs the automation of every unit that is completely parsed and not

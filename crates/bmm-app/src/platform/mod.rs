@@ -31,7 +31,12 @@ use crate::ui::actions::Quit;
 
 /// Adds the media files named on the command line (`get_launch_args`).
 pub fn ingest_launch_args(stores: &Stores, cx: &mut App) {
-  files::add_paths(&stores.files, bmm_core::services::get_launch_args(), cx);
+  files::add_paths(
+    &stores.files,
+    Some(&stores.ui),
+    bmm_core::services::get_launch_args(),
+    cx,
+  );
 }
 
 /// Quit (Cmd+Q on macOS) asks like closing the main window does: the window

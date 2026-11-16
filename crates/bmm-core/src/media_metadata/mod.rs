@@ -64,21 +64,25 @@ pub struct ParseOptions {
 }
 
 impl Default for ParseOptions {
+  /// The config's defaults: the documented 10 s budget
+  /// ([`crate::config::ConfigParser::DEFAULT_TIMEOUT_MS`]), a 16 MiB element
+  /// cap and no subtitle charset, so a caller without a config (a test, a
+  /// tool) parses as the app does by default.
   fn default() -> Self {
     Self {
-      timeout_ms: 1000,
+      timeout_ms: crate::config::ConfigParser::DEFAULT_TIMEOUT_MS,
       max_element_size: 16 * 1024 * 1024,
       subtitle_charset: String::new(),
     }
   }
 }
 
-/// Public entry point.  Opens `path`, builds a `FileSource`, runs the probe
-/// cascade and returns a populated `MediaMetadata` on success.
-///
-/// As of Phase 3 the Matroska reader is the only registered format reader.
-/// Files of types whose reader has not yet landed return
-/// `Err(ParseError::Unrecognised)`.
+/// Public entry point.  Opens `path`, builds a `FileSource`, runs the
+/// path-aware openers (Blu-ray playlists, VobSub `.sub` → `.idx`) and then the
+/// probe cascade of every registered reader (`probe::registered_readers`),
+/// and returns a populated `MediaMetadata` on success. A file no reader
+/// claims returns `Err(ParseError::Unrecognised)`; a reader that panics
+/// returns `Err(ParseError::Internal)`.
 pub fn parse<P: AsRef<Path>>(path: P, options: ParseOptions) -> Result<MediaMetadata, ParseError> {
   let path_ref = path.as_ref();
   let mut src = FileSource::open(path_ref)?;
@@ -88,12 +92,29 @@ pub fn parse<P: AsRef<Path>>(path: P, options: ParseOptions) -> Result<MediaMeta
   let mut metadata = MediaMetadata::new(file_name, file_size);
   // PARSER-089: install the subtitle-charset hint for the duration of
   // this parse so the encoding helper can consult it when no BOM is
-  // present.  Restored on exit (including the error path).
+  // present.  Restored on exit (including the error path and a panic).
   let previous_hint = subtitles::encoding::set_subtitle_charset_hint(options.subtitle_charset.clone());
-  let result = parse_with_extension_fallback(&mut src, &deadline, &mut metadata, path_ref);
+  let result = contain_panics(|| parse_with_extension_fallback(&mut src, &deadline, &mut metadata, path_ref));
   subtitles::encoding::set_subtitle_charset_hint(previous_hint);
   result?;
   Ok(metadata)
+}
+
+/// Runs a parse step and turns a panic in it into [`ParseError::Internal`]:
+/// the readers walk untrusted bytes, and one malformed file must fail on its
+/// own instead of unwinding into the caller's thread (the app's background
+/// executor). The panic hook still sees the panic first.
+fn contain_panics(parse: impl FnOnce() -> Result<(), ParseError>) -> Result<(), ParseError> {
+  std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse)).unwrap_or_else(|payload| {
+    let message = payload
+      .downcast_ref::<&str>()
+      .map(|message| (*message).to_owned())
+      .or_else(|| payload.downcast_ref::<String>().cloned())
+      .unwrap_or_else(|| "unknown cause".to_owned());
+    Err(ParseError::Internal {
+      reason: format!("the parser panicked: {message}"),
+    })
+  })
 }
 
 fn parse_with_extension_fallback(
@@ -188,9 +209,46 @@ mod tests {
   use super::*;
 
   #[test]
-  fn default_options_are_one_second_and_sixteen_mib() {
+  fn a_panicking_reader_fails_the_file_and_restores_the_charset_hint() {
+    let outer = subtitles::encoding::set_subtitle_charset_hint("windows-1250".to_owned());
+    let previous = subtitles::encoding::set_subtitle_charset_hint("windows-1252".to_owned());
+    let result = contain_panics(|| {
+      // An offset read from a file, past the end of what was read.
+      let bytes = [0u8; 4];
+      let offset = std::hint::black_box(7usize);
+      let _ = bytes[offset];
+      Ok(())
+    });
+    subtitles::encoding::set_subtitle_charset_hint(previous);
+    match result {
+      Err(ParseError::Internal { reason }) => {
+        assert!(
+          reason.starts_with("the parser panicked: index out of bounds"),
+          "{reason}"
+        )
+      }
+      other => panic!("expected Internal, got {other:?}"),
+    }
+    let payload = crate::protocol::MediaMetadataErrorPayload::from_parse_error(&ParseError::Internal {
+      reason: "the parser panicked: boom".to_owned(),
+    });
+    assert!(matches!(
+      payload,
+      crate::protocol::MediaMetadataErrorPayload::Internal { detail } if detail == "the parser panicked: boom"
+    ));
+    assert_eq!(
+      subtitles::encoding::set_subtitle_charset_hint(outer),
+      "windows-1250",
+      "the hint around the parse is back"
+    );
+    assert!(contain_panics(|| Ok(())).is_ok());
+  }
+
+  #[test]
+  fn default_options_are_the_config_default_and_sixteen_mib() {
     let opts = ParseOptions::default();
-    assert_eq!(opts.timeout_ms, 1000);
+    assert_eq!(opts.timeout_ms, crate::config::ConfigParser::DEFAULT_TIMEOUT_MS);
+    assert_eq!(opts.timeout_ms, 10_000);
     assert_eq!(opts.max_element_size, 16 * 1024 * 1024);
   }
 

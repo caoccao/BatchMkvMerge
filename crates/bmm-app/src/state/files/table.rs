@@ -199,13 +199,13 @@ impl FileStore {
   /// Sets the language of `row_keys`.
   pub fn set_rows_language(&mut self, scope: &TableScope, row_keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_targets(scope, row_keys, |track| set_language(track, value));
-    self.refresh(changed, false, cx);
+    self.refresh_languages(changed, cx);
   }
 
   /// Sets the track name of `row_keys`.
   pub fn set_rows_name(&mut self, scope: &TableScope, row_keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_targets(scope, row_keys, |track| track.track_name = value.to_string());
-    self.refresh(changed, false, cx);
+    self.refresh_rows(changed, cx);
   }
 
   /// A click on a flag button: the clicked row's next value, set on
@@ -226,7 +226,7 @@ impl FileStore {
       FlagKind::Default => track.default_track = value,
       FlagKind::Forced => track.forced = value,
     });
-    self.refresh(changed, false, cx);
+    self.refresh_rows(changed, cx);
   }
 
   /// The Default Track / Forced Display header buttons: the reset automation
@@ -261,7 +261,7 @@ impl FileStore {
       };
       changed.extend(self.edit_rows(std::slice::from_ref(&edit.file), &edit.keys, set));
     }
-    self.refresh(changed, false, cx);
+    self.refresh_rows(changed, cx);
   }
 
   /// Drag-reorder: moves the `from` row to the `to` row's position. A

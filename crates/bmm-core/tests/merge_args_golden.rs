@@ -211,6 +211,7 @@ fn merge_arguments_match_the_golden_cases() {
         MergeInput {
           file: input["file"].as_str().unwrap().to_string(),
           tracks,
+          sub_charset: None,
         }
       })
       .collect();
@@ -235,8 +236,8 @@ fn merge_arguments_match_the_golden_cases() {
     } else {
       assert_eq!(inputs.len(), 1, "{name}: a single merge has one input");
       (
-        build_merge_args(&inputs[0].file, output, &inputs[0].tracks),
-        build_command_string(&inputs[0].file, output, toolnix, &inputs[0].tracks),
+        build_merge_args(&inputs[0].file, output, &inputs[0].tracks, None),
+        build_command_string(&inputs[0].file, output, toolnix, &inputs[0].tracks, None),
       )
     };
     assert_eq!(args, strings(&expected["args"]), "{name}: args");

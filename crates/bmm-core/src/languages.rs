@@ -179,13 +179,58 @@ pub fn to_short_code(value: &str) -> String {
 }
 
 /// Map any language form to the 3-letter MKV code that keys the track-name
-/// presets. Unknown text is returned trimmed.
+/// presets; a BCP 47 tag maps by its primary language (`pt-BR` → `por`).
+/// Unknown text is returned trimmed.
 pub fn to_mkv_code(value: &str) -> String {
   let trimmed = value.trim();
-  match INDEX.mkv_code_by_any.get(&trimmed.to_lowercase()) {
+  let lowered = trimmed.to_lowercase();
+  let primary = lowered.split('-').next().unwrap_or_default();
+  match INDEX
+    .mkv_code_by_any
+    .get(&lowered)
+    .or_else(|| INDEX.mkv_code_by_any.get(primary))
+  {
     Some(code) => (*code).to_string(),
     None => trimmed.to_string(),
   }
+}
+
+/// The Language cell's value for what the user typed, or `None` when
+/// `mkvmerge` would reject it. A known language in any form (code, alias,
+/// English name, label; any case) becomes its short code (`German` → `de`).
+/// A well-formed BCP 47 tag whose primary language is known keeps its
+/// subtags, with the primary as its short code and the subtags in the usual
+/// case (`pt-br` → `pt-BR`, `ZH-HANT` → `zh-Hant`, `es-419`). Anything else,
+/// a typo or an empty cell, is `None`.
+pub fn normalize_language(value: &str) -> Option<String> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if let Some(code) = INDEX.short_code_by_any.get(&trimmed.to_lowercase()) {
+    return Some((*code).to_string());
+  }
+  let tag = language_tags::LanguageTag::parse(trimmed).ok()?;
+  let primary = INDEX.short_code_by_any.get(&tag.primary_language().to_lowercase())?;
+  let mut subtags = vec![(*primary).to_string()];
+  let mut in_extension = false;
+  for subtag in trimmed.split('-').skip(1) {
+    // After a singleton (`u`, `x`, …) every subtag is lowercase.
+    in_extension |= subtag.len() == 1;
+    let is_alpha = subtag.chars().all(|c| c.is_ascii_alphabetic());
+    let is_digit = subtag.chars().all(|c| c.is_ascii_digit());
+    subtags.push(if in_extension {
+      subtag.to_ascii_lowercase()
+    } else if subtag.len() == 4 && is_alpha {
+      let (first, rest) = subtag.split_at(1);
+      format!("{}{}", first.to_ascii_uppercase(), rest.to_ascii_lowercase())
+    } else if (subtag.len() == 2 && is_alpha) || (subtag.len() == 3 && is_digit) {
+      subtag.to_ascii_uppercase()
+    } else {
+      subtag.to_ascii_lowercase()
+    });
+  }
+  Some(subtags.join("-"))
 }
 
 /// The label of a short or MKV code; the code itself when unknown.
@@ -505,5 +550,33 @@ mod tests {
     assert_eq!(find("DIR"), Some(2));
     assert_eq!(find("ary"), Some(1));
     assert_eq!(find("x"), None);
+  }
+
+  #[test]
+  fn a_bcp_47_tag_maps_to_the_presets_of_its_primary_language() {
+    assert_eq!(to_mkv_code("pt-BR"), "por");
+    assert_eq!(to_mkv_code("zh-Hant"), "chi");
+    assert_eq!(to_mkv_code("xx-BR"), "xx-BR");
+  }
+
+  /// What `mkvmerge --language` accepts (checked against v101.0): a known
+  /// language, or a well-formed tag whose primary language is known.
+  #[test]
+  fn normalises_typed_languages_that_mkvmerge_accepts() {
+    assert_eq!(normalize_language("ger").as_deref(), Some("de"));
+    assert_eq!(normalize_language(" English ").as_deref(), Some("en"));
+    assert_eq!(normalize_language("und").as_deref(), Some("und"));
+    assert_eq!(normalize_language("pt-br").as_deref(), Some("pt-BR"));
+    assert_eq!(normalize_language("ZH-HANT").as_deref(), Some("zh-Hant"));
+    assert_eq!(normalize_language("es-419").as_deref(), Some("es-419"));
+    assert_eq!(normalize_language("sr-latn-RS").as_deref(), Some("sr-Latn-RS"));
+    assert_eq!(normalize_language("ger-DE").as_deref(), Some("de-DE"));
+    assert_eq!(
+      normalize_language("de-DE-u-co-PHONEBK").as_deref(),
+      Some("de-DE-u-co-phonebk")
+    );
+    for rejected in ["", "  ", "Englsh", "german-ish", "xx-BR", "pt--BR", "Klingon"] {
+      assert_eq!(normalize_language(rejected), None, "{rejected:?}");
+    }
   }
 }

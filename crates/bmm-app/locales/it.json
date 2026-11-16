@@ -58,7 +58,10 @@
         "malformed": "File malformato: %{detail}",
         "oversizedElement": "L'elemento supera il limite di dimensione: %{detail}",
         "internal": "Errore interno dell'analizzatore: %{detail}"
-      }
+      },
+      "sourceMissing": "Impossibile trovare il file di origine %{path}.",
+      "mkvmergeExitCode": "mkvmerge è terminato con il codice %{code}.",
+      "mkvmergeTerminated": "mkvmerge è stato interrotto."
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "Completato",
       "cancelled": "Annullato",
       "failed": "Fallito"
-    }
+    },
+    "warnings": "Completato con avvisi:"
   },
   "settings": {
     "title": "Impostazioni",
@@ -210,7 +214,12 @@
     "completedIn": "Completato in %{elapsed}",
     "unknownError": "Errore sconosciuto",
     "summary": "%{completed} completati, %{failed} falliti, %{cancelled} annullati",
-    "finishedIn": "Terminato in %{elapsed}"
+    "finishedIn": "Terminato in %{elapsed}",
+    "configResetTitle": "Impossibile leggere le impostazioni",
+    "configReset": "Le impostazioni non leggibili sono state ripristinate ai valori predefiniti. Il file originale è stato conservato come %{path}.",
+    "configResetNoBackup": "Le impostazioni non leggibili sono state ripristinate ai valori predefiniti.",
+    "completedWithWarnings": "Completato in %{elapsed} con avvisi: %{warnings}",
+    "pathsSkipped": "Impossibile leggere %{count} elemento/i, ignorato/i: %{paths}"
   },
   "confirm": {
     "exitTitle": "Esci",

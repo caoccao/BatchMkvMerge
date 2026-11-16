@@ -58,7 +58,10 @@
         "malformed": "Fichier mal formé : %{detail}",
         "oversizedElement": "L'élément dépasse la limite de taille : %{detail}",
         "internal": "Erreur interne de l'analyseur : %{detail}"
-      }
+      },
+      "sourceMissing": "Le fichier source %{path} est introuvable.",
+      "mkvmergeExitCode": "mkvmerge s'est terminé avec le code %{code}.",
+      "mkvmergeTerminated": "mkvmerge a été interrompu."
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "Terminé",
       "cancelled": "Annulé",
       "failed": "Échec"
-    }
+    },
+    "warnings": "Terminé avec des avertissements :"
   },
   "settings": {
     "title": "Paramètres",
@@ -210,7 +214,12 @@
     "completedIn": "Terminé en %{elapsed}",
     "unknownError": "Erreur inconnue",
     "summary": "%{completed} terminé(s), %{failed} en échec, %{cancelled} annulé(s)",
-    "finishedIn": "Fini en %{elapsed}"
+    "finishedIn": "Fini en %{elapsed}",
+    "configResetTitle": "Impossible de lire les paramètres",
+    "configReset": "Les paramètres illisibles ont été réinitialisés à leurs valeurs par défaut. Le fichier d'origine a été conservé sous %{path}.",
+    "configResetNoBackup": "Les paramètres illisibles ont été réinitialisés à leurs valeurs par défaut.",
+    "completedWithWarnings": "Terminé en %{elapsed} avec des avertissements : %{warnings}",
+    "pathsSkipped": "%{count} élément(s) illisible(s) ignoré(s) : %{paths}"
   },
   "confirm": {
     "exitTitle": "Quitter",

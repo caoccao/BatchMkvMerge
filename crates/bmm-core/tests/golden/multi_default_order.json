@@ -300,6 +300,6 @@
       "--track-order",
       "0:0,0:2,1:0,0:3,2:0"
     ],
-    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 2 -s 3 --language 0:en --track-name \"0:Main Feature\" --default-track-flag 0:1 --language 2:en --default-track-flag 2:0 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --no-global-tags --attachments 1 /media/Movie.mkv --no-video -a 0 --no-subtitles --language 0:ja --track-name \"0:Director Commentary\" --default-track-flag 0:0 --no-chapters --no-global-tags --no-attachments /media/Movie.ja.mka --no-video --no-audio -s 0 --language 0:en --no-chapters --no-global-tags --no-attachments /media/Movie.en.srt --no-video --no-audio --no-subtitles --no-chapters --no-global-tags --no-attachments /media/Movie.forced.srt --track-order 0:0,0:2,1:0,0:3,2:0"
+    "command": "/opt/mkvtoolnix/mkvmerge -o /out/Movie.mkv -d 0 -a 2 -s 3 --language 0:en --track-name '0:Main Feature' --default-track-flag 0:1 --language 2:en --default-track-flag 2:0 --language 3:fr --default-track-flag 3:0 --forced-display-flag 3:1 --no-global-tags --attachments 1 /media/Movie.mkv --no-video -a 0 --no-subtitles --language 0:ja --track-name '0:Director Commentary' --default-track-flag 0:0 --no-chapters --no-global-tags --no-attachments /media/Movie.ja.mka --no-video --no-audio -s 0 --language 0:en --no-chapters --no-global-tags --no-attachments /media/Movie.en.srt --no-video --no-audio --no-subtitles --no-chapters --no-global-tags --no-attachments /media/Movie.forced.srt --track-order 0:0,0:2,1:0,0:3,2:0"
   }
 }

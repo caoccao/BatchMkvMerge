@@ -78,12 +78,30 @@ pub fn checked_dir(value: &str, mode: OutputMode) -> String {
   }
 }
 
+/// What the OK check found for a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathCheck {
+  Writable,
+  NotWritable,
+  /// File mode: a file is there, and a merge replaces no file.
+  Exists,
+}
+
 /// Whether a merge can write to `value` in `mode`: in directory mode a
-/// directory (an existing file is not one), in file mode a file too.
-fn writable(value: String, mode: OutputMode) -> anyhow::Result<bool> {
+/// directory (an existing file is not one), in file mode a file that is not
+/// there yet, or a directory (the merge then writes the input's name in it).
+fn writable(value: String, mode: OutputMode) -> anyhow::Result<PathCheck> {
+  let check = |writable: bool| {
+    if writable {
+      PathCheck::Writable
+    } else {
+      PathCheck::NotWritable
+    }
+  };
   match mode {
-    OutputMode::Directory => bmm_core::services::check_output_dir_writable(value),
-    OutputMode::File => bmm_core::services::check_output_file_writable(value),
+    OutputMode::Directory => bmm_core::services::check_output_dir_writable(value).map(check),
+    OutputMode::File if Path::new(&value).is_file() => Ok(PathCheck::Exists),
+    OutputMode::File => bmm_core::services::check_output_file_writable(value).map(check),
   }
 }
 
@@ -276,8 +294,9 @@ impl OutputPathDialog {
     cx.notify();
   }
 
-  /// Browse: a folder picker, or in file mode a save dialog (which asks
-  /// about an existing file itself).
+  /// Browse: a folder picker, or in file mode a save dialog. The save dialog
+  /// asks before it returns an existing file, but OK still refuses one: a
+  /// merge replaces no file.
   fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let value = self.value(cx);
     let chosen = match self.request.mode {
@@ -340,12 +359,13 @@ impl OutputPathDialog {
       let _ = this.update_in(cx, |this, window, cx| {
         this.confirming = None;
         match writable {
-          Ok(true) => {
+          Ok(PathCheck::Writable) => {
             this.done = true;
             (this.request.on_confirm)(value, cx);
             window.close_dialog(cx);
           }
-          Ok(false) => this.error = Some(tr!("merge.outputPathNotWritable")),
+          Ok(PathCheck::NotWritable) => this.error = Some(tr!("merge.outputPathNotWritable")),
+          Ok(PathCheck::Exists) => this.error = Some(crate::actions::output_exists_message(&value).into()),
           Err(error) => this.error = Some(error.to_string().into()),
         }
         cx.notify();

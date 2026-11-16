@@ -15,17 +15,21 @@
 *   limitations under the License.
 */
 
-use anyhow::Result;
 #[cfg(target_os = "macos")]
 use std::cmp::Ordering;
 #[cfg(target_os = "macos")]
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, PipeReader, Read};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
 use std::sync::OnceLock;
 
 use crate::config;
+use crate::merge::MergeError;
 use crate::protocol::MkvToolNixStatus;
+
+/// The one MKVToolNix tool the app runs; finding it is finding MKVToolNix.
+const MKVMERGE: &str = "mkvmerge";
 
 /// Receives the MKVToolNix directory a merge found by itself (on macOS, the
 /// newest `MKVToolNix-<version>.app` when the default path has no
@@ -45,17 +49,48 @@ pub fn init_auto_detected(sink: AutoDetectedSink) {
   }
 }
 
-pub(crate) fn parse_mkvmerge_progress(line: &str) -> Option<u32> {
+/// One line of `mkvmerge` output.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MkvmergeLine<'a> {
+  /// A percentage, 0–100.
+  Progress(u32),
+  Warning(&'a str),
+  Error(&'a str),
+  /// Anything else: informational text, or what the process wrote to stderr.
+  Other(&'a str),
+}
+
+/// Classifies a line of `mkvmerge --gui-mode` output. In GUI mode progress,
+/// warnings and errors are `#GUI#progress 42%`, `#GUI#warning …` and
+/// `#GUI#error …` whatever the interface language, while the plain-text
+/// `Progress:` / `Warning:` / `Error:` prefixes are translated; those are
+/// still recognised in English. Other `#GUI#` markers (playlist scanning)
+/// are dropped.
+pub(crate) fn parse_mkvmerge_line(line: &str) -> Option<MkvmergeLine<'_>> {
   let trimmed = line.trim();
-  if trimmed.starts_with("Progress:") {
-    trimmed
-      .trim_start_matches("Progress:")
-      .trim()
-      .trim_end_matches('%')
-      .parse::<u32>()
-      .ok()
-  } else {
+  if trimmed.is_empty() {
+    return None;
+  }
+  let progress = trimmed
+    .strip_prefix("#GUI#progress")
+    .or_else(|| trimmed.strip_prefix("Progress:"));
+  if let Some(percent) = progress.and_then(|rest| rest.trim().trim_end_matches('%').trim().parse::<u32>().ok()) {
+    return Some(MkvmergeLine::Progress(percent.min(100)));
+  }
+  let message = |prefixes: [&str; 2]| {
+    prefixes
+      .iter()
+      .find_map(|prefix| trimmed.strip_prefix(prefix))
+      .map(str::trim)
+  };
+  if let Some(text) = message(["#GUI#warning", "Warning:"]) {
+    Some(MkvmergeLine::Warning(text))
+  } else if let Some(text) = message(["#GUI#error", "Error:"]) {
+    Some(MkvmergeLine::Error(text))
+  } else if trimmed.starts_with("#GUI#") {
     None
+  } else {
+    Some(MkvmergeLine::Other(trimmed))
   }
 }
 
@@ -129,16 +164,6 @@ fn create_mkvtoolnix_command(tool: &str) -> (PathBuf, std::process::Command) {
   (tool_path, cmd)
 }
 
-fn validate_path_as_file(path: &Path) -> anyhow::Result<()> {
-  if !path.exists() {
-    Err(anyhow::anyhow!("Path {} does not exist.", path.display()))
-  } else if !path.is_file() {
-    Err(anyhow::anyhow!("Path {} is not a file.", path.display()))
-  } else {
-    Ok(())
-  }
-}
-
 fn has_tool(path: &Path, tool: &str) -> bool {
   let tool_path = path.join(tool);
   if tool_path.exists() && tool_path.is_file() {
@@ -152,12 +177,6 @@ fn has_tool(path: &Path, tool: &str) -> bool {
     }
   }
   false
-}
-
-const MKVTOOLNIX_TOOLS: &[&str] = &["mkvmerge", "mkvmerge"];
-
-fn has_mkvtoolnix(path: &Path) -> bool {
-  MKVTOOLNIX_TOOLS.iter().all(|tool| has_tool(path, tool))
 }
 
 #[cfg(target_os = "macos")]
@@ -254,6 +273,13 @@ fn resolve_mkvtoolnix(path: &str, tool: &str) -> MkvToolNixResolution {
   }
 }
 
+/// The `mkvmerge` a merge with the MKVToolNix directory `mkv_toolnix_path`
+/// runs, found the way [`spawn_mkvmerge`] finds it, without reporting an
+/// auto-detected directory. For the copyable command.
+pub(crate) fn mkvmerge_executable(mkv_toolnix_path: &str) -> PathBuf {
+  get_tool_path(&resolve_mkvtoolnix(mkv_toolnix_path, MKVMERGE).path, MKVMERGE)
+}
+
 /// Hands an auto-detected directory that differs from the configured path
 /// to `report`.
 fn report_auto_detected(resolution: &MkvToolNixResolution, configured: &str, report: impl FnOnce(String)) {
@@ -266,21 +292,35 @@ fn report_auto_detected(resolution: &MkvToolNixResolution, configured: &str, rep
   }
 }
 
-pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<std::process::Child> {
-  let path = Path::new(file);
-  validate_path_as_file(path)?;
-  let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command("mkvmerge");
-  // `args` already carry the full mkvmerge merge invocation, including `-o
-  // <output>`, the per-file options and the source file in the correct
-  // position (per-file options must precede the input file).  `file` was only
-  // used above to validate the source exists — don't prepend it here.
+/// Starts `mkvmerge` for the source `file` with the complete argument list
+/// `args` (`-o <output>`, the per-file options, the inputs; `file` is only
+/// checked here, not passed again). Returns the process and one pipe that
+/// carries both its stdout and its stderr, so neither can fill up unread and
+/// whatever it prints can be shown. `--gui-mode` keeps its progress, warning
+/// and error lines recognisable in every interface language
+/// ([`parse_mkvmerge_line`]); the copyable command does not need it.
+pub fn spawn_mkvmerge(file: &str, args: &[String]) -> Result<(Child, PipeReader), MergeError> {
+  if !Path::new(file).is_file() {
+    return Err(MergeError::SourceMissing { path: file.to_owned() });
+  }
+  let (mkvmerge_path, mut cmd) = create_mkvtoolnix_command(MKVMERGE);
+  let pipe_error = |error: std::io::Error| MergeError::Other(format!("Couldn't create the output pipe: {error}"));
+  let (output, stdout) = std::io::pipe().map_err(pipe_error)?;
+  let stderr = stdout.try_clone().map_err(pipe_error)?;
   cmd
+    .arg("--gui-mode")
     .args(args)
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped());
-  cmd
-    .spawn()
-    .map_err(|e| anyhow::anyhow!("MKVMERGE_NOT_AVAILABLE:{}: {}", mkvmerge_path.display(), e))
+    .stdin(Stdio::null())
+    .stdout(stdout)
+    .stderr(stderr);
+  let child = cmd.spawn().map_err(|error| MergeError::NotAvailable {
+    path: mkvmerge_path.display().to_string(),
+    detail: error.to_string(),
+  })?;
+  // The command holds the parent's copies of the pipe's write end; reading
+  // reaches EOF only once they are closed and the process has exited.
+  drop(cmd);
+  Ok((child, output))
 }
 
 fn mkvtoolnix_gui_process_name() -> &'static str {
@@ -298,7 +338,7 @@ fn mkvtoolnix_gui_process_name() -> &'static str {
 pub fn detect_mkvtoolnix(path: &str, check_running: bool) -> MkvToolNixStatus {
   if check_running
     && let Some(dir) = crate::services::find_running_process_dir(mkvtoolnix_gui_process_name())
-    && has_mkvtoolnix(&dir)
+    && has_tool(&dir, MKVMERGE)
   {
     return MkvToolNixStatus {
       found: true,
@@ -312,9 +352,9 @@ pub fn detect_mkvtoolnix(path: &str, check_running: bool) -> MkvToolNixStatus {
       mkv_toolnix_path: String::new(),
     };
   }
-  let resolution = resolve_mkvtoolnix(trimmed_path, MKVTOOLNIX_TOOLS[0]);
+  let resolution = resolve_mkvtoolnix(trimmed_path, MKVMERGE);
   MkvToolNixStatus {
-    found: has_mkvtoolnix(&resolution.path),
+    found: has_tool(&resolution.path, MKVMERGE),
     mkv_toolnix_path: resolution.path.to_string_lossy().to_string(),
   }
 }
@@ -389,5 +429,43 @@ mod tests {
     let status = detect_mkvtoolnix("   ", false);
     assert!(!status.found);
     assert!(status.mkv_toolnix_path.is_empty());
+  }
+
+  #[test]
+  fn gui_mode_and_english_lines_are_classified() {
+    use MkvmergeLine::*;
+    assert_eq!(parse_mkvmerge_line("#GUI#progress 42%"), Some(Progress(42)));
+    assert_eq!(parse_mkvmerge_line("Progress: 7%"), Some(Progress(7)));
+    assert_eq!(parse_mkvmerge_line("#GUI#progress 120%"), Some(Progress(100)));
+    assert_eq!(
+      parse_mkvmerge_line("#GUI#warning 'a.mkv': track 7 not found."),
+      Some(Warning("'a.mkv': track 7 not found."))
+    );
+    assert_eq!(parse_mkvmerge_line("Warning: plain"), Some(Warning("plain")));
+    assert_eq!(
+      parse_mkvmerge_line("#GUI#error The file 'x' could not be opened."),
+      Some(Error("The file 'x' could not be opened."))
+    );
+    assert_eq!(parse_mkvmerge_line("Error: plain"), Some(Error("plain")));
+    assert_eq!(parse_mkvmerge_line("Fortschritt: 25%"), Some(Other("Fortschritt: 25%")));
+    assert_eq!(parse_mkvmerge_line("#GUI#begin_scanning_playlists"), None);
+    assert_eq!(parse_mkvmerge_line("   "), None);
+  }
+
+  #[test]
+  fn output_is_split_at_carriage_returns_and_newlines() {
+    let mut lines = Vec::new();
+    read_mkvmerge_output(&b"Progress: 25%\rProgress: 100%\r\nDone.\n\nlast"[..], |line| {
+      lines.push(line.to_owned())
+    });
+    assert_eq!(lines, ["Progress: 25%", "Progress: 100%", "Done.", "last"]);
+  }
+
+  #[test]
+  fn a_missing_source_is_reported_before_mkvmerge_is_looked_for() {
+    match spawn_mkvmerge("/definitely/not/here.mkv", &[]) {
+      Err(MergeError::SourceMissing { path }) => assert_eq!(path, "/definitely/not/here.mkv"),
+      other => panic!("expected SourceMissing, got {:?}", other.map(|_| ())),
+    }
   }
 }

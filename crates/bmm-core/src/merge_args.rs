@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::config::ConfigProfile;
+use crate::media_metadata::model::container::ContainerFormat;
 use crate::media_metadata::model::track_properties_common::TrackFlag;
 use crate::media_track::{MediaTrack, MediaTrackType};
 
@@ -44,6 +45,77 @@ use crate::media_track::{MediaTrack, MediaTrackType};
 pub struct MergeInput {
   pub file: String,
   pub tracks: Vec<MediaTrack>,
+  /// The character set `mkvmerge` reads this file's subtitle tracks in
+  /// (`--sub-charset`); `None` leaves it to `mkvmerge`. Set only for files
+  /// [`takes_sub_charset`] accepts.
+  pub sub_charset: Option<String>,
+}
+
+/// Whether `mkvmerge --sub-charset` should be given for the subtitle tracks
+/// of an input of `format`: a text subtitle file (SRT, SSA/ASS, MicroDVD),
+/// which may be in a legacy character set. Checked against mkvmerge v101.0:
+/// a BOM-less Windows-1252 SRT is read right with the option and gets
+/// replacement characters (and a warning) without it; a BOM wins over the
+/// option; but the text subtitles of a Matroska file, UTF-8 already, are
+/// re-encoded by it (`Café` became `CafÃ©`), so containers never take it.
+pub fn takes_sub_charset(format: &ContainerFormat) -> bool {
+  matches!(
+    format,
+    ContainerFormat::Srt | ContainerFormat::SsaAss | ContainerFormat::MicroDvd
+  )
+}
+
+/// The `--sub-charset` that has `mkvmerge` read a BOM-less text subtitle
+/// file the way the parser did with the configured subtitle charset `label`
+/// (`parser.subtitleCharset`). The parser resolves the label as the WHATWG
+/// Encoding Standard does, where `ISO-8859-1` is Windows-1252, but
+/// `mkvmerge` hands the name to iconv, which reads `ISO-8859-1` as Latin-1
+/// (byte 0x80 became U+0080 instead of `€`), so it gets iconv's name of the
+/// encoding the parser used. `None` when the label is empty or names no
+/// encoding: the parser then reads UTF-8, as `mkvmerge` does without the
+/// option.
+pub fn mkvmerge_sub_charset(label: &str) -> Option<&'static str> {
+  crate::media_metadata::subtitles::encoding::charset_hint_encoding(label).and_then(iconv_charset)
+}
+
+/// iconv's name of an `encoding_rs` encoding, the one that decodes the same
+/// bytes the same way. Checked with mkvmerge v101.0 (GNU libiconv) on SRT
+/// files with every byte of each single-byte set and samples of each
+/// multi-byte set: the same text for all but these, where no iconv name
+/// matches exactly and the closest is used: windows-1258 (iconv joins
+/// Vietnamese tone marks to their letter), macintosh and x-mac-cyrillic (`€`,
+/// `Ω`, the Apple logo), Shift_JIS, EUC-JP and ISO-2022-JP (`～`, `－`, NEC's
+/// circled numbers) and Big5 (`€`, the HKSCS and ETEN additions). iconv has
+/// no counterpart of `replacement` and `x-user-defined`.
+fn iconv_charset(encoding: &'static encoding_rs::Encoding) -> Option<&'static str> {
+  let name = match encoding.name() {
+    "replacement" | "x-user-defined" => return None,
+    "IBM866" => "CP866",
+    "ISO-8859-8-I" => "ISO-8859-8",
+    // WHATWG's KOI8-U has the Belarusian letters of KOI8-RU.
+    "KOI8-U" => "KOI8-RU",
+    "macintosh" => "MACINTOSH",
+    "windows-874" => "CP874",
+    "windows-1250" => "CP1250",
+    "windows-1251" => "CP1251",
+    "windows-1252" => "CP1252",
+    "windows-1253" => "CP1253",
+    "windows-1254" => "CP1254",
+    "windows-1255" => "CP1255",
+    "windows-1256" => "CP1256",
+    "windows-1257" => "CP1257",
+    "windows-1258" => "CP1258",
+    "x-mac-cyrillic" => "MACUKRAINE",
+    "GBK" => "CP936",
+    "gb18030" => "GB18030",
+    "Big5" => "BIG5-HKSCS",
+    "Shift_JIS" => "CP932",
+    "EUC-KR" => "CP949",
+    // UTF-8, UTF-16LE, UTF-16BE, ISO-8859-2 to -16, KOI8-R, EUC-JP and
+    // ISO-2022-JP have the same name in iconv.
+    name => name,
+  };
+  Some(name)
 }
 
 /// A track of one input, used to spell out an explicit cross-file
@@ -147,18 +219,61 @@ pub fn resolve_output_dir(file: &str, override_dir: Option<&str>, global_dir: Op
     .unwrap_or_default()
 }
 
-/// Quote one argument of the copyable command: values with whitespace,
-/// quotes or backslashes (and empty values) are wrapped in double quotes with
-/// inner double quotes escaped.
+/// Quote one argument of the copyable command for the platform's shell:
+/// [`posix_quote`] on Linux and macOS, [`windows_quote`] on Windows.
 fn shell_quote(value: &str) -> String {
-  if !value.is_empty()
-    && !value
-      .chars()
-      .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
-  {
+  if cfg!(target_os = "windows") {
+    windows_quote(value)
+  } else {
+    posix_quote(value)
+  }
+}
+
+/// A POSIX shell word: as it is when every character is one no shell treats
+/// specially (`A-Z a-z 0-9 _ @ % + = : , . / -`), else in single quotes, in
+/// which nothing expands (`$`, a backtick, `!`, a glob), with an inner `'`
+/// written as `'\''`.
+fn posix_quote(value: &str) -> String {
+  let plain =
+    |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '@' | '%' | '+' | '=' | ':' | ',' | '.' | '/' | '-');
+  if !value.is_empty() && value.chars().all(plain) {
     return value.to_string();
   }
-  format!("\"{}\"", value.replace('"', "\\\""))
+  format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// A Command Prompt (`cmd.exe`) argument: as it is unless it is empty or has
+/// whitespace, a quote or one of cmd's operators (`& | < > ^ ( )`), else in
+/// double quotes by the rules `CommandLineToArgvW` and the C runtime parse
+/// it back with. A `"` becomes `\"`, and backslashes are doubled before a
+/// quote and before the closing quote (`C:\dir\` → `"C:\dir\\"`). A `%NAME%`
+/// that names a variable still expands; cmd offers no escape for it inside
+/// quotes.
+fn windows_quote(value: &str) -> String {
+  let special = |c: char| c.is_whitespace() || matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '(' | ')');
+  if !value.is_empty() && !value.chars().any(special) {
+    return value.to_string();
+  }
+  let mut quoted = String::from('"');
+  let mut backslashes = 0;
+  for c in value.chars() {
+    match c {
+      '\\' => backslashes += 1,
+      '"' => {
+        quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+        quoted.push('"');
+        backslashes = 0;
+      }
+      _ => {
+        quoted.extend(std::iter::repeat_n('\\', backslashes));
+        quoted.push(c);
+        backslashes = 0;
+      }
+    }
+  }
+  quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
+  quoted.push('"');
+  quoted
 }
 
 fn flag_value(flag: TrackFlag) -> Option<u8> {
@@ -180,7 +295,7 @@ fn join_ids<'a>(tracks: impl IntoIterator<Item = &'a MediaTrack>) -> String {
 /// Append one input's option block and its path. Track ids are the file's own,
 /// so the same block serves every input of a multi-input merge. Flags are only
 /// written when set, so "unspecified" keeps the source's flag.
-fn append_input_options(args: &mut Vec<String>, file: &str, tracks: &[MediaTrack]) {
+fn append_input_options(args: &mut Vec<String>, file: &str, tracks: &[MediaTrack], sub_charset: Option<&str>) {
   let mut media: Vec<&MediaTrack> = Vec::new();
   for (track_type, select_flag, no_flag) in [
     (MediaTrackType::Video, "-d", "--no-video"),
@@ -202,9 +317,15 @@ fn append_input_options(args: &mut Vec<String>, file: &str, tracks: &[MediaTrack
       args.push("--language".to_string());
       args.push(format!("{}:{}", track.id, track.language));
     }
-    if !track.track_name.is_empty() {
+    // An empty name over a named source track clears the name; an unnamed
+    // track with an empty cell needs no option.
+    if !track.track_name.is_empty() || !track.source_track_name.is_empty() {
       args.push("--track-name".to_string());
       args.push(format!("{}:{}", track.id, track.track_name));
+    }
+    if let Some(charset) = sub_charset.filter(|_| track.track_type == MediaTrackType::Subtitles) {
+      args.push("--sub-charset".to_string());
+      args.push(format!("{}:{charset}", track.id));
     }
     if let Some(value) = flag_value(track.default_track) {
       args.push("--default-track-flag".to_string());
@@ -237,10 +358,15 @@ fn append_input_options(args: &mut Vec<String>, file: &str, tracks: &[MediaTrack
 /// The `mkvmerge` arguments that merge `source_file`'s selected `tracks` into
 /// `output_path`. `tracks` are the selected rows in the table's (possibly
 /// reordered) order, which the trailing `--track-order` keeps; the input is
-/// file 0.
-pub fn build_merge_args(source_file: &str, output_path: &str, tracks: &[MediaTrack]) -> Vec<String> {
+/// file 0. `sub_charset` is the input's [`MergeInput::sub_charset`].
+pub fn build_merge_args(
+  source_file: &str,
+  output_path: &str,
+  tracks: &[MediaTrack],
+  sub_charset: Option<&str>,
+) -> Vec<String> {
   let mut args = vec!["-o".to_string(), output_path.to_string()];
-  append_input_options(&mut args, source_file, tracks);
+  append_input_options(&mut args, source_file, tracks, sub_charset);
   let order: Vec<String> = tracks
     .iter()
     .filter(|track| track.track_type.is_media())
@@ -270,7 +396,7 @@ pub fn build_merge_args_multi(
 ) -> Vec<String> {
   let mut args = vec!["-o".to_string(), output_path.to_string()];
   for input in inputs {
-    append_input_options(&mut args, &input.file, &input.tracks);
+    append_input_options(&mut args, &input.file, &input.tracks, input.sub_charset.as_deref());
   }
 
   let track_order: Vec<String> = match order {
@@ -314,9 +440,14 @@ pub fn build_merge_args_multi(
   args
 }
 
-/// The `mkvmerge` executable inside the MKVToolNix directory.
+/// The `mkvmerge` executable a merge with this MKVToolNix directory runs
+/// (trimmed, `.exe` on Windows, the newest versioned app on macOS when the
+/// default directory has none), as [`crate::mkvtoolnix::spawn_mkvmerge`]
+/// finds it.
 fn mkvmerge_path(mkv_toolnix_path: &str) -> String {
-  format!("{mkv_toolnix_path}{}mkvmerge", std::path::MAIN_SEPARATOR)
+  crate::mkvtoolnix::mkvmerge_executable(mkv_toolnix_path)
+    .to_string_lossy()
+    .into_owned()
 }
 
 fn command_string(mkv_toolnix_path: &str, args: Vec<String>) -> String {
@@ -333,8 +464,12 @@ pub fn build_command_string(
   output_path: &str,
   mkv_toolnix_path: &str,
   tracks: &[MediaTrack],
+  sub_charset: Option<&str>,
 ) -> String {
-  command_string(mkv_toolnix_path, build_merge_args(source_file, output_path, tracks))
+  command_string(
+    mkv_toolnix_path,
+    build_merge_args(source_file, output_path, tracks, sub_charset),
+  )
 }
 
 /// The copyable shell command of [`build_merge_args_multi`].
@@ -370,6 +505,7 @@ mod tests {
       size: None,
       bit_rate: None,
       track_name: String::new(),
+      source_track_name: String::new(),
       language: String::new(),
       language_codes: Vec::new(),
       default_track: TrackFlag::Unspecified,
@@ -453,15 +589,42 @@ mod tests {
   }
 
   #[test]
-  fn quotes_shell_arguments_only_when_needed() {
-    assert_eq!(shell_quote("plain-arg_1.mkv"), "plain-arg_1.mkv");
-    assert_eq!(shell_quote(""), "\"\"");
-    assert_eq!(shell_quote("a b"), "\"a b\"");
-    assert_eq!(shell_quote("tab\there"), "\"tab\there\"");
-    assert_eq!(shell_quote("say \"hi\""), "\"say \\\"hi\\\"\"");
-    assert_eq!(shell_quote("it's"), "\"it's\"");
-    assert_eq!(shell_quote(r"C:\x"), "\"C:\\x\"");
-    assert_eq!(shell_quote("nbsp\u{a0}"), "\"nbsp\u{a0}\"");
+  fn posix_words_are_single_quoted_unless_plain() {
+    assert_eq!(posix_quote("plain-arg_1.mkv"), "plain-arg_1.mkv");
+    assert_eq!(posix_quote("0:0,0:2,1:0"), "0:0,0:2,1:0");
+    assert_eq!(posix_quote(""), "''");
+    assert_eq!(posix_quote("a b"), "'a b'");
+    assert_eq!(posix_quote(r#"say "hi""#), r#"'say "hi"'"#);
+    assert_eq!(posix_quote("it's"), r"'it'\''s'");
+    for metacharacters in [
+      "Tom&Jerry.mkv",
+      "Movie(2020).mkv",
+      "a;b.mkv",
+      "What?.mkv",
+      "[Group]Show*.mkv",
+      "#1.mkv",
+    ] {
+      assert_eq!(posix_quote(metacharacters), format!("'{metacharacters}'"));
+    }
+    // Nothing expands inside single quotes.
+    assert_eq!(
+      posix_quote("My $1 $(rm -rf ~) `id`.mkv"),
+      "'My $1 $(rm -rf ~) `id`.mkv'"
+    );
+    assert_eq!(posix_quote(r"C:\dir\"), r"'C:\dir\'");
+    assert_eq!(posix_quote("\u{7535}\u{5f71}.mkv"), "'\u{7535}\u{5f71}.mkv'");
+  }
+
+  #[test]
+  fn windows_arguments_follow_the_command_line_rules() {
+    assert_eq!(windows_quote(r"C:\in\Movie.mkv"), r"C:\in\Movie.mkv");
+    assert_eq!(windows_quote(""), r#""""#);
+    assert_eq!(windows_quote(r"C:\My Movies\a.mkv"), r#""C:\My Movies\a.mkv""#);
+    assert_eq!(windows_quote(r"C:\My Dir\"), r#""C:\My Dir\\""#);
+    assert_eq!(windows_quote(r#"0:Director's "Cut""#), r#""0:Director's \"Cut\"""#);
+    assert_eq!(windows_quote(r#"a\"b"#), r#""a\\\"b""#);
+    assert_eq!(windows_quote("Tom&Jerry.mkv"), r#""Tom&Jerry.mkv""#);
+    assert_eq!(windows_quote("it's"), "it's");
   }
 
   #[test]
@@ -479,7 +642,7 @@ mod tests {
     // Rows in table order after a drag: audio before video.
     let tracks = [audio, video, subtitle, chapters, attachment];
     assert_eq!(
-      build_merge_args("/in/Movie.mkv", "/out/Movie.mkv", &tracks),
+      build_merge_args("/in/Movie.mkv", "/out/Movie.mkv", &tracks, None),
       strings(&[
         "-o",
         "/out/Movie.mkv",
@@ -513,10 +676,81 @@ mod tests {
     );
   }
 
+  /// mkvmerge writes no name for `--track-name <id>:` (checked against
+  /// v101.0), so a cleared cell clears the source's name; an unnamed track
+  /// needs no option.
+  #[test]
+  fn a_cleared_track_name_clears_the_source_name() {
+    let mut cleared = row(MediaTrackType::Audio, 1);
+    cleared.source_track_name = "Release Group".to_string();
+    let unnamed = row(MediaTrackType::Audio, 2);
+    let mut renamed = row(MediaTrackType::Audio, 3);
+    renamed.source_track_name = "Old".to_string();
+    renamed.track_name = "New".to_string();
+    let args = build_merge_args("in.mkv", "out.mkv", &[cleared, unnamed, renamed], None);
+    let names: Vec<&str> = args
+      .windows(2)
+      .filter(|pair| pair[0] == "--track-name")
+      .map(|pair| pair[1].as_str())
+      .collect();
+    assert_eq!(names, ["1:", "3:New"]);
+  }
+
+  #[test]
+  fn a_text_subtitle_file_takes_the_subtitle_charset() {
+    let mut subtitle = row(MediaTrackType::Subtitles, 0);
+    subtitle.language = "fr".to_string();
+    let audio = row(MediaTrackType::Audio, 1);
+    let args = build_merge_args("in.srt", "out.mkv", &[subtitle, audio], Some("windows-1252"));
+    let charsets: Vec<&str> = args
+      .windows(2)
+      .filter(|pair| pair[0] == "--sub-charset")
+      .map(|pair| pair[1].as_str())
+      .collect();
+    assert_eq!(charsets, ["0:windows-1252"], "subtitle tracks only");
+    let mut inputs = inputs();
+    inputs[2].sub_charset = Some("cp1250".to_string());
+    let multi = build_merge_args_multi(&inputs, "/out/Movie.mkv", None);
+    assert_eq!(multi.iter().filter(|arg| *arg == "--sub-charset").count(), 1);
+    assert!(multi.contains(&"0:cp1250".to_string()));
+    assert!(takes_sub_charset(&ContainerFormat::Srt));
+    assert!(takes_sub_charset(&ContainerFormat::SsaAss));
+    assert!(takes_sub_charset(&ContainerFormat::MicroDvd));
+    assert!(!takes_sub_charset(&ContainerFormat::Matroska));
+  }
+
+  #[test]
+  fn the_subtitle_charset_reaches_mkvmerge_as_the_encoding_the_parser_used() {
+    let cases = [
+      ("", None),
+      ("  ", None),
+      ("no-such-charset", None),
+      ("utf8", Some("UTF-8")),
+      ("ISO-8859-1", Some("CP1252")),
+      ("latin1", Some("CP1252")),
+      (" windows-1252 ", Some("CP1252")),
+      ("cp1250", Some("CP1250")),
+      ("iso-8859-2", Some("ISO-8859-2")),
+      ("iso-8859-9", Some("CP1254")),
+      ("koi8-u", Some("KOI8-RU")),
+      ("sjis", Some("CP932")),
+      ("gb2312", Some("CP936")),
+      ("gb18030", Some("GB18030")),
+      ("big5", Some("BIG5-HKSCS")),
+      ("ks_c_5601-1987", Some("CP949")),
+      ("euc-jp", Some("EUC-JP")),
+      ("iso-2022-kr", None),
+      ("x-user-defined", None),
+    ];
+    for (label, expected) in cases {
+      assert_eq!(mkvmerge_sub_charset(label), expected, "{label:?}");
+    }
+  }
+
   #[test]
   fn writes_negative_options_for_unselected_types() {
     assert_eq!(
-      build_merge_args("in.mkv", "out.mkv", &[]),
+      build_merge_args("in.mkv", "out.mkv", &[], None),
       strings(&[
         "-o",
         "out.mkv",
@@ -530,7 +764,7 @@ mod tests {
       ])
     );
     let attachments = [row(MediaTrackType::Attachment, 1), row(MediaTrackType::Attachment, 3)];
-    let args = build_merge_args("in.mkv", "out.mkv", &attachments);
+    let args = build_merge_args("in.mkv", "out.mkv", &attachments, None);
     assert_eq!(args[args.len() - 3..], strings(&["--attachments", "1,3", "in.mkv"]));
     assert!(!args.contains(&"--track-order".to_string()));
   }
@@ -545,14 +779,17 @@ mod tests {
           row(MediaTrackType::Audio, 1),
           row(MediaTrackType::Chapters, 0),
         ],
+        sub_charset: None,
       },
       MergeInput {
         file: "/in/Movie.ja.mka".to_string(),
         tracks: vec![row(MediaTrackType::Audio, 0), row(MediaTrackType::Audio, 1)],
+        sub_charset: None,
       },
       MergeInput {
         file: "/in/Movie.en.srt".to_string(),
         tracks: vec![row(MediaTrackType::Subtitles, 0)],
+        sub_charset: None,
       },
     ]
   }
@@ -610,13 +847,17 @@ mod tests {
     let separator = std::path::MAIN_SEPARATOR;
     let mut audio = row(MediaTrackType::Audio, 1);
     audio.track_name = "Director's cut".to_string();
-    let command = build_command_string("/in/My Movie.mkv", "/out/My Movie.mkv", "/opt/mkv", &[audio]);
+    let command = build_command_string("/in/My Movie.mkv", "/out/My Movie.mkv", " /opt/mkv ", &[audio], None);
     let mkvmerge = shell_quote(&format!("/opt/mkv{separator}mkvmerge"));
+    let quote = shell_quote;
     assert_eq!(
       command,
       format!(
-        "{mkvmerge} -o \"/out/My Movie.mkv\" --no-video -a 1 --no-subtitles --track-name \"1:Director's cut\" \
-         --no-chapters --no-global-tags --no-attachments \"/in/My Movie.mkv\" --track-order 0:1"
+        "{mkvmerge} -o {} --no-video -a 1 --no-subtitles --track-name {} \
+         --no-chapters --no-global-tags --no-attachments {} --track-order 0:1",
+        quote("/out/My Movie.mkv"),
+        quote("1:Director's cut"),
+        quote("/in/My Movie.mkv"),
       )
     );
     let multi = build_command_string_multi(&inputs()[1..], "/out/x.mkv", "/opt/mkv", None);

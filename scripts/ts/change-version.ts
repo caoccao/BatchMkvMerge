@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-import * as fs from "https://deno.land/std/fs/mod.ts";
-import * as path from "https://deno.land/std/path/mod.ts";
+import * as fs from "https://deno.land/std@0.224.0/fs/mod.ts";
+import * as path from "https://deno.land/std@0.224.0/path/mod.ts";
 
 class ChangeVersion {
   private productionVersion: string;
@@ -52,7 +52,7 @@ class ChangeVersion {
     patterns.map((pattern) => {
       [...currentContent.matchAll(pattern)].map((match) => {
         const matchedString = match[0];
-        const currentVersion = match.groups["version"];
+        const currentVersion = match.groups!["version"];
         if (newVersion === currentVersion) {
           console.warn(`%c  Ignored ${matchedString}`, "color: yellow");
         } else {

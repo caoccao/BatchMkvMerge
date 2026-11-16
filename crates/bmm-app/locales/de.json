@@ -58,7 +58,10 @@
         "malformed": "Fehlerhafte Datei: %{detail}",
         "oversizedElement": "Element überschreitet die Größenbeschränkung: %{detail}",
         "internal": "Interner Parser-Fehler: %{detail}"
-      }
+      },
+      "sourceMissing": "Die Quelldatei %{path} wurde nicht gefunden.",
+      "mkvmergeExitCode": "mkvmerge wurde mit dem Code %{code} beendet.",
+      "mkvmergeTerminated": "mkvmerge wurde vorzeitig beendet."
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "Fertig",
       "cancelled": "Abgebrochen",
       "failed": "Fehlgeschlagen"
-    }
+    },
+    "warnings": "Mit Warnungen abgeschlossen:"
   },
   "settings": {
     "title": "Einstellungen",
@@ -210,7 +214,12 @@
     "completedIn": "Abgeschlossen in %{elapsed}",
     "unknownError": "Unbekannter Fehler",
     "summary": "%{completed} fertig, %{failed} fehlgeschlagen, %{cancelled} abgebrochen",
-    "finishedIn": "Beendet in %{elapsed}"
+    "finishedIn": "Beendet in %{elapsed}",
+    "configResetTitle": "Einstellungen konnten nicht gelesen werden",
+    "configReset": "Nicht lesbare Einstellungen wurden auf ihre Standardwerte zurückgesetzt. Die ursprüngliche Datei wurde als %{path} aufbewahrt.",
+    "configResetNoBackup": "Nicht lesbare Einstellungen wurden auf ihre Standardwerte zurückgesetzt.",
+    "completedWithWarnings": "Abgeschlossen in %{elapsed} mit Warnungen: %{warnings}",
+    "pathsSkipped": "%{count} Element(e) konnten nicht gelesen werden und wurden übersprungen: %{paths}"
   },
   "confirm": {
     "exitTitle": "Beenden",

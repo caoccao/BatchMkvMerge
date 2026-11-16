@@ -227,7 +227,7 @@ impl Render for AppView {
           .iter()
           .map(|path| path.to_string_lossy().into_owned())
           .collect();
-        files::add_paths(&this.stores.files, paths, cx);
+        files::add_paths(&this.stores.files, Some(&this.stores.ui), paths, cx);
       }))
       .child(
         v_flex()

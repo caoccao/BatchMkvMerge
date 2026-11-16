@@ -23,7 +23,7 @@
 //! were sent. [`MergeBackend`] is the other direction: enqueue and cancel.
 
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_channel::Receiver;
@@ -44,6 +44,11 @@ pub fn channel() -> (MergeEventSink, Receiver<MergeEvent>) {
 
 type EnqueueFn = dyn Fn(String, MergeArgs) -> Result<()> + Send + Sync;
 type CancelFn = dyn Fn(&str) -> Result<()> + Send + Sync;
+type ShutdownFn = dyn Fn(Duration) -> bool + Send + Sync;
+
+/// How long quitting waits for the cancelled merges to end, so no `mkvmerge`
+/// outlives the app.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Enqueues and cancels merges: the process-wide `mkvmerge` queue in the app,
 /// a queue with a fake launcher (or a recorder) in tests.
@@ -51,9 +56,12 @@ type CancelFn = dyn Fn(&str) -> Result<()> + Send + Sync;
 pub struct MergeBackend {
   enqueue: Arc<EnqueueFn>,
   cancel: Arc<CancelFn>,
+  shutdown: Arc<ShutdownFn>,
 }
 
 impl MergeBackend {
+  /// A backend from its enqueue and cancel; its shutdown has nothing to wait
+  /// for (see [`Self::with_shutdown`]).
   pub fn new(
     enqueue: impl Fn(String, MergeArgs) -> Result<()> + Send + Sync + 'static,
     cancel: impl Fn(&str) -> Result<()> + Send + Sync + 'static,
@@ -61,6 +69,15 @@ impl MergeBackend {
     Self {
       enqueue: Arc::new(enqueue),
       cancel: Arc::new(cancel),
+      shutdown: Arc::new(|_| true),
+    }
+  }
+
+  /// The same backend with `shutdown` behind [`Self::shutdown`].
+  pub fn with_shutdown(self, shutdown: impl Fn(Duration) -> bool + Send + Sync + 'static) -> Self {
+    Self {
+      shutdown: Arc::new(shutdown),
+      ..self
     }
   }
 
@@ -71,15 +88,18 @@ impl MergeBackend {
     Self::new(bmm_core::merge::enqueue, |file| {
       bmm_core::merge::cancel(file.to_string())
     })
+    .with_shutdown(bmm_core::merge::shutdown)
   }
 
   /// A queue of its own, e.g. with a fake launcher.
   pub fn queue(queue: Arc<MergeQueue>) -> Self {
     let cancel_queue = queue.clone();
+    let shutdown_queue = queue.clone();
     Self::new(
       move |file, args| queue.enqueue(file, args),
       move |file| cancel_queue.cancel(file),
     )
+    .with_shutdown(move |timeout| shutdown_queue.shutdown(timeout))
   }
 
   /// Queues `file` with its `mkvmerge` arguments.
@@ -90,6 +110,12 @@ impl MergeBackend {
   /// Cancels `file`, waiting or running.
   pub fn cancel(&self, file: &str) -> Result<()> {
     (self.cancel)(file)
+  }
+
+  /// Cancels every merge and waits up to `timeout` for the running ones to
+  /// end; `false` when some were still running. Called as the app quits.
+  pub fn shutdown(&self, timeout: Duration) -> bool {
+    (self.shutdown)(timeout)
   }
 }
 

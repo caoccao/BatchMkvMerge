@@ -91,7 +91,16 @@ fn require_chunk<'a>(chunks: &'a [Chunk], ctype: &[u8; 4], name: &'static str) -
   })
 }
 
-fn read_chunk_body(src: &mut FileSource, chunk: &Chunk) -> Result<Vec<u8>, ParseError> {
+/// What the reader needs of each chunk: `desc` is 32 bytes, `pakt` is read
+/// for its 24-byte header (its packet table can be megabytes long), and an
+/// ALAC magic cookie (`kuki`) is a few dozen bytes. A chunk is read up to its
+/// limit only, whatever size it declares.
+const DESC_READ_LIMIT: u64 = 4096;
+const PAKT_READ_LIMIT: u64 = 24;
+const KUKI_READ_LIMIT: u64 = 64 * 1024;
+
+/// The first `limit` bytes of `chunk` (all of a shorter one).
+fn read_chunk_body(src: &mut FileSource, chunk: &Chunk, limit: u64) -> Result<Vec<u8>, ParseError> {
   if chunk.size == 0 {
     return Err(ParseError::Malformed {
       format: "coreaudio",
@@ -100,7 +109,7 @@ fn read_chunk_body(src: &mut FileSource, chunk: &Chunk) -> Result<Vec<u8>, Parse
     });
   }
   src.seek_to(chunk.data_pos)?;
-  let mut buf = vec![0u8; chunk.size as usize];
+  let mut buf = vec![0u8; chunk.size.min(limit) as usize];
   src.read_exact(&mut buf)?;
   Ok(buf)
 }
@@ -130,7 +139,7 @@ impl Reader for CoreAudioReader {
     let chunks = scan_chunks(src, file_size, deadline)?;
 
     let desc_chunk = require_chunk(&chunks, b"desc", "desc")?;
-    let desc_body = read_chunk_body(src, desc_chunk)?;
+    let desc_body = read_chunk_body(src, desc_chunk, DESC_READ_LIMIT)?;
     let description = caf::decode_desc(&desc_body).ok_or(ParseError::Malformed {
       format: "coreaudio",
       offset: desc_chunk.data_pos,
@@ -146,7 +155,7 @@ impl Reader for CoreAudioReader {
 
     let pakt = require_chunk(&chunks, b"pakt", "pakt")?;
     let _data = require_chunk(&chunks, b"data", "data")?;
-    let pakt_body = read_chunk_body(src, pakt)?;
+    let pakt_body = read_chunk_body(src, pakt, PAKT_READ_LIMIT)?;
     if pakt_body.len() < 24 {
       return Err(ParseError::Malformed {
         format: "coreaudio",
@@ -177,7 +186,7 @@ impl Reader for CoreAudioReader {
     // kuki → ALAC magic cookie → codec_private.  Only reached for ALAC.
     let mut codec_private = None;
     if let Some(kuki) = find_chunk(&chunks, b"kuki") {
-      let body = read_chunk_body(src, kuki)?;
+      let body = read_chunk_body(src, kuki, KUKI_READ_LIMIT)?;
       let cookie = caf::convert_alac_cookie(&body).ok_or(ParseError::Malformed {
         format: "coreaudio",
         offset: kuki.data_pos,
@@ -268,6 +277,27 @@ mod tests {
   fn probe_rejects_other_magic() {
     let mut s = FileSource::from_reader_for_test(Cursor::new(b"RIFF".to_vec()));
     assert!(!CoreAudioReader.probe(&mut s).unwrap());
+  }
+
+  /// A long file's packet table is megabytes; only its header is read.
+  #[test]
+  fn a_large_packet_table_is_read_only_for_its_header() {
+    let mut bytes = build_caf(b"alac", 48_000.0, 2, 24);
+    let table = 4 * 1024 * 1024;
+    let pakt = bytes.windows(4).position(|window| window == b"pakt").unwrap();
+    bytes[pakt + 4..pakt + 12].copy_from_slice(&(24i64 + table as i64).to_be_bytes());
+    bytes.splice(pakt + 12 + 24..pakt + 12 + 24, std::iter::repeat_n(0u8, table));
+    let mut s = FileSource::from_reader_for_test(Cursor::new(bytes));
+    let length = s.length().unwrap();
+    let chunks = scan_chunks(&mut s, length, &Deadline::new(60_000)).unwrap();
+    let pakt = find_chunk(&chunks, b"pakt").unwrap();
+    assert_eq!(pakt.size, 24 + table as u64);
+    assert_eq!(read_chunk_body(&mut s, pakt, PAKT_READ_LIMIT).unwrap().len(), 24);
+    let mut out = MediaMetadata::new("clip.caf", 0);
+    CoreAudioReader
+      .read_headers(&mut s, &Deadline::new(60_000), &mut out)
+      .unwrap();
+    assert_eq!(out.tracks.len(), 1);
   }
 
   #[test]

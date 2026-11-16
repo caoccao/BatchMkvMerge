@@ -29,7 +29,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use bmm_core::merge::{MergeEvent, MergeOutcome, get_drive_key};
+use bmm_core::merge::{MergeError, MergeEvent, MergeOutcome, get_drive_key};
 
 /// A queue item's status. The UI shows [`as_str`](Self::as_str); the i18n key
 /// is [`label_key`](Self::label_key).
@@ -105,7 +105,10 @@ pub struct QueueItem {
   /// The user asked to cancel; the outcome still comes from `Finished`.
   pub cancel_requested: bool,
   /// Set with [`QueueItemStatus::Failed`].
-  pub error: Option<String>,
+  pub error: Option<MergeError>,
+  /// What `mkvmerge` warned about; a completed merge with warnings exited
+  /// with 1.
+  pub warnings: Vec<String>,
 }
 
 /// Whether a file may be (re-)enqueued: not while it is waiting or merging.
@@ -127,6 +130,7 @@ impl QueueItem {
       merge_ended_at: None,
       cancel_requested: false,
       error: None,
+      warnings: Vec::new(),
     }
   }
 
@@ -162,6 +166,7 @@ impl QueueItem {
           self.merge_ended_at = None;
           self.cancel_requested = false;
           self.error = None;
+          self.warnings.clear();
           self.progress = 0;
         }
         self.status = QueueItemStatus::Merging;
@@ -177,13 +182,20 @@ impl QueueItem {
         self.merge_started_at = self.merge_started_at.or(Some(now));
         true
       }
-      MergeEvent::Finished { outcome, error, at, .. } => {
+      MergeEvent::Finished {
+        outcome,
+        error,
+        warnings,
+        at,
+        ..
+      } => {
         self.status = (*outcome).into();
         self.merge_ended_at = self.merge_ended_at.or(Some(*at));
         if *outcome == MergeOutcome::Completed {
           self.progress = 100;
         }
         self.error = error.clone();
+        self.warnings = warnings.clone();
         true
       }
     }
@@ -241,6 +253,10 @@ mod tests {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + seconds)
   }
 
+  fn error_text(item: &QueueItem) -> Option<String> {
+    item.error.as_ref().map(ToString::to_string)
+  }
+
   fn started(seconds: u64) -> MergeEvent {
     MergeEvent::Started {
       file: FILE.to_string(),
@@ -259,7 +275,9 @@ mod tests {
     MergeEvent::Finished {
       file: FILE.to_string(),
       outcome,
-      error: error.map(str::to_string),
+      error: error.map(|message| MergeError::Other(message.to_string())),
+      warnings: Vec::new(),
+      launched: true,
       at: at(seconds),
     }
   }
@@ -328,7 +346,7 @@ mod tests {
     );
     assert_eq!(failed.status, QueueItemStatus::Failed);
     assert_eq!(failed.progress, 40);
-    assert_eq!(failed.error.as_deref(), Some("mkvmerge exited with 2"));
+    assert_eq!(error_text(&failed).as_deref(), Some("mkvmerge exited with 2"));
 
     // Cancelled while still waiting: no start, only the finish.
     let mut cancelled = QueueItem::waiting(FILE);
@@ -364,7 +382,7 @@ mod tests {
     assert_eq!(item.status, QueueItemStatus::Merging);
     assert_eq!((item.merge_started_at, item.merge_ended_at), (Some(at(10)), None));
     assert_eq!(
-      (item.progress, item.cancel_requested, item.error.as_deref()),
+      (item.progress, item.cancel_requested, error_text(&item).as_deref()),
       (0, false, None)
     );
   }
@@ -392,7 +410,7 @@ mod tests {
       (None, Some(at(9)))
     );
     let failed = QueueItem::from_event(&finished(MergeOutcome::Failed, Some("x"), 9), at(10));
-    assert_eq!((failed.progress, failed.error.as_deref()), (0, Some("x")));
+    assert_eq!((failed.progress, error_text(&failed).as_deref()), (0, Some("x")));
     assert_eq!(failed.file, FILE);
   }
 
@@ -425,5 +443,26 @@ mod tests {
     unstarted.progress = 50;
     assert_eq!(unstarted.card_elapsed(at(1)), Some(Duration::ZERO));
     assert_eq!((unstarted.elapsed(at(1)), unstarted.eta(at(1))), (None, None));
+  }
+
+  #[test]
+  fn a_completed_merge_keeps_its_warnings_until_the_next_run() {
+    let mut item = QueueItem::waiting(FILE);
+    item.apply(&started(0), at(0));
+    let warned = MergeEvent::Finished {
+      file: FILE.to_string(),
+      outcome: MergeOutcome::Completed,
+      error: None,
+      warnings: vec!["track 7 not found".to_string()],
+      launched: true,
+      at: at(5),
+    };
+    item.apply(&warned, at(5));
+    assert_eq!(
+      (item.status, item.warnings.as_slice()),
+      (QueueItemStatus::Completed, ["track 7 not found".to_string()].as_slice())
+    );
+    item.apply(&started(9), at(9));
+    assert!(item.warnings.is_empty());
   }
 }

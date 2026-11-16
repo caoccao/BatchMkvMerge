@@ -49,6 +49,7 @@ pub use load::{LoadState, MetadataSource};
 pub use table::TableScope;
 
 use super::config::{ConfigStore, active_profile};
+use super::ui::{NotificationKind, UiState};
 use crate::domain::file_tree::{FlagKind, build_merge_units};
 use crate::domain::grouping::{RenderEntry, build_render_entries};
 
@@ -87,6 +88,9 @@ impl FileSettings {
 pub struct FileStore {
   /// The files in the order they were added.
   files: Vec<String>,
+  /// What makes each listed file unique ([`file_identity`] when it came
+  /// through [`add_paths`], else its path).
+  file_identities: HashMap<String, String>,
   /// Raw parser output, for the card summaries.
   file_metadata: HashMap<String, MediaMetadata>,
   /// The table rows, edited in place by the track table.
@@ -116,8 +120,13 @@ pub struct FileStore {
   better_media_info: Option<String>,
   /// Why a file could not be parsed; it is not tried again until removed.
   load_errors: HashMap<String, MediaMetadataErrorPayload>,
-  /// Files being parsed on the background executor.
-  in_flight: HashSet<String>,
+  /// Files being parsed on the background executor, with the number of
+  /// their parse attempt (see `load_pending`).
+  in_flight: HashMap<String, u64>,
+  next_load_attempt: u64,
+  /// Parsed files whose refresh is still to come: results that arrive
+  /// together are refreshed once (see `finish_load`).
+  loaded: Vec<String>,
   /// Units whose automation ran, by their member list.
   automated_units: HashSet<Vec<String>>,
   /// How many times a unit's automation ran (tests).
@@ -148,6 +157,7 @@ impl FileStore {
   pub fn with_settings(settings: FileSettings, source: MetadataSource) -> Self {
     Self {
       files: Vec::new(),
+      file_identities: HashMap::new(),
       file_metadata: HashMap::new(),
       file_tracks: HashMap::new(),
       file_track_counts: HashMap::new(),
@@ -162,7 +172,9 @@ impl FileStore {
       active_card: None,
       better_media_info: None,
       load_errors: HashMap::new(),
-      in_flight: HashSet::new(),
+      in_flight: HashMap::new(),
+      next_load_attempt: 0,
+      loaded: Vec::new(),
       automated_units: HashSet::new(),
       automation_runs: 0,
       units: Vec::new(),
@@ -188,6 +200,19 @@ impl FileStore {
 
   pub fn metadata(&self, file: &str) -> Option<&MediaMetadata> {
     self.file_metadata.get(file)
+  }
+
+  /// The `--sub-charset` of a merge input: for a text subtitle file
+  /// ([`bmm_core::merge_args::takes_sub_charset`]), mkvmerge's name of the
+  /// encoding the parser decoded it with, the one the configured subtitle
+  /// charset (`parser.subtitleCharset`) names
+  /// ([`bmm_core::merge_args::mkvmerge_sub_charset`]); else `None`.
+  pub fn merge_sub_charset(&self, file: &str) -> Option<String> {
+    let format = &self.file_metadata.get(file)?.container.format;
+    if !bmm_core::merge_args::takes_sub_charset(format) {
+      return None;
+    }
+    bmm_core::merge_args::mkvmerge_sub_charset(&self.settings.parse_options.subtitle_charset).map(str::to_string)
   }
 
   pub fn tracks(&self, file: &str) -> Option<&[MediaTrack]> {
@@ -281,13 +306,29 @@ impl FileStore {
   }
 
   /// Appends the paths that are not listed yet, in order, and starts parsing
-  /// them.
+  /// them. A path is its own identity here; [`add_paths`] passes the
+  /// identity of each file ([`file_identity`]) through
+  /// [`Self::add_identified_files`] instead.
   pub fn add_files(&mut self, paths: impl IntoIterator<Item = String>, cx: &mut Context<Self>) {
+    self.add_identified_files(paths.into_iter().map(|path| (path.clone(), path)), cx);
+  }
+
+  /// [`Self::add_files`] for `(path, identity)` pairs: a path whose identity
+  /// a listed file (or an earlier pair) has is the same file under another
+  /// spelling (`/m/./a.mkv`, another letter case, a link) and is left out;
+  /// the first spelling stays.
+  pub fn add_identified_files(&mut self, files: impl IntoIterator<Item = (String, String)>, cx: &mut Context<Self>) {
+    let mut listed: HashSet<String> = self.files.iter().cloned().collect();
+    let mut identities: HashSet<String> = self.file_identities.values().cloned().collect();
     let mut added = Vec::new();
-    for path in paths {
-      if !self.files.contains(&path) && !added.contains(&path) {
-        added.push(path);
+    for (path, identity) in files {
+      if listed.contains(&path) || identities.contains(&identity) {
+        continue;
       }
+      listed.insert(path.clone());
+      identities.insert(identity.clone());
+      self.file_identities.insert(path.clone(), identity);
+      added.push(path);
     }
     if added.is_empty() {
       return;
@@ -304,6 +345,7 @@ impl FileStore {
       return;
     };
     self.files.remove(index);
+    self.file_identities.remove(path);
     self.file_metadata.remove(path);
     self.file_tracks.remove(path);
     self.file_track_counts.remove(path);
@@ -330,6 +372,7 @@ impl FileStore {
       return;
     }
     let removed = std::mem::take(&mut self.files);
+    self.file_identities.clear();
     self.file_metadata.clear();
     self.file_tracks.clear();
     self.file_track_counts.clear();
@@ -428,7 +471,7 @@ impl FileStore {
       FlagKind::Default => track.default_track = value,
       FlagKind::Forced => track.forced = value,
     });
-    self.refresh(changed, false, cx);
+    self.refresh_rows(changed, cx);
   }
 
   /// Moves the `from_key` row to `to_key`'s position in every file of `files`
@@ -465,13 +508,13 @@ impl FileStore {
   /// Sets the language of the rows `keys` in `files`.
   pub fn set_track_language(&mut self, files: &[String], keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_rows(files, keys, |track| set_language(track, value));
-    self.refresh(changed, false, cx);
+    self.refresh_languages(changed, cx);
   }
 
   /// Sets the track name of the rows `keys` in `files`.
   pub fn set_track_name(&mut self, files: &[String], keys: &[String], value: &str, cx: &mut Context<Self>) {
     let changed = self.edit_rows(files, keys, |track| track.track_name = value.to_string());
-    self.refresh(changed, false, cx);
+    self.refresh_rows(changed, cx);
   }
 
   /// The profile's per-track automation of one file: an `und` language becomes
@@ -592,6 +635,29 @@ impl FileStore {
     changed
   }
 
+  /// After an edit of row names or flags (or of languages while the group
+  /// mode does not key on them): nothing that [`Self::refresh`] derives can
+  /// have changed (units, entries, the selection, what to parse), so only
+  /// the changed files are emitted.
+  fn refresh_rows(&mut self, mut changed: Vec<String>, cx: &mut Context<Self>) {
+    if !changed.is_empty() {
+      let mut seen = HashSet::new();
+      changed.retain(|file| seen.insert(file.clone()));
+      cx.emit(FileEvent::Changed { files: changed });
+    }
+  }
+
+  /// [`Self::refresh_rows`] for a language edit: languages key the group
+  /// cards in [`GroupMode::TrackCountAndLanguage`], so there everything is
+  /// derived again.
+  fn refresh_languages(&mut self, changed: Vec<String>, cx: &mut Context<Self>) {
+    if matches!(self.settings.group_mode, GroupMode::TrackCountAndLanguage) {
+      self.refresh(changed, false, cx);
+    } else {
+      self.refresh_rows(changed, cx);
+    }
+  }
+
   /// Derives units and entries again, runs the automation of newly complete
   /// units, starts parsing unparsed files, then notifies (when `structural`
   /// or a derived value changed) and emits the changed files.
@@ -632,6 +698,15 @@ impl FileStore {
   }
 }
 
+/// What makes two paths the same file: the path as the file system resolves
+/// it (`.` and `..`, links, and on macOS and Windows the letter case stored
+/// on disk), or the path itself when that fails. Reads the file system.
+pub fn file_identity(path: &str) -> String {
+  std::fs::canonicalize(path)
+    .map(|real| real.to_string_lossy().into_owned())
+    .unwrap_or_else(|_| path.to_string())
+}
+
 /// Sets a row's language and the codes its filters match.
 fn set_language(track: &mut MediaTrack, value: &str) {
   track.language = value.to_string();
@@ -640,23 +715,33 @@ fn set_language(track: &mut MediaTrack, value: &str) {
 
 /// Resolves dropped, chosen or launch-argument paths to media files on the
 /// background executor (directories list their supported files, one level,
-/// sorted) and adds them.
-pub fn add_paths(files: &Entity<FileStore>, paths: Vec<String>, cx: &mut App) {
+/// sorted) and adds them. What could not be read is skipped, and `ui`, when
+/// given, says so in a snackbar.
+pub fn add_paths(files: &Entity<FileStore>, ui: Option<&Entity<UiState>>, paths: Vec<String>, cx: &mut App) {
   if paths.is_empty() {
     return;
   }
-  let files = files.clone();
+  let (files, ui) = (files.clone(), ui.cloned());
   cx.spawn(async move |cx| {
-    let resolved = cx
-      .background_spawn(async move { bmm_core::services::get_media_files(paths) })
+    let (found, identified) = cx
+      .background_spawn(async move {
+        let found = bmm_core::services::get_media_files(paths);
+        let identified: Vec<(String, String)> = found
+          .files
+          .iter()
+          .map(|file| (file.clone(), file_identity(file)))
+          .collect();
+        (found, identified)
+      })
       .await;
-    match resolved {
-      Ok(media_files) => {
-        if !media_files.is_empty() {
-          files.update(cx, |files, cx| files.add_files(media_files, cx));
-        }
-      }
-      Err(error) => log::error!("Failed to resolve the paths: {error}"),
+    if !found.files.is_empty() {
+      files.update(cx, |files, cx| files.add_identified_files(identified, cx));
+    }
+    if !found.skipped.is_empty()
+      && let Some(ui) = ui
+    {
+      let message = crate::notifications::skipped_paths_message(&found.skipped);
+      ui.update(cx, |ui, cx| ui.show_snackbar(NotificationKind::Error, message, cx));
     }
   })
   .detach();

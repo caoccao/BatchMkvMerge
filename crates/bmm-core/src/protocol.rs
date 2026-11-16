@@ -75,6 +75,7 @@ impl MediaMetadataErrorPayload {
       },
       ParseError::Malformed { .. } => Self::Malformed { detail },
       ParseError::OversizedElement { .. } => Self::OversizedElement { detail },
+      ParseError::Internal { .. } => Self::Internal { detail },
     }
   }
 

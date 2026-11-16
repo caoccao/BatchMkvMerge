@@ -261,7 +261,9 @@ pub fn close_requested(stores: &Stores, window: &mut Window, cx: &mut App) -> bo
   let cancel_stores = stores.clone();
   close_guard::should_close(stores.has_active_merges(cx), window, cx, move |_, cx| {
     cancel_stores.ui.update(cx, |ui, _| ui.set_closing());
-    crate::actions::cancel_all(&cancel_stores, cx)
+    crate::actions::cancel_all(&cancel_stores, cx);
+    // Wait for the killed processes, so none outlives the app.
+    cancel_stores.merges.shutdown(crate::merge_events::SHUTDOWN_TIMEOUT);
   })
 }
 

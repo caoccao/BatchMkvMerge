@@ -33,13 +33,13 @@ fn better_media_info_exe_name() -> &'static str {
   }
 }
 
-/// Whether a merge can write the output file `path`: an existing file that
-/// can be opened for writing (a merge replaces it), or a path
-/// [`check_output_dir_writable`] accepts. Nothing is changed.
+/// Whether a merge can write the output file `path`: a path
+/// [`check_output_dir_writable`] accepts. An existing file is refused, as a
+/// merge replaces no file (the app's `resolve_merge_output_for` fails the
+/// merge instead). Nothing is changed.
 pub fn check_output_file_writable(path: String) -> Result<bool> {
-  let requested = Path::new(&path);
-  if requested.is_file() {
-    return Ok(std::fs::OpenOptions::new().write(true).open(requested).is_ok());
+  if Path::new(&path).is_file() {
+    return Ok(false);
   }
   check_output_dir_writable(path)
 }
@@ -197,31 +197,61 @@ pub fn get_launch_args() -> Vec<String> {
   std::env::args().skip(1).collect()
 }
 
-pub fn get_media_files(paths: Vec<String>) -> Result<Vec<String>> {
-  let mut result: Vec<String> = Vec::new();
+/// What [`get_media_files`] found in the paths it was given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaFiles {
+  /// The supported media files: a given file as it is, a folder's files
+  /// sorted, in the order of the paths.
+  pub files: Vec<String>,
+  /// What could not be used: a path that does not exist (also what a path
+  /// that is not valid UTF-8 becomes once converted), a folder that cannot
+  /// be listed, and a file in a folder whose name is not valid UTF-8 (shown
+  /// lossily). Files of other types are not counted; they are left out on
+  /// purpose.
+  pub skipped: Vec<String>,
+}
+
+/// The supported media files of dropped, chosen or launch-argument `paths`.
+/// A folder contributes the supported files directly inside it (one level,
+/// as 0.1.0 did: a subfolder is a separate drop). One path that cannot be
+/// read never costs the others; it is listed in [`MediaFiles::skipped`].
+pub fn get_media_files(paths: Vec<String>) -> MediaFiles {
+  let mut found = MediaFiles::default();
   for input in paths {
     let path = Path::new(input.as_str());
     if !path.exists() {
+      log::warn!("Skipped {input}: it does not exist");
+      found.skipped.push(input);
       continue;
     }
     if path.is_dir() {
-      let mut entries: Vec<PathBuf> = path
-        .read_dir()
-        .map_err(anyhow::Error::msg)?
+      let listing = match path.read_dir() {
+        Ok(listing) => listing,
+        Err(error) => {
+          log::warn!("Skipped the folder {input}: {error}");
+          found.skipped.push(input);
+          continue;
+        }
+      };
+      let mut entries: Vec<PathBuf> = listing
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file() && is_supported_media_path(p))
         .collect();
       entries.sort();
       for p in entries {
-        if let Some(s) = p.to_str() {
-          result.push(s.to_owned());
+        match p.to_str() {
+          Some(s) => found.files.push(s.to_owned()),
+          None => {
+            log::warn!("Skipped {}: its name is not valid UTF-8", p.display());
+            found.skipped.push(p.to_string_lossy().into_owned());
+          }
         }
       }
     } else if path.is_file() && is_supported_media_path(path) {
-      result.push(input);
+      found.files.push(input);
     }
   }
-  Ok(result)
+  found
 }
 
 /// Opens `paths` in the BetterMediaInfo installed in `dir` (the directory
@@ -235,21 +265,22 @@ pub fn launch_better_media_info_from(dir: &str, paths: Vec<String>) -> Result<()
   // On macOS, going through `open` lets Launch Services activate the bundle
   // cleanly — spawning the bundle's Mach-O binary directly causes a brief
   // window flash because the child never goes through proper app activation.
+  // BetterMediaInfo reads its files from its launch arguments only, and
+  // `open --args` passes them only to an instance it starts, so `-n` starts
+  // a new one each time, as spawning the executable does elsewhere.
   #[cfg(target_os = "macos")]
   {
     if let Some(app_bundle) = find_macos_app_bundle(&exe) {
       let mut cmd = std::process::Command::new("/usr/bin/open");
-      cmd.arg("-a").arg(&app_bundle);
-      if !paths.is_empty() {
-        cmd.arg("--args").args(&paths);
-      }
+      cmd.args(open_args(&app_bundle, &paths));
       cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-      cmd
+      let child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo via open: {}", e))?;
+      reap(child);
       return Ok(());
     }
   }
@@ -265,10 +296,31 @@ pub fn launch_better_media_info_from(dir: &str, paths: Vec<String>) -> Result<()
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
   }
-  cmd
+  let child = cmd
     .spawn()
     .map_err(|e| anyhow::anyhow!("Failed to launch BetterMediaInfo: {}", e))?;
+  reap(child);
   Ok(())
+}
+
+/// The arguments of `/usr/bin/open` that start a new instance of `bundle`
+/// with `paths` as its launch arguments.
+#[cfg(any(target_os = "macos", test))]
+fn open_args(bundle: &Path, paths: &[String]) -> Vec<std::ffi::OsString> {
+  let mut args: Vec<std::ffi::OsString> = vec!["-n".into(), "-a".into(), bundle.as_os_str().to_owned()];
+  if !paths.is_empty() {
+    args.push("--args".into());
+    args.extend(paths.iter().map(Into::into));
+  }
+  args
+}
+
+/// Waits for a launched process on a thread of its own, so an ended one does
+/// not stay behind as a zombie until the app exits.
+fn reap(mut child: std::process::Child) {
+  std::thread::spawn(move || {
+    let _ = child.wait();
+  });
 }
 
 /// Whether the exact directory `path` already exists. Used by the output-path
@@ -287,6 +339,14 @@ pub fn parser_options_from_config(cfg: &config::Config) -> ParseOptions {
     std::env::var("BMM_PARSER_BUDGET_MS")
       .ok()
       .and_then(|v| v.parse::<u64>().ok())
+      // The same range as the config value: 0 would time every parse out,
+      // a huge value would switch the budget off.
+      .map(|ms| {
+        ms.clamp(
+          config::ConfigParser::MIN_TIMEOUT_MS,
+          config::ConfigParser::MAX_TIMEOUT_MS,
+        )
+      })
       .unwrap_or_else(|| cfg.parser.effective_timeout_ms())
   } else {
     cfg.parser.effective_timeout_ms()
@@ -383,6 +443,95 @@ mod tests {
   static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
   #[test]
+  fn open_starts_a_new_instance_with_the_files_as_arguments() {
+    let bundle = Path::new("/Applications/BetterMediaInfo.app");
+    let args = |paths: &[&str]| -> Vec<String> {
+      let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+      open_args(bundle, &paths)
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+    };
+    assert_eq!(
+      args(&["/m/a.mkv", "/m/b c.mkv"]),
+      [
+        "-n",
+        "-a",
+        "/Applications/BetterMediaInfo.app",
+        "--args",
+        "/m/a.mkv",
+        "/m/b c.mkv"
+      ]
+    );
+    assert_eq!(args(&[]), ["-n", "-a", "/Applications/BetterMediaInfo.app"]);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_reaped_child_leaves_no_zombie() {
+    let child = std::process::Command::new("/bin/sh")
+      .arg("-c")
+      .arg("exit 0")
+      .spawn()
+      .unwrap();
+    let pid = child.id().to_string();
+    reap(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+      let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid])
+        .output()
+        .unwrap();
+      let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
+      if state.is_empty() {
+        break;
+      }
+      assert!(
+        std::time::Instant::now() < deadline,
+        "process {pid} is still listed as {state:?}"
+      );
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+  }
+
+  #[test]
+  fn one_unreadable_path_does_not_cost_the_others() {
+    let dir = std::env::temp_dir().join(format!("bmm_media_files_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ok")).unwrap();
+    std::fs::create_dir_all(dir.join("locked")).unwrap();
+    std::fs::write(dir.join("ok").join("b.mkv"), b"").unwrap();
+    std::fs::write(dir.join("ok").join("a.srt"), b"").unwrap();
+    std::fs::write(dir.join("ok").join("notes.txt"), b"").unwrap();
+    std::fs::write(dir.join("locked").join("c.mkv"), b"").unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    // `DirEntry::path` joins with the platform's separator (`\` on Windows).
+    let listed = |name: &str| dir.join("ok").join(name).to_string_lossy().into_owned();
+    #[cfg(unix)]
+    let locked = {
+      use std::os::unix::fs::PermissionsExt;
+      std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+      // Root reads any folder; then there is nothing to skip.
+      std::fs::read_dir(dir.join("locked")).is_err()
+    };
+    #[cfg(not(unix))]
+    let locked = false;
+    let found = get_media_files(vec![path("locked"), path("ok"), path("missing.mkv")]);
+    assert_eq!(found.files, [listed("a.srt"), listed("b.mkv")]);
+    let mut skipped = vec![path("missing.mkv")];
+    if locked {
+      skipped.insert(0, path("locked"));
+    }
+    assert_eq!(found.skipped, skipped);
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
   fn an_output_file_or_directory_is_writable_where_a_merge_can_write_it() {
     let dir = std::env::temp_dir().join("bmm_output_writable");
     let _ = std::fs::remove_dir_all(&dir);
@@ -393,7 +542,10 @@ mod tests {
       assert!(check(path("new/sub/Movie.mkv")).unwrap(), "created");
     }
     std::fs::write(dir.join("Movie.mkv"), b"merged").unwrap();
-    assert!(check_output_file_writable(path("Movie.mkv")).unwrap(), "replaced");
+    assert!(
+      !check_output_file_writable(path("Movie.mkv")).unwrap(),
+      "a merge replaces no file"
+    );
     assert_eq!(
       std::fs::read(dir.join("Movie.mkv")).unwrap(),
       b"merged",
@@ -493,6 +645,26 @@ mod tests {
       std::env::remove_var("BMM_PARSER_BUDGET_MS");
     }
     assert_eq!(opts.timeout_ms, 2500);
+  }
+
+  #[test]
+  fn the_env_override_is_clamped_like_the_config_value() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = cfg_with_timeout(config::ConfigParser::DEFAULT_TIMEOUT_MS);
+    let with_env = |value: &str| {
+      unsafe {
+        std::env::set_var("BMM_PARSER_BUDGET_MS", value);
+      }
+      let timeout = parser_options_from_config(&cfg).timeout_ms;
+      unsafe {
+        std::env::remove_var("BMM_PARSER_BUDGET_MS");
+      }
+      timeout
+    };
+    assert_eq!(with_env("0"), config::ConfigParser::MIN_TIMEOUT_MS);
+    assert_eq!(with_env("999999999"), config::ConfigParser::MAX_TIMEOUT_MS);
+    assert_eq!(with_env("2500"), 2500);
+    assert_eq!(with_env("soon"), config::ConfigParser::DEFAULT_TIMEOUT_MS);
   }
 
   #[test]

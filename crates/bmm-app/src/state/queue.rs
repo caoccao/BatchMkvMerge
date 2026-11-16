@@ -36,7 +36,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
-use bmm_core::merge::{MergeEvent, MergeOutcome};
+use bmm_core::merge::{MergeError, MergeEvent, MergeOutcome};
 use gpui_kit::{Context, EventEmitter, Task};
 
 use crate::domain::status::{QueueItem, QueueItemStatus, can_enqueue};
@@ -51,11 +51,12 @@ pub enum QueueEvent {
   /// The item of `file` changed (its progress only, too) or was removed.
   ItemChanged { file: String },
   /// A merge ended; `elapsed` runs from its start to its end (zero when it
-  /// never started).
+  /// never started). `warnings` are what `mkvmerge` warned about.
   Finished {
     file: String,
     outcome: MergeOutcome,
-    error: Option<String>,
+    error: Option<MergeError>,
+    warnings: Vec<String>,
     elapsed: Duration,
   },
   /// A second passed while at least one merge runs.
@@ -300,8 +301,8 @@ impl QueueStore {
   pub fn apply_event(&mut self, event: &MergeEvent, now: SystemTime, cx: &mut Context<Self>) {
     let file = event.file();
     let finished = matches!(event, MergeEvent::Finished { .. });
-    if finished {
-      self.outputs.release(file);
+    if let MergeEvent::Finished { outcome, launched, .. } = event {
+      self.outputs.release(file, *launched, *outcome);
     }
     if !self.shown(file) {
       // A removed file: its merge's end drops it.
@@ -327,7 +328,14 @@ impl QueueStore {
     if let MergeEvent::Started { at, .. } = event {
       self.batch.get_or_insert_default().start(*at);
     }
-    if let MergeEvent::Finished { outcome, error, at, .. } = event {
+    if let MergeEvent::Finished {
+      outcome,
+      error,
+      warnings,
+      at,
+      ..
+    } = event
+    {
       let elapsed = self.items[file].elapsed(*at).unwrap_or_default();
       // A finish while nothing was active (a late `Cancelled` for a removed
       // item) belongs to no batch.
@@ -338,6 +346,7 @@ impl QueueStore {
         file: file.to_string(),
         outcome: *outcome,
         error: error.clone(),
+        warnings: warnings.clone(),
         elapsed,
       });
     }
@@ -418,6 +427,7 @@ impl QueueStore {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::state::outputs::OutputTarget;
   use core::prelude::v1::test;
   use gpui_kit::{AppContext, Entity, TestAppContext};
   use std::cell::RefCell;
@@ -448,7 +458,12 @@ mod tests {
     MergeEvent::Finished {
       file: file.to_string(),
       outcome,
-      error: (outcome == MergeOutcome::Failed).then(|| "mkvmerge exited with code Some(2)".to_string()),
+      error: (outcome == MergeOutcome::Failed).then(|| MergeError::Exited {
+        code: Some(2),
+        messages: Vec::new(),
+      }),
+      warnings: Vec::new(),
+      launched: true,
       at: at(seconds),
     }
   }
@@ -530,6 +545,7 @@ mod tests {
         file: A.to_string(),
         outcome,
         error: item.error.clone(),
+        warnings: Vec::new(),
         elapsed: Duration::from_secs(60),
       }));
       // Waiting, merging, finished: three structural changes; progress is not.
@@ -567,7 +583,7 @@ mod tests {
       assert!(queue.add_to_queue(A, cx), "a failed file can merge again");
       let item = queue.item(A).unwrap();
       assert_eq!(item.status, QueueItemStatus::Waiting);
-      assert_eq!((item.error.as_deref(), item.merge_started_at), (None, None));
+      assert_eq!((item.error.as_ref(), item.merge_started_at), (None, None));
       let order: Vec<&str> = queue.items().map(|item| item.file.as_str()).collect();
       assert_eq!(order, [A, B], "it keeps its position");
     });
@@ -633,7 +649,7 @@ mod tests {
     let claim = |queue: &QueueStore, file: &str, output: &str| {
       queue
         .outputs()
-        .claim(file, |_| Ok::<_, ()>(output.to_string()))
+        .claim(file, &OutputTarget::default(), |_, _| Ok::<_, ()>(output.to_string()))
         .unwrap();
     };
     harness.queue.update(cx, |queue, cx| {

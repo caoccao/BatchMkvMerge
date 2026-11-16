@@ -63,6 +63,11 @@ impl Handler {
   }
 }
 
+/// The handler name is a display string ("VideoHandler"); only this much of
+/// it is read, whatever the box claims. The child walker seeks to the box end
+/// afterwards, so the rest is skipped, not misparsed.
+pub const MAX_NAME_BYTES: u64 = 4096;
+
 pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<Handler, ParseError> {
   let payload = header.payload_size().unwrap_or(0);
   if payload < 24 {
@@ -76,7 +81,7 @@ pub fn parse(src: &mut FileSource, header: &BoxHeader) -> Result<Handler, ParseE
   src.skip(1 + 3 + 4)?;
   let handler_type = src.read_array::<4>()?;
   src.skip(12)?; // reserved[3]
-  let name_len = payload.saturating_sub(24);
+  let name_len = payload.saturating_sub(24).min(MAX_NAME_BYTES);
   let raw = if name_len == 0 {
     Vec::new()
   } else {
@@ -121,6 +126,25 @@ mod tests {
     let bytes = encode_box(b"hdlr", &build_hdlr_payload(handler_type, name));
     let (h, mut s) = read(bytes);
     parse(&mut s, &h).unwrap()
+  }
+
+  /// A box that declares a name of gigabytes is read for the first
+  /// [`MAX_NAME_BYTES`] only; nothing that large is allocated.
+  #[test]
+  fn a_huge_declared_name_is_read_only_up_to_the_cap() {
+    let name = "N".repeat(MAX_NAME_BYTES as usize + 100);
+    let h = parsed(b"vide", &name);
+    assert_eq!(h.name.len(), MAX_NAME_BYTES as usize);
+    let mut header = encode_box(b"hdlr", &build_hdlr_payload(b"vide", "x"))[..8].to_vec();
+    header[..4].copy_from_slice(&1u32.to_be_bytes());
+    let mut bytes = header;
+    bytes.extend_from_slice(&(u64::MAX / 2).to_be_bytes());
+    bytes.extend_from_slice(&build_hdlr_payload(b"vide", "VideoHandler"));
+    let (h, mut s) = read(bytes);
+    assert_eq!(h.payload_size().map(|size| size > MAX_NAME_BYTES), Some(true));
+    // The declared name runs past the end of the data: an EOF error, not an
+    // allocation of the declared size.
+    assert!(matches!(parse(&mut s, &h), Err(ParseError::UnexpectedEof { .. })));
   }
 
   #[test]

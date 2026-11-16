@@ -58,7 +58,10 @@
         "malformed": "ファイルの形式が不正です: %{detail}",
         "oversizedElement": "要素がサイズ上限を超えています: %{detail}",
         "internal": "パーサーの内部エラー: %{detail}"
-      }
+      },
+      "sourceMissing": "ソースファイル %{path} が見つかりません。",
+      "mkvmergeExitCode": "mkvmerge はコード %{code} で終了しました。",
+      "mkvmergeTerminated": "mkvmerge が強制終了されました。"
     }
   },
   "toolbar": {
@@ -113,7 +116,8 @@
       "completed": "完了",
       "cancelled": "キャンセル済み",
       "failed": "失敗"
-    }
+    },
+    "warnings": "警告ありで完了:"
   },
   "settings": {
     "title": "設定",
@@ -210,7 +214,12 @@
     "completedIn": "%{elapsed} で完了しました",
     "unknownError": "不明なエラー",
     "summary": "完了 %{completed} 件、失敗 %{failed} 件、キャンセル %{cancelled} 件",
-    "finishedIn": "%{elapsed} で終了しました"
+    "finishedIn": "%{elapsed} で終了しました",
+    "configResetTitle": "設定を読み込めませんでした",
+    "configReset": "読み込めなかった設定は既定値に戻されました。元のファイルは %{path} として保存されています。",
+    "configResetNoBackup": "読み込めなかった設定は既定値に戻されました。",
+    "completedWithWarnings": "%{elapsed} で完了しました（警告あり）: %{warnings}",
+    "pathsSkipped": "%{count} 個の項目を読み込めなかったため、スキップしました: %{paths}"
   },
   "confirm": {
     "exitTitle": "終了",
