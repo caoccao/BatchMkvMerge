@@ -867,14 +867,14 @@ fn type_and_confirm(shell: &Shell, cx: &mut TestAppContext, text: &str) {
 }
 
 #[gpui_kit::test]
-fn word_keys_stop_inside_numbers_in_a_dialog_field(cx: &mut TestAppContext) {
+fn word_keys_stop_at_every_dot_of_the_output_path(cx: &mut TestAppContext) {
   let (shell, _, _dir) = movie_shell(cx, "cards-word-keys");
   click_in(&shell, cx, 0, "card-output");
   assert!(has_dialog(&shell, cx));
   shell.window(cx, |window, cx| {
     window.press(SELECT_ALL, cx);
     window.press("backspace", cx);
-    window.input("Movie.2024.1080p", cx);
+    window.input("Movie.2024.1080p.mkv", cx);
   });
   cx.run_until_parked();
   let word_left = if cfg!(target_os = "macos") {
@@ -888,10 +888,12 @@ fn word_keys_stop_inside_numbers_in_a_dialog_field(cx: &mut TestAppContext) {
       _ => panic!("the dialog field has the focus"),
     })
   };
-  shell.press(cx, word_left);
-  assert_eq!(caret(&shell, cx), 11);
-  shell.press(cx, word_left);
-  assert_eq!(caret(&shell, cx), 6);
+  let mut stops = Vec::new();
+  for _ in 0..4 {
+    shell.press(cx, word_left);
+    stops.push(caret(&shell, cx));
+  }
+  assert_eq!(stops, [17, 11, 6, 0]);
 }
 
 #[gpui_kit::test]

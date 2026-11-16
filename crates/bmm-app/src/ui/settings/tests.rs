@@ -1043,6 +1043,25 @@ fn tool_paths_are_detected_after_typing_stored_on_blur_and_found_elsewhere(cx: &
 }
 
 #[gpui_kit::test]
+fn word_keys_stop_at_every_dot_of_a_tool_path(cx: &mut TestAppContext) {
+  let (shell, view) = open(cx);
+  page(&shell, cx, "Integration");
+  let input = view.read_with(cx, |view, cx| view.tool_row(Tool::MkvToolNix).read(cx).input().clone());
+  type_into(&shell, cx, &input, "/Applications/MKVToolNix.app");
+  let word_left = if cfg!(target_os = "macos") {
+    "alt-left"
+  } else {
+    "ctrl-left"
+  };
+  let mut stops = Vec::new();
+  for _ in 0..2 {
+    shell.press(cx, word_left);
+    stops.push(input.read_with(cx, |input, _| input.cursor()));
+  }
+  assert_eq!(stops, [25, 14]);
+}
+
+#[gpui_kit::test]
 fn the_settings_shortcut_opens_one_fixed_width_dialog_over_the_current_tab(cx: &mut TestAppContext) {
   use crate::ui::actions::SETTINGS_SHORTCUT;
 

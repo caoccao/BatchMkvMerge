@@ -72,7 +72,7 @@ BMM_WRITE_THEMES=1 cargo test --release -p BatchMkvMerge --lib theme::
 
 gpui-kit's own strings that the app shows (the settings search and Reset All, the select placeholder and search box, the input menu, the dialog buttons) are translated in the `gpui_component` part of every locale file; gpui-kit ships none for `de`, `es`, `fr` and `ja`.
 
-In every text field, Ctrl+Left/Right (Option on macOS), with Shift, and the word deletions treat each part of a number as a word: `Movie.2024.1080p` stops at 5, 6, 10 and 16 going right. Text without digits moves as gpui-kit's inputs do. The stops live in `crates/bmm-app/src/domain/word_navigation.rs`.
+In every text field, Ctrl+Left/Right (Option on macOS), with Shift, and the word deletions treat each part of a number as a word: `Movie.2024.1080p` stops at 5, 6, 10 and 16 going right. In a path field (the output path dialog, the Integration tool paths) every `.` between two letters or digits separates words too: `Movie.2024.1080p.mkv` stops at 5, 10, 16 and 20. Other text without digits moves as gpui-kit's inputs do. The stops live in `crates/bmm-app/src/domain/word_navigation.rs`.
 
 To try the app by hand on macOS or Linux without touching your settings, start it with a scratch home, because the config directory follows `$HOME` (on Linux only while `XDG_CONFIG_HOME` is unset): `HOME=/tmp/bmm-home cargo run --release -p BatchMkvMerge`.
 
@@ -155,6 +155,6 @@ In the app, on each OS:
 - [ ] Settings (Ctrl+Comma, Cmd+Comma on macOS, or F10): every page; Browse and Detect for MKVToolNix and BetterMediaInfo; adding, switching, deleting and resetting a profile; the language picker's drags.
 - [ ] The toolbar menus (F8 group mode, F9 profile), Ctrl+Q (clear the list), Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 and Ctrl+W on the tabs.
 - [ ] Every theme in light, dark and auto (auto follows the OS appearance), every language; the emoji track icons and Japanese and Chinese text render.
-- [ ] In a text field, the word keys (Ctrl+Arrow, Option+Arrow on macOS, with Shift, and the word deletions) stop at each part of a number.
+- [ ] In a text field, the word keys (Ctrl+Arrow, Option+Arrow on macOS, with Shift, and the word deletions) stop at each part of a number; in a path field also at a file's extension.
 - [ ] The window reopens at its saved size and position; a maximized window keeps its restore size. With a second display at another scale, it reopens on the display it was closed on.
 - [ ] The update banner appears for a newer GitHub release, and Skip this version hides it for that version.

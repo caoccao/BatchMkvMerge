@@ -25,11 +25,13 @@
 //! bindings decide (Linux also selects by word with Alt+Shift+Arrow), and
 //! acts only on a word action in a focused `Input` or `Textarea`, including
 //! gpui-kit's own (the settings search, a select's search) and those in
-//! dialogs. Where a number decides the stop it sets the selection and
+//! dialogs. Where a separator decides the stop it sets the selection and
 //! consumes the key; everything else runs gpui-kit's own handler. A deletion
 //! selects the range to delete and lets gpui-kit's word deletion remove it,
 //! so the edit keeps gpui-kit's undo step (undo brings the part back
-//! selected).
+//! selected). A field that holds a path sits in an element with the key
+//! context [`PATH_CONTEXT`], and its words also split at a `.` between two
+//! letters or digits.
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{
@@ -38,10 +40,13 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::*;
 
-use crate::domain::word_navigation::{Direction, Selection, WordCommand, word_command};
+use crate::domain::word_navigation::{Direction, Selection, Separators, WordCommand, word_command};
 
 /// gpui-kit's key context of its text inputs.
 const INPUT_CONTEXT: &str = "Input";
+
+/// The key context of an element around a field that holds a path.
+pub const PATH_CONTEXT: &str = "PathField";
 
 /// Installs the interceptor for the whole application.
 pub fn install(cx: &mut App) {
@@ -58,10 +63,20 @@ fn on_keystroke(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) -> bo
   let Some((direction, command)) = word_key(event, cx) else {
     return false;
   };
+  let separators = separators(event);
   match window.focused_input(cx) {
-    Some(AnyInputState::Input(state)) => redirect(&state, direction, command, window, cx),
-    Some(AnyInputState::Textarea(state)) => redirect(&state, direction, command, window, cx),
+    Some(AnyInputState::Input(state)) => redirect(&state, direction, command, separators, window, cx),
+    Some(AnyInputState::Textarea(state)) => redirect(&state, direction, command, separators, window, cx),
     _ => false,
+  }
+}
+
+/// Where the focused field's words split: in a path also at its dots.
+fn separators(event: &KeystrokeEvent) -> Separators {
+  if event.context_stack.iter().any(|context| context.contains(PATH_CONTEXT)) {
+    Separators::Paths
+  } else {
+    Separators::Numbers
   }
 }
 
@@ -97,11 +112,12 @@ fn word_key(event: &KeystrokeEvent, cx: &App) -> Option<(Direction, WordCommand)
   Some(key)
 }
 
-/// Sets the selection a number decides; `true` when the key is consumed.
+/// Sets the selection a separator decides; `true` when the key is consumed.
 fn redirect<T: TextField>(
   state: &Entity<T>,
   direction: Direction,
   command: WordCommand,
+  separators: Separators,
   window: &mut Window,
   cx: &mut App,
 ) -> bool {
@@ -115,7 +131,7 @@ fn redirect<T: TextField>(
   let Some((value, selection)) = state.read(cx).snapshot(command) else {
     return false;
   };
-  let Some(next) = word_command(&value, &selection, direction, command) else {
+  let Some(next) = word_command(&value, &selection, direction, command, separators) else {
     return false;
   };
   state.update(cx, |state, cx| state.select(&next, cx));
@@ -179,6 +195,7 @@ mod tests {
     input: Entity<InputState>,
     area: Entity<TextareaState>,
     masked: Entity<InputState>,
+    path: Entity<InputState>,
   }
 
   impl Render for Fields {
@@ -188,6 +205,7 @@ mod tests {
         .child(Input::new(&self.input))
         .child(Textarea::new(&self.area))
         .child(Input::new(&self.masked))
+        .child(div().key_context(PATH_CONTEXT).child(Input::new(&self.path)))
     }
   }
 
@@ -197,6 +215,7 @@ mod tests {
     Input,
     Area,
     Masked,
+    Path,
   }
 
   struct Harness {
@@ -217,7 +236,13 @@ mod tests {
           let input = cx.new(|cx| InputState::new(window, cx));
           let area = cx.new(|cx| TextareaState::new(window, cx));
           let masked = cx.new(|cx| InputState::new(window, cx).masked(true));
-          cx.new(|_| Fields { input, area, masked })
+          let path = cx.new(|cx| InputState::new(window, cx));
+          cx.new(|_| Fields {
+            input,
+            area,
+            masked,
+            path,
+          })
         })
         .expect("open the window")
       });
@@ -242,6 +267,7 @@ mod tests {
           Field::Input => fields.input.clone().update(cx, |state, cx| state.focus(window, cx)),
           Field::Area => fields.area.clone().update(cx, |state, cx| state.focus(window, cx)),
           Field::Masked => fields.masked.clone().update(cx, |state, cx| state.focus(window, cx)),
+          Field::Path => fields.path.clone().update(cx, |state, cx| state.focus(window, cx)),
         }
       });
       cx.run_until_parked();
@@ -258,11 +284,11 @@ mod tests {
       self.window(cx, |window, cx| {
         let fields = fields.read(cx);
         match field {
-          Field::Input | Field::Masked => {
-            let state = if matches!(field, Field::Input) {
-              &fields.input
-            } else {
-              &fields.masked
+          Field::Input | Field::Masked | Field::Path => {
+            let state = match field {
+              Field::Input => &fields.input,
+              Field::Masked => &fields.masked,
+              _ => &fields.path,
             };
             state.clone().update(cx, |state, cx| {
               state.set_selected_range_with_direction(range, reversed, cx)
@@ -352,6 +378,29 @@ mod tests {
     // Shift back over the anchor turns the selection round.
     harness.select(cx, Field::Input, 6..10, false);
     assert_eq!(harness.presses(cx, &key("shift-left"), 2), ["6", "5..6r"]);
+  }
+
+  #[gpui_kit::test]
+  fn a_path_stops_at_every_dot_of_a_file_name(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, true);
+    let path = "C:/Videos/Movie.2024.1080p.mkv";
+    harness.type_in(cx, Field::Path, path, path.len());
+    assert_eq!(harness.presses(cx, &key("left"), 6), ["27", "21", "16", "10", "9", "3"]);
+    harness.select(cx, Field::Path, 10..10, false);
+    assert_eq!(harness.presses(cx, &key("right"), 5), ["15", "20", "26", "30", "30"]);
+    assert_eq!(harness.presses(cx, &key("shift-left"), 2), ["27..30r", "21..30r"]);
+    harness.select(cx, Field::Path, 30..30, false);
+    assert_eq!(
+      harness.edits(cx, &key("backspace"), 3),
+      [
+        "C:/Videos/Movie.2024.1080p.",
+        "C:/Videos/Movie.2024.1080p",
+        "C:/Videos/Movie.2024."
+      ]
+    );
+    // The same text outside a path field keeps `1080p.mkv` one word.
+    harness.type_in(cx, Field::Input, path, path.len());
+    assert_eq!(harness.presses(cx, &key("left"), 2), ["16", "15"]);
   }
 
   #[gpui_kit::test]

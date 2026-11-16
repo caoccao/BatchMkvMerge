@@ -35,6 +35,7 @@ use super::{BUTTON_GROUP_GAP, FIELD_MIN_WIDTH};
 use crate::state::Stores;
 use crate::tools::{Tool, ToolStatus};
 use crate::ui::text_button;
+use crate::ui::word_navigation::PATH_CONTEXT;
 
 /// How long the text must stay unchanged before it is checked.
 pub const DETECT_DELAY: Duration = Duration::from_millis(250);
@@ -264,6 +265,7 @@ impl Render for ToolPathRow {
             div()
               .flex_1()
               .min_w(px(FIELD_MIN_WIDTH))
+              .key_context(PATH_CONTEXT)
               .child(Input::new(&self.input).small().w_full()),
           )
           .child(

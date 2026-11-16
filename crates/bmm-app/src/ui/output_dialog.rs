@@ -39,6 +39,7 @@ use gpui_kit::*;
 
 use crate::assets::{OUTPUT_DIRECTORY_ICON_NAME, toolbar_icon};
 
+use super::word_navigation::PATH_CONTEXT;
 use super::{confirm_button, hex, space, text, text_button};
 
 /// How long the field must rest before the existence check runs.
@@ -395,7 +396,7 @@ impl Render for OutputPathDialog {
         h_flex()
           .gap(space(1.0))
           .child(
-            div().flex_1().min_w_0().child(
+            div().flex_1().min_w_0().key_context(PATH_CONTEXT).child(
               Input::new(&self.input)
                 .id("output-path")
                 .aria_label(tr!("merge.outputPath"))

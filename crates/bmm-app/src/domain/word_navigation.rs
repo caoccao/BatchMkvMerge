@@ -17,7 +17,9 @@
 
 //! Ctrl+Arrow (Windows, Linux) / Option+Arrow (macOS) stops inside numbers:
 //! `123.456` and `1,234.567` are one word to the OS, but users expect each
-//! numeric part to be a word.
+//! numeric part to be a word. In a path it also stops at every `.` between
+//! two letters or digits: `movie.mkv` is one word to the OS, but the name and
+//! the extension are words of their own ([`Separators`]).
 //!
 //! The per-platform rule ([`numeric_word_boundary`], kept with its test table
 //! from the versions before 1.0.0) adds stops to word jumps that differ per
@@ -27,9 +29,8 @@
 //! start of the previous one, over any whitespace, line breaks included. The
 //! app therefore uses one rule, [`word_stop`]: the per-platform rule's macOS
 //! variant, skipping line breaks as gpui-kit does, and stepping over a
-//! separator inside a number, which gpui-kit would give a stop of its own when
-//! a jump starts beside it. Word deletion uses the same stops
-//! ([`word_command`]).
+//! separator, which gpui-kit would give a stop of its own when a jump starts
+//! beside it. Word deletion uses the same stops ([`word_command`]).
 //!
 //! Offsets are UTF-8 byte offsets into the text (GPUI's input offsets). Words
 //! are UAX #29 word segments.
@@ -43,6 +44,16 @@ use unicode_segmentation::UnicodeSegmentation;
 pub enum Direction {
   Left,
   Right,
+}
+
+/// The `.` and `,` that split a word into parts, each a word of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Separators {
+  /// A `.` or `,` between two digits: the parts of a number.
+  Numbers,
+  /// Those, and a `.` between two letters or digits, as in the file names of
+  /// a path: `Movie.2024.mkv` has the words `Movie`, `2024` and `mkv`.
+  Paths,
 }
 
 /// How the input's own word jumps run, which the extra stops are fitted to.
@@ -96,23 +107,33 @@ fn segment_containing(value: &str, index: usize) -> Option<(usize, &str)> {
     .find(|(start, segment)| (*start..start + segment.len()).contains(&index))
 }
 
-/// Whether byte offset `index` holds a `.` or `,` between two numeric chars.
-fn is_numeric_separator(value: &str, index: usize) -> bool {
+/// Whether byte offset `index` holds a `.` or `,` that `separators` splits a
+/// word at.
+fn is_separator(value: &str, index: usize, separators: Separators) -> bool {
   // Both are ASCII, so the byte test never matches inside another char.
-  matches!(value.as_bytes().get(index), Some(b'.' | b','))
-    && value[..index].chars().next_back().is_some_and(char::is_numeric)
-    && value[index + 1..].chars().next().is_some_and(char::is_numeric)
+  let Some(&separator @ (b'.' | b',')) = value.as_bytes().get(index) else {
+    return false;
+  };
+  let before = value[..index].chars().next_back();
+  let after = value[index + 1..].chars().next();
+  let between = |test: fn(char) -> bool| before.is_some_and(test) && after.is_some_and(test);
+  between(char::is_numeric) || (separators == Separators::Paths && separator == b'.' && between(char::is_alphanumeric))
 }
 
-/// The extra stop inside a number for a word jump from `caret`, or `None` to
+/// The extra stop inside a word for a word jump from `caret`, or `None` to
 /// let the input's own word navigation run.
 ///
 /// The jump passes the space it would pass anyway first, and only a stop at a
-/// `.` or `,` between two digits counts: backward it lands on the next part's
-/// start; forward on the part's end or the next part's start, as the jumps
-/// do. Other punctuation in the same word must not be skipped to reach such
-/// a stop.
-fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps) -> Option<usize> {
+/// separator counts: backward it lands on the next part's start; forward on
+/// the part's end or the next part's start, as the jumps do. Another `.` or
+/// `,` in the same word must not be skipped to reach such a stop.
+fn stop_in_word(
+  value: &str,
+  caret: usize,
+  direction: Direction,
+  jumps: Jumps,
+  separators: Separators,
+) -> Option<usize> {
   let left = direction == Direction::Left;
   // `index` walks chars: the one before the caret going left, at it going right.
   let mut index = if left {
@@ -135,12 +156,11 @@ fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps)
   }
 
   let mut nearest: Option<usize> = None;
-  let mut numeric = false;
+  let mut splits = false;
   for (offset, _) in word.match_indices(['.', ',']) {
-    let splits_number = word[..offset].chars().next_back().is_some_and(char::is_numeric)
-      && word[offset + 1..].chars().next().is_some_and(char::is_numeric);
     let before = word_start + offset;
-    let boundaries: &[usize] = if splits_number {
+    let separator = is_separator(value, before, separators);
+    let boundaries: &[usize] = if separator {
       &[before + usize::from(left || !jumps.forward_ends_parts)]
     } else {
       &[before, before + 1]
@@ -153,11 +173,11 @@ fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps)
       };
       if closer {
         nearest = Some(boundary);
-        numeric = splits_number;
+        splits = separator;
       }
     }
   }
-  if numeric { nearest } else { None }
+  if splits { nearest } else { None }
 }
 
 /// The per-platform rule: the extra stop inside a number for a word jump from
@@ -170,7 +190,13 @@ fn stop_in_number(value: &str, caret: usize, direction: Direction, jumps: Jumps)
 /// after the separator on Windows and before it on macOS. Other punctuation in
 /// the same word must not be skipped to reach such a stop.
 pub fn numeric_word_boundary(value: &str, caret: usize, direction: Direction, is_mac: bool) -> Option<usize> {
-  stop_in_number(value, caret, direction, Jumps::per_platform(is_mac))
+  stop_in_word(
+    value,
+    caret,
+    direction,
+    Jumps::per_platform(is_mac),
+    Separators::Numbers,
+  )
 }
 
 /// Where gpui-kit's own word jump from `offset` lands: forward at the end of
@@ -193,13 +219,15 @@ pub fn stock_word_jump(value: &str, offset: usize, direction: Direction) -> usiz
   }
 }
 
-/// Where a word jump from `caret` stops in a gpui-kit input when a number
+/// Where a word jump from `caret` stops in a gpui-kit input when a separator
 /// decides it, or `None` when the input's own jump is right.
 ///
-/// Each part of a number is a word: forward the jump ends at a part's end,
-/// backward at a part's start, and the separator gets no stop of its own.
-pub fn word_stop(value: &str, caret: usize, direction: Direction) -> Option<usize> {
-  if let Some(stop) = stop_in_number(value, caret, direction, Jumps::GPUI_KIT) {
+/// Each part between `separators` is a word: forward the jump ends at a
+/// part's end, backward at a part's start, and the separator gets no stop of
+/// its own.
+pub fn word_stop(value: &str, caret: usize, direction: Direction, separators: Separators) -> Option<usize> {
+  let stop = |caret| stop_in_word(value, caret, direction, Jumps::GPUI_KIT, separators);
+  if let Some(stop) = stop(caret) {
     return Some(stop);
   }
   // At a part's edge the jump goes on from the far side of the separator.
@@ -207,12 +235,10 @@ pub fn word_stop(value: &str, caret: usize, direction: Direction) -> Option<usiz
     Direction::Left => (caret.checked_sub(1)?, caret - 1),
     Direction::Right => (caret, caret + 1),
   };
-  if !is_numeric_separator(value, separator) {
+  if !is_separator(value, separator, separators) {
     return None;
   }
-  Some(
-    stop_in_number(value, past, direction, Jumps::GPUI_KIT).unwrap_or_else(|| stock_word_jump(value, past, direction)),
-  )
+  Some(stop(past).unwrap_or_else(|| stock_word_jump(value, past, direction)))
 }
 
 /// A text selection: `range` in byte offsets, `reversed` when the caret is at
@@ -267,12 +293,13 @@ pub fn word_command(
   selection: &Selection,
   direction: Direction,
   command: WordCommand,
+  separators: Separators,
 ) -> Option<Selection> {
   if command == WordCommand::Delete && !selection.range.is_empty() {
     return None;
   }
   let caret = selection.caret();
-  let stop = word_stop(value, caret, direction)?;
+  let stop = word_stop(value, caret, direction, separators)?;
   let selection = match command {
     WordCommand::Move => Selection {
       range: stop..stop,
@@ -418,14 +445,14 @@ mod tests {
   // The gpui-kit rule of the app.
 
   /// The offsets a key pressed again and again stops at: `word_stop` where a
-  /// number decides, otherwise gpui-kit's own jump (`numbers` false: always).
-  fn walk(value: &str, start: usize, direction: Direction, numbers: bool) -> Vec<usize> {
+  /// separator decides, otherwise gpui-kit's own jump (`separators` `None`:
+  /// always).
+  fn walk(value: &str, start: usize, direction: Direction, separators: Option<Separators>) -> Vec<usize> {
     let mut stops = Vec::new();
     let mut caret = start;
     loop {
-      let next = numbers
-        .then(|| word_stop(value, caret, direction))
-        .flatten()
+      let next = separators
+        .and_then(|separators| word_stop(value, caret, direction, separators))
         .unwrap_or_else(|| stock_word_jump(value, caret, direction));
       if next == caret {
         return stops;
@@ -438,7 +465,7 @@ mod tests {
   #[test]
   fn the_stock_jump_is_gpui_kits() {
     // Recorded from gpui-base 0.9.1's `InputState` with Option+Arrow.
-    let stock = |value, start, direction| walk(value, start, direction, false);
+    let stock = |value, start, direction| walk(value, start, direction, None);
     assert_eq!(stock("123.456", 0, Direction::Right), [7]);
     assert_eq!(stock("123.456", 7, Direction::Left), [0]);
     assert_eq!(stock("123.456", 3, Direction::Right), [4, 7]);
@@ -454,11 +481,13 @@ mod tests {
     assert_eq!(stock("abc\n123.456", 3, Direction::Right), [11]);
     assert_eq!(stock("abc\n123.456", 4, Direction::Left), [0]);
     assert_eq!(stock("123.456\n", 8, Direction::Left), [0]);
+    assert_eq!(stock("C:/Videos/movie.mkv", 19, Direction::Left), [10, 9, 3, 2, 1, 0]);
+    assert_eq!(stock("x264.mkv", 0, Direction::Right), [4, 5, 8]);
   }
 
   #[test]
   fn each_part_of_a_number_is_a_word() {
-    let jumps = |value, start, direction| walk(value, start, direction, true);
+    let jumps = |value, start, direction| walk(value, start, direction, Some(Separators::Numbers));
     assert_eq!(jumps("123.456", 0, Direction::Right), [3, 7]);
     assert_eq!(jumps("123.456", 7, Direction::Left), [4, 0]);
     assert_eq!(jumps("1,234.567", 0, Direction::Right), [1, 5, 9]);
@@ -492,10 +521,47 @@ mod tests {
       ("字幕 １２３.４５６", 7, Direction::Right),
     ] {
       assert_eq!(
-        word_stop(value, caret, direction),
+        word_stop(value, caret, direction, Separators::Numbers),
         numeric_word_boundary(value, caret, direction, true),
         "{value:?} {caret} {direction:?}"
       );
+    }
+  }
+
+  #[test]
+  fn each_part_of_a_file_name_in_a_path_is_a_word() {
+    let jumps = |value, start, direction| walk(value, start, direction, Some(Separators::Paths));
+    assert_eq!(jumps("movie.mkv", 0, Direction::Right), [5, 9]);
+    assert_eq!(jumps("movie.mkv", 9, Direction::Left), [6, 0]);
+    // The dots of a number, and those gpui-kit gives a stop of their own.
+    let path = "C:/Videos/Movie.2024.1080p.mkv";
+    assert_eq!(jumps(path, 0, Direction::Right), [1, 2, 3, 9, 10, 15, 20, 26, 30]);
+    assert_eq!(jumps(path, 30, Direction::Left), [27, 21, 16, 10, 9, 3, 2, 1, 0]);
+    assert_eq!(jumps("x264.mkv", 0, Direction::Right), [4, 8]);
+    assert_eq!(jumps("x264.mkv", 8, Direction::Left), [5, 0]);
+    // A number's `,` too; a word jump still passes spaces and a quote.
+    assert_eq!(jumps("1,234.mkv", 0, Direction::Right), [1, 5, 9]);
+    assert_eq!(jumps("My Movie.mkv", 12, Direction::Left), [9, 3, 0]);
+    assert_eq!(jumps("can't.mkv", 0, Direction::Right), [5, 9]);
+    // Outside a path a dot between letters splits nothing.
+    let text = |value, start, direction| walk(value, start, direction, Some(Separators::Numbers));
+    assert_eq!(text("movie.mkv", 0, Direction::Right), [9]);
+    assert_eq!(text(path, 30, Direction::Left), [16, 15, 10, 9, 3, 2, 1, 0]);
+  }
+
+  #[test]
+  fn other_dots_in_a_path_keep_gpui_kits_jumps() {
+    for value in [".config", "../movies", "movie.", "a .b", "a. b", "C:/a b/c-d_e", "a..b"] {
+      let carets = value.char_indices().map(|(byte, _)| byte).chain([value.len()]);
+      for caret in carets {
+        for direction in [Direction::Left, Direction::Right] {
+          assert_eq!(
+            word_stop(value, caret, direction, Separators::Paths),
+            None,
+            "{value:?} {caret} {direction:?}"
+          );
+        }
+      }
     }
   }
 
@@ -518,7 +584,7 @@ mod tests {
       for caret in carets {
         for direction in [Direction::Left, Direction::Right] {
           assert_eq!(
-            word_stop(value, caret, direction),
+            word_stop(value, caret, direction, Separators::Numbers),
             None,
             "{value:?} {caret} {direction:?}"
           );
@@ -530,7 +596,7 @@ mod tests {
   #[test]
   fn unicode_numbers_split_too() {
     // The CJK and full-width chars take 3 bytes, the emoji 4.
-    let jumps = |value, start, direction| walk(value, start, direction, true);
+    let jumps = |value, start, direction| walk(value, start, direction, Some(Separators::Numbers));
     assert_eq!(jumps("字幕 １２３.４５６", 0, Direction::Right), [3, 6, 16, 26]);
     assert_eq!(jumps("字幕 １２３.４５６", 26, Direction::Left), [17, 7, 3, 0]);
     assert_eq!(jumps("🎬 123.456", 0, Direction::Right), [4, 8, 12]);
@@ -544,8 +610,15 @@ mod tests {
   #[test]
   fn moves_from_the_caret() {
     let value = "1,234.567";
-    let command =
-      |range, reversed, direction| word_command(value, &selection(range, reversed), direction, WordCommand::Move);
+    let command = |range, reversed, direction| {
+      word_command(
+        value,
+        &selection(range, reversed),
+        direction,
+        WordCommand::Move,
+        Separators::Numbers,
+      )
+    };
     assert_eq!(command(0..0, false, Direction::Right), Some(selection(1..1, false)));
     // A selection collapses at the stop after its caret, as gpui-kit's moves.
     assert_eq!(command(0..2, false, Direction::Right), Some(selection(5..5, false)));
@@ -553,7 +626,13 @@ mod tests {
     assert_eq!(command(9..9, false, Direction::Left), Some(selection(6..6, false)));
     assert_eq!(command(6..6, false, Direction::Right), None);
     assert_eq!(
-      word_command("abc", &selection(0..0, false), Direction::Right, WordCommand::Move),
+      word_command(
+        "abc",
+        &selection(0..0, false),
+        Direction::Right,
+        WordCommand::Move,
+        Separators::Numbers
+      ),
       None
     );
   }
@@ -561,8 +640,15 @@ mod tests {
   #[test]
   fn extends_the_selection_from_its_anchor() {
     let value = "1,234.567";
-    let command =
-      |range, reversed, direction| word_command(value, &selection(range, reversed), direction, WordCommand::Select);
+    let command = |range, reversed, direction| {
+      word_command(
+        value,
+        &selection(range, reversed),
+        direction,
+        WordCommand::Select,
+        Separators::Numbers,
+      )
+    };
     assert_eq!(command(0..0, false, Direction::Right), Some(selection(0..1, false)));
     assert_eq!(command(0..1, false, Direction::Right), Some(selection(0..5, false)));
     assert_eq!(command(9..9, false, Direction::Left), Some(selection(6..9, true)));
@@ -576,8 +662,15 @@ mod tests {
 
   #[test]
   fn deletes_up_to_the_stop() {
-    let command =
-      |value, range, direction| word_command(value, &selection(range, false), direction, WordCommand::Delete);
+    let command = |value, range, direction| {
+      word_command(
+        value,
+        &selection(range, false),
+        direction,
+        WordCommand::Delete,
+        Separators::Numbers,
+      )
+    };
     assert_eq!(
       command("1,234.567", 9..9, Direction::Left),
       Some(selection(6..9, false))
@@ -591,6 +684,18 @@ mod tests {
     // Selected text deletes itself, and words without numbers as gpui-kit.
     assert_eq!(command("1,234.567", 0..2, Direction::Left), None);
     assert_eq!(command("hello world", 11..11, Direction::Left), None);
+    // In a path, the extension alone.
+    assert_eq!(command("movie.mkv", 9..9, Direction::Left), None);
+    assert_eq!(
+      word_command(
+        "movie.mkv",
+        &selection(9..9, false),
+        Direction::Left,
+        WordCommand::Delete,
+        Separators::Paths
+      ),
+      Some(selection(6..9, false))
+    );
   }
 
   #[test]
