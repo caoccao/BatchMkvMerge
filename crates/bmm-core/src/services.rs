@@ -506,7 +506,7 @@ mod tests {
     std::fs::write(dir.join("locked").join("c.mkv"), b"").unwrap();
     let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
     // `DirEntry::path` joins with the platform's separator (`\` on Windows).
-    let listed = |name: &str| dir.join("ok").join(name).to_string_lossy().into_owned();
+    let listed = |folder: &str, name: &str| dir.join(folder).join(name).to_string_lossy().into_owned();
     #[cfg(unix)]
     let locked = {
       use std::os::unix::fs::PermissionsExt;
@@ -514,14 +514,18 @@ mod tests {
       // Root reads any folder; then there is nothing to skip.
       std::fs::read_dir(dir.join("locked")).is_err()
     };
+    // A folder cannot be made unreadable this way on Windows.
     #[cfg(not(unix))]
     let locked = false;
     let found = get_media_files(vec![path("locked"), path("ok"), path("missing.mkv")]);
-    assert_eq!(found.files, [listed("a.srt"), listed("b.mkv")]);
+    let mut files = vec![listed("ok", "a.srt"), listed("ok", "b.mkv")];
     let mut skipped = vec![path("missing.mkv")];
     if locked {
       skipped.insert(0, path("locked"));
+    } else {
+      files.insert(0, listed("locked", "c.mkv"));
     }
+    assert_eq!(found.files, files);
     assert_eq!(found.skipped, skipped);
     #[cfg(unix)]
     {
