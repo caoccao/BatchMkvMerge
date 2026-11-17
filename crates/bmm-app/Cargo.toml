@@ -28,7 +28,7 @@ bmm-platform = { path = "../bmm-platform" }
 # The card summary's encoded date in the local time zone; gpui already
 # compiles it with these features.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-gpui-kit = "=0.9.1"
+gpui-kit = "=0.10.0"
 log.workspace = true
 # Locale files under `locales/` and `t!`; gpui-kit's i18n needs 4.2 or later.
 rust-i18n = "4.2"
@@ -36,7 +36,7 @@ unicode-segmentation = "1"
 
 # Headless test windows use gpui-kit's `test-support` feature.
 [dev-dependencies]
-gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+gpui-kit = { version = "=0.10.0", features = ["test-support"] }
 serde_json.workspace = true
 
 [build-dependencies]

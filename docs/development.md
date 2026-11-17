@@ -18,7 +18,7 @@
 ## Tech Stack
 
 - Rust (edition 2024), a Cargo workspace: the UI-free `crates/bmm-core` library, `crates/bmm-platform` and the application `crates/bmm-app` (package `BatchMkvMerge`)
-- [gpui-kit](https://crates.io/crates/gpui-kit) 0.9.1 (exact pin; GPUI with the `gpui-pre` backend) for the user interface
+- [gpui-kit](https://crates.io/crates/gpui-kit) 0.10.0 (exact pin; GPUI with the `gpui-pre` backend) for the user interface
 - [rust-i18n](https://crates.io/crates/rust-i18n) 4.2 for localization (9 locales under `crates/bmm-app/locales/`)
 - `crates/bmm-platform`: per-OS integrations GPUI lacks (taskbar / Dock / launcher progress through `ITaskbarList3`, `NSDockTile`, the `com.canonical.Unity.LauncherEntry` D-Bus signal)
 - Native Rust media metadata parser under `crates/bmm-core/src/media_metadata/`
@@ -70,7 +70,7 @@ The twenty colour themes in `crates/bmm-app/themes/` are derived from their main
 BMM_WRITE_THEMES=1 cargo test --release -p BatchMkvMerge --lib theme::
 ```
 
-gpui-kit's own strings that the app shows (the settings search and Reset All, the select placeholder and search box, the input menu, the dialog buttons) are translated in the `gpui_component` part of every locale file; gpui-kit ships none for `de`, `es`, `fr` and `ja`.
+gpui-kit's own strings that the app shows (the settings search and Reset All, the select placeholder and search box, the input menu, the dialog buttons) are translated in the `gpui_component` part of every locale file.
 
 In every text field, Ctrl+Left/Right (Option on macOS), with Shift, and the word deletions treat each part of a number as a word: `Movie.2024.1080p` stops at 5, 6, 10 and 16 going right. In a path field (the output path dialog, the Integration tool paths) every `.` between two letters or digits separates words too: `Movie.2024.1080p.mkv` stops at 5, 10, 16 and 20. Other text without digits moves as gpui-kit's inputs do. The stops live in `crates/bmm-app/src/domain/word_navigation.rs`.
 
