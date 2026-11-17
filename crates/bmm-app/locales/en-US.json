@@ -99,6 +99,7 @@
     "resume": "Resume",
     "resumeAll": "Resume All",
     "clearCompleted": "Clear Completed",
+    "quitWhenComplete": "Quit when complete",
     "systemNotification": "System Notification",
     "systemNotificationTooltip": "Show system notification when complete.",
     "topmostNotification": "Topmost Notification",
@@ -212,6 +213,8 @@
     "copyright": "© Copyright 2026"
   },
   "notification": {
+    "quit": "Quit",
+    "okButDoNotQuit": "OK, but do not quit",
     "completedIn": "Completed in %{elapsed}",
     "unknownError": "Unknown error",
     "summary": "%{completed} completed, %{failed} failed, %{cancelled} cancelled",

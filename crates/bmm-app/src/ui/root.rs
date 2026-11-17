@@ -113,6 +113,10 @@ impl AppView {
             this.complete(completion, window, cx);
             return;
           }
+          UiEvent::QuitAfterCompletion => {
+            this.quit_after_completion(window, cx);
+            return;
+          }
         };
         window.push_notification(notification, cx);
       }),
@@ -157,7 +161,8 @@ impl AppView {
 
   /// A drained queue's notice: an OS notification (`.system()`: the OS
   /// notification centre only, the title, and the two lines as its body)
-  /// and/or the topmost window.
+  /// and/or the topmost window. If the topmost window is shown, it owns
+  /// the decision to quit.
   fn complete(&mut self, completion: &Completion, window: &mut Window, cx: &mut Context<Self>) {
     let notice = &completion.notice;
     if completion.system {
@@ -170,8 +175,22 @@ impl AppView {
       window.push_notification(notification.title(notice.title.clone()).system(), cx);
     }
     if completion.topmost {
-      self.topmost.show(notice.clone(), window, cx);
+      let quit = completion.quit.then(|| self.stores.ui.downgrade());
+      self.topmost.show(notice.clone(), quit, window, cx);
+    } else if completion.quit {
+      self.quit_after_completion(window, cx);
     }
+  }
+
+  fn quit_after_completion(&self, window: &mut Window, cx: &mut Context<Self>) {
+    // A new batch may have started while the topmost window was open.
+    if self.stores.has_active_merges(cx) {
+      return;
+    }
+    main_window::save_geometry(&self.stores, window, cx);
+    self.stores.ui.update(cx, |ui, _| ui.set_closing());
+    // The application's main-window close handler quits the app.
+    window.remove_window();
   }
 
   pub fn stores(&self) -> &Stores {

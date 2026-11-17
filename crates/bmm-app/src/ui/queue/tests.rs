@@ -20,7 +20,7 @@
 
 use bmm_core::merge::{MergeEvent, MergeOutcome};
 use core::prelude::v1::test;
-use gpui_kit::test::TestWindowExt;
+use gpui_kit::test::{TestQueryExt, TestWindowExt};
 use gpui_kit::*;
 
 use super::*;
@@ -444,6 +444,7 @@ fn three_merges_notify_once_after_the_last(cx: &mut TestAppContext) {
   // Escape closes it; the next completion opens a new one.
   cx.update_window(handle, |_, window, cx| {
     window.render_frame(cx);
+    assert!(window.try_find("topmost-keep-open").is_none());
     window.press("escape", cx);
   })
   .unwrap();
@@ -471,11 +472,63 @@ fn nothing_notifies_with_the_toggles_off_or_a_cancelled_batch(cx: &mut TestAppCo
   click(&shell, cx, "toolbar-topmost-notification");
   click(&shell, cx, "toolbar-resume-all");
   assert_eq!(shell.enqueued().len(), 2, "nothing to resume");
+  click(&shell, cx, "toolbar-quit-when-complete");
   shell.press(cx, "f3");
   shell.send(cx, finished(A, MergeOutcome::Cancelled, None));
   shell.send(cx, finished(B, MergeOutcome::Cancelled, None));
   assert_eq!(system_notifications(cx), [], "the user cancelled everything");
   assert_eq!(topmost(&shell, cx).0, 0);
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_ok());
+}
+
+#[gpui_kit::test]
+fn quit_when_complete_closes_the_main_window_after_the_last_job(cx: &mut TestAppContext) {
+  let shell = queued(cx, &[A, B]);
+  click(&shell, cx, "toolbar-quit-when-complete");
+  click(&shell, cx, "toolbar-system-notification");
+  shell.send(cx, started(A));
+  shell.send(cx, finished(A, MergeOutcome::Completed, None));
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_ok());
+  assert_eq!(system_notifications(cx), []);
+  shell.send(cx, started(B));
+  shell.send(cx, finished(B, MergeOutcome::Completed, None));
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_err());
+  assert_eq!(system_notifications(cx).len(), 1);
+}
+
+#[gpui_kit::test]
+fn topmost_completion_lets_the_user_keep_the_app_open_or_quit(cx: &mut TestAppContext) {
+  let shell = queued(cx, &[A]);
+  click(&shell, cx, "toolbar-quit-when-complete");
+  click(&shell, cx, "toolbar-topmost-notification");
+  shell.send(cx, started(A));
+  shell.send(cx, finished(A, MergeOutcome::Completed, None));
+  let notification = topmost(&shell, cx).1.expect("topmost notification");
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_ok());
+  cx.update_window(notification, |_, window, cx| {
+    window.render_frame(cx);
+    window.find_by_label("OK, but do not quit");
+    window.click("topmost-keep-open", cx);
+  })
+  .unwrap();
+  cx.run_until_parked();
+  assert!(topmost_texts(cx, notification).is_none());
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_ok());
+  assert!(shell.stores.ui.read_with(cx, |ui, _| ui.quit_when_complete()));
+
+  shell.press(cx, "f3");
+  shell.send(cx, started(A));
+  shell.send(cx, finished(A, MergeOutcome::Completed, None));
+  let notification = topmost(&shell, cx).1.expect("topmost notification");
+  cx.update_window(notification, |_, window, cx| {
+    window.render_frame(cx);
+    window.find_by_label("Quit");
+    window.click("topmost-close", cx);
+  })
+  .unwrap();
+  cx.run_until_parked();
+  assert!(topmost_texts(cx, notification).is_none());
+  assert!(cx.update_window(shell.handle, |_, _, _| ()).is_err());
 }
 
 #[gpui_kit::test]

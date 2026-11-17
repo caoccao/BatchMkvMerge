@@ -823,6 +823,15 @@ fn toolbar_overflow_exposes_hidden_commands_and_menu_shortcuts(cx: &mut TestAppC
   shell.press(cx, "escape");
   assert_eq!(open_menu(&shell, cx), None);
 
+  shell.resize(cx, 350.0, 450.0);
+  shell.click(cx, "toolbar-overflow");
+  assert!(menu_items(&shell, cx).contains(&("Quit when complete".to_string(), false)));
+  click_menu_item(&shell, cx, "Quit when complete");
+  assert!(shell.stores.ui.read_with(cx, |ui, _| ui.quit_when_complete()));
+  shell.click(cx, "toolbar-overflow");
+  assert!(menu_items(&shell, cx).contains(&("Quit when complete".to_string(), true)));
+  shell.press(cx, "escape");
+
   shell.click(cx, "toolbar-overflow");
   shell.resize(cx, 1000.0, 450.0);
   assert_eq!(open_menu(&shell, cx), None);

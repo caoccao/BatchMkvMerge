@@ -15,9 +15,8 @@
 *   limitations under the License.
 */
 
-//! Navigation state: the tabs, the in-app toast, the completion notifications
-//! and their toggles, the open toolbar menu and the version the update banner
-//! announces.
+//! Navigation state: the tabs, the in-app toast, the completion toggles, the
+//! open toolbar menu and the version the update banner announces.
 
 use gpui_kit::{Context, EventEmitter};
 
@@ -115,6 +114,8 @@ pub struct Completion {
   pub system: bool,
   /// Show it in the topmost window.
   pub topmost: bool,
+  /// Quit after delivering the notifications or acknowledging the topmost window.
+  pub quit: bool,
 }
 
 /// Events for the window that shows the state.
@@ -128,16 +129,19 @@ pub enum UiEvent {
   Toast(Toast),
   /// Show a card's message at the bottom of the main window.
   Snackbar(Snackbar),
-  /// The queue drained: notify the OS and/or show the topmost window.
+  /// The queue drained: deliver the enabled completion actions.
   Completion(Completion),
+  /// The user accepted the topmost window's Quit action.
+  QuitAfterCompletion,
 }
 
 pub struct UiState {
   active_tab: TabType,
   show_about: bool,
-  /// The queue's two notification toggles; off at every start.
+  /// The queue's completion toggles, off at every start.
   system_notification: bool,
   topmost_notification: bool,
+  quit_when_complete: bool,
   /// The main window is closing: no more completions.
   closing: bool,
   open_menu: Option<ToolbarMenu>,
@@ -160,6 +164,7 @@ impl UiState {
       show_about: false,
       system_notification: false,
       topmost_notification: false,
+      quit_when_complete: false,
       closing: false,
       open_menu: None,
       update_available: None,
@@ -299,6 +304,10 @@ impl UiState {
     self.topmost_notification
   }
 
+  pub fn quit_when_complete(&self) -> bool {
+    self.quit_when_complete
+  }
+
   /// The queue's System Notification toggle. Nothing asks for permission here;
   /// the OS asks on the first notification.
   pub fn toggle_system_notification(&mut self, cx: &mut Context<Self>) {
@@ -312,23 +321,34 @@ impl UiState {
     cx.notify();
   }
 
+  pub fn toggle_quit_when_complete(&mut self, cx: &mut Context<Self>) {
+    self.quit_when_complete = !self.quit_when_complete;
+    cx.notify();
+  }
+
   /// The main window is closing (its exit dialog said Yes): the merges it
   /// cancels drain the queue, which must not notify.
   pub fn set_closing(&mut self) {
     self.closing = true;
   }
 
-  /// Delivers the notice of a drained queue through the enabled channels;
-  /// nothing when both are off or the window is closing.
+  /// Delivers the enabled completion actions for a drained queue.
   pub fn show_completion(&mut self, notice: CompletionNotice, cx: &mut Context<Self>) {
-    if self.closing || !(self.system_notification || self.topmost_notification) {
+    if self.closing || !(self.system_notification || self.topmost_notification || self.quit_when_complete) {
       return;
     }
     cx.emit(UiEvent::Completion(Completion {
       notice,
       system: self.system_notification,
       topmost: self.topmost_notification,
+      quit: self.quit_when_complete,
     }));
+  }
+
+  pub fn request_completion_quit(&self, cx: &mut Context<Self>) {
+    if self.quit_when_complete && !self.closing {
+      cx.emit(UiEvent::QuitAfterCompletion);
+    }
   }
 }
 
@@ -424,26 +444,37 @@ mod tests {
       failed: false,
     };
     ui.update(cx, |ui, cx| {
-      assert!(!ui.system_notification() && !ui.topmost_notification(), "off at start");
+      assert!(
+        !ui.system_notification() && !ui.topmost_notification() && !ui.quit_when_complete(),
+        "off at start"
+      );
       ui.show_completion(notice.clone(), cx);
       ui.toggle_topmost_notification(cx);
       ui.show_completion(notice.clone(), cx);
       ui.toggle_system_notification(cx);
       ui.toggle_topmost_notification(cx);
       ui.show_completion(notice.clone(), cx);
+      ui.toggle_system_notification(cx);
+      ui.toggle_quit_when_complete(cx);
+      ui.show_completion(notice.clone(), cx);
       ui.set_closing();
       ui.show_completion(notice.clone(), cx);
     });
-    let completion = |system, topmost| {
+    let completion = |system, topmost, quit| {
       UiEvent::Completion(Completion {
         notice: notice.clone(),
         system,
         topmost,
+        quit,
       })
     };
     assert_eq!(
       seen.borrow().as_slice(),
-      [completion(false, true), completion(true, false)]
+      [
+        completion(false, true, false),
+        completion(true, false, false),
+        completion(false, false, true)
+      ]
     );
   }
 

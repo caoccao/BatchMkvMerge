@@ -99,6 +99,7 @@
     "resume": "再開",
     "resumeAll": "すべて再開",
     "clearCompleted": "完了を消去",
+    "quitWhenComplete": "完了時に終了",
     "systemNotification": "システム通知",
     "systemNotificationTooltip": "完了時にシステム通知を表示します。",
     "topmostNotification": "最前面通知",
@@ -212,6 +213,8 @@
     "copyright": "© Copyright 2026"
   },
   "notification": {
+    "quit": "終了",
+    "okButDoNotQuit": "OK、アプリは終了しない",
     "completedIn": "%{elapsed} で完了しました",
     "unknownError": "不明なエラー",
     "summary": "完了 %{completed} 件、失敗 %{failed} 件、キャンセル %{cancelled} 件",

@@ -17,8 +17,8 @@
 
 //! The topmost completion window: an undecorated 440×200 window above every
 //! other application's, centred on the work area of the main window's display,
-//! showing the title, the file or counts, the detail and Close. Escape and
-//! Enter close it. A later completion updates the open window in place.
+//! showing the title, the file or counts, the detail and the dismissal
+//! buttons. A later completion updates the open window in place.
 //!
 //! The window is GPUI's `PopUp` kind (an `NSPanel` above other applications
 //! on macOS, `WS_EX_TOPMOST` on Windows, override-redirect on X11). On
@@ -31,8 +31,8 @@ use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 
-use crate::state::ui::CompletionNotice;
-use crate::ui::confirm_button;
+use crate::state::ui::{CompletionNotice, UiState};
+use crate::ui::{confirm_button, text_button};
 
 pub const KEY_CONTEXT: &str = "TopmostNotification";
 /// The window's size.
@@ -41,34 +41,45 @@ pub const SIZE: (f32, f32) = (440.0, 200.0);
 actions!(
   topmost_notification,
   [
-    /// Escape or Enter: close the window.
+    /// Escape: close the notification and leave the app open.
     Dismiss,
+    /// Enter: accept the notification's primary action.
+    Accept,
   ]
 );
 
 pub fn bind_keys(cx: &mut App) {
   cx.bind_keys([
     KeyBinding::new("escape", Dismiss, Some(KEY_CONTEXT)),
-    KeyBinding::new("enter", Dismiss, Some(KEY_CONTEXT)),
+    KeyBinding::new("enter", Accept, Some(KEY_CONTEXT)),
   ]);
 }
 
 /// The window's content.
 pub struct TopmostNotification {
   notice: CompletionNotice,
+  quit: Option<WeakEntity<UiState>>,
   focus: FocusHandle,
 }
 
 impl TopmostNotification {
-  fn new(notice: CompletionNotice, cx: &mut Context<Self>) -> Self {
+  fn new(notice: CompletionNotice, quit: Option<WeakEntity<UiState>>, cx: &mut Context<Self>) -> Self {
     Self {
       notice,
+      quit,
       focus: cx.focus_handle(),
     }
   }
 
   pub fn notice(&self) -> &CompletionNotice {
     &self.notice
+  }
+
+  fn accept(&self, window: &mut Window, cx: &mut Context<Self>) {
+    window.remove_window();
+    if let Some(ui) = &self.quit {
+      let _ = ui.update(cx, |ui, cx| ui.request_completion_quit(cx));
+    }
   }
 }
 
@@ -82,12 +93,14 @@ impl Render for TopmostNotification {
       (IconName::CircleCheck, theme.success)
     };
     let line = notice.line.clone();
+    let quit = self.quit.is_some();
     v_flex()
       .id("topmost-notification")
       .test_support()
       .track_focus(&self.focus)
       .key_context(KEY_CONTEXT)
       .on_action(|_: &Dismiss, window, _| window.remove_window())
+      .on_action(cx.listener(|this, _: &Accept, window, cx| this.accept(window, cx)))
       .size_full()
       .p(super::space(2.0))
       .gap(super::space(1.25))
@@ -127,12 +140,26 @@ impl Render for TopmostNotification {
       )
       .child(div().flex_1())
       .child(
-        h_flex().justify_end().child(
-          confirm_button("topmost-close")
-            .small()
-            .label(tr!("tabs.close"))
-            .on_click(|_, window, _| window.remove_window()),
-        ),
+        h_flex()
+          .justify_end()
+          .gap(super::space(1.0))
+          .children(quit.then(|| {
+            text_button("topmost-keep-open")
+              .small()
+              .outline()
+              .label(tr!("notification.okButDoNotQuit"))
+              .on_click(|_, window, _| window.remove_window())
+          }))
+          .child(
+            confirm_button("topmost-close")
+              .small()
+              .label(if quit {
+                tr!("notification.quit")
+              } else {
+                tr!("tabs.close")
+              })
+              .on_click(cx.listener(|this, _, window, cx| this.accept(window, cx))),
+          ),
       )
   }
 }
@@ -158,11 +185,12 @@ impl TopmostWindow {
 
   /// Shows `notice`: in the open window, brought to the front, or in a new
   /// one centred on the display of `main`.
-  pub fn show(&mut self, notice: CompletionNotice, main: &Window, cx: &mut App) {
+  pub fn show(&mut self, notice: CompletionNotice, quit: Option<WeakEntity<UiState>>, main: &Window, cx: &mut App) {
     if let (Some(handle), Some(view)) = (self.window, self.view.clone()) {
       let reused = handle.update(cx, |_, window, cx| {
         view.update(cx, |view, cx| {
           view.notice = notice.clone();
+          view.quit = quit.clone();
           cx.notify();
         });
         window.activate_window();
@@ -193,17 +221,17 @@ impl TopmostWindow {
       app_id: Some(crate::DESKTOP_ID.into()),
       ..Default::default()
     };
-    let build = |notice: CompletionNotice| {
+    let build = |notice: CompletionNotice, quit: Option<WeakEntity<UiState>>| {
       move |window: &mut Window, cx: &mut App| {
-        let view = cx.new(|cx| TopmostNotification::new(notice, cx));
+        let view = cx.new(|cx| TopmostNotification::new(notice, quit, cx));
         view.read(cx).focus.clone().focus(window, cx);
         view
       }
     };
-    let mut opened = gpui_kit::open_window(options(window_kind(cx)), cx, build(notice.clone()));
+    let mut opened = gpui_kit::open_window(options(window_kind(cx)), cx, build(notice.clone(), quit.clone()));
     if opened.is_err() && window_kind(cx) != WindowKind::PopUp {
       // A Wayland compositor without layer-shell.
-      opened = gpui_kit::open_window(options(WindowKind::PopUp), cx, build(notice));
+      opened = gpui_kit::open_window(options(WindowKind::PopUp), cx, build(notice, quit));
     }
     match opened {
       Ok((handle, view)) => {

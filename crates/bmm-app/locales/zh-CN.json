@@ -99,6 +99,7 @@
     "resume": "恢复",
     "resumeAll": "全部恢复",
     "clearCompleted": "清除已完成",
+    "quitWhenComplete": "完成后退出",
     "systemNotification": "系统通知",
     "systemNotificationTooltip": "完成时显示系统通知。",
     "topmostNotification": "置顶通知",
@@ -212,6 +213,8 @@
     "copyright": "© 版权所有 2026"
   },
   "notification": {
+    "quit": "退出",
+    "okButDoNotQuit": "确定，但不退出",
     "completedIn": "%{elapsed} 内完成",
     "unknownError": "未知错误",
     "summary": "已完成 %{completed} 个，失败 %{failed} 个，已取消 %{cancelled} 个",

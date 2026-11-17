@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use gpui_kit::assets::{Assets, icon_assets};
+use gpui_kit::assets::{Assets, IconName, icon_assets};
 use gpui_kit::component::Icon;
 use gpui_kit::{AssetSource, Result, SharedString};
 
@@ -32,10 +32,14 @@ pub const BATCH_MKV_EXTRACT_ICON: &str = "images/batchmkvextract.png";
 pub const BD_MASTER_ICON: &str = "images/bdmaster.png";
 
 pub const OUTPUT_DIRECTORY_ICON_NAME: &str = "output-directory";
+pub const QUIT_ICON_NAME: &str = "log-out";
 pub const SETTINGS_ICON_NAME: &str = "settings";
 
 pub fn toolbar_icon(name: &str) -> Icon {
-  Icon::default().path(format!("icons/toolbar/{name}.svg"))
+  match name {
+    QUIT_ICON_NAME => Icon::new(IconName::LogOut),
+    _ => Icon::default().path(format!("icons/toolbar/{name}.svg")),
+  }
 }
 
 pub fn card_icon(name: &str) -> Icon {
@@ -96,6 +100,7 @@ icon_assets!(
     FolderCog,
     Images,
     ListFilter,
+    LogOut,
     RotateCcw,
     Settings2,
     SunMoon,

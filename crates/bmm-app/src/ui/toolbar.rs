@@ -32,7 +32,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Icon, Side, Sizable, h_flex}
 use gpui_kit::*;
 
 use crate::actions;
-use crate::assets::{OUTPUT_DIRECTORY_ICON_NAME, toolbar_icon};
+use crate::assets::{OUTPUT_DIRECTORY_ICON_NAME, QUIT_ICON_NAME, toolbar_icon};
 use crate::state::ui::ToolbarMenu;
 use crate::state::{Stores, TabType};
 use crate::ui::output_dialog::{OutputDialogRequest, OutputMode, OutputPathDialog};
@@ -71,6 +71,7 @@ enum ToolbarAction {
   CancelAll,
   ClearCompleted,
   ClearFiles,
+  QuitWhenComplete,
   SystemNotification,
   TopmostNotification,
   GroupByFileName,
@@ -88,6 +89,7 @@ impl ToolbarAction {
       Self::CancelAll => actions::cancel_all(stores, cx),
       Self::ClearCompleted => stores.queue.update(cx, |queue, cx| queue.clear_completed(cx)),
       Self::ClearFiles => actions::clear_files(stores, cx),
+      Self::QuitWhenComplete => stores.ui.update(cx, |ui, cx| ui.toggle_quit_when_complete(cx)),
       Self::SystemNotification => stores.ui.update(cx, |ui, cx| ui.toggle_system_notification(cx)),
       Self::TopmostNotification => stores.ui.update(cx, |ui, cx| ui.toggle_topmost_notification(cx)),
       Self::GroupByFileName => stores.config.update(cx, |store, cx| {
@@ -386,6 +388,7 @@ impl Render for Toolbar {
     let has_global_output = self.stores.files.read(cx).global_output_dir().is_some();
     let ui = self.stores.ui.read(cx);
     let active_tab = ui.active_tab();
+    let quit = ui.quit_when_complete();
     let (system, topmost) = (ui.system_notification(), ui.topmost_notification());
     let queue = self.stores.queue.read(cx);
     let can_resume = queue.resumable_items().next().is_some();
@@ -472,6 +475,17 @@ impl Render for Toolbar {
         ToolbarAction::ClearFiles,
       )),
       None,
+      Some(ToolbarButton {
+        checked: Some(quit),
+        ..item(
+          "toolbar-quit-when-complete",
+          QUIT_ICON_NAME,
+          tr!("queue.quitWhenComplete"),
+          highlight(quit),
+          true,
+          ToolbarAction::QuitWhenComplete,
+        )
+      }),
       Some(ToolbarButton {
         checked: Some(system),
         ..item(

@@ -99,6 +99,7 @@
     "resume": "Fortsetzen",
     "resumeAll": "Alle fortsetzen",
     "clearCompleted": "Abgeschlossene löschen",
+    "quitWhenComplete": "Nach Abschluss beenden",
     "systemNotification": "Systembenachrichtigung",
     "systemNotificationTooltip": "Systembenachrichtigung nach Abschluss anzeigen.",
     "topmostNotification": "Benachrichtigung im Vordergrund",
@@ -212,6 +213,8 @@
     "copyright": "© Copyright 2026"
   },
   "notification": {
+    "quit": "Beenden",
+    "okButDoNotQuit": "OK, aber nicht beenden",
     "completedIn": "Abgeschlossen in %{elapsed}",
     "unknownError": "Unbekannter Fehler",
     "summary": "%{completed} fertig, %{failed} fehlgeschlagen, %{cancelled} abgebrochen",

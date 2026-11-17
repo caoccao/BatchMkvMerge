@@ -99,6 +99,7 @@
     "resume": "Reanudar",
     "resumeAll": "Reanudar todo",
     "clearCompleted": "Eliminar completados",
+    "quitWhenComplete": "Salir al finalizar",
     "systemNotification": "Notificación del sistema",
     "systemNotificationTooltip": "Mostrar una notificación del sistema al finalizar.",
     "topmostNotification": "Notificación en primer plano",
@@ -212,6 +213,8 @@
     "copyright": "© Copyright 2026"
   },
   "notification": {
+    "quit": "Salir",
+    "okButDoNotQuit": "Aceptar sin salir",
     "completedIn": "Completado en %{elapsed}",
     "unknownError": "Error desconocido",
     "summary": "%{completed} completados, %{failed} fallidos, %{cancelled} cancelados",
