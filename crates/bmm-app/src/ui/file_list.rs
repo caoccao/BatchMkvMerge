@@ -376,7 +376,7 @@ impl Render for FileListView {
         div()
           .id(("file-entry", index))
           .test_support()
-          .w_full()
+          .m(px(1.0))
           .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
             let card = card.clone();
             this
@@ -405,8 +405,7 @@ impl Render for FileListView {
           .child(
             v_flex()
               .w_full()
-              .pb(super::SHELL_MARGIN)
-              .gap(super::space(1.0))
+              .items_stretch()
               .on_children_prepainted(move |bounds, _, _| *card_bounds.borrow_mut() = bounds)
               .children(entries),
           ),

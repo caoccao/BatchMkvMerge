@@ -157,9 +157,23 @@ fn progress(file: &str, percent: u32) -> MergeEvent {
 }
 
 #[gpui_kit::test]
-fn the_file_list_scrollbar_overlays_full_width_cards(cx: &mut TestAppContext) {
+fn the_file_list_spaces_cards_evenly_and_overlays_the_scrollbar(cx: &mut TestAppContext) {
   let (_dir, a, b, parsed) = two_movies("cards-scrollbar");
   let shell = shell(cx, config(GroupMode::None, false), parsed, &[&a, &b]);
+  shell.resize(cx, 1200.0, 1000.0);
+  shell.window(cx, |window, cx| {
+    window.simulate_next_frame(cx);
+    window.render_frame(cx);
+    let panel = window.find("panel-file-list").bounds();
+    let viewport = window.find("file-list").bounds();
+    let first = window.find(FileCard::element_id(&a)).bounds();
+    let last = window.find(FileCard::element_id(&b)).bounds();
+    assert_eq!(viewport, panel.inset(px(1.0)));
+    assert_eq!(first.left(), viewport.left() + px(1.0));
+    assert_eq!(first.right(), viewport.right() - px(1.0));
+    assert_eq!(first.top(), viewport.top() + px(1.0));
+    assert_eq!(last.top() - first.bottom(), px(2.0));
+  });
   cx.simulate_window_scale_factor_change(shell.handle, 1.5);
   let resize = |cx: &mut TestAppContext, height| {
     shell.resize(cx, 1200.0, height);
@@ -171,10 +185,10 @@ fn the_file_list_scrollbar_overlays_full_width_cards(cx: &mut TestAppContext) {
       (viewport, first)
     })
   };
-  let (viewport, first) = resize(cx, 1000.0);
-  assert_eq!(first.right(), viewport.right());
+  let (wide_viewport, wide_first) = resize(cx, 1000.0);
   let (viewport, first) = resize(cx, 450.0);
-  assert_eq!(first.right(), viewport.right());
+  assert_eq!(first.size.width, wide_first.size.width);
+  assert_eq!(viewport.size.width, wide_viewport.size.width);
   shell.window(cx, |window, cx| {
     let width = gpui_kit::component::scroll::Scrollbar::width();
     let scale = window.scale_factor();
@@ -204,7 +218,7 @@ fn the_file_list_scrollbar_overlays_full_width_cards(cx: &mut TestAppContext) {
     assert!(viewport.bottom() <= window.find("status-bar").bounds().top());
     let bottom_gap = viewport.bottom() - last.bottom();
     assert!(
-      bottom_gap > px(0.0) && (bottom_gap - crate::ui::SHELL_MARGIN).abs() < px(1.0),
+      bottom_gap > px(0.0) && (bottom_gap - px(1.0)).abs() < px(1.0),
       "the last card ends inside the scroll viewport: {bottom_gap:?}, {last:?}, {viewport:?}"
     );
     let bounds = last.scale(scale);
@@ -227,7 +241,8 @@ fn the_file_list_scrollbar_overlays_full_width_cards(cx: &mut TestAppContext) {
     );
   });
   let (viewport, first) = resize(cx, 1000.0);
-  assert_eq!(first.right(), viewport.right());
+  assert_eq!(first.size.width, wide_first.size.width);
+  assert_eq!(viewport.size.width, wide_viewport.size.width);
 }
 
 #[gpui_kit::test]

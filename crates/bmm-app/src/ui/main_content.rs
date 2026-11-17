@@ -110,10 +110,11 @@ impl Render for MainContent {
       .child(
         v_flex()
           .id(SharedString::from(format!("panel-{}", active.name())))
+          .test_support()
           .flex_1()
           .min_h_0()
           .w_full()
-          .py(super::SHELL_MARGIN)
+          .p(px(1.0))
           .overflow_y_scroll()
           .child(content),
       )

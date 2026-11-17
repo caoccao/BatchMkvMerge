@@ -280,10 +280,10 @@ fn the_welcome_page_fills_the_tab_in_a_tall_window(cx: &mut TestAppContext) {
     assert_eq!(cancel.left() - resume.right(), px(2.0));
     // The tab starts after the strip's 2 px top margin and 1 px top border.
     assert_eq!(file_tab.top() - toolbar.bottom(), px(3.0));
-    assert_eq!(welcome.top() - file_tab.bottom(), px(2.0));
-    assert_eq!(welcome.left() - root.left(), px(2.0));
-    assert_eq!(root.right() - welcome.right(), px(2.0));
-    assert_eq!(status_bar.top() - welcome.bottom(), px(2.0));
+    assert_eq!(welcome.top() - file_tab.bottom(), px(1.0));
+    assert_eq!(welcome.left() - root.left(), px(3.0));
+    assert_eq!(root.right() - welcome.right(), px(3.0));
+    assert_eq!(status_bar.top() - welcome.bottom(), px(1.0));
   });
 }
 
