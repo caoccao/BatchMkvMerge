@@ -15,22 +15,20 @@
 *   limitations under the License.
 */
 
-//! The toolbar: icon buttons with tooltips and their enabled states, and the
-//! group-mode and profile menus, which F8 and F9 open too. A menu's open state
-//! lives in [`crate::state::UiState`], so the shortcuts reach it; the menu
-//! itself is a gpui-kit `PopupMenu` in a controlled `Popover`, built when it
-//! opens.
+//! The single-row toolbar and its menus. Actions that do not fit are shown
+//! in an overflow menu. Group and Profile also open with F8 and F9.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use bmm_core::config::GroupMode;
+use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme, Disableable, Side, Sizable, h_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Side, Sizable, h_flex};
 use gpui_kit::*;
 
 use crate::actions;
@@ -59,6 +57,138 @@ fn group_mode_icon(mode: &GroupMode) -> &'static str {
   }
 }
 
+const BUTTON_SIZE: Pixels = px(40.0);
+const BUTTON_GAP: Pixels = px(2.0);
+const OVERFLOW_WIDTH: Pixels = px(24.0);
+// The row gap supplies 2 pt of the spacing on each side of the divider.
+const DIVIDER_WIDTH: Pixels = px(5.0);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolbarAction {
+  OutputPath,
+  MergeAll,
+  ResumeAll,
+  CancelAll,
+  ClearCompleted,
+  ClearFiles,
+  SystemNotification,
+  TopmostNotification,
+  GroupByFileName,
+  Settings,
+  About,
+  Menu(ToolbarMenu),
+}
+
+impl ToolbarAction {
+  fn run(self, stores: &Stores, window: &mut Window, cx: &mut App) {
+    match self {
+      Self::OutputPath => open_global_output_dialog(stores, window, cx),
+      Self::MergeAll => actions::merge_all(stores, cx),
+      Self::ResumeAll => actions::resume_all(stores, cx),
+      Self::CancelAll => actions::cancel_all(stores, cx),
+      Self::ClearCompleted => stores.queue.update(cx, |queue, cx| queue.clear_completed(cx)),
+      Self::ClearFiles => actions::clear_files(stores, cx),
+      Self::SystemNotification => stores.ui.update(cx, |ui, cx| ui.toggle_system_notification(cx)),
+      Self::TopmostNotification => stores.ui.update(cx, |ui, cx| ui.toggle_topmost_notification(cx)),
+      Self::GroupByFileName => stores.config.update(cx, |store, cx| {
+        store.update(cx, |config| config.group_by_file_name = !config.group_by_file_name)
+      }),
+      Self::Settings => stores.ui.update(cx, |ui, cx| ui.open_settings(cx)),
+      Self::About => stores.ui.update(cx, |ui, cx| ui.open_about(cx)),
+      Self::Menu(menu) => stores.ui.update(cx, |ui, cx| ui.show_menu(menu, cx)),
+    }
+  }
+}
+
+/// A button's presentation and command are shared by the toolbar and its menu.
+#[derive(Clone, PartialEq)]
+struct ToolbarButton {
+  id: &'static str,
+  icon: &'static str,
+  label: SharedString,
+  tooltip: Option<SharedString>,
+  color: Option<Hsla>,
+  enabled: bool,
+  checked: Option<bool>,
+  action: ToolbarAction,
+}
+
+impl ToolbarButton {
+  fn icon(&self) -> Icon {
+    let icon = toolbar_icon(self.icon);
+    match self.color.filter(|_| self.enabled) {
+      Some(color) => icon.text_color(color),
+      None => icon,
+    }
+  }
+
+  fn button(&self, merge_width: Pixels) -> Button {
+    let tooltip = self.tooltip.as_ref().unwrap_or(&self.label).clone();
+    let button = Button::new(self.id)
+      .ghost()
+      .h(BUTTON_SIZE)
+      .tooltip(tooltip.clone())
+      .disabled(!self.enabled);
+    if self.action == ToolbarAction::MergeAll {
+      button
+        .with_size(BUTTON_SIZE)
+        .w(merge_width)
+        .icon(self.icon())
+        .label(self.label.clone())
+    } else {
+      let button = button
+        .w(BUTTON_SIZE)
+        .px_0()
+        .child(self.icon().with_size(px(32.0)))
+        .accessibility_label(tooltip);
+      match self.checked {
+        Some(checked) => button.toggled(checked),
+        None => button,
+      }
+    }
+  }
+}
+
+/// Only Merge All has a label in the row. A custom-size gpui-kit Button uses
+/// a base-size label, a 75% icon, a half-rem gap and 20% padding on each side.
+fn merge_button_width(label: &SharedString, window: &Window) -> Pixels {
+  let rem = window.rem_size();
+  let run = window.text_style().to_run(label.len());
+  let text = window
+    .text_system()
+    .layout_line(label.as_ref(), rem, &[run], None)
+    .width;
+  BUTTON_SIZE * 1.15 + rem * 0.5 + text.ceil() + px(1.0)
+}
+
+/// Keep the largest prefix that fits, reserving the chevron only if needed.
+/// Separators belong between visible controls, so a trailing one moves with
+/// the hidden controls.
+fn visible_buttons(items: &[Option<ToolbarButton>], merge_width: Pixels, available: Pixels) -> usize {
+  let width = |item: &Option<ToolbarButton>| match item {
+    Some(button) if button.action == ToolbarAction::MergeAll => merge_width,
+    Some(_) => BUTTON_SIZE,
+    None => DIVIDER_WIDTH,
+  };
+  let total =
+    items.iter().fold(px(0.0), |total, item| total + width(item)) + BUTTON_GAP * items.len().saturating_sub(1) as f32;
+  if total <= available {
+    return items.len();
+  }
+  let mut used = OVERFLOW_WIDTH;
+  let mut visible = 0;
+  for (index, item) in items.iter().enumerate() {
+    used += width(item) + BUTTON_GAP;
+    if used > available {
+      break;
+    }
+    if item.is_some() {
+      visible = index + 1;
+    }
+  }
+  visible
+}
+
 /// The open menus' entities; a menu is built when it opens and dropped when
 /// it closes, so it always lists the current choices.
 type Menus = Rc<RefCell<HashMap<ToolbarMenu, Entity<PopupMenu>>>>;
@@ -66,6 +196,7 @@ type Menus = Rc<RefCell<HashMap<ToolbarMenu, Entity<PopupMenu>>>>;
 pub struct Toolbar {
   stores: Stores,
   menus: Menus,
+  overflow: Vec<Option<ToolbarButton>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -84,6 +215,7 @@ impl Toolbar {
     Self {
       stores,
       menus: Menus::default(),
+      overflow: Vec::new(),
       _subscriptions: subscriptions,
     }
   }
@@ -94,11 +226,11 @@ impl Toolbar {
   }
 }
 
-/// The choices of a toolbar menu, the current one checked.
-fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut App) -> Entity<PopupMenu> {
+/// The choices for Group or Profile, used on the row and in overflow submenus.
+fn menu_choices(menu: ToolbarMenu, popup: PopupMenu, stores: &Stores, cx: &App) -> PopupMenu {
   let config = stores.config.read(cx).config().clone();
   let store = stores.config.clone();
-  PopupMenu::build(window, cx, move |popup, _, _| match menu {
+  match menu {
     ToolbarMenu::GroupMode => GROUP_MODES.iter().fold(popup.check_side(Side::Left), |popup, mode| {
       let (mode, store) = (mode.clone(), store.clone());
       popup.item(
@@ -118,6 +250,49 @@ fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut 
           .on_click(move |_, _, cx| store.update(cx, |store, cx| store.set_active_profile(&name, cx))),
       )
     }),
+    ToolbarMenu::Overflow => popup,
+  }
+}
+
+fn build_menu(
+  stores: &Stores,
+  menu: ToolbarMenu,
+  hidden: &[Option<ToolbarButton>],
+  window: &mut Window,
+  cx: &mut App,
+) -> Entity<PopupMenu> {
+  PopupMenu::build(window, cx, |popup, window, cx| {
+    if menu != ToolbarMenu::Overflow {
+      return menu_choices(menu, popup, stores, cx);
+    }
+    hidden.iter().fold(popup.check_side(Side::Right), |popup, item| {
+      let Some(button) = item else {
+        return popup.separator();
+      };
+      let stores = stores.clone();
+      if let ToolbarAction::Menu(menu) = button.action
+        && button.enabled
+      {
+        return popup.submenu_with_icon(
+          Some(button.icon()),
+          button.label.clone(),
+          window,
+          cx,
+          move |popup, _, cx| menu_choices(menu, popup, &stores, cx),
+        );
+      }
+      let action = button.action;
+      popup.item(
+        PopupMenuItem::new(button.label.clone())
+          .icon(button.icon())
+          .checked(button.checked.unwrap_or(false))
+          .disabled(!button.enabled)
+          .on_click(move |_, window, cx| {
+            let stores = stores.clone();
+            window.defer(cx, move |window, cx| action.run(&stores, window, cx));
+          }),
+      )
+    })
   })
 }
 
@@ -126,11 +301,25 @@ fn build_menu(stores: &Stores, menu: ToolbarMenu, window: &mut Window, cx: &mut 
 /// closes it.
 ///
 /// [`UiState`]: crate::state::UiState
-fn menu_popover(stores: &Stores, menus: &Menus, menu: ToolbarMenu, trigger: Button, cx: &App) -> Popover {
+fn menu_popover(
+  stores: &Stores,
+  menus: &Menus,
+  menu: ToolbarMenu,
+  trigger: Button,
+  hidden: &[Option<ToolbarButton>],
+  cx: &App,
+) -> Popover {
   let open = stores.ui.read(cx).open_menu() == Some(menu);
   let ui = stores.ui.clone();
   let (stores, menus) = (stores.clone(), menus.clone());
+  let anchor = if hidden.is_empty() {
+    Anchor::TopLeft
+  } else {
+    Anchor::TopRight
+  };
+  let hidden = hidden.to_vec();
   Popover::new(SharedString::from(format!("toolbar-menu-{}", menu.name())))
+    .anchor(anchor)
     .appearance(false)
     .overlay_closable(false)
     .trigger(trigger)
@@ -148,7 +337,7 @@ fn menu_popover(stores: &Stores, menus: &Menus, menu: ToolbarMenu, trigger: Butt
       if let Some(popup) = menus.borrow().get(&menu).cloned() {
         return popup;
       }
-      let popup = build_menu(&stores, menu, window, cx);
+      let popup = build_menu(&stores, menu, &hidden, window, cx);
       popup.focus_handle(cx).focus(window, cx);
       let (ui, closed) = (stores.ui.clone(), menus.clone());
       window
@@ -162,48 +351,32 @@ fn menu_popover(stores: &Stores, menus: &Menus, menu: ToolbarMenu, trigger: Butt
     })
 }
 
-/// A 32 px glyph in a 40 px ghost button. Disabled icons inherit the
-/// button's disabled foreground color.
-fn icon_button(id: &'static str, name: &str, color: Option<Hsla>, tooltip: SharedString, enabled: bool) -> Button {
-  let icon = toolbar_icon(name).with_size(px(32.0));
-  let icon = match color.filter(|_| enabled) {
-    Some(color) => icon.text_color(color),
-    None => icon,
-  };
-  Button::new(id)
-    .ghost()
-    .size(px(40.0))
-    .px_0()
-    .child(icon)
-    .accessibility_label(tooltip.clone())
-    .tooltip(tooltip)
-    .disabled(!enabled)
-}
-
 fn divider(cx: &App) -> Div {
-  div().w(px(1.0)).h(px(20.0)).mx(super::space(0.5)).bg(cx.theme().border)
+  div()
+    .flex_none()
+    .w(px(1.0))
+    .h(px(20.0))
+    .mx((DIVIDER_WIDTH - px(1.0)) / 2.0)
+    .bg(cx.theme().border)
 }
 
-impl Toolbar {
-  /// The session's default output directory: the output dialog in directory
-  /// mode; empty clears it.
-  fn open_global_output_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let files = self.stores.files.clone();
-    let request = OutputDialogRequest {
-      title: tr!("toolbar.setGlobalOutputPath"),
-      initial: files.read(cx).global_output_dir().unwrap_or_default().to_string(),
-      mode: OutputMode::Directory,
-      default_file_name: String::new(),
-      on_confirm: Rc::new(move |value: String, cx: &mut App| {
-        files.update(cx, |files, cx| files.set_global_output_dir(value, cx));
-      }),
-    };
-    OutputPathDialog::open(request, window, cx);
-  }
+/// The session's default output directory. Clearing the field resets it.
+fn open_global_output_dialog(stores: &Stores, window: &mut Window, cx: &mut App) {
+  let files = stores.files.clone();
+  let request = OutputDialogRequest {
+    title: tr!("toolbar.setGlobalOutputPath"),
+    initial: files.read(cx).global_output_dir().unwrap_or_default().to_string(),
+    mode: OutputMode::Directory,
+    default_file_name: String::new(),
+    on_confirm: Rc::new(move |value: String, cx: &mut App| {
+      files.update(cx, |files, cx| files.set_global_output_dir(value, cx));
+    }),
+  };
+  OutputPathDialog::open(request, window, cx);
 }
 
 impl Render for Toolbar {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme();
     let (primary, muted, success, danger) = (theme.primary, theme.muted_foreground, theme.success, theme.danger);
     let config = self.stores.config.read(cx).config();
@@ -232,148 +405,202 @@ impl Render for Toolbar {
       tr!("toolbar.settings")
     };
 
-    h_flex().id("toolbar").test_support().gap(super::space(1.0)).child(
-      h_flex()
-        .items_center()
-        .child(
-          icon_button(
-            "toolbar-global-output",
-            OUTPUT_DIRECTORY_ICON_NAME,
-            Some(if has_global_output { primary } else { muted }),
-            tr!("toolbar.setGlobalOutputPath"),
-            true,
-          )
-          .on_click(cx.listener(|this, _, window, cx| this.open_global_output_dialog(window, cx))),
+    let item = |id, icon, label, color, enabled, action| ToolbarButton {
+      id,
+      icon,
+      label,
+      tooltip: None,
+      color,
+      enabled,
+      checked: None,
+      action,
+    };
+    let merge_label = tr!("group.mergeAll");
+    let merge_width = merge_button_width(&merge_label, window);
+    let items = [
+      Some(item(
+        "toolbar-global-output",
+        OUTPUT_DIRECTORY_ICON_NAME,
+        tr!("toolbar.setGlobalOutputPath"),
+        Some(if has_global_output { primary } else { muted }),
+        true,
+        ToolbarAction::OutputPath,
+      )),
+      None,
+      Some(ToolbarButton {
+        tooltip: Some(tr!("toolbar.mergeAll")),
+        ..item(
+          "toolbar-merge-all",
+          "merge-all",
+          merge_label,
+          None,
+          can_merge_all,
+          ToolbarAction::MergeAll,
         )
-        .child(divider(cx))
-        .child(
-          icon_button(
-            "toolbar-merge-all",
-            "merge-all",
-            None,
-            tr!("toolbar.mergeAll"),
-            can_merge_all,
-          )
-          .on_click(cx.listener(|this, _, _, cx| actions::merge_all(&this.stores, cx))),
+      }),
+      Some(item(
+        "toolbar-resume-all",
+        "resume-all",
+        tr!("queue.resumeAll"),
+        Some(success),
+        can_resume,
+        ToolbarAction::ResumeAll,
+      )),
+      Some(item(
+        "toolbar-cancel-all",
+        "cancel-all",
+        tr!("toolbar.cancelAll"),
+        Some(danger),
+        has_active_jobs,
+        ToolbarAction::CancelAll,
+      )),
+      None,
+      Some(item(
+        "toolbar-clear-completed",
+        "clear-completed",
+        tr!("queue.clearCompleted"),
+        None,
+        can_clear_completed,
+        ToolbarAction::ClearCompleted,
+      )),
+      Some(item(
+        "toolbar-clear",
+        "clear-list",
+        tr!("toolbar.clear"),
+        None,
+        can_clear,
+        ToolbarAction::ClearFiles,
+      )),
+      None,
+      Some(ToolbarButton {
+        checked: Some(system),
+        ..item(
+          "toolbar-system-notification",
+          "system-notification",
+          tr!("queue.systemNotificationTooltip"),
+          highlight(system),
+          true,
+          ToolbarAction::SystemNotification,
         )
-        .child(
-          icon_button(
-            "toolbar-resume-all",
-            "resume-all",
-            Some(success),
-            tr!("queue.resumeAll"),
-            can_resume,
-          )
-          .on_click(cx.listener(|this, _, _, cx| actions::resume_all(&this.stores, cx))),
+      }),
+      Some(ToolbarButton {
+        checked: Some(topmost),
+        ..item(
+          "toolbar-topmost-notification",
+          "topmost-notification",
+          tr!("queue.topmostNotificationTooltip"),
+          highlight(topmost),
+          true,
+          ToolbarAction::TopmostNotification,
         )
-        .child(
-          icon_button(
-            "toolbar-cancel-all",
-            "cancel-all",
-            Some(danger),
-            tr!("toolbar.cancelAll"),
-            has_active_jobs,
-          )
-          .on_click(cx.listener(|this, _, _, cx| actions::cancel_all(&this.stores, cx))),
+      }),
+      None,
+      Some(ToolbarButton {
+        tooltip: Some(tr!(group_mode_label_key(&group_mode))),
+        ..item(
+          "toolbar-group-mode",
+          group_mode_icon(&group_mode),
+          tr!("groupMode.title"),
+          Some(group_color),
+          true,
+          ToolbarAction::Menu(ToolbarMenu::GroupMode),
         )
-        .child(divider(cx))
-        .child(
-          icon_button(
-            "toolbar-clear-completed",
-            "clear-completed",
-            None,
-            tr!("queue.clearCompleted"),
-            can_clear_completed,
-          )
-          .on_click(cx.listener(|this, _, _, cx| this.stores.queue.update(cx, |queue, cx| queue.clear_completed(cx)))),
+      }),
+      Some(ToolbarButton {
+        checked: Some(group_by_file_name),
+        ..item(
+          "toolbar-group-by-file-name",
+          "group-by-filename",
+          tr!("groupMode.byFileName"),
+          highlight(group_by_file_name),
+          true,
+          ToolbarAction::GroupByFileName,
         )
-        .child(
-          icon_button("toolbar-clear", "clear-list", None, tr!("toolbar.clear"), can_clear)
-            .on_click(cx.listener(|this, _, _, cx| actions::clear_files(&this.stores, cx))),
-        )
-        .child(divider(cx))
-        .child(
-          icon_button(
-            "toolbar-system-notification",
-            "system-notification",
-            highlight(system),
-            tr!("queue.systemNotificationTooltip"),
-            true,
-          )
-          .toggled(system)
-          .on_click(
-            cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_system_notification(cx))),
-          ),
-        )
-        .child(
-          icon_button(
-            "toolbar-topmost-notification",
-            "topmost-notification",
-            highlight(topmost),
-            tr!("queue.topmostNotificationTooltip"),
-            true,
-          )
-          .toggled(topmost)
-          .on_click(
-            cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.toggle_topmost_notification(cx))),
-          ),
-        )
-        .child(divider(cx))
-        .child(menu_popover(
-          &self.stores,
-          &self.menus,
-          ToolbarMenu::GroupMode,
-          icon_button(
-            "toolbar-group-mode",
-            group_mode_icon(&group_mode),
-            Some(group_color),
-            tr!(group_mode_label_key(&group_mode)),
-            true,
-          ),
-          cx,
-        ))
-        .child(
-          icon_button(
-            "toolbar-group-by-file-name",
-            "group-by-filename",
-            highlight(group_by_file_name),
-            tr!("groupMode.byFileName"),
-            true,
-          )
-          .on_click(cx.listener(|this, _, _, cx| {
-            this.stores.config.update(cx, |config, cx| {
-              config.update(cx, |config| config.group_by_file_name = !config.group_by_file_name)
-            });
-          })),
-        )
-        .child(menu_popover(
-          &self.stores,
-          &self.menus,
-          ToolbarMenu::Profile,
-          icon_button("toolbar-profile", "profile", None, tr!("toolbar.profile"), has_profiles),
-          cx,
-        ))
-        .child(
-          icon_button(
-            "toolbar-settings",
-            crate::assets::SETTINGS_ICON_NAME,
-            None,
-            settings_tooltip,
-            true,
-          )
-          .on_click(cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.open_settings(cx)))),
-        )
-        .child(divider(cx))
-        .child(
-          icon_button(
-            "toolbar-about",
-            "about",
-            highlight(active_tab == TabType::About),
-            tr!("toolbar.about"),
-            true,
-          )
-          .on_click(cx.listener(|this, _, _, cx| this.stores.ui.update(cx, |ui, cx| ui.open_about(cx)))),
-        ),
-    )
+      }),
+      Some(item(
+        "toolbar-profile",
+        "profile",
+        tr!("toolbar.profile"),
+        None,
+        has_profiles,
+        ToolbarAction::Menu(ToolbarMenu::Profile),
+      )),
+      Some(item(
+        "toolbar-settings",
+        crate::assets::SETTINGS_ICON_NAME,
+        settings_tooltip,
+        None,
+        true,
+        ToolbarAction::Settings,
+      )),
+      None,
+      Some(item(
+        "toolbar-about",
+        "about",
+        tr!("toolbar.about"),
+        highlight(active_tab == TabType::About),
+        true,
+        ToolbarAction::About,
+      )),
+    ];
+    let available = window.viewport_size().width - super::SHELL_MARGIN * 2.0;
+    let (visible, hidden) = items.split_at(visible_buttons(&items, merge_width, available));
+    if self.overflow.as_slice() != hidden {
+      self.overflow = hidden.to_vec();
+      self.menus.borrow_mut().remove(&ToolbarMenu::Overflow);
+    }
+
+    let row = h_flex()
+      .id("toolbar")
+      .test_support()
+      .w_full()
+      .h(BUTTON_SIZE)
+      .mt(super::SHELL_MARGIN)
+      .gap(BUTTON_GAP)
+      .children(visible.iter().map(|item| {
+        let Some(item) = item else {
+          return divider(cx).into_any_element();
+        };
+        let button = item.button(merge_width);
+        match item.action {
+          ToolbarAction::Menu(menu) => {
+            menu_popover(&self.stores, &self.menus, menu, button, &[], cx).into_any_element()
+          }
+          action => {
+            let stores = self.stores.clone();
+            button
+              .on_click(move |_, window, cx| action.run(&stores, window, cx))
+              .into_any_element()
+          }
+        }
+      }));
+    let open_menu = self.stores.ui.read(cx).open_menu();
+    if hidden.is_empty() {
+      if open_menu == Some(ToolbarMenu::Overflow) {
+        let ui = self.stores.ui.clone();
+        cx.defer(move |cx| ui.update(cx, |ui, cx| ui.hide_menu(ToolbarMenu::Overflow, cx)));
+      }
+      return row;
+    }
+
+    // A shortcut can open a hidden Group or Profile menu at the chevron.
+    let menu = open_menu
+      .filter(|menu| {
+        hidden
+          .iter()
+          .flatten()
+          .any(|item| item.action == ToolbarAction::Menu(*menu))
+      })
+      .unwrap_or(ToolbarMenu::Overflow);
+    let label = tr!("toolbar.moreActions");
+    let button = Button::new("toolbar-overflow")
+      .ghost()
+      .w(OVERFLOW_WIDTH)
+      .h(BUTTON_SIZE)
+      .px_0()
+      .child(Icon::new(IconName::ChevronsRight).with_size(px(16.0)))
+      .accessibility_label(label.clone())
+      .tooltip(label);
+    row.child(menu_popover(&self.stores, &self.menus, menu, button, hidden, cx))
   }
 }

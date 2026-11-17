@@ -48,9 +48,11 @@ use gpui_kit::*;
 pub use file_card::FileCard;
 pub use group_card::GroupCard;
 
+use crate::assets::{BETTER_MEDIA_INFO_ICON, card_icon};
 use crate::domain::format::{format_hms, format_track_counts};
 use crate::domain::status::{QueueItem, QueueItemStatus};
 
+const CARD_ACTION_SIZE: f32 = 24.0;
 /// Pixel size of the status icon.
 const STATUS_ICON_SIZE: f32 = 18.0;
 /// Trailing characters a middle-truncated path always shows.
@@ -286,6 +288,34 @@ pub fn icon_button(
     .accessibility_label(label.clone())
     .tooltip(label)
     .disabled(!enabled)
+}
+
+fn header_button(id: &'static str, label: SharedString) -> Button {
+  Button::new(id)
+    .ghost()
+    .size(px(CARD_ACTION_SIZE))
+    .px_0()
+    .accessibility_label(label.clone())
+    .tooltip(label)
+}
+
+pub(super) fn header_icon_button(
+  id: &'static str,
+  name: &str,
+  color: Option<Hsla>,
+  label: SharedString,
+  enabled: bool,
+) -> Button {
+  let icon = card_icon(name).with_size(px(CARD_ACTION_SIZE));
+  let icon = match color.filter(|_| enabled) {
+    Some(color) => icon.text_color(color),
+    None => icon,
+  };
+  header_button(id, label).child(icon).disabled(!enabled)
+}
+
+pub(super) fn better_media_info_button(id: &'static str) -> Button {
+  header_button(id, tr!("merge.openInBetterMediaInfo")).child(img(BETTER_MEDIA_INFO_ICON).size(px(CARD_ACTION_SIZE)))
 }
 
 /// The child-count badge of a multi-member unit: a primary pill. Selectable so

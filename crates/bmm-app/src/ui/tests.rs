@@ -274,6 +274,10 @@ fn the_welcome_page_fills_the_tab_in_a_tall_window(cx: &mut TestAppContext) {
     let root = window.find("app-root").bounds();
     let status_bar = window.find("status-bar").bounds();
     let welcome = window.find("welcome").bounds();
+    let resume = window.find("toolbar-resume-all").bounds();
+    let cancel = window.find("toolbar-cancel-all").bounds();
+    assert_eq!(toolbar.top() - root.top(), px(2.0));
+    assert_eq!(cancel.left() - resume.right(), px(2.0));
     // The tab starts after the strip's 2 px top margin and 1 px top border.
     assert_eq!(file_tab.top() - toolbar.bottom(), px(3.0));
     assert_eq!(welcome.top() - file_tab.bottom(), px(2.0));
@@ -398,6 +402,7 @@ fn switching_the_language_changes_the_ui_text(cx: &mut TestAppContext) {
   let shell = Shell::open(cx);
   assert!(shell.shows(cx, "File List"));
   assert!(shell.shows(cx, "Add Files"));
+  assert!(shell.shows(cx, "Merge All"));
   assert!(
     shell.shows(cx, "Clear (Ctrl + Q)"),
     "icon buttons are named by their tooltip"
@@ -416,6 +421,16 @@ fn switching_the_language_changes_the_ui_text(cx: &mut TestAppContext) {
   assert!(shell.shows(cx, "Dateien hinzufügen"));
   assert!(shell.shows(cx, settings_de));
   assert!(!shell.shows(cx, "File List"));
+  let (width, height) = crate::platform::window::MIN_WINDOW_SIZE;
+  shell.resize(cx, width as f32, height as f32);
+  shell.window(cx, |window, _| {
+    let toolbar = window.find("toolbar").bounds();
+    let merge = window.find_by_label("Alle zusammenführen").bounds();
+    let overflow = window.find("toolbar-overflow").bounds();
+    assert!(merge.size.width > px(40.0));
+    assert!(merge.right() <= overflow.left() && overflow.right() <= toolbar.right());
+    assert_eq!(merge.top(), overflow.top());
+  });
   shell.stores.config.update(cx, |config, cx| {
     config.update(cx, |config| config.language = Language::EnUS)
   });
@@ -763,6 +778,58 @@ fn click_menu_item(shell: &Shell, cx: &mut TestAppContext, label: &str) {
 
 fn open_menu(shell: &Shell, cx: &mut TestAppContext) -> Option<ToolbarMenu> {
   shell.stores.ui.read_with(cx, |ui, _| ui.open_menu())
+}
+
+#[gpui_kit::test]
+fn toolbar_overflow_exposes_hidden_commands_and_menu_shortcuts(cx: &mut TestAppContext) {
+  let shell = Shell::open(cx);
+  shell.window(cx, |window, _| {
+    window.activate_window();
+    assert!(window.try_find("toolbar-overflow").is_none());
+  });
+  shell
+    .stores
+    .config
+    .update(cx, |store, cx| store.add_profile("Anime", cx));
+
+  shell.resize(cx, 600.0, 450.0);
+  shell.click(cx, "toolbar-overflow");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::Overflow));
+  let items = menu_items(&shell, cx);
+  assert!(items.iter().any(|(label, _)| label == "About"));
+  assert!(!items.iter().any(|(label, _)| label == "Merge All"));
+  click_menu_item(&shell, cx, "About");
+  assert_eq!(open_menu(&shell, cx), None);
+  assert_eq!(shell.stores.ui.read_with(cx, |ui, _| ui.active_tab()), TabType::About);
+
+  shell.resize(cx, 500.0, 450.0);
+  shell.window(cx, |window, _| assert!(window.try_find("toolbar-profile").is_none()));
+  shell.click(cx, "toolbar-overflow");
+  click_menu_item(&shell, cx, "Profile (F9)");
+  click_menu_item(&shell, cx, "Default");
+  assert_eq!(open_menu(&shell, cx), None);
+
+  shell.press(cx, "f9");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::Profile));
+  assert_eq!(
+    menu_items(&shell, cx),
+    [("Default".to_string(), true), ("Anime".to_string(), false)]
+  );
+  shell.resize(cx, 420.0, 450.0);
+  shell.window(cx, |window, _| assert!(window.try_find("toolbar-group-mode").is_none()));
+  shell.press(cx, "f8");
+  assert_eq!(open_menu(&shell, cx), Some(ToolbarMenu::GroupMode));
+  assert!(menu_items(&shell, cx).iter().any(|(label, _)| label == "No grouping"));
+  shell.press(cx, "escape");
+  assert_eq!(open_menu(&shell, cx), None);
+
+  shell.click(cx, "toolbar-overflow");
+  shell.resize(cx, 1000.0, 450.0);
+  assert_eq!(open_menu(&shell, cx), None);
+  shell.window(cx, |window, _| {
+    assert!(window.try_find("toolbar-overflow").is_none());
+    window.find("toolbar-about");
+  });
 }
 
 #[gpui_kit::test]

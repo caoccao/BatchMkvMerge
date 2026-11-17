@@ -164,7 +164,7 @@ fn an_empty_queue_shows_just_the_table_headers_and_the_toolbar_has_the_queue_act
   shell.resize(cx, 600.0, 450.0);
   shell.window(cx, |window, _| {
     let toolbar = window.within("toolbar");
-    let bounds = [
+    let bounds: Vec<_> = [
       "toolbar-global-output",
       "toolbar-merge-all",
       "toolbar-resume-all",
@@ -178,10 +178,29 @@ fn an_empty_queue_shows_just_the_table_headers_and_the_toolbar_has_the_queue_act
       "toolbar-profile",
       "toolbar-settings",
       "toolbar-about",
+      "toolbar-overflow",
     ]
-    .map(|id| toolbar.find(id).bounds());
-    assert!(bounds.windows(2).all(|pair| pair[0].right() <= pair[1].left()));
-    assert!(bounds.last().unwrap().right() <= window.find("app-root").bounds().right());
+    .into_iter()
+    .filter_map(|id| toolbar.try_find(id).map(|button| button.bounds()))
+    .collect();
+    assert_eq!(bounds.last(), Some(&toolbar.find("toolbar-overflow").bounds()));
+    assert!(toolbar.try_find("toolbar-about").is_none());
+    assert!(
+      bounds
+        .windows(2)
+        .all(|pair| pair[0].top() == pair[1].top() && pair[1].left() - pair[0].right() >= px(2.0))
+    );
+    let last_button = bounds[bounds.len() - 2];
+    assert_eq!(
+      toolbar.find("toolbar-overflow").bounds().left() - last_button.right(),
+      px(2.0)
+    );
+    let root = window.find("app-root").bounds();
+    assert!(
+      bounds
+        .iter()
+        .all(|button| button.left() >= root.left() && button.right() <= root.right())
+    );
   });
 }
 

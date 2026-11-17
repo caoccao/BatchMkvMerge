@@ -65,6 +65,7 @@
     }
   },
   "toolbar": {
+    "moreActions": "Weitere Symbolleistenaktionen",
     "setGlobalOutputPath": "Globalen Ausgabepfad festlegen",
     "mergeAll": "Alle zusammenführen (F3)",
     "cancelAll": "Alle abbrechen (F4)",

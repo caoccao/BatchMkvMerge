@@ -113,6 +113,16 @@ fn control(shell: &Shell, cx: &mut TestAppContext, index: usize, id: impl Into<E
   })
 }
 
+fn assert_action_sizes(shell: &Shell, cx: &mut TestAppContext, ids: &[&'static str]) {
+  shell.window(cx, |window, cx| {
+    window.render_frame(cx);
+    let card = window.within(("file-entry", 0usize));
+    for &id in ids {
+      assert_eq!(card.find(id).bounds().size, size(px(24.0), px(24.0)), "{id}");
+    }
+  });
+}
+
 fn click_in(shell: &Shell, cx: &mut TestAppContext, index: usize, id: impl Into<ElementId>) {
   let id = id.into();
   shell.window(cx, |window, cx| {
@@ -257,6 +267,7 @@ fn draw(shell: &Shell, cx: &mut TestAppContext) {
 fn two_identical_files_form_one_group_card_in_each_group_mode(cx: &mut TestAppContext) {
   let (_dir, a, b, parsed) = two_movies("cards-group-modes");
   let shell = shell(cx, config(GroupMode::TrackCount, false), parsed, &[&a, &b]);
+  assert_action_sizes(&shell, cx, &["group-output", "group-copy", "group-clear"]);
   for mode in [GroupMode::TrackCount, GroupMode::TrackCountAndLanguage] {
     shell.stores.config.update(cx, |config, cx| {
       config.update(cx, |config| config.group_mode = mode.clone())
@@ -311,6 +322,7 @@ fn a_file_card_shows_its_path_summary_and_actions(cx: &mut TestAppContext) {
   for id in ["card-output", "card-copy", "card-merge", "card-delete"] {
     assert_eq!(control(&shell, cx, 0, id), Some(false), "{id}");
   }
+  assert_action_sizes(&shell, cx, &["card-output", "card-copy", "card-delete", "card-drag"]);
   for id in ["card-children", "card-bmi", "card-progress"] {
     assert_eq!(control(&shell, cx, 0, id), None, "{id}");
   }
@@ -1113,6 +1125,7 @@ fn better_media_info_is_detected_and_a_failed_launch_is_shown(cx: &mut TestAppCo
     Some(tool_dir)
   );
   assert_eq!(control(&shell, cx, 0, "card-bmi"), Some(false));
+  assert_action_sizes(&shell, cx, &["card-bmi"]);
   // A launch from a directory without it fails with a message.
   let gone = dir.path().join("gone").to_string_lossy().into_owned();
   shell

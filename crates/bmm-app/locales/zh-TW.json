@@ -65,6 +65,7 @@
     }
   },
   "toolbar": {
+    "moreActions": "更多工具列操作",
     "setGlobalOutputPath": "設定全域輸出路徑",
     "mergeAll": "全部合併 (F3)",
     "cancelAll": "全部取消 (F4)",

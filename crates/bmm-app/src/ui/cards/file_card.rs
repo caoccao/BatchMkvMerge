@@ -29,16 +29,18 @@ use bmm_core::merge_args::file_name;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::input::TextareaState;
 use gpui_kit::base::{TestSupportExt as _, TestTextExt as _};
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{CardDrag, CardHeight, ChildBadge, DragChip, card_summary, icon_button, middle_ellipsis, status_icon};
+use super::{
+  CARD_ACTION_SIZE, CardDrag, CardHeight, ChildBadge, DragChip, better_media_info_button, card_summary,
+  header_icon_button, icon_button, middle_ellipsis, status_icon,
+};
 use crate::actions::{self, MergeRequest, OutputTarget, resolve_merge_output_for};
-use crate::assets::BETTER_MEDIA_INFO_ICON;
+use crate::assets::card_icon;
 use crate::domain::format::{format_encoded_date, format_file_size};
 use crate::domain::status::QueueItemStatus;
 use crate::state::Stores;
@@ -404,9 +406,9 @@ impl Render for FileCard {
       .items_center()
       .gap(crate::ui::space(0.5))
       .child(
-        icon_button(
+        header_icon_button(
           "card-output",
-          IconName::FolderOpen,
+          "output-folder",
           Some(output_color),
           tr!("merge.setOutputPath"),
           !active,
@@ -415,22 +417,16 @@ impl Render for FileCard {
       )
       .when(better_media_info, |actions| {
         actions.child(
-          Button::new("card-bmi")
-            .ghost()
-            .small()
-            .accessibility_label(tr!("merge.openInBetterMediaInfo"))
-            .tooltip(tr!("merge.openInBetterMediaInfo"))
-            .child(img(BETTER_MEDIA_INFO_ICON).size(px(20.0)))
-            .on_click(cx.listener(|this, _, _, cx| {
-              let roots = vec![this.root().to_string()];
-              actions::open_in_better_media_info(&this.stores, roots, cx).detach();
-            })),
+          better_media_info_button("card-bmi").on_click(cx.listener(|this, _, _, cx| {
+            let roots = vec![this.root().to_string()];
+            actions::open_in_better_media_info(&this.stores, roots, cx).detach();
+          })),
         )
       })
       .child(
-        icon_button(
+        header_icon_button(
           "card-copy",
-          IconName::Copy,
+          "copy-command",
           None,
           tr!("merge.copyCommand"),
           has_selection && !active,
@@ -447,9 +443,9 @@ impl Render for FileCard {
           .on_click(cx.listener(|this, _, _, cx| this.merge(cx))),
       )
       .child(
-        icon_button(
+        header_icon_button(
           "card-delete",
-          IconName::Trash,
+          "delete",
           Some(danger),
           tr!("list.delete"),
           !actions::unit_merging(&self.stores, &self.members, cx),
@@ -568,9 +564,9 @@ fn drag_handle(root: &str, active: bool, cx: &App) -> impl IntoElement {
     .flex()
     .items_center()
     .justify_center()
-    .size(px(24.0))
+    .size(px(CARD_ACTION_SIZE))
     .rounded(px(4.0))
-    .child(Icon::new(IconName::GripVertical).small().text_color(color))
+    .child(card_icon("drag-grip").with_size(px(CARD_ACTION_SIZE)).text_color(color))
     .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx));
   if active {
     return handle.into_any_element();

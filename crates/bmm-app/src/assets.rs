@@ -15,8 +15,8 @@
 *   limitations under the License.
 */
 
-//! Application images, toolbar icons, and Lucide icons beyond gpui-kit's
-//! default bundle.
+//! Application images, toolbar and card icons, and Lucide icons beyond
+//! gpui-kit's default bundle.
 
 use std::borrow::Cow;
 
@@ -38,6 +38,10 @@ pub fn toolbar_icon(name: &str) -> Icon {
   Icon::default().path(format!("icons/toolbar/{name}.svg"))
 }
 
+pub fn card_icon(name: &str) -> Icon {
+  Icon::default().path(format!("icons/cards/{name}.svg"))
+}
+
 const IMAGES: &[(&str, &[u8])] = &[
   (APP_ICON, include_bytes!("../assets/icon.png")),
   (BETTER_MEDIA_INFO_ICON, include_bytes!("../assets/bettermediainfo.png")),
@@ -45,18 +49,18 @@ const IMAGES: &[(&str, &[u8])] = &[
   (BD_MASTER_ICON, include_bytes!("../assets/bdmaster.png")),
 ];
 
-macro_rules! toolbar_icons {
-  ($($name:literal),+ $(,)?) => {
-    const TOOLBAR_ICONS: &[(&str, &[u8])] = &[
+macro_rules! wrapped_icons {
+  ($icons:ident, $folder:literal; $($name:literal),+ $(,)?) => {
+    const $icons: &[(&str, &[u8])] = &[
       $((
-        concat!("icons/toolbar/", $name, ".svg"),
-        include_bytes!(concat!(env!("OUT_DIR"), "/toolbar/", $name, ".svg")),
+        concat!("icons/", $folder, "/", $name, ".svg"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/", $folder, "/", $name, ".svg")),
       )),+
     ];
   };
 }
 
-toolbar_icons!(
+wrapped_icons!(TOOLBAR_ICONS, "toolbar";
   "about",
   "cancel-all",
   "clear-completed",
@@ -73,6 +77,7 @@ toolbar_icons!(
   "system-notification",
   "topmost-notification",
 );
+wrapped_icons!(CARD_ICONS, "cards"; "output-folder", "copy-command", "delete", "drag-grip");
 
 // Lucide icons the UI needs that are not part of gpui-kit's default 106-icon
 // bundle; every icon is in the `IconName` enum, only the SVGs are opt-in.
@@ -80,6 +85,7 @@ icon_assets!(
   ExtraIcons,
   [
     Blocks,
+    ChevronsRight,
     CircleMinus,
     Clapperboard,
     Clock,
@@ -88,14 +94,12 @@ icon_assets!(
     Files,
     Film,
     FolderCog,
-    GripVertical,
     Images,
     ListFilter,
     RotateCcw,
     Settings2,
     SunMoon,
     Tornado,
-    Trash,
     X,
   ]
 );
@@ -105,7 +109,12 @@ pub struct AppAssets;
 
 impl AssetSource for AppAssets {
   fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-    if let Some((_, bytes)) = IMAGES.iter().chain(TOOLBAR_ICONS).find(|(name, _)| *name == path) {
+    if let Some((_, bytes)) = IMAGES
+      .iter()
+      .chain(TOOLBAR_ICONS)
+      .chain(CARD_ICONS)
+      .find(|(name, _)| *name == path)
+    {
       return Ok(Some(Cow::Borrowed(bytes)));
     }
     if let Some(bytes) = ExtraIcons.load(path)? {
@@ -118,6 +127,7 @@ impl AssetSource for AppAssets {
     let mut names: Vec<SharedString> = IMAGES
       .iter()
       .chain(TOOLBAR_ICONS)
+      .chain(CARD_ICONS)
       .filter(|(name, _)| name.starts_with(path))
       .map(|(name, _)| SharedString::new_static(name))
       .collect();
@@ -138,18 +148,21 @@ mod tests {
   use super::*;
 
   #[test]
-  fn toolbar_icons_rasterize_with_transparent_backgrounds() {
+  fn generated_icons_rasterize_with_transparent_backgrounds() {
     let renderer = SvgRenderer::new(Arc::new(AppAssets));
-    for (path, _) in TOOLBAR_ICONS {
-      let svg = AppAssets.load(path).unwrap().unwrap();
-      let svg = renderer.parse_svg(&svg).unwrap();
-      for side in [32, 64, 96, 128] {
-        let dimensions = size(DevicePixels(side), DevicePixels(side));
-        let image = renderer.render_parsed(&svg, SvgSize::ExactSize(dimensions)).unwrap();
-        assert_eq!(image.size(0), dimensions, "{path}");
-        let pixels = image.as_bytes(0).unwrap().chunks_exact(4);
-        assert!(pixels.clone().any(|pixel| pixel[3] == 0), "{path} has no transparency");
-        assert!(pixels.clone().any(|pixel| pixel[3] > 128), "{path} is blank");
+    for (icons, logical_size) in [(TOOLBAR_ICONS, 32), (CARD_ICONS, 24)] {
+      for (path, _) in icons {
+        let svg = AppAssets.load(path).unwrap().unwrap();
+        let svg = renderer.parse_svg(&svg).unwrap();
+        for scale in 1..=4 {
+          let side = DevicePixels(logical_size * scale);
+          let dimensions = size(side, side);
+          let image = renderer.render_parsed(&svg, SvgSize::ExactSize(dimensions)).unwrap();
+          assert_eq!(image.size(0), dimensions, "{path}");
+          let pixels = image.as_bytes(0).unwrap().chunks_exact(4);
+          assert!(pixels.clone().any(|pixel| pixel[3] == 0), "{path} has no transparency");
+          assert!(pixels.clone().any(|pixel| pixel[3] > 128), "{path} is blank");
+        }
       }
     }
   }

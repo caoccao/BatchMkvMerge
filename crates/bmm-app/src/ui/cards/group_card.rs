@@ -30,14 +30,15 @@ use bmm_core::media_track::media_track_counts;
 use bmm_core::merge_args::{file_name, parent_dir};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{SelectableText, TestSupportExt as _, TestTextExt as _};
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{CardHeight, ChildBadge, card_summary, icon_button, mono_caption, progress_bar, status_icon, time_label};
+use super::{
+  CardHeight, ChildBadge, better_media_info_button, card_summary, header_icon_button, icon_button, mono_caption,
+  progress_bar, status_icon, time_label,
+};
 use crate::actions::{self, MergeRequest};
-use crate::assets::BETTER_MEDIA_INFO_ICON;
 use crate::domain::status::QueueItemStatus;
 use crate::state::Stores;
 use crate::state::files::FileEvent;
@@ -399,9 +400,9 @@ impl Render for GroupCard {
           })),
       )
       .child(
-        icon_button(
+        header_icon_button(
           "group-output",
-          IconName::FolderOpen,
+          "output-folder",
           Some(output_color),
           tr!("merge.setOutputPath"),
           !any_active,
@@ -410,22 +411,16 @@ impl Render for GroupCard {
       )
       .when(better_media_info, |header| {
         header.child(
-          Button::new("group-bmi")
-            .ghost()
-            .small()
-            .accessibility_label(tr!("merge.openInBetterMediaInfo"))
-            .tooltip(tr!("merge.openInBetterMediaInfo"))
-            .child(img(BETTER_MEDIA_INFO_ICON).size(px(20.0)))
-            .on_click(cx.listener(|this, _, _, cx| {
-              let roots = this.roots_vec();
-              actions::open_in_better_media_info(&this.stores, roots, cx).detach();
-            })),
+          better_media_info_button("group-bmi").on_click(cx.listener(|this, _, _, cx| {
+            let roots = this.roots_vec();
+            actions::open_in_better_media_info(&this.stores, roots, cx).detach();
+          })),
         )
       })
       .child(
-        icon_button(
+        header_icon_button(
           "group-copy",
-          IconName::Copy,
+          "copy-command",
           None,
           tr!("group.copyAllCommands"),
           has_selection,
@@ -449,9 +444,9 @@ impl Render for GroupCard {
           })),
       )
       .child(
-        icon_button(
+        header_icon_button(
           "group-clear",
-          IconName::Trash,
+          "delete",
           Some(danger),
           tr!("group.clearAll"),
           !any_active,

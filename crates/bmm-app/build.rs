@@ -23,11 +23,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 fn main() {
   println!("cargo:rerun-if-changed=build.rs");
-  println!("cargo:rerun-if-changed=assets/toolbar");
   println!("cargo:rerun-if-changed=locales");
   println!("cargo:rerun-if-changed=packaging/icons/icon.ico");
-  if let Err(error) = wrap_toolbar_icons() {
-    panic!("failed to embed the toolbar icons: {error}");
+  for (folder, size) in [("toolbar", 32), ("cards", 24)] {
+    println!("cargo:rerun-if-changed=assets/{folder}");
+    if let Err(error) = wrap_icons(folder, size) {
+      panic!("failed to embed the {folder} icons: {error}");
+    }
   }
   // CARGO_CFG_TARGET_OS, not cfg!(windows): the build script runs on the host.
   if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
@@ -40,12 +42,11 @@ fn main() {
 }
 
 /// GPUI tints an SVG using its alpha mask and rasterizes at twice the device
-/// size. Wrap the high-resolution artwork in a 32 px viewport so the toolbar
-/// keeps its logical size and stays sharp on high-DPI displays.
-fn wrap_toolbar_icons() -> io::Result<()> {
-  let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR")).join("toolbar");
+/// size. Embed the high-resolution artwork at the icon's logical size.
+fn wrap_icons(folder: &str, size: u32) -> io::Result<()> {
+  let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR")).join(folder);
   fs::create_dir_all(&output)?;
-  for entry in fs::read_dir("assets/toolbar")? {
+  for entry in fs::read_dir(PathBuf::from("assets").join(folder))? {
     let entry = entry?;
     let file_name = entry.file_name();
     let Some(name) = file_name.to_str().and_then(|name| name.strip_suffix("-256x256.png")) else {
@@ -55,7 +56,7 @@ fn wrap_toolbar_icons() -> io::Result<()> {
     fs::write(
       output.join(format!("{name}.svg")),
       format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><image width="32" height="32" href="data:image/png;base64,{image}"/></svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}"><image width="{size}" height="{size}" href="data:image/png;base64,{image}"/></svg>"#
       ),
     )?;
   }

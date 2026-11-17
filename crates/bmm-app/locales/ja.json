@@ -65,6 +65,7 @@
     }
   },
   "toolbar": {
+    "moreActions": "ツールバーのその他の操作",
     "setGlobalOutputPath": "グローバル出力先を設定",
     "mergeAll": "すべて結合 (F3)",
     "cancelAll": "すべてキャンセル (F4)",

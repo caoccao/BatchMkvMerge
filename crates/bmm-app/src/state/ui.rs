@@ -54,11 +54,12 @@ impl TabType {
   }
 }
 
-/// The toolbar's two menus (F8, F9).
+/// The toolbar's menus. F8 and F9 also open Group and Profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolbarMenu {
   GroupMode,
   Profile,
+  Overflow,
 }
 
 impl ToolbarMenu {
@@ -67,6 +68,7 @@ impl ToolbarMenu {
     match self {
       Self::GroupMode => "group-mode",
       Self::Profile => "profile",
+      Self::Overflow => "overflow",
     }
   }
 }

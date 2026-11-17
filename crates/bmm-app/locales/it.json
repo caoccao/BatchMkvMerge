@@ -65,6 +65,7 @@
     }
   },
   "toolbar": {
+    "moreActions": "Altre azioni della barra degli strumenti",
     "setGlobalOutputPath": "Imposta percorso di output globale",
     "mergeAll": "Unisci tutto (F3)",
     "cancelAll": "Interrompi tutto (F4)",
