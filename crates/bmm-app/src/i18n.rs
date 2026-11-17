@@ -249,6 +249,14 @@ pub(crate) mod tests {
       let text = std::fs::read_to_string(&file).unwrap();
       for marker in ["tr!(\"", "rust_i18n::t!(\""] {
         for (start, _) in text.match_indices(marker) {
+          // The marker can end a longer name (`include_str!`).
+          if text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_')
+          {
+            continue;
+          }
           let rest = &text[start + marker.len()..];
           let key = &rest[..rest.find('"').expect("unclosed key")];
           checked += 1;
